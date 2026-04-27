@@ -1,0 +1,5 @@
+generate header "include/zxfoundation/zconfig.h"
+
+option ULTRASPARK_RELEASE : string = "26h1" {
+    label "ZXFoundation kernel realease"
+}

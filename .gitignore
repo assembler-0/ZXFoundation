@@ -1,0 +1,7 @@
+cmake-build-*
+*build*
+*.cache
+.venv/
+.p/
+.idea/
+mytoolchain.cmake
