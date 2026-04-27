@@ -5,9 +5,14 @@
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 
+// ---------------------------------------------------------------------------
+// zxfoundation_global_initialize - kernel initialization sequence
+// - No returns
+// ---------------------------------------------------------------------------
 [[noreturn]] void zxfoundation_global_initialize(void) {
+    sclp_setup();
     printk_initialize(sclp_putc);
-    printk("ZXFoundation " CONFIG_ULTRASPARK_RELEASE "\n");
+    printk("ZXFoundation " CONFIG_ULTRASPARK_RELEASE " for IBM z/Architecture z10 processors\n");
 
     for (;;) {
         __asm__ volatile("nop");
