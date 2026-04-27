@@ -13,6 +13,7 @@
     sclp_setup();
     printk_initialize(sclp_putc);
     printk("ZXFoundation " CONFIG_ULTRASPARK_RELEASE " for IBM z/Architecture processors\n");
+    printk("Copyright (C) 2026 assembler-0\n");
 
     for (;;) {
         __asm__ volatile("nop");

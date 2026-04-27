@@ -5,3 +5,4 @@ cmake-build-*
 .p/
 .idea/
 mytoolchain.cmake
+compile_flags.txt

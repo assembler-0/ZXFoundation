@@ -88,13 +88,33 @@ int sclp_write(const char *buf, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// sclp_putc - write a single character, translating '\n' to '\r\n'.
+// sclp_putc - buffer characters and flush as a single sclp_write on '\n'.
+//
+// SCLP's ASCII console event is line-oriented: firing one SERVC per
+// character causes the firmware to display everything on the same line.
+// We accumulate into a small static buffer and flush the whole line at once,
+// translating '\n' to '\r\n' at flush time.
 // ---------------------------------------------------------------------------
+#define SCLP_LINE_BUF_SIZE 256
+
 void sclp_putc(char c) {
+    static char   line_buf[SCLP_LINE_BUF_SIZE];
+    static size_t line_len = 0;
+
     if (c == '\n') {
-        char crlf[2] = {'\r', '\n'};
-        sclp_write(crlf, 2);
+        // Append \r\n and flush the complete line.
+        if (line_len < SCLP_LINE_BUF_SIZE - 1) {
+            line_buf[line_len++] = '\r';
+        }
+        line_buf[line_len++] = '\n';
+        sclp_write(line_buf, line_len);
+        line_len = 0;
     } else {
-        sclp_write(&c, 1);
+        line_buf[line_len++] = c;
+        // Flush early if the buffer is nearly full (leave room for \r\n).
+        if (line_len >= SCLP_LINE_BUF_SIZE - 2) {
+            sclp_write(line_buf, line_len);
+            line_len = 0;
+        }
     }
 }

@@ -17,7 +17,7 @@ target_compile_options(zxfoundation.krnl PRIVATE
     -pipe
     -mpacked-stack
     -m64
-    -march=z16
+    -march=arch9
 )
 
 if(COMPILER_ID STREQUAL "clang")
