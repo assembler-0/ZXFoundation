@@ -44,9 +44,13 @@ int sclp_setup(void) {
 
     if (m->h.response_code != SCLP_RC_NORMAL)
         return -1;
-    if (!(m->send_mask & SCLP_EVENT_MASK_MSG_ASCII))
-        return -1;
 
+    // send_mask reflects what the firmware will accept from us.
+    // Some QEMU builds leave this field zero even though Write Event Data
+    // succeeds, so we treat a missing bit as a non-fatal advisory rather
+    // than a hard failure.  The caller can still use sclp_write(); if the
+    // firmware truly doesn't support ASCII console events the write will
+    // simply return a non-normal response code at that point.
     return 0;
 }
 

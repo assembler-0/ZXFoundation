@@ -34,6 +34,14 @@
 #define CONFIG_PSW_DISABLED_WAIT            0x0002000180000000ULL
 
 // ---------------------------------------------------------------------------
+// Trap / panic
+// ---------------------------------------------------------------------------
+// PSW address stored in the disabled-wait PSW on panic.
+// The value is deliberately non-zero and non-aligned so it is visually
+// distinct from a normal halt (addr=0) in QEMU logs and operator consoles.
+#define CONFIG_PANIC_HALT_ADDR              0x0000000000DEAD00ULL
+
+// ---------------------------------------------------------------------------
 // Computed / derived
 // ---------------------------------------------------------------------------
 #define CONFIG_HAVE_CONSOLE                 1

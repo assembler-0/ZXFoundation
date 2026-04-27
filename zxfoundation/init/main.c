@@ -1,7 +1,9 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// main.c ZXFoundation kernel entry point
 
+#include <arch/s390x/trap/trap.h>
 #include <drivers/console/sclp.h>
+#include <zxfoundation/panic.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 
@@ -10,10 +12,17 @@
 // - No returns
 // ---------------------------------------------------------------------------
 [[noreturn]] void zxfoundation_global_initialize(void) {
-    sclp_setup();
+    if (sclp_setup() != 0) {
+        panic_halt();
+    }
+
     printk_initialize(sclp_putc);
-    printk("ZXFoundation " CONFIG_ULTRASPARK_RELEASE " for IBM z/Architecture processors\n");
+
+    printk("ZXFoundation " CONFIG_ULTRASPARK_RELEASE " for IBM z/Architecture z10 processors\n");
     printk("Copyright (C) 2026 assembler-0\n");
+
+    trap_init();
+    printk("Trap vectors installed.\n");
 
     for (;;) {
         __asm__ volatile("nop");

@@ -33,6 +33,7 @@ _start_64bit:
 
 .Lbss_zero_done:
 
+    brasl   %r14, trap_init
     brasl   %r14, zxfoundation_global_initialize
 
 .Lhalt:
