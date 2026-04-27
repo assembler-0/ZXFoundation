@@ -4,13 +4,14 @@
 // arch/s390x/cpu/servc.h - SERVC (Service Call) instruction wrapper
 
 #include <zxfoundation/types.h>
+#include <zxfoundation/zconfig.h>
 
 #define SERVC_CC_OK               0   // Command accepted and completed
 #define SERVC_CC_BUSY             2   // Interface busy, retry later
 #define SERVC_CC_NOT_OPERATIONAL  3   // SCLP not available on this machine
 
-#define SERVC_MAX_RETRIES         3
-#define SERVC_BUSY_DELAY          100000  // Spin iterations between retries
+#define SERVC_MAX_RETRIES         CONFIG_SCLP_SERVC_MAX_RETRIES
+#define SERVC_BUSY_DELAY          CONFIG_SCLP_SERVC_BUSY_DELAY
 
 // ---------------------------------------------------------------------------
 // servc_issue - emit a single SERVC instruction.

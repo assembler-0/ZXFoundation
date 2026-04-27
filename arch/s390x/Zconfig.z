@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# arch/s390x/Zconfig.z - s390x architecture configuration
+
+menu "s390x Architecture" {
+
+    menu "Boot" {
+
+        option KERNEL_LOAD_ADDRESS : int = 0x10000 {
+            label "Kernel physical load address"
+            help  "Physical address where the firmware IPL loader places the
+                   kernel image. The s390-ccw-virtio firmware jumps directly
+                   to this address, so _start must be located here.
+                   Do not change unless you know what you are doing."
+        }
+
+        option BOOT_STACK_SIZE : int = 16384 {
+            label "Boot stack size (bytes)"
+            help  "Size of the temporary stack used during early boot, before
+                   the memory allocator is available. Must be a multiple of 16
+                   to satisfy s390x stack alignment requirements."
+            range 4096 .. 65536
+        }
+
+    }
+
+    menu "ABI" {
+
+        option S390X_SAVE_AREA : int = 160 {
+            label "Register save area size (bytes)"
+            help  "The s390x ABI requires callers to reserve this many bytes
+                   below the stack pointer (%r15) before issuing any call.
+                   This is fixed by the ABI and should not be changed."
+        }
+
+    }
+
+    menu "PSW" {
+
+        option PSW_ARCH_BITS : int = 0x0000000180000000 {
+            label "PSW architecture mode bits"
+            help  "Bits set in PSW word 0 to select 64-bit z/Architecture mode.
+                   Fixed by the IBM Z architecture specification."
+        }
+
+        option PSW_DISABLED_WAIT : int = 0x0002000180000000 {
+            label "Disabled-wait PSW word 0"
+            help  "PSW word 0 value for a disabled wait state (CPU halts and
+                   displays the PSW on the operator panel). Used as the
+                   fallback halt state if the kernel returns unexpectedly."
+        }
+
+    }
+
+}

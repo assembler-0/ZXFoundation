@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# drivers/console/Zconfig.z - Console driver configuration
+
+menu "Console drivers" {
+
+    option SCLP_CONSOLE : bool = true {
+        label "SCLP ASCII console driver"
+        help  "Enable the SCLP (Service Call Logical Processor) console driver.
+               This is the primary early-boot console on IBM Z / s390x.
+               Required for any output before a VirtIO or HVC console is up."
+    }
+
+    menu "SCLP" when SCLP_CONSOLE {
+
+        option SCLP_SERVC_MAX_RETRIES : int = 3 {
+            label "SERVC busy-retry limit"
+            help  "How many times to retry a SERVC instruction when the
+                   firmware returns condition code 2 (busy) before giving up.
+                   Higher values make output more reliable on a loaded system
+                   at the cost of longer stalls."
+            range 1 .. 16
+        }
+
+        option SCLP_SERVC_BUSY_DELAY : int = 100000 {
+            label "SERVC busy-retry spin count"
+            help  "Number of spin-loop iterations to wait between SERVC retries
+                   when the firmware is busy. This is a rough delay with no
+                   time guarantee; it exists only to avoid hammering the
+                   firmware interface in a tight loop."
+            range 1000 .. 10000000
+        }
+
+    }
+
+}

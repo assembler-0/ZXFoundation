@@ -1,5 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Zconfig - ZXFoundation kernel top-level configuration
+
+title "ZXFoundation system configuration"
+
 generate header "include/zxfoundation/zconfig.h"
 
+include "arch/s390x/Zconfig.z" as arch
+include "drivers/console/Zconfig.z" as console
+
+# ---------------------------------------------------------------------------
+# Release
+# ---------------------------------------------------------------------------
+
 option ULTRASPARK_RELEASE : string = "26h1" {
-    label "ZXFoundation kernel realease"
+    label "ZXFoundation kernel release string"
 }
+
+# ---------------------------------------------------------------------------
+# Debugging
+# ---------------------------------------------------------------------------
+
+option DEBUG : bool = false {
+    label "Enable debug mode"
+    help  "Enables extra assertions, verbose boot output, and debug symbols.
+           Not recommended for production builds."
+}
+
+option EARLY_PRINTK : bool = true {
+    label "Enable early printk"
+    help  "Enables printk output via the SCLP console before any subsystem
+           initialisation. Disable to silence all early boot messages."
+    implies arch.console.SCLP_CONSOLE
+}
+
+# ---------------------------------------------------------------------------
+# Computed / derived
+# ---------------------------------------------------------------------------
+
+computed HAVE_CONSOLE : bool = arch.console.SCLP_CONSOLE
