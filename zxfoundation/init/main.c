@@ -12,7 +12,7 @@
 [[noreturn]] void zxfoundation_global_initialize(void) {
     sclp_setup();
     printk_initialize(sclp_putc);
-    printk("ZXFoundation " CONFIG_ULTRASPARK_RELEASE " for IBM z/Architecture z10 processors\n");
+    printk("ZXFoundation " CONFIG_ULTRASPARK_RELEASE " for IBM z/Architecture processors\n");
 
     for (;;) {
         __asm__ volatile("nop");
