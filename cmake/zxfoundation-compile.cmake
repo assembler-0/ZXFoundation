@@ -63,6 +63,7 @@ target_link_options(zxfoundation.elf PRIVATE
     --no-dynamic-linker
     -ztext
     -zmax-page-size=0x1000
+    --no-warn-rwx-segments
     --no-pie -g
     -m${TARGET_EMULATION_MODE}
 )

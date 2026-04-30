@@ -10,10 +10,12 @@
 [[noreturn]] void zxfoundation_global_initialize(void) {
     diag_setup();
     printk_initialize(diag_putc);
-    printk("ZXFoundation %s copyright (C) 2026 assembler-0 All rights reserved.", CONFIG_ULTRASPARK_RELEASE);
+    printk("ZXFoundation %s copyright (C) 2026 assembler-0 All rights reserved.\n", CONFIG_ULTRASPARK_RELEASE);
 
     if (sclp_setup() == 0) {
         printk("SCLP console initialized\n");
+    } else {
+        printk("SCLP console setup failed\n");
     }
 
     while (true) {
