@@ -1,8 +1,7 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// zxfoundation/sys/ebcdic.c - ASCII/EBCDIC conversion
 
-#include <zxfoundation/ebcdic.h>
-#include <zxfoundation/types.h>
+#include <arch/s390x/init/zxfl/ebcdic.h>
 
 /// @brief ASCII to EBCDIC conversion table (Code Page 037)
 static const uint8_t ascii_to_ebcdic_table[256] = {

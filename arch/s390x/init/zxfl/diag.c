@@ -5,14 +5,13 @@
 ///        With DIAG8CMD ENABLE: expects EBCDIC, goes to command line
 ///        Prefix with "MSG * " to display as message instead of command
 
-#include <drivers/console/diag.h>
-#include <lib/ebcdic.h>
-#include <zxfoundation/types.h>
+#include <arch/s390x/init/zxfl/diag.h>
+#include <arch/s390x/init/zxfl/ebcdic.h>
 
 /// @brief DIAG 8 instruction - write string to hypervisor console
 static inline void diag8_write(const char *addr, size_t len) {
-    register uint64_t r2 __asm__("2") = (uint64_t)(uintptr_t)addr;
-    register uint64_t r3 __asm__("3") = (uint64_t)len;
+    register uint32_t r2 __asm__("2") = (uint32_t)(uintptr_t)addr;
+    register uint32_t r3 __asm__("3") = (uint32_t)len;
     
     __asm__ __volatile__(
         "diag %[r2], %[r3], 8\n"
@@ -30,7 +29,9 @@ int diag_write(const char *buf, size_t len) {
     if (len == 0)
         return 0;
     
-    diag8_write(buf, len);
+    for (size_t i = 0; i < len; i++) {
+        diag_putc(buf[i]);
+    }
     return 0;
 }
 

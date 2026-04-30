@@ -1,13 +1,19 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* arch/s390x/init/link.ld - ZXFoundation linker script for s390x */
+/* arch/s390x/init/zxfl/zxfl.ld - ZXFoundation Loader script */
 
-ENTRY(__zx_start_kernel64)
+ENTRY(__zx_ipl_entry)
 
 SECTIONS {
-    . = 0x10000;
+    . = 0x0;
 
+    .text.ipl : {
+        KEEP(*(.text.ipl))
+    }
+
+    ASSERT(. <= 0x18, "ERROR: IPL1 record exceeds 24 bytes (0x18)")
+
+    . = 0x200;
     .text : {
-        KEEP(*(.text.__zx_start_kernel64))
         *(.text)
         *(.text.*)
     }
@@ -22,7 +28,7 @@ SECTIONS {
         *(.data.*)
     }
 
-    .bss : ALIGN(4K) {
+    .bss : ALIGN(8) {
         __bss_start = .;
         *(COMMON)
         *(.bss)
@@ -30,9 +36,11 @@ SECTIONS {
         __bss_end = .;
     }
 
+    ASSERT(. <= 0x10000, "ERROR: ZXFL Bootloader exceeds 64KB max size")
+
     /DISCARD/ : {
         *(.comment)
-        *(.eh_frame)
         *(.note.GNU-stack)
+        *(.eh_frame)
     }
 }
