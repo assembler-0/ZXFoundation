@@ -14,15 +14,26 @@ else()
 endif()
 
 set(CMAKE_C_LINK_EXECUTABLE "<CMAKE_LINKER> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
+set(CMAKE_CXX_LINK_EXECUTABLE "<CMAKE_LINKER> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
+set(CMAKE_ASM_LINK_EXECUTABLE "<CMAKE_LINKER> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
 set(CMAKE_LINKER ld.lld)
 set(CMAKE_AR llvm-ar)
 set(CMAKE_RANLIB llvm-ranlib)
+set(CMAKE_OBJCOPY llvm-objcopy)
+set(ZX_HOST_CC clang)
 
 set(COMPILER_ID "clang")
 
-if(NOT DEFINED TARGET_TRIPLE)
-    set(TARGET_TRIPLE "s390x-unknown-none-elf" CACHE STRING "Clang target triple")
+if(NOT DEFINED TARGET_EMULATION_MODE)
     set(TARGET_EMULATION_MODE "elf64_s390" CACHE STRING "Target emulation mode when linking")
+endif()
+
+if(NOT DEFINED COMMON_TARGET_TRIPLE)
+    set(COMMON_TARGET_TRIPLE "s390x-unknown-none-elf" CACHE STRING "Target triple for z/Architecture (S390X)")
+endif()
+
+if(NOT DEFINED MARCH_MODE)
+    set(MARCH_MODE "arch9" CACHE STRING "Argument for -march=")
 endif()
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)

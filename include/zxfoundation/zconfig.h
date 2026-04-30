@@ -20,7 +20,7 @@
 #define CONFIG_SCLP_SERVC_BUSY_DELAY        100000
 
 // ---------------------------------------------------------------------------
-// s390x boot
+// s390x init
 // ---------------------------------------------------------------------------
 #define CONFIG_KERNEL_LOAD_ADDRESS          0x10000
 #define CONFIG_BOOT_STACK_SIZE              16384

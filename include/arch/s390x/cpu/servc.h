@@ -13,14 +13,6 @@
 #define SERVC_MAX_RETRIES         CONFIG_SCLP_SERVC_MAX_RETRIES
 #define SERVC_BUSY_DELAY          CONFIG_SCLP_SERVC_BUSY_DELAY
 
-// ---------------------------------------------------------------------------
-// servc_issue - emit a single SERVC instruction.
-//
-//   cmd      - SCLP command word
-//   sccb_ptr - 4KB-aligned address of the SCCB
-//
-// Returns the raw condition code (SERVC_CC_*).
-// ---------------------------------------------------------------------------
 static inline int servc_issue(uint32_t cmd, void *sccb_ptr) {
     int cc;
     __asm__ volatile(
@@ -34,13 +26,6 @@ static inline int servc_issue(uint32_t cmd, void *sccb_ptr) {
     return cc;
 }
 
-// ---------------------------------------------------------------------------
-// servc_retry - issue SERVC with automatic busy-retry.
-//
-// Retries up to SERVC_MAX_RETRIES times when CC=2 (busy), spinning for
-// SERVC_BUSY_DELAY iterations between attempts.
-// Returns the final condition code.
-// ---------------------------------------------------------------------------
 static inline int servc_retry(uint32_t cmd, void *sccb_ptr) {
     int cc;
     for (int attempt = 0; attempt <= SERVC_MAX_RETRIES; ++attempt) {

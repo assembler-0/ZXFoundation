@@ -1,0 +1,14 @@
+ARCHMODE    z/Arch          
+CPUSERIAL   000666          
+CPUMODEL    2064            
+MAINSIZE    512             
+XPNDSIZE    0               
+NUMCPU      1               
+DIAG8CMD    ENABLE
+CNSLPORT    3270            
+0009        3215-C  /       
+001F        3270            
+  
+0100        3390    sysres.3390
+
+IPL 0100

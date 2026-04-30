@@ -12,43 +12,27 @@
 
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/trap/trap.h>
-#include <zxfoundation/panic.h>
+#include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 
-// ---------------------------------------------------------------------------
-// Forward declarations for the assembly entry stubs (defined in trap.S)
-// ---------------------------------------------------------------------------
 extern void trap_ext_entry(void);
 extern void trap_svc_entry(void);
 extern void trap_pgm_entry(void);
 extern void trap_mchk_entry(void);
 extern void trap_io_entry(void);
 
-// ---------------------------------------------------------------------------
-// lc_write_psw - write a 64-bit PSW pair (mask + addr) to a lowcore offset.
-//
-// We write directly via a raw pointer to avoid any struct-layout ambiguity
-// between the host compiler and the actual s390x memory map.
-// ---------------------------------------------------------------------------
 static inline void lc_write_psw(uint32_t offset, uint64_t mask, uint64_t addr) {
     volatile uint64_t *p = (volatile uint64_t *)(uintptr_t)offset;
     p[0] = mask;
     p[1] = addr;
 }
 
-// ---------------------------------------------------------------------------
-// lc_read_u16 - read a uint16_t from a lowcore offset.
-// ---------------------------------------------------------------------------
 static inline uint16_t lc_read_u16(uint32_t offset) {
     return *(volatile uint16_t *)(uintptr_t)offset;
 }
 
-// ---------------------------------------------------------------------------
-// pgm_code_name - return a human-readable string for a PGM interrupt code.
-// ---------------------------------------------------------------------------
 static const char *pgm_code_name(uint16_t code) {
-    // Strip the PER bit (bit 15) and monitor-event bit (bit 8) before lookup.
     switch (code & 0x007F) {
     case PGM_OPERATION:         return "operation exception";
     case PGM_PRIVILEGED_OP:     return "privileged-operation exception";
@@ -70,9 +54,6 @@ static const char *pgm_code_name(uint16_t code) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// dump_regs - print the full register frame to the console.
-// ---------------------------------------------------------------------------
 static void dump_regs(const pt_regs_t *regs) {
     printk("CPU registers at time of exception:\n");
     printk("  PSW  mask=%016lx  addr=%016lx\n",
@@ -84,15 +65,6 @@ static void dump_regs(const pt_regs_t *regs) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// trap_init - install exception new-PSWs into the lowcore.
-//
-// The new PSW for each exception type is:
-//   mask = CONFIG_PSW_ARCH_BITS  (64-bit mode, DAT off, interrupts disabled)
-//   addr = address of the corresponding trap_*_entry stub
-//
-// This must be called before any code that could trigger an exception.
-// ---------------------------------------------------------------------------
 void trap_init(void) {
     const uint64_t psw_mask = CONFIG_PSW_ARCH_BITS;
 
@@ -103,12 +75,6 @@ void trap_init(void) {
     lc_write_psw(LC_IO_NEW_PSW,   psw_mask, (uint64_t)(uintptr_t)trap_io_entry);
 }
 
-// ---------------------------------------------------------------------------
-// do_ext_interrupt - External interrupt handler.
-//
-// External interrupts include timer, inter-CPU signals, and service signals.
-// For now we log and return; a real kernel would dispatch to sub-handlers.
-// ---------------------------------------------------------------------------
 void do_ext_interrupt(pt_regs_t *regs) {
     uint16_t code = lc_read_u16(LC_EXT_INT_CODE);
     printk("EXT interrupt: code=0x%04x  PSW addr=%016lx\n",
@@ -117,11 +83,6 @@ void do_ext_interrupt(pt_regs_t *regs) {
     (void)regs;
 }
 
-// ---------------------------------------------------------------------------
-// do_svc_interrupt - Supervisor-call (SVC) handler.
-//
-// SVCs are the system-call mechanism.  We log the call number and return.
-// ---------------------------------------------------------------------------
 void do_svc_interrupt(pt_regs_t *regs, uint16_t svc_code) {
     printk("SVC %u  PSW addr=%016lx\n",
            (unsigned)svc_code, regs->psw_addr);
@@ -129,37 +90,20 @@ void do_svc_interrupt(pt_regs_t *regs, uint16_t svc_code) {
     (void)regs;
 }
 
-// ---------------------------------------------------------------------------
-// do_pgm_exception - Program exception handler (fatal).
-//
-// Program exceptions are caused by illegal instructions, bad addresses,
-// protection violations, etc.  We treat all of them as fatal.
-// ---------------------------------------------------------------------------
 void do_pgm_exception(pt_regs_t *regs, uint16_t pgm_code, uint16_t ilc) {
     dump_regs(regs);
     panic("Program exception: %s (code=0x%04x, ILC=%u, PSW addr=%016lx)\n",
           pgm_code_name(pgm_code),
           (unsigned)pgm_code,
-          (unsigned)(ilc >> 1),   // ILC field encodes length/2
+          (unsigned)(ilc >> 1),
           regs->psw_addr);
 }
 
-// ---------------------------------------------------------------------------
-// do_mchk_interrupt - Machine-check handler (fatal).
-//
-// Machine checks indicate hardware errors.  Always fatal.
-// ---------------------------------------------------------------------------
 void do_mchk_interrupt(pt_regs_t *regs) {
     dump_regs(regs);
     panic("Machine check interrupt at PSW addr=%016lx\n", regs->psw_addr);
 }
 
-// ---------------------------------------------------------------------------
-// do_io_interrupt - I/O interrupt handler.
-//
-// I/O interrupts are generated by channel subsystem completions.
-// We log and return; a real driver model would dispatch to device handlers.
-// ---------------------------------------------------------------------------
 void do_io_interrupt(pt_regs_t *regs) {
     printk("I/O interrupt: PSW addr=%016lx\n", regs->psw_addr);
     // TODO: dispatch to I/O subsystem.

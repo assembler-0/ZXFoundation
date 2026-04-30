@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // zxfoundation/sys/panic.c
 
-#include <zxfoundation/panic.h>
+#include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <arch/s390x/trap/trap.h>
 
-#include <stdarg.h>
-
-// ---------------------------------------------------------------------------
-// panic_halt - enter a disabled-wait state.
-//
-// The PSW address is set to CONFIG_PANIC_HALT_ADDR so the halt is
-// distinguishable from a normal end-of-kernel disabled wait in QEMU logs
-// and operator consoles.  Safe to call before the console is up.
-// ---------------------------------------------------------------------------
 [[noreturn]] void panic_halt(void) {
     __asm__ volatile(
         "   larl    %%r1, 1f\n"
@@ -29,17 +20,12 @@
     __builtin_unreachable();
 }
 
-// ---------------------------------------------------------------------------
-// panic_emit - emit the panic banner and formatted message via vprintk.
-// ---------------------------------------------------------------------------
 static void panic_emit(const char *fmt, va_list ap) {
     printk("\nZXFoundation panic\n*** STOP: ");
     vprintk(fmt, ap);
+    printk("\n");
 }
 
-// ---------------------------------------------------------------------------
-// panic - print a message and halt.
-// ---------------------------------------------------------------------------
 [[noreturn]] void panic(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -48,9 +34,6 @@ static void panic_emit(const char *fmt, va_list ap) {
     panic_halt();
 }
 
-// ---------------------------------------------------------------------------
-// panic_with_regs - print a register dump, then panic.
-// ---------------------------------------------------------------------------
 [[noreturn]] void panic_with_regs(const pt_regs_t *regs, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);

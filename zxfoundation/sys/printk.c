@@ -3,15 +3,10 @@
 
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/errno.h>
-
-#include <stdarg.h>
-#include <stdint.h>
+#include <zxfoundation/types.h>
 
 static printk_putc_sink global_sink = nullptr;
 
-// ---------------------------------------------------------------------------
-// Simple hex/decimal conversion helpers
-// ---------------------------------------------------------------------------
 static void print_hex(uint64_t val, int width) {
     char buf[16];
     const char *digits = "0123456789abcdef";
@@ -63,21 +58,6 @@ static void print_str(const char *s) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// vprintk - va_list variant; the core formatter.
-//
-// Supported format specifiers:
-//   %s     - string
-//   %d     - signed decimal (int)
-//   %ld    - signed decimal (long / int64_t)
-//   %u     - unsigned decimal (unsigned int)
-//   %lu    - unsigned decimal (unsigned long / uint64_t)
-//   %x     - lowercase hex (unsigned int, no padding)
-//   %lx    - lowercase hex (uint64_t, no padding)
-//   %016lx - lowercase hex (uint64_t, zero-padded to 16 digits)
-//   %04x   - lowercase hex (unsigned int, zero-padded to 4 digits)
-//   %%     - literal '%'
-// ---------------------------------------------------------------------------
 int vprintk(const char *fmt, va_list ap) {
     if (!global_sink) return -ENODEV;
 
@@ -156,9 +136,6 @@ int vprintk(const char *fmt, va_list ap) {
     return count;
 }
 
-// ---------------------------------------------------------------------------
-// printk - printf-style wrapper around vprintk.
-// ---------------------------------------------------------------------------
 int printk(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);

@@ -1,8 +1,11 @@
 cmake-build-*
-*build*
 *.cache
 .venv/
 .p/
 .idea/
 mytoolchain.cmake
+*build*
 compile_flags.txt
+.kiro
+flatboot/
+.DS_Store

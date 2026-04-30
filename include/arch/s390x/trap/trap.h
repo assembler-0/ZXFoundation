@@ -1,40 +1,16 @@
 #pragma once
 
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/trap/trap.h
-//
-// s390x trap / exception subsystem public interface.
-//
-// Covers:
-//   - pt_regs  : full general-purpose register save frame
-//   - Program-exception (PGM) interrupt codes
-//   - trap_init()  : install exception vectors into the lowcore
-//   - trap handler declarations
+// include/arch/s390x/trap/trap.h - s390x trap / exception subsystem public interface.
 
 #include <zxfoundation/types.h>
 
-// ---------------------------------------------------------------------------
-// pt_regs - full CPU state saved on every exception entry.
-//
-// Layout (all 8-byte slots, 256 bytes total):
-//   [0..15]  : GPRs r0..r15  (saved/restored by trap.S stubs)
-//   [16]     : PSW mask      (from the hardware-saved old PSW)
-//   [17]     : PSW addr      (faulting / interrupted instruction address)
-//
-// The struct is placed on the kernel stack by the assembly stubs in trap.S.
-// C handlers receive a pointer to it and may read (but should not modify)
-// the register values for diagnostic purposes.
-// ---------------------------------------------------------------------------
 typedef struct {
     uint64_t gprs[16];      // r0 .. r15
     uint64_t psw_mask;      // PSW mask at time of exception
     uint64_t psw_addr;      // PSW address (faulting instruction + ILC)
 } pt_regs_t;
 
-// ---------------------------------------------------------------------------
-// s390x Program-Exception interrupt codes (pgm_code field in lowcore).
-// Reference: z/Architecture PoO, Table 6-3.
-// ---------------------------------------------------------------------------
 #define PGM_OPERATION           0x0001  // Operation exception
 #define PGM_PRIVILEGED_OP       0x0002  // Privileged-operation exception
 #define PGM_EXECUTE             0x0003  // Execute exception
@@ -81,16 +57,8 @@ typedef struct {
 #define PGM_PER                 0x0080  // PER event (bit, may combine)
 #define PGM_CRYPTO_OP           0x0119  // Crypto-operation exception
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-// trap_init - install all exception new-PSWs into the lowcore.
-// Must be called early in boot, before enabling any interrupts.
 void trap_init(void);
 
-// Individual C-level handlers (called from assembly stubs in trap.S).
-// Each receives a pointer to the saved register frame.
 void do_ext_interrupt(pt_regs_t *regs);
 void do_svc_interrupt(pt_regs_t *regs, uint16_t svc_code);
 void do_pgm_exception(pt_regs_t *regs, uint16_t pgm_code, uint16_t ilc);

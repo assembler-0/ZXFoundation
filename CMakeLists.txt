@@ -20,11 +20,11 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/toolchain")
 
-include(dependencies)   # Host dependencies
-include(configuration)  # Build options
-include(platform)       # Platform checks
-include(standard)       # C/C++ Standards
-
-include(source)         # Core kernel sources
-include(zxfoundation-compile)
-include(run)            # Run targets (qemu, etc.)
+include(dependencies) 		  # Host dependencies
+include(configuration) 		  # Build options
+include(platform)       	  # Platform checks
+include(standard)   	      # C/C++ Standards
+include(hosttools)			  # Host tools
+include(source)        		  # Core kernel sources
+include(zxfoundation-compile) # Full kernel compilation
+include(run)       		      # Run targets (qemu, etc.)
