@@ -19,6 +19,7 @@ target_compile_options(zxfoundation.elf PRIVATE
     -pipe
     -mpacked-stack
     -march=${MARCH_MODE}
+    -mtune=${MARCH_MODE}
     -m64
 )
 

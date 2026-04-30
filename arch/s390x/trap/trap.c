@@ -1,14 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/trap/trap.c
-//
-// s390x exception dispatcher.
-//
-// trap_init() installs the new-PSW vectors into the lowcore so the CPU
-// knows where to jump when an exception fires.
-//
-// Each do_*() function is called from the assembly stubs in trap.S with a
-// pointer to the saved pt_regs frame.  Fatal exceptions call panic(); the
-// others log and return (allowing the interrupted context to resume).
+// arch/s390x/trap/trap.c - s390x exception dispatcher.
 
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/trap/trap.h>

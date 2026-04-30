@@ -19,7 +19,6 @@ if(COMPILER_ID STREQUAL "clang")
     target_compile_options(stage1.elf PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
         -m31
-        -march=z900
     )
 endif()
 
@@ -30,7 +29,6 @@ if(COMPILER_ID STREQUAL "gcc")
         -fno-delete-null-pointer-checks
         -mesa
         -m31
-        -march=z900
     )
 endif()
 

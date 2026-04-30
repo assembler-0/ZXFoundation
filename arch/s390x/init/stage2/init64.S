@@ -6,6 +6,7 @@
     .machinemode zarch
     .section .text.__zx_start_kernel64, "ax", @progbits
     .globl __zx_start_kernel64
+
 __zx_start_kernel64:
     larl    %r15, stack_top
     aghi    %r15, -CONFIG_S390X_SAVE_AREA

@@ -6,14 +6,12 @@ ENTRY(__zx_ipl1_record)
 SECTIONS {
     . = 0x0;
 
-    /* IPL1 record - exactly 24 bytes */
     .text.ipl1 : {
         KEEP(*(.text.ipl1))
     }
 
     ASSERT(. == 0x18, "ERROR: IPL1 record must be exactly 24 bytes (0x18)")
 
-    /* Loader code starts at offset 0x18 */
     .text.loader : {
         KEEP(*(.text.loader))
     }

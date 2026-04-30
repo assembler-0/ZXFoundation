@@ -26,7 +26,7 @@ if(NOT DEFINED COMMON_TARGET_TRIPLE)
 endif()
 
 if(NOT DEFINED MARCH_MODE)
-    set(MARCH_MODE "arch9" CACHE STRING "Argument for -march=")
+    set(MARCH_MODE "z10" CACHE STRING "Argument for -march= and -mtune=")
 endif()
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)

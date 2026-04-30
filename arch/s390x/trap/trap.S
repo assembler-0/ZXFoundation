@@ -7,7 +7,6 @@
 #define PT_REGS_PSWM        128     // offsetof(pt_regs_t, psw_mask)
 #define PT_REGS_PSWA        136     // offsetof(pt_regs_t, psw_addr)
 
-// Old PSW offsets — z/Architecture PoO SA22-7832, Table 5-1
 #define LC_EXT_OLD_PSW      0x018
 #define LC_SVC_OLD_PSW      0x028
 #define LC_PGM_OLD_PSW      0x038
