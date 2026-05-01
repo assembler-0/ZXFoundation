@@ -2,11 +2,11 @@
 
 include(cmake/zxfl-compile.cmake)
 
-add_executable(zxfoundation.krnl
+add_executable(core.zxfoundation.nucleus
     ${ZX_SOURCES_64}
 )
 
-target_compile_options(zxfoundation.krnl PRIVATE
+target_compile_options(core.zxfoundation.nucleus PRIVATE
     -ffreestanding
     -nostdlib
     -fno-builtin
@@ -24,13 +24,13 @@ target_compile_options(zxfoundation.krnl PRIVATE
 )
 
 if(COMPILER_ID STREQUAL "clang")
-    target_compile_options(zxfoundation.krnl PRIVATE
+    target_compile_options(core.zxfoundation.nucleus PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
     )
 endif()
 
 if(COMPILER_ID STREQUAL "gcc")
-    target_compile_options(zxfoundation.krnl PRIVATE
+    target_compile_options(core.zxfoundation.nucleus PRIVATE
         -static-libgcc
         -Wno-array-bounds
         -fno-delete-null-pointer-checks
@@ -38,15 +38,15 @@ if(COMPILER_ID STREQUAL "gcc")
     )
 endif()
 
-target_compile_definitions(zxfoundation.krnl PUBLIC
+target_compile_definitions(core.zxfoundation.nucleus PUBLIC
     $<$<COMPILE_LANGUAGE:C>:__zxfoundation__>
 )
 
-target_compile_options(zxfoundation.krnl PRIVATE
+target_compile_options(core.zxfoundation.nucleus PRIVATE
     $<$<COMPILE_LANGUAGE:ASM>:-D__zxfoundation__>
 )
 
-target_compile_options(zxfoundation.krnl PRIVATE
+target_compile_options(core.zxfoundation.nucleus PRIVATE
     -O${OPT_LEVEL}
     -g${DSYM_LEVEL}
 )
@@ -54,9 +54,9 @@ target_compile_options(zxfoundation.krnl PRIVATE
 # linking
 set(zxfoundation_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/link.ld" CACHE STRING "zxfoundation linker script")
 
-set_target_properties(zxfoundation.krnl PROPERTIES LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
+set_target_properties(core.zxfoundation.nucleus PROPERTIES LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
 
-target_link_options(zxfoundation.krnl PRIVATE
+target_link_options(core.zxfoundation.nucleus PRIVATE
     -T ${zxfoundation_LINKER_SCRIPT}
     -nostdlib
     -static

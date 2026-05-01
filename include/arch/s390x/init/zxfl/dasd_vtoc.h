@@ -52,11 +52,11 @@ typedef struct {
 ///   key  = buf[0..43]   (44 bytes: DS1DSNAM)
 ///   data = buf[44..139] (96 bytes)
 #define DSCB1_KD_FMTID_OFF      44U         ///< DS1FMTID in key+data buffer
-#define DSCB1_KD_EXTENT0_OFF    (44U + 64U) ///< First extent in key+data buffer
+#define DSCB1_KD_EXTENT0_OFF    105U        ///< First extent in key+data buffer
 
 /// Offsets when key is ABSENT (data-only buffer, 96 bytes):
-#define DSCB1_D_FMTID_OFF       44U         ///< DS1FMTID in data-only buffer
-#define DSCB1_D_EXTENT0_OFF     64U         ///< First extent in data-only buffer
+#define DSCB1_D_FMTID_OFF       0U          ///< DS1FMTID in data-only buffer
+#define DSCB1_D_EXTENT0_OFF     61U         ///< First extent in data-only buffer (105-44)
 
 // ---------------------------------------------------------------------------
 // DSCB format identifiers (EBCDIC)
@@ -110,7 +110,7 @@ typedef struct {
 ///        error.  A single unreadable record does not abort the scan.
 ///
 /// @param schid      Subchannel ID (from lowcore 0xB8 at IPL)
-/// @param dsname     ASCII dataset name, NUL-terminated (e.g. "sys.zxfoundation.nucleus")
+/// @param dsname     ASCII dataset name, NUL-terminated (e.g. "core.zxfoundation.nucleus")
 /// @param out_extent Filled with the first extent descriptor on success
 /// @return 0 on success, -1 if the dataset was not found
 int dasd_find_dataset(uint32_t schid,

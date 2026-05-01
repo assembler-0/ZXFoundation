@@ -71,6 +71,7 @@ static void diag_flush(const char *line_buf, size_t line_len) {
 // ---------------------------------------------------------------------------
 
 int diag_setup(void) {
+    diag_flush_all();
     return 0;
 }
 

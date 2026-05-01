@@ -43,4 +43,17 @@ static inline void print_msg(const char *msg) {
     }
 }
 
+static inline void diag_print_hex8(uint32_t v) {
+    const char hex[] = "0123456789abcdef";
+    for (int i = 7; i >= 0; i--) {
+        diag_putc(hex[(v >> (i * 4)) & 0xF]);
+    }
+}
+
+static inline void diag_print_hex2(uint8_t v) {
+    const char hex[] = "0123456789abcdef";
+    diag_putc(hex[(v >> 4) & 0xF]);
+    diag_putc(hex[v & 0xF]);
+}
+
 #endif /* ZXFOUNDATION_ZXFL_DIAG_H */

@@ -13,13 +13,20 @@ static inline void zxfl_memcpy(void *dst, const void *src, uint32_t n) {
     while (n--) *d++ = *s++;
 }
 
-static void zxfl_bzero(uint32_t addr, uint32_t size) {
+static void zxfl_bzero(uintptr_t addr, size_t size) {
     if (size == 0) return;
-    register uint32_t r0 __asm__("0") = 0;          // Padding byte = 0
-    register uint32_t r2 __asm__("2") = addr;
-    register uint32_t r3 __asm__("3") = size;
-    register uint32_t r4 __asm__("4") = addr;        // Source = destination
-    register uint32_t r5 __asm__("5") = 0;           // Source length = 0 → pure fill
+#ifdef __s390x__
+    register uint64_t r2 __asm__("2") = (uint64_t)addr;
+    register uint64_t r3 __asm__("3") = (uint64_t)size;
+    register uint64_t r4 __asm__("4") = (uint64_t)addr;
+    register uint64_t r5 __asm__("5") = 0;
+#else
+    register uint32_t r2 __asm__("2") = (uint32_t)addr;
+    register uint32_t r3 __asm__("3") = (uint32_t)size;
+    register uint32_t r4 __asm__("4") = (uint32_t)addr;
+    register uint32_t r5 __asm__("5") = 0;
+#endif
+    register uint32_t r0 __asm__("0") = 0;
 
     __asm__ volatile (
         "1: mvcl %[r2], %[r4]\n"
@@ -36,7 +43,7 @@ static void zxfl_bzero(uint32_t addr, uint32_t size) {
 ///        Layout assumption: fixed-block records of DASD_BLOCK_SIZE bytes,
 ///        ZXFL_RECS_PER_TRACK records per track, DASD_3390_HEADS_PER_CYL
 ///        heads per cylinder.  This matches the sysres.conf FB 4096 4096
-///        allocation for sys.zxfoundation.nucleus.
+///        allocation for core.zxfoundation.nucleus.
 ///
 ///        We deliberately avoid division where possible by using the fact
 ///        that DASD_BLOCK_SIZE is a power of two.
@@ -78,7 +85,7 @@ static int load_segment(uint32_t schid,
 
     uint64_t file_remaining = ph->p_filesz;
     uint64_t file_offset    = ph->p_offset;
-    uint32_t mem_dest       = (uint32_t)ph->p_paddr;
+    uintptr_t mem_dest      = (uintptr_t)ph->p_paddr;
 
     while (file_remaining > 0) {
         uint16_t cyl;
@@ -90,7 +97,7 @@ static int load_segment(uint32_t schid,
                                   CCW_CMD_READ_DATA,
                                   io_block, DASD_BLOCK_SIZE);
         if (rc < 0) {
-            print_msg("zxfl: IO error loading segment\n");
+            print_msg("zxfl: io error loading segment\n");
             return -1;
         }
 
@@ -101,7 +108,7 @@ static int load_segment(uint32_t schid,
                              ? (uint32_t)file_remaining
                              : avail;
 
-        zxfl_memcpy((void *)(uintptr_t)mem_dest,
+        zxfl_memcpy((void *)mem_dest,
                     io_block + block_off,
                     copy_len);
 
@@ -126,17 +133,17 @@ int zxfl_load_elf64(uint32_t schid,
                               CCW_CMD_READ_DATA,
                               io_block, DASD_BLOCK_SIZE);
     if (rc < 0) {
-        print_msg("zxfl: cannot read ELF header block\n");
+        print_msg("zxfl: cannot read elf header block\n");
         return -1;
     }
 
     const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)(uintptr_t)io_block;
     if (!elf64_check_magic(ehdr)) {
-        print_msg("zxfl: bad ELF magic\n");
+        print_msg("zxfl: bad elf magic\n");
         return -1;
     }
     if (ehdr->e_machine != EM_S390) {
-        print_msg("zxfl: wrong ELF machine type\n");
+        print_msg("zxfl: wrong elf machine type\n");
         return -1;
     }
     if (ehdr->e_phnum == 0) {
@@ -184,7 +191,7 @@ int zxfl_load_elf64(uint32_t schid,
     }
 
     if (load_min == 0xFFFFFFFFU) {
-        print_msg("zxfl: no PT_LOAD segments\n");
+        print_msg("zxfl: no pt_load segments\n");
         return -1;
     }
 
