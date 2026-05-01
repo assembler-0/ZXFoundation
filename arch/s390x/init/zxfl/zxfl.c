@@ -1,58 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/zxfl.c
-//
-/// @brief ZXFL bootloader main entry point.
-///
-///        This is a dedicated single-volume boot loader.  The disk layout
-///        is fixed by sysres.conf and never changes:
-///
-///          cyl 0, head 0          IPL track  (loader binary)
-///          cyl 0, head 1, rec 1+  sys.zxfoundation.nucleus (ELF64 kernel, FB 4096)
-///
-///        There is no VTOC.  The kernel location is derived directly from
-///        the sysres.conf allocation ("TRK 15" = track 15 on a 3390-1 with
-///        15 heads/cyl → cyl 1, head 0).  We do not scan a VTOC because
-///        dasdload does not write one when no VTOC statement is present.
-///
-///        Sequence: load ELF64 kernel → build boot protocol → hand off.
+// arch/s390x/init/zxfl/zxfl.c - ZXFL main entry point.
 
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/elfload.h>
 #include <arch/s390x/init/zxfl/diag.h>
 
-// ---------------------------------------------------------------------------
-// Kernel location on disk
-//
-// sysres.conf: "sys.zxfoundation.nucleus SEQ zxfoundation.krnl TRK 15 0 0 PS FB 4096 4096 0"
-//
-// dasdload allocates datasets sequentially.  With no VTOC statement and
-// the kernel as the only dataset, dasdload places sys.zxfoundation.nucleus immediately
-// after the IPL track:
-//   Track  0 = cyl 0, head 0  → IPL track (loader)
-//   Track  1 = cyl 0, head 1  → sys.zxfoundation.nucleus begins here
-//
-// The "TRK 15" primary allocation means 15 tracks are reserved, but the
-// dataset starts at the first available track after the IPL track.
-// Records are 4096-byte fixed-block with no keys (kl=0, dl=4096).
-// ---------------------------------------------------------------------------
+// TODO: FILE EXPLORER
+
 #define KERNEL_START_CYL    0U
 #define KERNEL_START_HEAD   1U
 
-// ---------------------------------------------------------------------------
-// Static boot-protocol storage (BSS — zeroed before zxfl_main is called)
-// ---------------------------------------------------------------------------
 static zxfl_boot_protocol_t boot_protocol;
 static zxfl_mmap_entry_t    memory_map[ZXFL_MMAP_MAX_ENTRIES];
 static char                 cmdline_buf[256] = "console=ttyS0";
 
-// Memory hint passed to the kernel (hercules.cnf MAINSIZE 512).
-// The kernel performs authoritative detection after switching to z/Arch.
 #define ZXFL_MEM_HINT_BYTES  (512U * 1024U * 1024U)
-
-// ---------------------------------------------------------------------------
-// CPU mode-switch and kernel handoff
-// ---------------------------------------------------------------------------
 
 /// @brief Switch to 64-bit z/Arch mode and jump to the kernel entry point.
 ///
@@ -71,13 +34,13 @@ static char                 cmdline_buf[256] = "console=ttyS0";
     __asm__ volatile (
         ".machinemode zarch\n"
         "lhi    1, 1\n"
-        "sigp   1, 0, 0x12\n"   // SIGP Set Architecture → z/Arch
-        "sam64\n"                // Switch to 64-bit addressing
+        "sigp   1, 0, 0x12\n"   
+        "sam64\n"    
         "larl   1, .Lcregs\n"
-        "lctlg  0, 15, 0(1)\n"  // Load all CRs from embedded table
-        "llgfr  2, 2\n"         // Zero-extend protocol pointer
-        "llgfr  8, 8\n"         // Zero-extend entry address
-        "bsm    0, 8\n"         // Branch to kernel in 64-bit mode
+        "lctlg  0, 15, 0(1)\n"
+        "llgfr  2, 2\n"
+        "llgfr  8, 8\n"
+        "bsm    0, 8\n"
         ".align 8\n"
         ".Lcregs:\n"
         ".quad 0\n" ".quad 0\n" ".quad 0\n" ".quad 0\n"
@@ -91,12 +54,7 @@ static char                 cmdline_buf[256] = "console=ttyS0";
     while (1) { __asm__ volatile ("nop"); }
 }
 
-// ---------------------------------------------------------------------------
-// Main bootloader entry
-// ---------------------------------------------------------------------------
-
 void zxfl_main(void) {
-    // Read the IPL subchannel ID from lowcore 0xB8.
     uint32_t ipl_schid;
     __asm__ volatile ("l %0, 0xb8" : "=d" (ipl_schid));
 
@@ -130,9 +88,6 @@ void zxfl_main(void) {
     boot_protocol.loader_start = 0U;
     boot_protocol.loader_size  = 0x10000U;  // First 64 KB = loader footprint
 
-    // -----------------------------------------------------------------------
-    // Step 2: Build the memory map.
-    // -----------------------------------------------------------------------
     uint64_t total_mem   = (uint64_t)ZXFL_MEM_HINT_BYTES;
     uint64_t avail_start = (uint64_t)load_base + (uint64_t)load_size;
 

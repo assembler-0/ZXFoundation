@@ -1,12 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/elfload.c
-//
-/// @brief ELF64 kernel loader for the ZXFL bootloader.
-///        Loads PT_LOAD segments from DASD into physical memory at the
-///        addresses specified by p_paddr (= p_vaddr pre-MMU).
-///        Advances across track and cylinder boundaries automatically.
-///        No address is hardcoded — the load address is taken entirely
-///        from the ELF program headers.
 
 #include <arch/s390x/init/zxfl/elfload.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
@@ -14,20 +7,12 @@
 #include <arch/s390x/init/zxfl/elf64.h>
 #include <arch/s390x/init/zxfl/diag.h>
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 static inline void zxfl_memcpy(void *dst, const void *src, uint32_t n) {
     uint8_t       *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     while (n--) *d++ = *s++;
 }
 
-/// @brief Zero a memory range using MVCL.
-///        MVCL is used instead of a byte loop because it is significantly
-///        faster for large BSS regions and is available in ESA/390 31-bit mode.
-///        The padding byte (R0 bits 0-7) is set to 0x00.
 static void zxfl_bzero(uint32_t addr, uint32_t size) {
     if (size == 0) return;
     register uint32_t r0 __asm__("0") = 0;          // Padding byte = 0
@@ -36,10 +21,6 @@ static void zxfl_bzero(uint32_t addr, uint32_t size) {
     register uint32_t r4 __asm__("4") = addr;        // Source = destination
     register uint32_t r5 __asm__("5") = 0;           // Source length = 0 → pure fill
 
-    // MVCL with source length 0 fills the destination with the padding byte.
-    // The "jo 1b" retries if the condition code is 3 (operands overlap and
-    // the operation was only partially completed — not possible here since
-    // source length is 0, but included for strict correctness).
     __asm__ volatile (
         "1: mvcl %[r2], %[r4]\n"
         "   jo   1b\n"
@@ -48,10 +29,6 @@ static void zxfl_bzero(uint32_t addr, uint32_t size) {
         : "cc", "memory"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Sector/record position arithmetic
-// ---------------------------------------------------------------------------
 
 /// @brief Convert a byte offset within a dataset extent into a (cyl, head, rec)
 ///        tuple.  The extent begins at (begin_cyl, begin_head).
@@ -82,12 +59,6 @@ static void offset_to_cchhr(const dscb1_extent_t *ext,
     *out_rec  = (uint8_t)(rec_in_trk + 1); // DASD records are 1-based
 }
 
-// ---------------------------------------------------------------------------
-// ELF64 loader
-// ---------------------------------------------------------------------------
-
-/// @brief Scratch buffer for reading one DASD block.
-///        Static to avoid stack pressure; single-threaded bootloader.
 static uint8_t io_block[DASD_BLOCK_SIZE] __attribute__((aligned(DASD_BLOCK_SIZE)));
 
 /// @brief Load one PT_LOAD segment from DASD into physical memory.
@@ -103,7 +74,6 @@ static int load_segment(uint32_t schid,
                         const elf64_phdr_t *ph) {
     if (ph->p_filesz == 0 && ph->p_memsz == 0) return 0;
 
-    // Zero the entire in-memory region first (covers BSS tail).
     zxfl_bzero((uint32_t)ph->p_paddr, (uint32_t)ph->p_memsz);
 
     uint64_t file_remaining = ph->p_filesz;
@@ -148,7 +118,6 @@ int zxfl_load_elf64(uint32_t schid,
                     uint64_t *out_entry,
                     uint32_t *out_load_base,
                     uint32_t *out_load_size) {
-    // Read the first block to obtain the ELF header.
     uint16_t cyl  = ext->begin_cyl;
     uint16_t head = ext->begin_head;
     uint8_t  rec  = 1;
@@ -177,16 +146,11 @@ int zxfl_load_elf64(uint32_t schid,
 
     *out_entry = ehdr->e_entry;
 
-    // The program header table may not fit in the first block if e_phoff
-    // is large.  We read the block containing the phdr table separately.
-    // For a typical kernel ELF, e_phoff == 64 (immediately after the ELF
-    // header), so it fits in the first block.  We handle the general case.
     uint8_t phdr_block[DASD_BLOCK_SIZE] __attribute__((aligned(DASD_BLOCK_SIZE)));
     const elf64_phdr_t *phdrs;
 
     if (ehdr->e_phoff + (uint64_t)ehdr->e_phnum * sizeof(elf64_phdr_t)
             <= DASD_BLOCK_SIZE) {
-        // Common case: phdr table fits in the first block already in io_block.
         phdrs = (const elf64_phdr_t *)(uintptr_t)(io_block + ehdr->e_phoff);
     } else {
         // Rare case: phdr table starts beyond the first block.

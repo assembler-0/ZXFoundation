@@ -19,7 +19,7 @@ if(DASDLOAD)
     add_custom_command(
         OUTPUT sysres.3390
         COMMAND ${CMAKE_COMMAND} -E rm -f sysres.3390
-        COMMAND ${DASDLOAD} ${CMAKE_SOURCE_DIR}/scripts/sysres.conf sysres.3390
+        COMMAND ${DASDLOAD} -z ${CMAKE_SOURCE_DIR}/scripts/sysres.conf sysres.3390
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/hercules.cnf hercules.cnf
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         VERBATIM

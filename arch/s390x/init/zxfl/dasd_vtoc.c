@@ -8,10 +8,6 @@
 #include <arch/s390x/init/zxfl/ebcdic.h>
 #include <arch/s390x/init/zxfl/diag.h>
 
-// ---------------------------------------------------------------------------
-// Minimal diagnostic helpers (no printf dependency)
-// ---------------------------------------------------------------------------
-
 static void vtoc_print_hex8(uint32_t v) {
     const char hex[] = "0123456789abcdef";
     char buf[9];
@@ -29,10 +25,6 @@ static void vtoc_print_hex2(uint8_t v) {
     diag_putc(hex[v & 0xF]);
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 static inline void vtoc_memset(void *s, int c, uint32_t n) {
     uint8_t *p = (uint8_t *)s;
     while (n--) *p++ = (uint8_t)c;
@@ -47,10 +39,6 @@ static inline int vtoc_memcmp(const void *s1, const void *s2, uint32_t n) {
     }
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// VTOC location discovery
-// ---------------------------------------------------------------------------
 
 /// @brief Read the Format-4 DSCB and extract the VTOC start address.
 ///
@@ -69,15 +57,11 @@ static inline int vtoc_memcmp(const void *s1, const void *s2, uint32_t n) {
 /// @param out_head   Receives VTOC start head
 static void vtoc_find_f4(uint32_t schid,
                          uint16_t *out_cyl, uint16_t *out_head) {
-    // Default: dasdload places the VTOC at cyl 0, head 1 when the VTOC
-    // statement follows the dataset statements in the control file.
     *out_cyl  = VTOC_DEFAULT_CYL;
     *out_head = VTOC_DEFAULT_HEAD;
 
     static uint8_t f4_buf[96] __attribute__((aligned(4)));
 
-    // Try key+data first (140 bytes), fall back to data-only (96 bytes).
-    // The F4 DSCB is at cyl=0, head=1, rec=1 on a dasdload volume.
     int rc = dasd_read_record(schid, 0, 1, 1,
                               CCW_CMD_READ_KD, f4_buf, 96U);
     if (rc != 0) {
@@ -87,16 +71,6 @@ static void vtoc_find_f4(uint32_t schid,
     }
     if (rc != 0) return; // Can't read F4 — use defaults
 
-    // In data-only layout, DS1FMTID is at byte 44.
-    // For F4 DSCB: fmtid = 0xF4, VTOC pointer at bytes 1-5.
-    // Note: when read with READ_KD into a 96-byte buffer, the key is
-    // discarded and only data is returned, so byte 0 = DS1FMTID.
-    // When read with READ_DATA, byte 0 is also DS1FMTID.
-    // The F4 DSCB data layout:
-    //   byte 0:   DS1FMTID (0xF4)
-    //   byte 1-2: VTOCDSCB start cylinder (big-endian)
-    //   byte 3-4: VTOCDSCB start head     (big-endian)
-    //   byte 5:   VTOCDSCB start record
     if (f4_buf[0] != DSCB_FMT4_ID) return; // Not F4 — use defaults
 
     *out_cyl  = (uint16_t)((f4_buf[1] << 8) | f4_buf[2]);
@@ -149,35 +123,26 @@ static int dscb_match(const uint8_t *buf, uint32_t buf_len,
     return 1;
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 int dasd_find_dataset(uint32_t schid,
                       const char *dsname,
                       dscb1_extent_t *out_extent) {
-    // Build 44-byte EBCDIC space-padded name.
     uint8_t target[44];
     vtoc_memset(target, 0x40U, 44U);
     for (int i = 0; dsname[i] != '\0' && i < 44; i++)
         target[i] = ascii_to_ebcdic((uint8_t)dsname[i]);
 
-    // Diagnostic: show schid and target name bytes so we can verify
-    // the EBCDIC conversion and the subchannel ID are correct.
     print_msg("zxfl: vtoc schid=");
     vtoc_print_hex8(schid);
     print_msg(" name=");
     for (int i = 0; i < 12; i++) vtoc_print_hex2(target[i]);
     diag_putc('\n');
 
-    // 4-byte aligned read buffer: 140 bytes for key+data.
     static uint8_t dscb_buf[140] __attribute__((aligned(4)));
 
     uint16_t cur_cyl  = VTOC_DEFAULT_CYL;
     uint16_t cur_head = VTOC_DEFAULT_HEAD;
     uint32_t consec   = 0;
 
-    // Discover the actual VTOC location from the Format-4 DSCB.
     vtoc_find_f4(schid, &cur_cyl, &cur_head);
 
     for (uint32_t track = 0; track < VTOC_MAX_TRACKS; track++) {
@@ -185,14 +150,12 @@ int dasd_find_dataset(uint32_t schid,
             int      rc      = -1;
             uint32_t buf_len = 0;
 
-            // Attempt 1: Read Key+Data.
             rc = dasd_read_record(schid, cur_cyl, cur_head, rec,
                                   CCW_CMD_READ_KD, dscb_buf, 140U);
             if (rc == 0) {
                 buf_len = 140U;
                 consec  = 0;
             } else {
-                // Clear unit-check state, then retry data-only.
                 dasd_sense(schid);
                 rc = dasd_read_record(schid, cur_cyl, cur_head, rec,
                                       CCW_CMD_READ_DATA, dscb_buf, 96U);
@@ -203,7 +166,6 @@ int dasd_find_dataset(uint32_t schid,
                     dasd_sense(schid);
                     consec++;
 
-                    // Diagnostic: show where the scan is failing.
                     print_msg("zxfl: vtoc io err cyl=");
                     vtoc_print_hex8(cur_cyl);
                     print_msg(" hd=");
@@ -218,7 +180,6 @@ int dasd_find_dataset(uint32_t schid,
                 }
             }
 
-            // Diagnostic: show fmtid of every record we successfully read.
             uint8_t fmtid = (buf_len >= 45U) ? dscb_buf[44] : 0;
             print_msg("zxfl: vtoc rec c=");
             vtoc_print_hex8(cur_cyl);
