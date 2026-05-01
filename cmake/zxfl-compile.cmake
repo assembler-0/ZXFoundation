@@ -2,17 +2,18 @@
 # cmake/zxfl-compile.cmake — ZXFL bootloader compilation
 #
 # Source files are split by concern:
-#   zxfl_ipl.S  — IPL entry, stack setup, memory detection (assembly)
-#   zxfl.c      — Main sequencing: VTOC → load → handoff
-#   dasd.c      — DASD I/O engine: SSCH/TSCH, record reads, VTOC search
-#   elfload.c   — ELF64 segment loader with multi-track traversal
-#   diag.c      — DIAG 8 console (MSG * prefix, EBCDIC conversion)
-#   ebcdic.c    — ASCII ↔ EBCDIC conversion tables
+#   zxfl_ipl.S    — IPL entry, stack setup, memory detection (assembly)
+#   zxfl.c        — Main sequencing: VTOC → load → handoff
+#   dasd_io.c     — Raw DASD channel I/O: SSCH/TSCH, SENSE, record reads
+#   dasd_vtoc.c   — VTOC dataset search with multi-track scan
+#   elfload.c     — ELF64 segment loader with multi-track traversal
+#   diag.c        — DIAG 8 console (MSG * prefix, EBCDIC conversion)
+#   ebcdic.c      — ASCII ↔ EBCDIC conversion tables (CP037)
 
 set(ZXFL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/zxfl_ipl.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/zxfl.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/dasd.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/dasd_io.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/elfload.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/diag.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/ebcdic.c
@@ -98,7 +99,7 @@ if(CMAKE_OBJCOPY AND BIN2REC)
         TARGET zxfl.elf
         POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary zxfl.elf zxfl.bin
-        COMMAND ${BIN2REC} zxfl.bin ipltext.obj
+        COMMAND ${BIN2REC} zxfl.bin zxfoundationloader.sys
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         VERBATIM
         COMMENT "zxfoundation::build: generating ZXFL bootloader IPL deck"

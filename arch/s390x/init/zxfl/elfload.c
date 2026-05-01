@@ -9,7 +9,8 @@
 ///        from the ELF program headers.
 
 #include <arch/s390x/init/zxfl/elfload.h>
-#include <arch/s390x/init/zxfl/dasd.h>
+#include <arch/s390x/init/zxfl/dasd_io.h>
+#include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/elf64.h>
 #include <arch/s390x/init/zxfl/diag.h>
 
@@ -58,7 +59,7 @@ static void zxfl_bzero(uint32_t addr, uint32_t size) {
 ///        Layout assumption: fixed-block records of DASD_BLOCK_SIZE bytes,
 ///        ZXFL_RECS_PER_TRACK records per track, DASD_3390_HEADS_PER_CYL
 ///        heads per cylinder.  This matches the sysres.conf FB 4096 4096
-///        allocation for SYS1.NUCLEUS.
+///        allocation for sys.zxfoundation.nucleus.
 ///
 ///        We deliberately avoid division where possible by using the fact
 ///        that DASD_BLOCK_SIZE is a power of two.

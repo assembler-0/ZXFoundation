@@ -7,7 +7,7 @@
 #define ZXFOUNDATION_ZXFL_ELFLOAD_H
 
 #include <zxfoundation/types.h>
-#include <arch/s390x/init/zxfl/dasd.h>
+#include <arch/s390x/init/zxfl/dasd_vtoc.h>
 
 /// @brief Load an ELF64 kernel from DASD into physical memory.
 ///
@@ -18,7 +18,7 @@
 ///        the ELF program headers.
 ///
 /// @param schid         Subchannel ID of the IPL device
-/// @param ext           First extent of the SYS1.NUCLEUS dataset
+/// @param ext           First extent of the sys.zxfoundation.nucleus dataset
 /// @param out_entry     Receives the ELF entry point (e_entry)
 /// @param out_load_base Receives the lowest p_paddr across all PT_LOAD segments
 /// @param out_load_size Receives the total span (max_end - min_base)
