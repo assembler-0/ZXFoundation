@@ -1,20 +1,27 @@
-/// SPDX-License-Identifier: Apache-2.0
-/// drivers/console/diag.c - DIAG 8 hypervisor console driver
+// SPDX-License-Identifier: Apache-2.0
+// drivers/console/diag.c
+//
+/// @brief DIAG 8 hypervisor console driver for the ZXFoundation kernel.
 ///
-/// @brief DIAG 8 provides direct output to Hercules/z/VM console.
-///        With DIAG8CMD ENABLE: expects EBCDIC, goes to command line
-///        Prefix with "MSG * " to display as message instead of command
+///        Identical fix to arch/s390x/init/zxfl/diag.c: after each flush
+///        the "MSG * " prefix is restored to ASCII so the next conversion
+///        does not double-convert it into garbage.
+///
+///        The kernel runs in 64-bit z/Arch mode, so R2/R3 are 64-bit.
 
 #include <drivers/console/diag.h>
 #include <lib/ebcdic.h>
 #include <zxfoundation/types.h>
 
-/// @brief DIAG 8 instruction - write string to hypervisor console
-static inline void diag8_write(const char *addr, size_t len) {
+// ---------------------------------------------------------------------------
+// DIAG 8 raw write (64-bit kernel mode)
+// ---------------------------------------------------------------------------
+
+/// @brief Issue the DIAG 8 instruction with a 64-bit buffer address.
+static inline void diag8_write(const char *addr, uint64_t len) {
     register uint64_t r2 __asm__("2") = (uint64_t)(uintptr_t)addr;
-    register uint64_t r3 __asm__("3") = (uint64_t)len;
-    
-    __asm__ __volatile__(
+    register uint64_t r3 __asm__("3") = len;
+    __asm__ __volatile__ (
         "diag %[r2], %[r3], 8\n"
         : /* no outputs */
         : [r2] "d" (r2), [r3] "d" (r3)
@@ -22,67 +29,74 @@ static inline void diag8_write(const char *addr, size_t len) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Line-buffered output
+// ---------------------------------------------------------------------------
+
+#define DIAG_LINE_BUF_SIZE  256U
+#define MSG_PREFIX_LEN      6U
+
+// Pre-built EBCDIC "MSG * " (CP037) — written directly, no table lookup.
+#define EBCDIC_M  0xD4U
+#define EBCDIC_S  0xE2U
+#define EBCDIC_G  0xC7U
+#define EBCDIC_SP 0x40U
+#define EBCDIC_ST 0x5CU
+
+/// @brief Flush line_buf to DIAG 8 using a separate EBCDIC transmit buffer.
+///        The ASCII line_buf is never modified — no double-conversion hazard.
+static void diag_flush(const char *line_buf, size_t line_len) {
+    if (line_len <= MSG_PREFIX_LEN) return;
+
+    static char tx[DIAG_LINE_BUF_SIZE];
+
+    tx[0] = (char)EBCDIC_M;
+    tx[1] = (char)EBCDIC_S;
+    tx[2] = (char)EBCDIC_G;
+    tx[3] = (char)EBCDIC_SP;
+    tx[4] = (char)EBCDIC_ST;
+    tx[5] = (char)EBCDIC_SP;
+
+    size_t payload_len = line_len - MSG_PREFIX_LEN;
+    for (size_t i = 0; i < payload_len; i++) {
+        tx[MSG_PREFIX_LEN + i] =
+            (char)ascii_to_ebcdic((uint8_t)line_buf[MSG_PREFIX_LEN + i]);
+    }
+
+    diag8_write(tx, (uint64_t)line_len);
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 int diag_setup(void) {
     return 0;
-}
-
-int diag_write(const char *buf, size_t len) {
-    if (len == 0)
-        return 0;
-    
-    diag8_write(buf, len);
-    return 0;
-}
-
-/// @brief Line buffer for DIAG 8 output
-/// Format: "MSG * " + message content (in EBCDIC)
-#define DIAG_LINE_BUF_SIZE 256
-#define MSG_PREFIX "MSG * "
-#define MSG_PREFIX_LEN 6
-
-/// @brief Flush the current line buffer to DIAG 8
-static void diag_flush(char *line_buf, size_t *line_len) {
-    if (*line_len > MSG_PREFIX_LEN) {
-        // Convert entire buffer (including prefix) to EBCDIC
-        ascii_to_ebcdic_buf(line_buf, *line_len);
-        diag8_write(line_buf, *line_len);
-        
-        // Reset buffer with ASCII "MSG * " prefix for next line
-        for (size_t i = 0; i < MSG_PREFIX_LEN; i++) {
-            line_buf[i] = MSG_PREFIX[i];
-        }
-        *line_len = MSG_PREFIX_LEN;
-    }
 }
 
 void diag_putc(const char c) {
     static char   line_buf[DIAG_LINE_BUF_SIZE];
     static size_t line_len = MSG_PREFIX_LEN;
-    
-    // Initialize buffer with "MSG * " prefix on first call
-    static int initialized = 0;
-    if (!initialized) {
-        for (size_t i = 0; i < MSG_PREFIX_LEN; i++) {
-            line_buf[i] = MSG_PREFIX[i];
-        }
-        initialized = 1;
-    }
 
     if (c == '\n') {
-        // Flush the complete line with MSG prefix
-        diag_flush(line_buf, &line_len);
+        diag_flush(line_buf, line_len);
+        line_len = MSG_PREFIX_LEN;
     } else {
         line_buf[line_len++] = c;
-        // Flush early if buffer is nearly full
-        if (line_len >= DIAG_LINE_BUF_SIZE - 1) {
-            diag_flush(line_buf, &line_len);
+        if (line_len >= DIAG_LINE_BUF_SIZE - 1U) {
+            diag_flush(line_buf, line_len);
+            line_len = MSG_PREFIX_LEN;
         }
     }
 }
 
-/// @brief Force flush any pending output (for panic/halt situations)
+int diag_write(const char *buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        diag_putc(buf[i]);
+    }
+    return 0;
+}
+
 void diag_flush_all(void) {
-    // This is a bit of a hack - we need access to the static buffer
-    // For now, just send a newline to force a flush
     diag_putc('\n');
 }

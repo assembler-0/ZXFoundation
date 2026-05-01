@@ -1,13 +1,28 @@
-# ZXFoundation ZXFL bootloader compilation
+# SPDX-License-Identifier: Apache-2.0
+# cmake/zxfl-compile.cmake — ZXFL bootloader compilation
+#
+# Source files are split by concern:
+#   zxfl_ipl.S  — IPL entry, stack setup, memory detection (assembly)
+#   zxfl.c      — Main sequencing: VTOC → load → handoff
+#   dasd.c      — DASD I/O engine: SSCH/TSCH, record reads, VTOC search
+#   elfload.c   — ELF64 segment loader with multi-track traversal
+#   diag.c      — DIAG 8 console (MSG * prefix, EBCDIC conversion)
+#   ebcdic.c    — ASCII ↔ EBCDIC conversion tables
 
 set(ZXFL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/zxfl_ipl.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/zxfl.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/dasd.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/elfload.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/diag.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/ebcdic.c
 )
 
 add_executable(zxfl.elf ${ZXFL_SOURCES})
+
+target_include_directories(zxfl.elf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 target_compile_options(zxfl.elf PRIVATE
     -ffreestanding
@@ -52,10 +67,15 @@ target_compile_options(zxfl.elf PRIVATE
     -g${DSYM_LEVEL}
 )
 
+# ---------------------------------------------------------------------------
 # Linking
-set(zxfoundation_zxfl_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/zxfl.ld" CACHE STRING "zxfl linker script")
+# ---------------------------------------------------------------------------
+set(zxfoundation_zxfl_LINKER_SCRIPT
+    "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/zxfl.ld"
+    CACHE STRING "zxfl linker script")
 
-set_target_properties(zxfl.elf PROPERTIES LINK_DEPENDS "${zxfoundation_zxfl_LINKER_SCRIPT}")
+set_target_properties(zxfl.elf PROPERTIES
+    LINK_DEPENDS "${zxfoundation_zxfl_LINKER_SCRIPT}")
 
 target_link_options(zxfl.elf PRIVATE
     -T ${zxfoundation_zxfl_LINKER_SCRIPT}
@@ -69,15 +89,18 @@ target_link_options(zxfl.elf PRIVATE
     -g
 )
 
+# ---------------------------------------------------------------------------
+# Post-build: binary → IPL object record deck
+# ---------------------------------------------------------------------------
 if(CMAKE_OBJCOPY AND BIN2REC)
     add_dependencies(zxfl.elf tools)
     add_custom_command(
         TARGET zxfl.elf
+        POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary zxfl.elf zxfl.bin
         COMMAND ${BIN2REC} zxfl.bin ipltext.obj
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         VERBATIM
-        COMMENT "zxfoundation::build: generating ZXFL bootloader"
-        POST_BUILD
+        COMMENT "zxfoundation::build: generating ZXFL bootloader IPL deck"
     )
 endif()
