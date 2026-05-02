@@ -49,7 +49,7 @@ SECTIONS {
      *   0x81000: lock_lo  = ZXFL_LOCK_EMBED_LO  (0xE5664311)
      *
      * Verify: (lock_hi << 32 | lock_lo) ^ ZXFL_LOCK_MASK == ZXFL_LOCK_EXPECTED
-     * See include/arch/s390x/init/zxfl/zxfl_private.h for constants.
+     * See include/arch/s390x/init/zxfl/zxvl_private.h for constants.
      * Re-key by updating ZXFL_LOCK_EMBED_HI/LO and the two LONG() values below.
      */
     . = 0xB0000;

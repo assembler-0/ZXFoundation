@@ -4,8 +4,7 @@
 #include <arch/s390x/init/zxfl/elf64.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
-#include <arch/s390x/init/zxfl/zxfl_lock.h>
-#include <arch/s390x/init/zxfl/zxfl_private.h>
+#include <arch/s390x/init/zxfl/zxvl_private.h>
 
 static void zxfl_bzero(uintptr_t addr, size_t size) {
     if (size == 0) return;
@@ -28,21 +27,21 @@ static void zxfl_bzero(uintptr_t addr, size_t size) {
 ///        tuple.  The extent begins at (begin_cyl, begin_head).
 ///
 ///        Layout assumption: fixed-block records of DASD_BLOCK_SIZE bytes,
-///        ZXFL_RECS_PER_TRACK records per track, DASD_3390_HEADS_PER_CYL
+///        ZXVL_RECS_PER_TRACK records per track, DASD_3390_HEADS_PER_CYL
 ///        heads per cylinder.  This matches the sysres.conf FB 4096 4096
 ///        allocation for core.zxfoundation.nucleus.
 ///
 ///        We deliberately avoid division where possible by using the fact
 ///        that DASD_BLOCK_SIZE is a power of two.
-#define ZXFL_RECS_PER_TRACK     12U
+#define ZXVL_RECS_PER_TRACK     12U
 
 static void offset_to_cchhr(const dscb1_extent_t *ext,
                              uint64_t byte_offset,
                              uint16_t *out_cyl, uint16_t *out_head,
                              uint8_t  *out_rec) {
     uint32_t block_num  = (uint32_t)(byte_offset / DASD_BLOCK_SIZE);
-    uint32_t track_num  = block_num / ZXFL_RECS_PER_TRACK;
-    uint32_t rec_in_trk = block_num % ZXFL_RECS_PER_TRACK; // 0-based
+    uint32_t track_num  = block_num / ZXVL_RECS_PER_TRACK;
+    uint32_t rec_in_trk = block_num % ZXVL_RECS_PER_TRACK; // 0-based
 
     uint32_t abs_head = (uint32_t)ext->begin_head + track_num;
     uint32_t abs_cyl  = (uint32_t)ext->begin_cyl  + abs_head / DASD_3390_HEADS_PER_CYL;
@@ -141,20 +140,15 @@ int zxfl_load_elf64(uint32_t schid,
 
     *out_entry = ehdr->e_entry;
 
-    // Copy phdr table into a dedicated buffer before the segment loop.
-    // phdrs must NOT point into io_block — load_segment overwrites io_block
-    // via dasd_read_record, corrupting phdrs for subsequent iterations.
     uint8_t phdr_block[DASD_BLOCK_SIZE] __attribute__((aligned(DASD_BLOCK_SIZE)));
     const elf64_phdr_t *phdrs;
 
     if (ehdr->e_phoff + (uint64_t)ehdr->e_phnum * sizeof(elf64_phdr_t)
             <= DASD_BLOCK_SIZE) {
-        // phdr table is in io_block — copy it out before io_block is reused.
         zxfl_memcpy(phdr_block, io_block + ehdr->e_phoff,
                     (uint32_t)(ehdr->e_phnum * sizeof(elf64_phdr_t)));
         phdrs = (const elf64_phdr_t *)(uintptr_t)phdr_block;
     } else {
-        // Rare case: phdr table starts beyond the first block.
         uint16_t pc; uint16_t ph_head; uint8_t pr;
         offset_to_cchhr(ext, ehdr->e_phoff, &pc, &ph_head, &pr);
         rc = dasd_read_record(schid, pc, ph_head, pr,
@@ -189,42 +183,38 @@ int zxfl_load_elf64(uint32_t schid,
         return -1;
     }
 
-    // ---- Kernel-lock verification ----
+    print("zxvl: ZXVerifiedLoad 26h1\n");
+    print("zxvl: inspecting nucleus\n");
     {
-        const uintptr_t lock_base = (uintptr_t)load_min + ZXFL_LOCK_OFFSET;
+        const uintptr_t lock_base = (uintptr_t)load_min + ZXVL_LOCK_OFFSET;
         const volatile uint32_t *p_hi       = (volatile uint32_t *)(lock_base);
         const volatile uint32_t *p_sentinel = (volatile uint32_t *)(lock_base + 4U);
-        const volatile uint32_t *p_lo       = (volatile uint32_t *)(lock_base + ZXFL_LOCK_GAP);
+        const volatile uint32_t *p_lo       = (volatile uint32_t *)(lock_base + ZXVL_LOCK_GAP);
 
-        if (*p_sentinel != ZXFL_LOCK_SENTINEL) {
-            print("zxfl: kernel lock sentinel missing\n");
+        if (*p_sentinel != ZXVL_LOCK_SENTINEL) {
+            print("zxvl: nucleus lock sentinel missing\n");
             return -1;
         }
         const uint64_t lock_word = ((uint64_t)*p_hi << 32) | (uint64_t)*p_lo;
-        if ((lock_word ^ ZXFL_LOCK_MASK) != ZXFL_LOCK_EXPECTED) {
-            print("zxfl: kernel lock failed\n");
+        if ((lock_word ^ ZXVL_LOCK_MASK) != ZXVL_LOCK_EXPECTED) {
+            print("zxvl: nucleus lock failed\n");
             return -1;
         }
     }
 
-    // ---- Mutual authentication handshake (non-replayable) ----
-    // challenge = ZXFL_SEED ^ nonce  (nonce = stfle_fac[0] ^ schid, machine-specific)
-    // expected  = rotl64(challenge ^ ZXFL_SEED, 17) + ZXFL_HS_RESPONSE
-    //           = rotl64(nonce, 17) + ZXFL_HS_RESPONSE
-    // The stub computes the same: it knows ZXFL_SEED, XORs it out, rotates, adds.
     {
         typedef uint64_t (*hs_fn_t)(uint64_t);
-        const hs_fn_t stub    = (hs_fn_t)((uintptr_t)load_min + ZXFL_HS_OFFSET);
-        const uint64_t challenge = ZXFL_SEED ^ hs_nonce;
+        auto stub    = (hs_fn_t)((uintptr_t)load_min + ZXVL_HS_OFFSET);
+        const uint64_t challenge = ZXVL_SEED ^ hs_nonce;
         const uint64_t response  = stub(challenge);
-        // rotl64(hs_nonce, 17) + ZXFL_HS_RESPONSE
         const uint64_t expected  =
-            ((hs_nonce << 17) | (hs_nonce >> 47)) + ZXFL_HS_RESPONSE;
+            ((hs_nonce << 17) | (hs_nonce >> 47)) + ZXVL_HS_RESPONSE;
         if (response != expected) {
-            print("zxfl: handshake failed\n");
+            print("zxvl: nucleus handshake failed\n");
             return -1;
         }
     }
+    print(" zxvl: nucleus verified\n");
 
     *out_load_base = load_min;
     *out_load_size = load_max - load_min;

@@ -7,19 +7,6 @@
 stage2_entry:
     lgr     %r13, %r2
 
-    // ----------------------------------------------------------------
-    // Step 1: Install disabled-wait new PSWs BEFORE zeroing BSS or
-    // calling any C code.  Hercules fires external interrupts (timer
-    // ticks) at any time.  If an interrupt fires before C installs the
-    // new PSWs, the CPU loads the zero new PSW from BSS and crashes.
-    //
-    // We install the same disabled-wait PSW for all five interrupt types.
-    // The C code (zxfl_lowcore_setup) will re-install them with the
-    // correct per-type halt addresses after BSS is zeroed.
-    //
-    // MVC copies 16 bytes (one PSW) from .Ldisabled_wait_psw to each
-    // new PSW slot in the lowcore.
-    // ----------------------------------------------------------------
     larl    %r1, .Ldisabled_wait_psw
     mvc     0x080(16,%r0),  0(%r1)      // external new PSW
     mvc     0x090(16,%r0),  0(%r1)      // SVC new PSW
@@ -27,15 +14,9 @@ stage2_entry:
     mvc     0x0B0(16,%r0),  0(%r1)      // machine-check new PSW
     mvc     0x0C0(16,%r0),  0(%r1)      // I/O new PSW
 
-    // ----------------------------------------------------------------
-    // Step 2: Mask all interrupts in the current PSW via SSM.
-    // ----------------------------------------------------------------
     larl    %r1, .Lzero_byte
     ssm     0(%r1)
 
-    // ----------------------------------------------------------------
-    // Step 3: Zero BSS.
-    // ----------------------------------------------------------------
     larl    %r2, __bss_start
     larl    %r3, __bss_stop
     sgr     %r3, %r2

@@ -14,7 +14,7 @@
 ///            binding_token = ZXFL_SEED ^ stfle_fac[0] ^ (uint64_t)ipl_schid
 ///
 ///        ZXFL_SEED is a 64-bit compile-time constant defined ONLY in the
-///        loader's private header (arch/s390x/init/zxfl/zxfl_private.h).
+///        loader's private header (arch/s390x/init/zxfl/zxvl_private.h).
 ///        It is never stored in this struct.  The kernel must independently
 ///        recompute the token using the same formula and the same seed to
 ///        verify authenticity.  An outsider's kernel has no seed and cannot
@@ -147,7 +147,7 @@ typedef struct {
     /// The loader allocates a 16KB stack for the kernel's initial thread.
     /// head64.S uses this instead of its own BSS stack, so the stack
     /// layout is controlled by the loader. An opaque frame is written
-    /// below this address (see ZXFL_STACK_FRAME_* in zxfl_private.h).
+    /// below this address (see ZXFL_STACK_FRAME_* in zxvl_private.h).
     uint64_t kernel_stack_top;  ///< Physical address of initial kernel stack top
 
     // ---- CONTROL REGISTER SNAPSHOT (16 bytes) ----

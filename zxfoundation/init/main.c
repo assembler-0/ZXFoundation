@@ -6,7 +6,7 @@
 #include <zxfoundation/zconfig.h>
 #include <zxfoundation/sys/panic.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
-#include <arch/s390x/init/zxfl/zxfl_private.h>
+#include <arch/s390x/init/zxfl/zxvl_private.h>
 
 /// @brief Called from head64.S to extract the loader-provided stack top.
 ///        Returning 0 causes head64.S to fall back to the BSS stack.
@@ -21,15 +21,16 @@ uint64_t zx_get_loader_stack_top(const zxfl_boot_protocol_t *boot) {
 ///        kernel_stack_top to point at the frame, not above it).
 static void validate_stack_frame(const zxfl_boot_protocol_t *boot) {
     if (!boot->kernel_stack_top)
-        return; // no loader stack — skip (degraded mode)
+        goto bad;
 
     const uint64_t *frame = (const uint64_t *)boot->kernel_stack_top;
-    if (frame[0] != ZXFL_FRAME_MAGIC_A)
-        panic("sys: opaque stack frame magic_a mismatch — unauthorized loader");
+    if (frame[0] != ZXVL_FRAME_MAGIC_A)
+        goto bad;
 
-    const uint64_t expected_b = ZXFL_FRAME_MAGIC_B ^ boot->binding_token;
+    const uint64_t expected_b = ZXVL_FRAME_MAGIC_B ^ boot->binding_token;
     if (frame[1] != expected_b)
-        panic("sys: opaque stack frame magic_b mismatch — unauthorized loader");
+bad:
+        panic("sys: stack frame corruption/not found — unauthorized loader");
 }
 
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
@@ -39,7 +40,7 @@ static void validate_stack_frame(const zxfl_boot_protocol_t *boot) {
     if (!boot || boot->magic != ZXFL_MAGIC)
         panic("sys: boot protocol missing or corrupt");
 
-    const uint64_t expected = ZXFL_COMPUTE_TOKEN(boot->stfle_fac[0], boot->ipl_schid);
+    const uint64_t expected = ZXVL_COMPUTE_TOKEN(boot->stfle_fac[0], boot->ipl_schid);
     if (boot->binding_token != expected)
         panic("sys: binding token mismatch — unauthorized loader");
 

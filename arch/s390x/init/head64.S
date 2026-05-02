@@ -3,7 +3,7 @@
 
 #include <zxfoundation/zconfig.h>
 
-// Handshake constants — must match zxfl_private.h exactly.
+// Handshake constants — must match zxvl_private.h exactly.
 // Split into HI/LO halves because GAS can't handle 64-bit immediates directly.
 // ZXFL_HS_CHALLENGE = 0xFEEDFACECAFEBABE
 // ZXFL_HS_RESPONSE  = 0xDEADBEEF0BADF00D
@@ -27,7 +27,7 @@
 // ---------------------------------------------------------------------------
     .section .text.handshake, "ax"
     .globl __zxfl_handshake_stub
-// ZXFL_SEED split (must match zxfl_private.h)
+// ZXFL_SEED split (must match zxvl_private.h)
 // ZXFL_SEED = 0xA5F0C3E1B2D49687
 .equ ZXFL_SEED_HI, 0xA5F0C3E1
 .equ ZXFL_SEED_LO, 0xB2D49687
