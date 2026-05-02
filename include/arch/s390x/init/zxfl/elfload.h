@@ -27,6 +27,7 @@ int zxfl_load_elf64(uint32_t schid,
                     const dscb1_extent_t *ext,
                     uint64_t *out_entry,
                     uint32_t *out_load_base,
-                    uint32_t *out_load_size);
+                    uint32_t *out_load_size,
+                    uint64_t hs_nonce);
 
 #endif /* ZXFOUNDATION_ZXFL_ELFLOAD_H */

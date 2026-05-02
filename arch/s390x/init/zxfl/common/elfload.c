@@ -1,12 +1,11 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/elfload.c
-
 #include <arch/s390x/init/zxfl/elfload.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/elf64.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
+#include <arch/s390x/init/zxfl/zxfl_lock.h>
+#include <arch/s390x/init/zxfl/zxfl_private.h>
 
 static void zxfl_bzero(uintptr_t addr, size_t size) {
     if (size == 0) return;
@@ -112,7 +111,8 @@ int zxfl_load_elf64(uint32_t schid,
                     const dscb1_extent_t *ext,
                     uint64_t *out_entry,
                     uint32_t *out_load_base,
-                    uint32_t *out_load_size) {
+                    uint32_t *out_load_size,
+                    uint64_t hs_nonce) {
     uint16_t cyl  = ext->begin_cyl;
     uint16_t head = ext->begin_head;
     uint8_t  rec  = 1;
@@ -141,12 +141,18 @@ int zxfl_load_elf64(uint32_t schid,
 
     *out_entry = ehdr->e_entry;
 
+    // Copy phdr table into a dedicated buffer before the segment loop.
+    // phdrs must NOT point into io_block — load_segment overwrites io_block
+    // via dasd_read_record, corrupting phdrs for subsequent iterations.
     uint8_t phdr_block[DASD_BLOCK_SIZE] __attribute__((aligned(DASD_BLOCK_SIZE)));
     const elf64_phdr_t *phdrs;
 
     if (ehdr->e_phoff + (uint64_t)ehdr->e_phnum * sizeof(elf64_phdr_t)
             <= DASD_BLOCK_SIZE) {
-        phdrs = (const elf64_phdr_t *)(uintptr_t)(io_block + ehdr->e_phoff);
+        // phdr table is in io_block — copy it out before io_block is reused.
+        zxfl_memcpy(phdr_block, io_block + ehdr->e_phoff,
+                    (uint32_t)(ehdr->e_phnum * sizeof(elf64_phdr_t)));
+        phdrs = (const elf64_phdr_t *)(uintptr_t)phdr_block;
     } else {
         // Rare case: phdr table starts beyond the first block.
         uint16_t pc; uint16_t ph_head; uint8_t pr;
@@ -181,6 +187,43 @@ int zxfl_load_elf64(uint32_t schid,
     if (load_min == 0xFFFFFFFFU) {
         print("zxfl: no pt_load segments\n");
         return -1;
+    }
+
+    // ---- Kernel-lock verification ----
+    {
+        const uintptr_t lock_base = (uintptr_t)load_min + ZXFL_LOCK_OFFSET;
+        const volatile uint32_t *p_hi       = (volatile uint32_t *)(lock_base);
+        const volatile uint32_t *p_sentinel = (volatile uint32_t *)(lock_base + 4U);
+        const volatile uint32_t *p_lo       = (volatile uint32_t *)(lock_base + ZXFL_LOCK_GAP);
+
+        if (*p_sentinel != ZXFL_LOCK_SENTINEL) {
+            print("zxfl: kernel lock sentinel missing\n");
+            return -1;
+        }
+        const uint64_t lock_word = ((uint64_t)*p_hi << 32) | (uint64_t)*p_lo;
+        if ((lock_word ^ ZXFL_LOCK_MASK) != ZXFL_LOCK_EXPECTED) {
+            print("zxfl: kernel lock failed\n");
+            return -1;
+        }
+    }
+
+    // ---- Mutual authentication handshake (non-replayable) ----
+    // challenge = ZXFL_SEED ^ nonce  (nonce = stfle_fac[0] ^ schid, machine-specific)
+    // expected  = rotl64(challenge ^ ZXFL_SEED, 17) + ZXFL_HS_RESPONSE
+    //           = rotl64(nonce, 17) + ZXFL_HS_RESPONSE
+    // The stub computes the same: it knows ZXFL_SEED, XORs it out, rotates, adds.
+    {
+        typedef uint64_t (*hs_fn_t)(uint64_t);
+        const hs_fn_t stub    = (hs_fn_t)((uintptr_t)load_min + ZXFL_HS_OFFSET);
+        const uint64_t challenge = ZXFL_SEED ^ hs_nonce;
+        const uint64_t response  = stub(challenge);
+        // rotl64(hs_nonce, 17) + ZXFL_HS_RESPONSE
+        const uint64_t expected  =
+            ((hs_nonce << 17) | (hs_nonce >> 47)) + ZXFL_HS_RESPONSE;
+        if (response != expected) {
+            print("zxfl: handshake failed\n");
+            return -1;
+        }
     }
 
     *out_load_base = load_min;

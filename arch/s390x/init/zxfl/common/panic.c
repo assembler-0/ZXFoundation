@@ -5,8 +5,8 @@
 #include <arch/s390x/init/zxfl/panic.h>
 
 static const uint64_t panic_psw[2] __attribute__((aligned(8))) = {
-    0x0002000180000000ULL,  // 64-bit disabled-wait
-    0x00000000DEAD0000ULL,  // operator-visible halt address
+    0x0000800180000000ULL,  // 64-bit disabled-wait
+    0x0000000000000000ULL,  // halt at 0x0 (always mapped)
 };
 
 [[noreturn]] void panic(const char *msg) {

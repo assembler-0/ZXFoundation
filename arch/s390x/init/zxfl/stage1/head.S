@@ -99,7 +99,7 @@ stage1_entry:
 
     .align 8
 .Ldisabled_wait_psw:
-    .quad   0x0002000180000000          // 64-bit disabled-wait PSW
+    .quad   0x0000800180000000          // 64-bit disabled-wait PSW (bit16=wait, bits31+32=64bit)
     .quad   0x00000000DEAD0001          // halt address (operator-visible)
 
     .section .bss

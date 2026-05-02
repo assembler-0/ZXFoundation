@@ -1,6 +1,8 @@
 ARCHMODE    z/Arch          
 CPUSERIAL   000666          
 CPUMODEL    2096
+LPARNUM     1
+LPARNAME    ZXF
 SCLPMDL     2096
 MAINSIZE    512             
 XPNDSIZE    0               

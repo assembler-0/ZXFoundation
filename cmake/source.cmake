@@ -12,6 +12,8 @@ include_directories(SYSTEM
     ${CMAKE_SOURCE_DIR}/include
 )
 
+file(GLOB CPU_SOURCES      "arch/s390x/cpu/*.c")
+
 set(ZX_SOURCES_64
     ${INIT_SOURCES}
     ${ARCH_INIT_SOURCES_64}
@@ -20,4 +22,5 @@ set(ZX_SOURCES_64
     ${TRAP_S_SOURCES}
     ${CONSOLE_SOURCES}
     ${LIB_SOURCES}
+    ${CPU_SOURCES}
 )

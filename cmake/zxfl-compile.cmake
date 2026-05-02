@@ -8,6 +8,10 @@ set(ZXFL_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/ebcdic.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/panic.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/string.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/lowcore.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/smp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stsi.c
 )
 
 set(ZXFL_COMMON_FLAGS
@@ -68,7 +72,6 @@ set(ZXFL_STAGE2_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.c
     ${ZXFL_COMMON_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/elfload.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
 )
 
 add_executable(zxfl_stage2.elf ${ZXFL_STAGE2_SOURCES})

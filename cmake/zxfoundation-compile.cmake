@@ -18,6 +18,8 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -fno-stack-protector
     -pipe
     -mpacked-stack
+    -msoft-float
+    -mno-vx
     -march=${MARCH_MODE}
     -mtune=${MARCH_MODE}
     -m64

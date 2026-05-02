@@ -4,7 +4,6 @@
 #include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
-#include <arch/s390x/trap/trap.h>
 
 [[noreturn]] void panic_halt(void) {
     __asm__ volatile(
@@ -34,22 +33,3 @@ static void panic_emit(const char *fmt, va_list ap) {
     panic_halt();
 }
 
-[[noreturn]] void panic_with_regs(const pt_regs_t *regs, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    panic_emit(fmt, ap);
-    va_end(ap);
-
-    if (regs) {
-        printk("Register dump:\n");
-        printk("  PSW  mask=%016lx  addr=%016lx\n",
-               regs->psw_mask, regs->psw_addr);
-        for (int i = 0; i < 16; i += 2) {
-            printk("  r%-2d  %016lx    r%-2d  %016lx\n",
-                   i,     regs->gprs[i],
-                   i + 1, regs->gprs[i + 1]);
-        }
-    }
-
-    panic_halt();
-}
