@@ -1,77 +1,58 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/stage1/stage1_main.c
+// arch/s390x/init/zxfl/stage1/entry.c
+
+//! P.S.: could've done this in raw assembly but having some logs is nice
 
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/panic.h>
 
-#define STAGE2_LOAD_ADDR    0x20000U
+#define STAGE2_LOAD_ADDR    0x20000UL
 #define STAGE2_FILENAME     "CORE.ZXFOUNDATIONLOADER01.SYS"
 
-/// @brief Jump to Stage 2 in 64-bit mode.
-/// @param schid Subchannel ID.
-/// @param entry Entry point address.
-[[noreturn]] static void jump_to_stage2(uint32_t schid, uint32_t entry) {
-    register uint32_t r2 __asm__("2") = schid;
-    register uint32_t r3 __asm__("3") = entry;
-
+/// @brief Jump to stage 2. Stage 2 is a flat binary linked at 0x20000,
+///        so the entry point IS 0x20000. R2 carries schid per our ABI.
+/// @param schid Subchannel ID of the IPL device.
+[[noreturn]] static void jump_to_stage2(uint64_t schid) {
+    register uint64_t r2  __asm__("2")  = schid;
+    register uint64_t r14 __asm__("14") = STAGE2_LOAD_ADDR;
     __asm__ volatile (
-        ".machinemode zarch\n"
-        "lhi    1, 1\n"
-        "sigp   1, 0, 0x12\n"   /* Set Architecture: z/Arch mode */
-        "sam64\n"               /* Switch to 64-bit addressing */
-        "llgfr  2, 2\n"
-        "llgfr  3, 3\n"
-        "br     3\n"
+        "br     %[entry]\n"
         :
-        : "r" (r2), "r" (r3)
-        : "memory", "1"
+        : [entry] "r" (r14), "r" (r2)
+        : "memory"
     );
-    for (;;) { __asm__ volatile("nop"); }
+    __builtin_unreachable();
 }
 
-/// @brief Stage 1 entry point (31-bit).
-/// @param ipl_schid Subchannel ID of the device we booted from.
-void zxfl00_entry(const uint32_t ipl_schid) {
-    dscb1_extent_t extent;
-    uint8_t *load_ptr = (uint8_t *)STAGE2_LOAD_ADDR;
+/// @brief Stage 1 entry point. Called from head.S in 64-bit mode.
+/// @param schid Subchannel ID from lowcore 0xB8.
+[[noreturn]] void zxfl00_entry(uint32_t schid) {
     diag_setup();
+    print("zxfl00: ZXFoundationLoader 26h1 - core.zxfoundationloader00.sys initializing\n");
 
-    print_msg("zxfl: ZXFoundationLoader 26h1 - core.zxfoundationloader00.sys initializing\n");
+    dscb1_extent_t ext;
+    if (dasd_find_dataset(schid, STAGE2_FILENAME, &ext) < 0)
+        panic("zxfl00: core.zxfoundationloader01.sys not found\n");
 
-    if (dasd_find_dataset(ipl_schid, STAGE2_FILENAME, &extent) < 0) {
-        panic("zxfl: core.zxfoundationloader01.sys loader not found on DASD\n");
+    uint8_t *dst = (uint8_t *)STAGE2_LOAD_ADDR;
+    uint16_t cyl  = ext.begin_cyl;
+    uint16_t head = ext.begin_head;
+    uint8_t  rec  = 1;
+
+    while (cyl < ext.end_cyl ||
+           (cyl == ext.end_cyl && head <= ext.end_head)) {
+        int rc = dasd_read_next(schid, &cyl, &head, &rec,
+                                CCW_CMD_READ_DATA, dst, DASD_BLOCK_SIZE);
+        if (rc < 0)
+            break;
+        dst += DASD_BLOCK_SIZE;
     }
 
-    uint16_t cur_cyl  = extent.begin_cyl;
-    uint16_t cur_head = extent.begin_head;
+    if (*(volatile uint64_t *)STAGE2_LOAD_ADDR == 0)
+        panic("zxfl00: core.zxfoundationloader01.sys load empty\n");
 
-    for (uint32_t i = 0; i < 4096; i++) load_ptr[i] = 0xAA; // poison
-
-    while (cur_cyl < extent.end_cyl || (cur_cyl == extent.end_cyl && cur_head <= extent.end_head)) {
-        for (uint8_t r = 1; r <= 12; r++) {
-            int rc = dasd_read_record(ipl_schid, cur_cyl, cur_head, r, CCW_CMD_READ_DATA, load_ptr, 4096);
-            if (rc == 0) {
-                load_ptr += 4096;
-            } else {
-                break; 
-            }
-        }
-        cur_head++;
-        if (cur_head >= DASD_3390_HEADS_PER_CYL) {
-            cur_head = 0;
-            cur_cyl++;
-        }
-    }
-
-    uint32_t magic = *(uint32_t*)STAGE2_LOAD_ADDR;
-
-    if (magic == 0xAAAAAAAA || magic == 0) {
-        print_msg("zxfl: core.zxfoundationloader01.sys not loaded correctly\n");
-        return;
-    }
-
-    print_msg("zxfl: launching core.zxfoundation01.sys\n");
-    jump_to_stage2(ipl_schid, STAGE2_LOAD_ADDR);
+    print("zxfl00: launching core.zxfoundationloader00.sys\n");
+    jump_to_stage2((uint64_t)schid);
 }

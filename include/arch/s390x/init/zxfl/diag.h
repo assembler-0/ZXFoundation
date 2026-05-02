@@ -37,7 +37,7 @@ void diag_flush_all(void);
 /// @brief Write a NUL-terminated ASCII string to the DIAG 8 console.
 ///        Convenience wrapper used throughout the bootloader.
 /// @param msg NUL-terminated ASCII string
-static inline void print_msg(const char *msg) {
+static inline void print(const char *msg) {
     while (*msg) {
         diag_putc(*msg++);
     }

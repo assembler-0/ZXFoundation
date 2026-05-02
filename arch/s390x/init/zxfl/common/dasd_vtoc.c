@@ -6,21 +6,7 @@
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/ebcdic.h>
-
-static inline void vtoc_memset(void *s, int c, uint32_t n) {
-    uint8_t *p = (uint8_t *)s;
-    while (n--) *p++ = (uint8_t)c;
-}
-
-static inline int vtoc_memcmp(const void *s1, const void *s2, uint32_t n) {
-    const uint8_t *p1 = (const uint8_t *)s1;
-    const uint8_t *p2 = (const uint8_t *)s2;
-    while (n--) {
-        if (*p1 != *p2) return (int)*p1 - (int)*p2;
-        p1++; p2++;
-    }
-    return 0;
-}
+#include <arch/s390x/init/zxfl/string.h>
 
 /// @brief Read the VOL1 label at cyl 0, head 0, record 3 and extract the VTOC pointer.
 /// @param schid    Subchannel ID
@@ -71,8 +57,8 @@ static void vtoc_find_from_vol1(uint32_t schid,
 ///          buf[64..73]  = DS1EXTENT[0]
 ///
 /// @return 1=match, 0=no match (skip), -1=unrecognised
-static int dscb_match(const uint8_t *buf, uint32_t buf_len,
-                      const uint8_t *dsname_ebcdic,
+static int dscb_match(uint8_t *buf, uint32_t buf_len,
+                      uint8_t *dsname_ebcdic,
                       dscb1_extent_t *out_extent) {
     uint32_t extent_off;
 
@@ -84,7 +70,7 @@ static int dscb_match(const uint8_t *buf, uint32_t buf_len,
         return 0; // F4, F5, empty, or unrecognised — not an error
     }
 
-    if (vtoc_memcmp(buf, dsname_ebcdic, 44U) != 0) return 0;
+    if (zxfl_memcmp(buf, dsname_ebcdic, 44U) != 0) return 0;
 
     const uint8_t *ext = buf + extent_off;
     out_extent->begin_cyl  = (uint16_t)((ext[2] << 8) | ext[3]);
@@ -98,7 +84,7 @@ int dasd_find_dataset(uint32_t schid,
                       const char *dsname,
                       dscb1_extent_t *out_extent) {
     uint8_t target[44];
-    vtoc_memset(target, 0x40U, 44U);
+    zxfl_memset(target, 0x40U, 44U);
     for (int i = 0; dsname[i] != '\0' && i < 44; i++)
         target[i] = ascii_to_ebcdic((uint8_t)dsname[i]);
 

@@ -6,26 +6,14 @@
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/elf64.h>
 #include <arch/s390x/init/zxfl/diag.h>
-
-static inline void zxfl_memcpy(void *dst, const void *src, uint32_t n) {
-    uint8_t       *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-    while (n--) *d++ = *s++;
-}
+#include <arch/s390x/init/zxfl/string.h>
 
 static void zxfl_bzero(uintptr_t addr, size_t size) {
     if (size == 0) return;
-#ifdef __s390x__
     register uint64_t r2 __asm__("2") = (uint64_t)addr;
     register uint64_t r3 __asm__("3") = (uint64_t)size;
     register uint64_t r4 __asm__("4") = (uint64_t)addr;
     register uint64_t r5 __asm__("5") = 0;
-#else
-    register uint32_t r2 __asm__("2") = (uint32_t)addr;
-    register uint32_t r3 __asm__("3") = (uint32_t)size;
-    register uint32_t r4 __asm__("4") = (uint32_t)addr;
-    register uint32_t r5 __asm__("5") = 0;
-#endif
     register uint32_t r0 __asm__("0") = 0;
 
     __asm__ volatile (
@@ -97,7 +85,7 @@ static int load_segment(uint32_t schid,
                                   CCW_CMD_READ_DATA,
                                   io_block, DASD_BLOCK_SIZE);
         if (rc < 0) {
-            print_msg("zxfl: io error loading segment\n");
+            print("zxfl: io error loading segment\n");
             return -1;
         }
 
@@ -133,21 +121,21 @@ int zxfl_load_elf64(uint32_t schid,
                               CCW_CMD_READ_DATA,
                               io_block, DASD_BLOCK_SIZE);
     if (rc < 0) {
-        print_msg("zxfl: cannot read elf header block\n");
+        print("zxfl: cannot read elf header block\n");
         return -1;
     }
 
     const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)(uintptr_t)io_block;
     if (!elf64_check_magic(ehdr)) {
-        print_msg("zxfl: bad elf magic\n");
+        print("zxfl: bad elf magic\n");
         return -1;
     }
     if (ehdr->e_machine != EM_S390) {
-        print_msg("zxfl: wrong elf machine type\n");
+        print("zxfl: wrong elf machine type\n");
         return -1;
     }
     if (ehdr->e_phnum == 0) {
-        print_msg("zxfl: no program headers\n");
+        print("zxfl: no program headers\n");
         return -1;
     }
 
@@ -167,7 +155,7 @@ int zxfl_load_elf64(uint32_t schid,
                               CCW_CMD_READ_DATA,
                               phdr_block, DASD_BLOCK_SIZE);
         if (rc < 0) {
-            print_msg("zxfl: cannot read phdr block\n");
+            print("zxfl: cannot read phdr block\n");
             return -1;
         }
         uint32_t off_in_block = (uint32_t)(ehdr->e_phoff % DASD_BLOCK_SIZE);
@@ -191,7 +179,7 @@ int zxfl_load_elf64(uint32_t schid,
     }
 
     if (load_min == 0xFFFFFFFFU) {
-        print_msg("zxfl: no pt_load segments\n");
+        print("zxfl: no pt_load segments\n");
         return -1;
     }
 

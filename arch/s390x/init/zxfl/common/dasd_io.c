@@ -2,15 +2,11 @@
 // arch/s390x/init/zxfl/dasd_io.c - Raw DASD channel I/O engine for ZXFL.
 
 #include <arch/s390x/init/zxfl/dasd_io.h>
-
-static inline void zxfl_memset_io(void *s, int c, uint32_t n) {
-    uint8_t *p = (uint8_t *)s;
-    while (n--) *p++ = (uint8_t)c;
-}
+#include <arch/s390x/init/zxfl/string.h>
 
 int dasd_sync_io(uint32_t schid, ccw1_t *ccw) {
     orb_t orb;
-    zxfl_memset_io(&orb, 0, sizeof(orb));
+    zxfl_memset(&orb, 0, sizeof(orb));
     orb.flags = ORB_FLAGS_F1_LPM_FF;
     orb.cpa   = (uint32_t)(uintptr_t)ccw;
 

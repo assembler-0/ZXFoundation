@@ -1,21 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // include/arch/s390x/init/zxfl/dasd_io.h
-//
-/// @brief Raw DASD channel I/O primitives for the ZXFL bootloader.
-///        Covers CCW/ORB construction, synchronous SSCH/TSCH execution,
-///        SENSE, and single-record / sequential-record reads.
-///
-///        This header is intentionally narrow: it exposes only the I/O
-///        engine.  VTOC search lives in dasd_vtoc.h.
 
 #ifndef ZXFOUNDATION_ZXFL_DASD_IO_H
 #define ZXFOUNDATION_ZXFL_DASD_IO_H
 
 #include <zxfoundation/types.h>
-
-// ---------------------------------------------------------------------------
-// CCW Format-1
-// ---------------------------------------------------------------------------
 
 /// @brief Channel Command Word, Format 1.
 ///        Must be 8-byte aligned as required by the channel subsystem.
@@ -73,16 +62,9 @@ typedef struct __attribute__((packed)) {
     uint8_t  rec;       ///< Record number (1-based)
 } dasd_search_arg_t;
 
-// ---------------------------------------------------------------------------
-// 3390 geometry constants
-// ---------------------------------------------------------------------------
 #define DASD_3390_HEADS_PER_CYL 15U     ///< Heads per cylinder on a 3390
 #define DASD_3390_BYTES_PER_TRK 56664U  ///< Usable bytes per track (3390)
 #define DASD_BLOCK_SIZE         4096U   ///< Fixed-block record size used by ZXFL
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /// @brief Execute a synchronous SSCH/TSCH I/O operation.
 ///

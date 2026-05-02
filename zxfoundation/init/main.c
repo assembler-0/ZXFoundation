@@ -2,7 +2,6 @@
 /// main.c ZXFoundation kernel entry point
 
 #include <drivers/console/diag.h>
-#include <drivers/console/sclp.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <zxfoundation/sys/panic.h>
@@ -20,11 +19,7 @@
         panic("ZXFoundationLoader corruption");
     }
 
-    if (sclp_setup() == 0) {
-        printk("sys: SCLP console initialized\n");
-    } else {
-        printk("sys: SCLP console setup failed\n");
-    }
+    printk("sys: core.zxfoundation.nuclues init complete\n");
 
     while (true) {
         __asm__ volatile("nop");

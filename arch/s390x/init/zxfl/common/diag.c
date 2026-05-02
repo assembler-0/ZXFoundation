@@ -5,13 +5,8 @@
 #include <arch/s390x/init/zxfl/ebcdic.h>
 
 static inline void diag8_write(const char *addr, uint32_t len) {
-#ifdef __s390x__
     register unsigned long r2 __asm__("2") = (unsigned long)addr;
     register unsigned long r3 __asm__("3") = (unsigned long)len;
-#else
-    register uint32_t r2 __asm__("2") = (uint32_t)(uintptr_t)addr;
-    register uint32_t r3 __asm__("3") = len;
-#endif
     __asm__ __volatile__ (
         "diag %[r2], %[r3], 8\n"
         : /* no outputs */

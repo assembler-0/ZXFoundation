@@ -1,6 +1,9 @@
 #ifndef ZXFOUNDATION_ZCONFIG_H
 #define ZXFOUNDATION_ZCONFIG_H
 
+// SPDX-License-Identifier: Apache-2.0
+// include/zxfoundation/zconfig.h
+
 // ---------------------------------------------------------------------------
 // Release
 // ---------------------------------------------------------------------------
@@ -16,7 +19,7 @@
 // Console drivers
 // ---------------------------------------------------------------------------
 #define CONFIG_SCLP_CONSOLE                 1
-#define CONFIG_SCLP_SERVC_MAX_RETRIES       3
+#define CONFIG_SCLP_SERVC_MAX_RETRIES       100
 #define CONFIG_SCLP_SERVC_BUSY_DELAY        100000
 
 // ---------------------------------------------------------------------------
@@ -45,5 +48,6 @@
 // Computed / derived
 // ---------------------------------------------------------------------------
 #define CONFIG_HAVE_CONSOLE                 1
+#define CONFIG_PAGE_SIZE                    4096
 
 #endif /* ZXFOUNDATION_ZCONFIG_H */

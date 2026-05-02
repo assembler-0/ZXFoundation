@@ -32,10 +32,6 @@
 
 #include <zxfoundation/types.h>
 
-// ---------------------------------------------------------------------------
-// DSCB extent descriptor
-// ---------------------------------------------------------------------------
-
 /// @brief Parsed first extent from a Format-1 DSCB.
 typedef struct {
     uint16_t begin_cyl;     ///< First cylinder of the extent
@@ -43,10 +39,6 @@ typedef struct {
     uint16_t end_cyl;       ///< Last cylinder of the extent
     uint16_t end_head;      ///< Last head of the extent
 } dscb1_extent_t;
-
-// ---------------------------------------------------------------------------
-// DSCB field offsets
-// ---------------------------------------------------------------------------
 
 /// Offsets when key IS present (key+data combined buffer, 140 bytes total):
 ///   key  = buf[0..43]   (44 bytes: DS1DSNAM)
@@ -58,37 +50,21 @@ typedef struct {
 #define DSCB1_D_FMTID_OFF       0U          ///< DS1FMTID in data-only buffer
 #define DSCB1_D_EXTENT0_OFF     61U         ///< First extent in data-only buffer (105-44)
 
-// ---------------------------------------------------------------------------
-// DSCB format identifiers (EBCDIC)
-// ---------------------------------------------------------------------------
 #define DSCB_FMT1_ID            0xF1U   ///< Format-1 DSCB (dataset entry)
 #define DSCB_FMT4_ID            0xF4U   ///< Format-4 DSCB (VTOC header)
 #define DSCB_FMT5_ID            0xF5U   ///< Format-5 DSCB (free space)
 
-// ---------------------------------------------------------------------------
-// VTOC location and scan limits
-// ---------------------------------------------------------------------------
-
 /// Default VTOC location — dasdload places the VTOC at cyl 0, head 1
-/// when the VTOC statement follows the dataset statements.
-/// This is used as a fallback if the Format-4 DSCB cannot be read.
 #define VTOC_DEFAULT_CYL        0U
 #define VTOC_DEFAULT_HEAD       1U
 
 /// Maximum records to scan per VTOC track.
-/// A 3390 track with 4096-byte records holds at most 12 data records
-/// (floor(56664 / 4096) = 13, minus 1 for the R0 home-address record).
-/// We use 20 to be safe against smaller record sizes.
 #define VTOC_MAX_RECORDS_PER_TRACK  20U
 
 /// Maximum VTOC tracks to scan before giving up.
-/// A typical sysres volume has a small VTOC (1-3 tracks).  We scan up to
-/// 5 tracks to handle larger volumes without spinning forever.
 #define VTOC_MAX_TRACKS         5U
 
 /// Maximum consecutive I/O failures before aborting the VTOC scan.
-/// A single bad record should not abort the entire scan; three consecutive
-/// failures indicate the end of the VTOC or a hardware problem.
 #define VTOC_MAX_CONSECUTIVE_ERRORS 3U
 
 // ---------------------------------------------------------------------------

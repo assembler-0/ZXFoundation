@@ -9,8 +9,7 @@ file(GLOB CONSOLE_SOURCES "drivers/console/*.c")
 file(GLOB LIB_SOURCES     "lib/*.c")
 
 include_directories(SYSTEM
-    include
-    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
 )
 
 set(ZX_SOURCES_64
