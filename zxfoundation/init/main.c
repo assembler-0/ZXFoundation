@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // zxfoundation/init/main.c — ZXFoundation kernel entry point
 
-#include <drivers/console/diag.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <zxfoundation/sys/panic.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <drivers/console/diag.h>
 
 /// @brief Called from head64.S to extract the loader-provided stack top.
 ///        Returning 0 causes head64.S to fall back to the BSS stack.
@@ -38,7 +38,7 @@ bad:
     printk_initialize(diag_putc);
 
     if (!boot || boot->magic != ZXFL_MAGIC)
-        panic("sys: boot protocol missing or corrupt");
+        panic("sys: protocol missing or corrupt");
 
     const uint64_t expected = ZXVL_COMPUTE_TOKEN(boot->stfle_fac[0], boot->ipl_schid);
     if (boot->binding_token != expected)

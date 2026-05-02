@@ -7,13 +7,14 @@
 //   1.  Lowcore setup — install safe disabled-wait new PSWs.
 //   2.  STFLE — detect all CPU facilities (up to 32 dwords).
 //   3.  SMP enumeration — find all CPUs via STSI; stop APs.
-//   4.  Memory probe — walk physical memory in 1 MB frames to build map.
-//   5.  Control register setup — CR0, CR6 for kernel entry state.
-//   6.  Parmfile read — ETC.ZXFOUNDATION.PARM from DASD.
-//   7.  ELF64 kernel load — CORE.ZXFOUNDATION.NUCLEUS from DASD.
-//   8.  Protocol fill — populate zxfl_boot_protocol_t v3.
-//   9.  Binding token — compute ZXFL_SEED ^ stfle_fac[0] ^ schid.
-//  10.  Jump to kernel — R2 = &proto, R14 = entry_point.
+//   4.  Control register setup — CR0, CR6 for kernel entry state.
+//   5.  Parmfile read — ETC.ZXFOUNDATION.PARM from DASD.
+//   6.  syssize= parse — determine memory probe ceiling from parmfile.
+//   7.  Memory probe — walk physical memory in 1 MB frames to build map.
+//   8.  ELF64 kernel load — CORE.ZXFOUNDATION.NUCLEUS from DASD.
+//   9.  Protocol fill — populate zxfl_boot_protocol_t v3.
+//  10.  Binding token — compute ZXFL_SEED ^ stfle_fac[0] ^ schid.
+//  11.  Jump to kernel — R2 = &proto, R14 = entry_point.
 
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
@@ -25,6 +26,7 @@
 #include <arch/s390x/init/zxfl/elfload.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/panic.h>
+#include <arch/s390x/init/zxfl/parmfile.h>
 
 #define ZX_NUCLEUS_NAME         "CORE.ZXFOUNDATION.NUCLEUS"
 #define ZX_PARMFILE_NAME        "ETC.ZXFOUNDATION.PARM"
@@ -32,9 +34,10 @@
 /// @brief Probe granularity: 1 MB frames.
 #define MEM_PROBE_FRAME         (1UL << 20)
 
-/// @brief Maximum physical address to probe — must not exceed MAINSIZE.
-///        Set to match hercules.cnf MAINSIZE (512 MB).
-#define MEM_PROBE_MAX           (512UL << 20)
+/// @brief Fallback memory ceiling when syssize= is absent from the parmfile.
+///        Conservative: 512 MB matches the default Hercules MAINSIZE.
+///        The real ceiling is supplied at runtime by parse_syssize().
+#define MEM_PROBE_DEFAULT_MAX   (512UL << 20)
 
 /// @brief Magic pattern written to test if a frame is usable RAM.
 ///        Two distinct values are written and read back to rule out
@@ -92,9 +95,12 @@ static void snapshot_control_regs(zxfl_boot_protocol_t *proto) {
 /// @param max          Maximum entries.
 /// @param kernel_start Physical start of the loaded kernel.
 /// @param kernel_end   Physical end (exclusive) of the loaded kernel.
+/// @param mem_limit    Physical address ceiling for probing (from syssize=).
+///                     Must be a multiple of MEM_PROBE_FRAME.
 /// @return Number of entries written.
 static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
-                             uint64_t kernel_start, uint64_t kernel_end) {
+                             uint64_t kernel_start, uint64_t kernel_end,
+                             uint64_t mem_limit) {
     uint32_t count = 0;
 
     if (count < max) {
@@ -114,7 +120,7 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
     }
 
     for (uint64_t frame = 2UL * MEM_PROBE_FRAME;
-         frame < MEM_PROBE_MAX && count < max;
+         frame < mem_limit && count < max;
          frame += MEM_PROBE_FRAME) {
 
         volatile uint64_t *probe = (volatile uint64_t *)frame;
@@ -222,6 +228,12 @@ static void load_parmfile(uint32_t schid) {
         s_proto.cmdline_len++;
     s_proto.flags |= ZXFL_FLAG_CMDLINE;
 
+    uint64_t mem_limit = parse_syssize(s_cmdline, s_proto.cmdline_len);
+    if (mem_limit == 0) {
+        mem_limit = MEM_PROBE_DEFAULT_MAX;
+        print("zxfl01: syssize= not set; defaulting to 512 MB probe ceiling\n");
+    }
+
     dscb1_extent_t kernel_ext;
     if (dasd_find_dataset(schid, ZX_NUCLEUS_NAME, &kernel_ext) < 0)
         panic("zxfl01: core.zxfoundation.nucleus not found in vtoc\n");
@@ -243,7 +255,8 @@ static void load_parmfile(uint32_t schid) {
     s_proto.mem_map_count = probe_memory(
         s_mem_map, ZXFL_MEM_MAP_MAX,
         s_proto.kernel_phys_start,
-        s_proto.kernel_phys_end
+        s_proto.kernel_phys_end,
+        mem_limit
     );
     s_proto.mem_map_addr    = (uint64_t)(uintptr_t)s_mem_map;
     s_proto.mem_total_bytes = sum_usable_ram(s_mem_map, s_proto.mem_map_count);

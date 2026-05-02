@@ -214,7 +214,7 @@ int zxfl_load_elf64(uint32_t schid,
             return -1;
         }
     }
-    print(" zxvl: nucleus verified\n");
+    print("zxvl: nucleus verified\n");
 
     *out_load_base = load_min;
     *out_load_size = load_max - load_min;
