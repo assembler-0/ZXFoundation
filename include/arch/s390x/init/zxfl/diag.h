@@ -1,13 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 // include/arch/s390x/init/zxfl/diag.h
-//
-/// @brief DIAG 8 hypervisor console driver for the ZXFL bootloader.
-///
-///        DIAG 8 provides synchronous ASCII output to the Hercules/z/VM
-///        operator console.  With DIAG8CMD ENABLE, Hercules interprets the
-///        buffer as a host command unless it begins with "MSG * " (EBCDIC).
-///        The driver maintains a line buffer in ASCII and converts to EBCDIC
-///        immediately before issuing the DIAG 8 instruction.
 
 #ifndef ZXFOUNDATION_ZXFL_DIAG_H
 #define ZXFOUNDATION_ZXFL_DIAG_H
