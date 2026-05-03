@@ -49,6 +49,27 @@
 // ---------------------------------------------------------------------------
 #define CONFIG_HAVE_CONSOLE                 1
 #define CONFIG_PAGE_SIZE                    4096UL
+
+/// @brief Higher-Half Direct Map (HHDM) offset.
+///        0xFFFF800000000000ULL places the kernel at -128TB, in the
+///        topmost Region-First entry (RFX=2047) of the 5-level paging
+///        hierarchy.  This cleanly separates kernel (R1[2047]) from
+///        user space (R1[0]) at the highest table level.
 #define CONFIG_KERNEL_VIRT_OFFSET           0xFFFF800000000000ULL
+
+#ifndef __ASSEMBLER__
+
+#include <zxfoundation/types.h>
+
+/// @brief Convert physical address to Higher-Half Direct Map (HHDM) virtual address.
+static inline uint64_t hhdm_phys_to_virt(uint64_t phys) {
+    return phys + CONFIG_KERNEL_VIRT_OFFSET;
+}
+
+/// @brief Convert Higher-Half Direct Map (HHDM) virtual address to physical address.
+static inline uint64_t hhdm_virt_to_phys(uint64_t virt) {
+    return virt - CONFIG_KERNEL_VIRT_OFFSET;
+}
+#endif
 
 #endif /* ZXFOUNDATION_ZCONFIG_H */

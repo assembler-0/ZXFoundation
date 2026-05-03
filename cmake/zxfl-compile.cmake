@@ -1,16 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # cmake/zxfl-compile.cmake — ZXFoundationLoader compilation
 
-set(ZXFL_COMMON_SOURCES
+# Minimal sources for Stage 1 (must fit in 12K record)
+set(ZXFL_STAGE1_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_io.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_vtoc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/diag.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/ebcdic.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/panic.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/parmfile.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/string.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/lowcore.c
+)
+
+# Full sources for Stage 2
+set(ZXFL_STAGE2_COMMON_SOURCES
+    ${ZXFL_STAGE1_COMMON_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/parmfile.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/mmu.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stsi.c
 )
@@ -50,7 +56,7 @@ set(ZXFL_COMMON_LINK_FLAGS
 set(ZXFL_STAGE1_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/head.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/entry.c
-    ${ZXFL_COMMON_SOURCES}
+    ${ZXFL_STAGE1_COMMON_SOURCES}
 )
 
 add_executable(zxfl_stage1.elf ${ZXFL_STAGE1_SOURCES})
@@ -71,7 +77,7 @@ target_link_options(zxfl_stage1.elf PRIVATE
 set(ZXFL_STAGE2_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.c
-    ${ZXFL_COMMON_SOURCES}
+    ${ZXFL_STAGE2_COMMON_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/elfload.c
 )
 

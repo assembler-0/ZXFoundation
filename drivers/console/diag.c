@@ -1,25 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // drivers/console/diag.c
-//
-/// @brief DIAG 8 hypervisor console driver for the ZXFoundation kernel.
-///
-///        Identical fix to arch/s390x/init/zxfl/diag.c: after each flush
-///        the "MSG * " prefix is restored to ASCII so the next conversion
-///        does not double-convert it into garbage.
-///
-///        The kernel runs in 64-bit z/Arch mode, so R2/R3 are 64-bit.
 
 #include <drivers/console/diag.h>
 #include <lib/ebcdic.h>
 #include <zxfoundation/types.h>
+#include <zxfoundation/zconfig.h>
 
 // ---------------------------------------------------------------------------
 // DIAG 8 raw write (64-bit kernel mode)
 // ---------------------------------------------------------------------------
 
 /// @brief Issue the DIAG 8 instruction with a 64-bit buffer address.
+///        Note: DIAG 8 requires a REAL address.
 static inline void diag8_write(const char *addr, uint64_t len) {
-    register uint64_t r2 __asm__("2") = (uint64_t)(uintptr_t)addr;
+    // Convert HHDM virtual address to physical (real) address
+    uint64_t phys = hhdm_virt_to_phys((uint64_t)(uintptr_t)addr);
+    
+    register uint64_t r2 __asm__("2") = phys;
     register uint64_t r3 __asm__("3") = len;
     __asm__ __volatile__ (
         "diag %[r2], %[r3], 8\n"

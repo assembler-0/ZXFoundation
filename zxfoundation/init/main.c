@@ -40,6 +40,11 @@ bad:
 }
 
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
+    // Install HHDM-virtual disabled-wait PSWs into the lowcore FIRST.
+    // Any fault before this point (including inside diag_setup) would load
+    // the loader's physical-address PSW and cause a program interrupt loop.
+    zxfl_lowcore_setup();
+
     diag_setup();
     printk_initialize(diag_putc);
 
@@ -56,8 +61,6 @@ bad:
            CONFIG_ULTRASPARK_RELEASE);
 
     zx_cpu_features_init(boot);
-    
-    zxfl_lowcore_setup();
     
     rcu_init();
 

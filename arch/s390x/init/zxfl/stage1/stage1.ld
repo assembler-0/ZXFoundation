@@ -6,7 +6,7 @@
  *   0x0000 - 0x0017 : IPL PSW + padding (.text.ipl, 24 bytes)
  *   0x0018 - 0x0057 : unused (padding to 0x58)
  *   0x0058 - ...    : stage1_entry + C code + rodata + data
- *   ...  - 0x1FFF   : fit within 8192 bytes total
+ *   ...  - 0x2FFF   : fit within 12288 bytes total
  */
 
 ENTRY(__zx_ipl_entry)
@@ -38,7 +38,7 @@ SECTIONS
         __bss_stop = .;
     }
 
-    ASSERT(LOADADDR(.bss) <= 0x2000, "stage1: code+data exceeds 8K")
+    ASSERT(LOADADDR(.bss) <= 0x3000, "stage1: code+data exceeds 12K")
 
     /DISCARD/ : {
         *(.comment)

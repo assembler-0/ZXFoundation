@@ -85,7 +85,21 @@ typedef struct {
 // ---------------------------------------------------------------------------
 
 /// @brief Passed by pointer in R2 to the kernel entry point.
-///        All pointer fields are valid physical addresses (DAT off).
+///
+///        ADDRESS CONVENTION (mirrors Limine boot protocol):
+///        ===================================================
+///        - POINTER fields (addresses of structures, arrays, strings) are
+///          HHDM virtual — the loader adds CONFIG_KERNEL_VIRT_OFFSET before
+///          jumping to the kernel.  The kernel dereferences them directly.
+///          Affected fields: mem_map_addr, cmdline_addr, kernel_stack_top.
+///
+///        - PHYSICAL RANGE fields (base addresses and sizes of memory regions,
+///          the kernel image extents, and lowcore_phys) remain PHYSICAL.
+///          The kernel uses them for PFN arithmetic and must NOT add the HHDM
+///          offset.  Affected fields: kernel_phys_start, kernel_phys_end,
+///          kernel_entry (physical ELF entry, used only by the loader),
+///          lowcore_phys (always 0x0), zxfl_mem_region_t::base/length.
+///
 ///        The struct is 8-byte aligned; all uint64_t fields are at natural
 ///        offsets — no implicit compiler padding is needed or relied upon.
 typedef struct {
@@ -120,7 +134,7 @@ typedef struct {
 
     // ---- MEMORY MAP (24 bytes) ----
     uint64_t mem_total_bytes;   ///< Total detected RAM (bytes)
-    uint64_t mem_map_addr;      ///< Physical address of zxfl_mem_region_t[]
+    uint64_t mem_map_addr;      ///< Virtual (HHDM) address of zxfl_mem_region_t[]
     uint32_t mem_map_count;     ///< Number of valid entries in mem_map
     uint32_t _pad3;
 
@@ -133,7 +147,7 @@ typedef struct {
     uint64_t lowcore_phys;      ///< Physical address of BSP lowcore (always 0x0)
 
     // ---- COMMAND LINE (16 bytes) ----
-    uint64_t cmdline_addr;      ///< Physical address of NUL-terminated ASCII cmdline
+    uint64_t cmdline_addr;      ///< Virtual (HHDM) address of NUL-terminated ASCII cmdline
     uint32_t cmdline_len;       ///< Length in bytes (excluding NUL)
     uint32_t _pad6;
 
@@ -142,7 +156,7 @@ typedef struct {
     /// head64.S uses this instead of its own BSS stack, so the stack
     /// layout is controlled by the loader. An opaque frame is written
     /// below this address (see ZXFL_STACK_FRAME_* in zxvl_private.h).
-    uint64_t kernel_stack_top;  ///< Physical address of initial kernel stack top
+    uint64_t kernel_stack_top;  ///< Virtual (HHDM) address of initial kernel stack top
 
     // ---- CONTROL REGISTER SNAPSHOT (16 bytes) ----
     /// Taken after the loader configures CRs, immediately before kernel jump.
@@ -150,13 +164,10 @@ typedef struct {
     uint64_t cr14_snapshot;
 } zxfl_boot_protocol_t;
 
-#endif /* ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H */
-
-/// @brief Setup minimal page tables and enable DAT in loader.
-void zxfl_mmu_setup(void);
-
-/// @brief Jump to kernel with DAT enabled.
-[[noreturn]] void zxfl_mmu_jump_kernel(uint64_t entry, uint64_t boot_proto);
-
 /// @brief Setup page tables, enable DAT, and jump to kernel (combined).
+///        Called by stage2 entry after filling the boot protocol.
+/// @param entry      Kernel entry point (ELF e_entry, virtual address).
+/// @param boot_proto Physical address of zxfl_boot_protocol_t.
 [[noreturn]] void zxfl_mmu_setup_and_jump(uint64_t entry, uint64_t boot_proto);
+
+#endif /* ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H */

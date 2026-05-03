@@ -8,6 +8,7 @@
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <zxfoundation/zconfig.h>
 
 /// @brief Zero memory using 64-bit MVCL.
 static void zxfl_bzero(uint64_t addr, uint64_t size) {
@@ -101,30 +102,48 @@ int zxfl_load_elf64(uint32_t schid,
         return -1;
     }
 
-    *out_entry = ehdr->e_entry;
+    if (ehdr->e_type != ET_EXEC) {
+        print("zxvl: nucleus must be ET_EXEC\n");
+        return -1;
+    }
 
-    // Load Program Headers
-    static elf64_phdr_t phdrs[16]; // Fixed size for simplicity in mission-critical loader
-    if (ehdr->e_phnum > 16) {
+    // ZXFoundationLoader exclusively loads ZXFoundation kernels.
+    // The nucleus MUST have a higher-half entry point — physical-address
+    // kernels are rejected.  This guarantees the kernel runs entirely in
+    // virtual memory from its first instruction.
+    if (ehdr->e_entry < CONFIG_KERNEL_VIRT_OFFSET) {
+        print("zxvl: nucleus entry point not in higher-half — refusing to load\n");
+        return -1;
+    }
+
+    // 1. Save entry point and program header info locally
+    *out_entry = ehdr->e_entry;
+    const uint16_t phnum = ehdr->e_phnum;
+    const uint64_t phoff = ehdr->e_phoff;
+
+    // 2. Load Program Headers into a safe local array
+    static elf64_phdr_t phdrs[16]; 
+    if (phnum > 16) {
         print("zxfl: too many segments\n");
         return -1;
     }
 
-    uint32_t ph_size = ehdr->e_phnum * sizeof(elf64_phdr_t);
-    if (ehdr->e_phoff + ph_size <= DASD_BLOCK_SIZE) {
-        zxfl_memcpy(phdrs, io_block + ehdr->e_phoff, ph_size);
+    uint32_t ph_size = phnum * sizeof(elf64_phdr_t);
+    if (phoff + ph_size <= DASD_BLOCK_SIZE) {
+        zxfl_memcpy(phdrs, io_block + phoff, ph_size);
     } else {
         uint16_t pc, ph_head; uint8_t pr;
-        offset_to_cchhr(ext, ehdr->e_phoff, &pc, &ph_head, &pr);
+        offset_to_cchhr(ext, phoff, &pc, &ph_head, &pr);
         if (dasd_read_record(schid, pc, ph_head, pr, CCW_CMD_READ_DATA, io_block, DASD_BLOCK_SIZE) < 0) return -1;
-        uint32_t off = (uint32_t)(ehdr->e_phoff % DASD_BLOCK_SIZE);
+        uint32_t off = (uint32_t)(phoff % DASD_BLOCK_SIZE);
         zxfl_memcpy(phdrs, io_block + off, ph_size);
     }
 
+    // 3. Load segments (this will overwrite io_block)
     uint64_t load_min = 0xFFFFFFFFFFFFFFFFULL;
     uint64_t load_max = 0ULL;
 
-    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+    for (uint16_t i = 0; i < phnum; i++) {
         if (phdrs[i].p_type != PT_LOAD || phdrs[i].p_memsz == 0) continue;
 
         if (load_segment(schid, ext, &phdrs[i]) < 0) return -1;
