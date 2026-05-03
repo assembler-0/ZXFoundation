@@ -46,7 +46,17 @@ static inline bool list_empty(const list_node_t *head) {
 #define list_entry(ptr, type, member) \
     ((type *)((char *)(ptr) - (uintptr_t)(&((type *)0)->member)))
 
+#define list_add_head(new_node, head) \
+    __list_add(new_node, head, (head)->next)
+
 #define list_for_each_entry(pos, head, member) \
     for (pos = list_entry((head)->next, __typeof__(*pos), member); \
          &pos->member != (head); \
          pos = list_entry(pos->member.next, __typeof__(*pos), member))
+
+/// @brief Safe iteration: allows removing 'pos' during traversal.
+///        'tmp' is a scratch pointer of the same type as 'pos'.
+#define list_for_each_safe(pos, tmp, head) \
+    for ((pos) = (head)->next, (tmp) = (pos)->next; \
+         (pos) != (head); \
+         (pos) = (tmp), (tmp) = (pos)->next)
