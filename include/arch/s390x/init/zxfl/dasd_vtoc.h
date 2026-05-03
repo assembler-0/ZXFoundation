@@ -2,30 +2,6 @@
 // include/arch/s390x/init/zxfl/dasd_vtoc.h
 //
 /// @brief VTOC (Volume Table of Contents) search for the ZXFL bootloader.
-///
-///        Exposes the Format-1 DSCB extent structure and the dataset-search
-///        function.  Raw I/O primitives are in dasd_io.h.
-///
-/// VTOC layout on a 3390-1 (sysres.conf: SYS1.VTOC VTOC TRK 14):
-///   Track 14 = cylinder 0, head 14 (15 heads/cylinder, 0-based heads).
-///   Record 1 = Format-4 DSCB (VTOC header, DS1FMTID = 0xF4).
-///   Records 2..N = Format-1 DSCBs (one per dataset, DS1FMTID = 0xF1).
-///   The VTOC may span multiple tracks; we scan until we find the dataset
-///   or exhaust VTOC_MAX_TRACKS tracks without finding it.
-///
-/// DSCB key/data layout:
-///   When the hardware returns key+data (Read Key+Data, 0x0E):
-///     buf[0..43]   = DS1DSNAM  (44-byte EBCDIC dataset name, space-padded)
-///     buf[44]      = DS1FMTID  (0xF1 for Format-1)
-///     buf[108..117]= DS1EXTENT[0] (first extent, 10 bytes)
-///
-///   When the hardware returns data-only (0-byte key, Read Data, 0x06):
-///     buf[0..43]   = DS1DSNAM
-///     buf[44]      = DS1FMTID
-///     buf[64..73]  = DS1EXTENT[0]
-///
-///   Both layouts share the same DS1DSNAM position (buf[0..43]) and the
-///   same DS1FMTID position (buf[44]).  Only the extent offset differs.
 
 #ifndef ZXFOUNDATION_ZXFL_DASD_VTOC_H
 #define ZXFOUNDATION_ZXFL_DASD_VTOC_H
@@ -40,9 +16,7 @@ typedef struct {
     uint16_t end_head;      ///< Last head of the extent
 } dscb1_extent_t;
 
-/// Offsets when key IS present (key+data combined buffer, 140 bytes total):
-///   key  = buf[0..43]   (44 bytes: DS1DSNAM)
-///   data = buf[44..139] (96 bytes)
+/// Offsets when key IS present
 #define DSCB1_KD_FMTID_OFF      44U         ///< DS1FMTID in key+data buffer
 #define DSCB1_KD_EXTENT0_OFF    105U        ///< First extent in key+data buffer
 
@@ -66,10 +40,6 @@ typedef struct {
 
 /// Maximum consecutive I/O failures before aborting the VTOC scan.
 #define VTOC_MAX_CONSECUTIVE_ERRORS 3U
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /// @brief Locate a dataset in the VTOC by ASCII name.
 ///

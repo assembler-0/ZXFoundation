@@ -8,15 +8,6 @@
 ///
 ///        syssize= syntax:
 ///            syssize=<decimal_megabytes>[M|G]
-///
-///        Examples:
-///            syssize=512       → 512 MB
-///            syssize=512M      → 512 MB
-///            syssize=2G        → 2048 MB
-///
-///        The value is used as the upper bound for probe_memory().
-///        If the parameter is absent, malformed, or zero, the caller
-///        must fall back to a safe default.
 
 #ifndef ZXFOUNDATION_ZXFL_PARMFILE_H
 #define ZXFOUNDATION_ZXFL_PARMFILE_H

@@ -5,26 +5,29 @@
 #include <zxfoundation/spinlock.h>
 #include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
+#include <zxfoundation/memory/page.h>
 #include <lib/bitmap.h>
 
 #define PMM_BITMAP_WORDS    BITMAP_WORDS(PMM_MAX_PHYS_PAGES)
 
 // free_map:   bit set → frame is available for allocation.
 // poison_map: bit set → frame was freed and not yet reallocated (UAF detector).
-static uint64_t free_map  [PMM_BITMAP_WORDS];
+static uint64_t free_map[PMM_BITMAP_WORDS];
 static uint64_t poison_map[PMM_BITMAP_WORDS];
 
-static spinlock_t pmm_lock       = SPINLOCK_INIT;
-static uint64_t   total_pages    = 0;
-static uint64_t   free_pages_cnt = 0;
-static uint64_t   max_pfn        = 0;
-static bool       pmm_ready      = false;
+static spinlock_t pmm_lock = SPINLOCK_INIT;
+static uint64_t total_pages = 0;
+static uint64_t free_pages_cnt = 0;
+static uint64_t max_pfn = 0;
+static bool pmm_ready = false;
+
+zx_page_t *zx_mem_map = nullptr;
 
 void pmm_init(const zxfl_boot_protocol_t *boot) {
     if (!boot)
         panic("pmm_init: NULL boot protocol");
 
-    bitmap_zero(free_map,   PMM_BITMAP_WORDS);
+    bitmap_zero(free_map, PMM_BITMAP_WORDS);
     bitmap_zero(poison_map, PMM_BITMAP_WORDS);
     total_pages = free_pages_cnt = max_pfn = 0;
 
@@ -32,12 +35,12 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
         panic("pmm_init: no memory map in boot protocol");
 
     const zxfl_mem_region_t *map =
-        (const zxfl_mem_region_t *)(uintptr_t)boot->mem_map_addr;
+            (const zxfl_mem_region_t *) (uintptr_t) boot->mem_map_addr;
 
     for (uint32_t i = 0; i < boot->mem_map_count; i++) {
         const zxfl_mem_region_t *r = &map[i];
         uint64_t pfn_start = pmm_phys_to_pfn(r->base);
-        uint64_t pfn_end   = pmm_phys_to_pfn(r->base + r->length);
+        uint64_t pfn_end = pmm_phys_to_pfn(r->base + r->length);
         if (pfn_end > PMM_MAX_PHYS_PAGES) pfn_end = PMM_MAX_PHYS_PAGES;
         if (pfn_end > max_pfn) max_pfn = pfn_end;
 
@@ -55,10 +58,30 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
         if (bitmap_test_and_clear(free_map, pfn))
             free_pages_cnt--;
 
+    // Allocate the global mem_map array.
+    uint64_t map_size_bytes = max_pfn * sizeof(zx_page_t);
+    uint64_t map_pages = (map_size_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    uint64_t map_pfn = bitmap_find_next_set_run(free_map, max_pfn, 0, map_pages);
+    if (map_pfn >= max_pfn) panic("pmm_init: not enough contiguous memory for mem_map");
+
+    bitmap_clear_range(free_map, map_pfn, map_pages);
+    bitmap_clear_range(poison_map, map_pfn, map_pages);
+    free_pages_cnt -= map_pages;
+
+    zx_mem_map = (zx_page_t *) hhdm_phys_to_virt(pmm_pfn_to_phys(map_pfn));
+
+    // Zero initialize the mem_map
+    uint8_t *map_bytes = (uint8_t *) zx_mem_map;
+    for (uint64_t i = 0; i < map_pages * PAGE_SIZE; i++) {
+        map_bytes[i] = 0;
+    }
+
     pmm_ready = true;
-    printk("pmm: %llu MB total, %llu MB free\n",
-           (unsigned long long)(total_pages    * PAGE_SIZE / (1024 * 1024)),
-           (unsigned long long)(free_pages_cnt * PAGE_SIZE / (1024 * 1024)));
+    printk("pmm: %llu MB total, %llu MB free (mem_map: %llu pages)\n",
+           (unsigned long long) (total_pages * PAGE_SIZE / (1024 * 1024)),
+           (unsigned long long) (free_pages_cnt * PAGE_SIZE / (1024 * 1024)),
+           (unsigned long long) map_pages);
 }
 
 uint64_t pmm_alloc_page(void) { return pmm_alloc_pages(1); }
@@ -75,7 +98,7 @@ uint64_t pmm_alloc_pages(uint64_t n) {
         spin_unlock_irqrestore(&pmm_lock, flags);
         return PMM_INVALID_PFN;
     }
-    bitmap_clear_range(free_map,   pfn, n);
+    bitmap_clear_range(free_map, pfn, n);
     bitmap_clear_range(poison_map, pfn, n);
     free_pages_cnt -= n;
 
@@ -89,18 +112,18 @@ void pmm_free_pages(uint64_t pfn, uint64_t n) {
     if (!pmm_ready) panic("pmm_free_pages: PMM not initialized");
     if (pfn + n > PMM_MAX_PHYS_PAGES)
         panic("pmm_free_pages: PFN %llu+%llu out of range",
-              (unsigned long long)pfn, (unsigned long long)n);
+              (unsigned long long) pfn, (unsigned long long) n);
 
     irqflags_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
     for (uint64_t i = 0; i < n; i++) {
         if (bitmap_test(poison_map, pfn + i))
             panic("pmm_free_pages: double-free of PFN %llu",
-                  (unsigned long long)(pfn + i));
+                  (unsigned long long) (pfn + i));
         if (bitmap_test(free_map, pfn + i))
             panic("pmm_free_pages: freeing already-free PFN %llu",
-                  (unsigned long long)(pfn + i));
-        bitmap_set(free_map,   pfn + i);
+                  (unsigned long long) (pfn + i));
+        bitmap_set(free_map, pfn + i);
         bitmap_set(poison_map, pfn + i);
     }
     free_pages_cnt += n;
@@ -109,7 +132,7 @@ void pmm_free_pages(uint64_t pfn, uint64_t n) {
 
 void pmm_reserve_range(uint64_t phys_start, uint64_t phys_end) {
     uint64_t pfn_start = pmm_phys_to_pfn(phys_start);
-    uint64_t pfn_end   = pmm_phys_to_pfn(phys_end + PAGE_SIZE - 1);
+    uint64_t pfn_end = pmm_phys_to_pfn(phys_end + PAGE_SIZE - 1);
     if (pfn_end > PMM_MAX_PHYS_PAGES) pfn_end = PMM_MAX_PHYS_PAGES;
 
     irqflags_t flags;
@@ -123,8 +146,8 @@ void pmm_reserve_range(uint64_t phys_start, uint64_t phys_end) {
 void pmm_get_stats(pmm_stats_t *out) {
     irqflags_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
-    out->total_pages    = total_pages;
-    out->free_pages     = free_pages_cnt;
+    out->total_pages = total_pages;
+    out->free_pages = free_pages_cnt;
     out->reserved_pages = total_pages - free_pages_cnt;
     spin_unlock_irqrestore(&pmm_lock, flags);
 }

@@ -2,30 +2,16 @@
 // include/arch/s390x/init/zxfl/stfle.h
 //
 /// @brief Expanded STFLE (Store Facility List Extended) API.
-///
-///        STFLE stores a list of 64-bit doublewords where each bit
-///        represents one CPU facility.  Bit N is in doubleword N/64,
-///        at bit position 63 - (N % 64) (big-endian bit numbering).
-///
-///        The instruction takes R0 = (max_dwords - 1) and stores up to
-///        (R0 + 1) doublewords.  On return, R0 = (actual_dwords - 1).
-///        CC=0 means the buffer was large enough; CC=3 means STFLE is
-///        not available (pre-z9 hardware — treat all facilities as absent).
-
 #ifndef ZXFOUNDATION_ZXFL_STFLE_H
 #define ZXFOUNDATION_ZXFL_STFLE_H
 
 #include <zxfoundation/types.h>
-#include <stdbool.h>
 
 /// @brief Maximum doublewords to request from STFLE.
 ///        256 facilities = 4 dwords was the old limit.
 ///        Current z/Architecture supports up to 2048 facilities = 32 dwords.
 #define STFLE_MAX_DWORDS    32U
 
-// ---------------------------------------------------------------------------
-// Well-known facility bit numbers (z/Architecture PoP, Appendix B)
-// ---------------------------------------------------------------------------
 #define STFLE_BIT_ZARCH         2U      ///< z/Architecture installed
 #define STFLE_BIT_STFLE         7U      ///< STFLE itself
 #define STFLE_BIT_EIMM          21U     ///< Extended-immediate facility
@@ -41,10 +27,6 @@
 #define STFLE_BIT_MISC_INST_EXT 58U     ///< Miscellaneous-instruction-extensions 1
 #define STFLE_BIT_MISC_INST_EX2 76U     ///< Miscellaneous-instruction-extensions 2
 #define STFLE_BIT_MISC_INST_EX3 61U     ///< Miscellaneous-instruction-extensions 3
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
 
 /// @brief Detect CPU facilities using STFLE.
 ///

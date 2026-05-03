@@ -7,12 +7,10 @@
 
 #include <arch/s390x/init/zxfl/parmfile.h>
 
-/// @brief Byte-level ASCII digit check.
 static inline bool is_digit(char c) {
     return (uint8_t)(c - '0') <= 9U;
 }
 
-/// @brief Byte-level ASCII whitespace check (space, tab, CR, LF).
 static inline bool is_space(char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
@@ -80,9 +78,6 @@ uint64_t parse_syssize(const char *cmdline, uint32_t len) {
         if (value < PARMFILE_SYSSIZE_MIN_MB || value > PARMFILE_SYSSIZE_MAX_MB)
             return 0;
 
-        // Return bytes, aligned down to 1 MB boundary.
-        // multiplier is already 1 MB when value is in MB.
-        // For G path, value was converted to MB above, so multiplier stays 1<<20.
         (void)multiplier; // suppress unused warning — always 1<<20 after G conversion
         return value << 20; // value (MB) * 2^20 = bytes
     }

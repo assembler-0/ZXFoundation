@@ -2,19 +2,6 @@
 // include/arch/s390x/init/zxfl/zxfl.h
 //
 /// @brief ZXFoundation Boot Protocol — contract between loader and kernel.
-///
-///        This header defines the data structures passed from the ZXFL
-///        bootloader to the ZXFoundation kernel nucleus at boot time.
-///        The loader fills the zxfl_boot_protocol_t struct in physical
-///        memory, converts pointer fields to HHDM virtual addresses,
-///        and passes the struct address in R2 at kernel entry.
-///
-///        ZXFoundationLoader is the EXCLUSIVE loader for ZXFoundation.
-///        It enforces:
-///          - Higher-half virtual entry point (>= CONFIG_KERNEL_VIRT_OFFSET)
-///          - ET_EXEC ELF type (no relocatable kernels)
-///          - Binding token authentication
-///          - Security lock + handshake verification
 
 #ifndef ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
 #define ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
@@ -75,10 +62,6 @@
 /// @brief Physical lowcore address (always 0 on z/Architecture).
 #define ZXFL_LOWCORE_PHYS       0x0ULL
 
-// ---------------------------------------------------------------------------
-// Auxiliary structures
-// ---------------------------------------------------------------------------
-
 /// @brief One entry in the physical memory map.
 typedef struct {
     uint64_t base;      ///< Physical base address
@@ -112,10 +95,6 @@ typedef struct {
     uint32_t capability;       ///< STSI 1.2.2 CPU capability rating
     uint32_t _pad;
 } zxfl_sysinfo_t;
-
-// ---------------------------------------------------------------------------
-// Boot protocol structure
-// ---------------------------------------------------------------------------
 
 typedef struct {
     // ---- HEADER (16 bytes) ----
@@ -184,11 +163,15 @@ typedef struct {
     // ---- TOD CLOCK (8 bytes) ----
     uint64_t tod_boot;          ///< TOD clock value at boot (STCK)
 
-} zxfl_boot_protocol_t;
+    // ---- MODULES ----
+    uint32_t module_count;
+    uint32_t _pad8;
+    struct {
+        char     name[32];      ///< Module name (NUL-terminated)
+        uint64_t phys_start;    ///< Physical start address
+        uint64_t size_bytes;    ///< Size of the module in bytes
+    } modules[16];
 
-/// @brief Setup page tables, enable DAT, and jump to kernel.
-/// @param entry      Kernel entry point (HHDM virtual address from ELF).
-/// @param boot_proto Physical address of zxfl_boot_protocol_t.
-[[noreturn]] void zxfl_mmu_setup_and_jump(uint64_t entry, uint64_t boot_proto);
+} zxfl_boot_protocol_t;
 
 #endif /* ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H */

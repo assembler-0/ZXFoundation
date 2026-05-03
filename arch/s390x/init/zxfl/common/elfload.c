@@ -107,22 +107,16 @@ int zxfl_load_elf64(uint32_t schid,
         return -1;
     }
 
-    // ZXFoundationLoader exclusively loads ZXFoundation kernels.
-    // The nucleus MUST have a higher-half entry point — physical-address
-    // kernels are rejected.  This guarantees the kernel runs entirely in
-    // virtual memory from its first instruction.
     if (ehdr->e_entry < CONFIG_KERNEL_VIRT_OFFSET) {
         print("zxvl: nucleus entry point not in higher-half — refusing to load\n");
         return -1;
     }
 
-    // 1. Save entry point and program header info locally
     *out_entry = ehdr->e_entry;
     const uint16_t phnum = ehdr->e_phnum;
     const uint64_t phoff = ehdr->e_phoff;
 
-    // 2. Load Program Headers into a safe local array
-    static elf64_phdr_t phdrs[16]; 
+    static elf64_phdr_t phdrs[16];
     if (phnum > 16) {
         print("zxfl: too many segments\n");
         return -1;
@@ -139,7 +133,6 @@ int zxfl_load_elf64(uint32_t schid,
         zxfl_memcpy(phdrs, io_block + off, ph_size);
     }
 
-    // 3. Load segments (this will overwrite io_block)
     uint64_t load_min = 0xFFFFFFFFFFFFFFFFULL;
     uint64_t load_max = 0ULL;
 
@@ -155,7 +148,6 @@ int zxfl_load_elf64(uint32_t schid,
 
     if (load_min == 0xFFFFFFFFFFFFFFFFULL) return -1;
 
-    // Verification Logic
     print("zxvl: inspecting nucleus\n");
     {
         const uint64_t lock_base = load_min + ZXVL_LOCK_OFFSET;

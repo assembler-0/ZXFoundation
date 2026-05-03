@@ -25,7 +25,6 @@ stage1_entry:
 .Lswitched64:
     sam64                               // switch addressing mode to 64-bit
 
-    // ----------------------------------------------------------------
     larl    %r2, __bss_start
     larl    %r3, __bss_stop
     sgr     %r3, %r2                    // r3 = BSS length

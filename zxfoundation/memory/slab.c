@@ -2,10 +2,13 @@
 // zxfoundation/memory/slab.c
 
 #include <zxfoundation/memory/pmm.h>
+#include <zxfoundation/memory/page.h>
 #include <zxfoundation/spinlock.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/sys/panic.h>
+#include <zxfoundation/memory/slab.h>
 #include <arch/s390x/cpu/processor.h>
+#include <zxfoundation/zconfig.h>
 #include <lib/list.h>
 #include <lib/string.h>
 
@@ -13,31 +16,31 @@
 
 typedef struct kmem_magazine {
     list_node_t node;
-    uint32_t    count;
-    void       *objects[MAG_SIZE];
+    uint32_t count;
+    void *objects[MAG_SIZE];
 } kmem_magazine_t;
 
 /// @brief A raw slab of memory (usually 1 page).
 typedef struct kmem_slab {
     list_node_t node;
-    uint16_t    free_count;
-    uint16_t    next_free_idx;
-    void       *data;
+    uint16_t free_count;
+    uint16_t next_free_idx;
+    void *data;
 } kmem_slab_t;
 
 typedef struct kmem_cache {
     const char *name;
-    size_t      obj_size;
-    uint8_t     storage_key;
-    
-    spinlock_t  depot_lock;
+    size_t obj_size;
+    uint8_t storage_key;
+
+    spinlock_t depot_lock;
     list_node_t full_mags;
     list_node_t empty_mags;
     list_node_t partial_slabs;
     list_node_t full_slabs;
-    
+
     /// @brief Per-CPU magazines.
-    kmem_magazine_t *cpu_mags[64]; 
+    kmem_magazine_t *cpu_mags[64];
 } kmem_cache_t;
 
 // Bootstrap caches
@@ -52,24 +55,26 @@ static bool kmem_cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag
     } else {
         uint64_t pfn = pmm_alloc_page();
         if (pfn == PMM_INVALID_PFN) return false;
-        
-        // Apply Storage Key protection immediately.
-        // Bit 4 set (0x10) means fetch protection is enabled.
+
         arch_set_storage_key(pmm_pfn_to_phys(pfn), cache->storage_key | 0x10);
 
-        slab = (kmem_slab_t*)pmm_pfn_to_phys(pfn);
-        slab->data = (void*)((uintptr_t)slab + sizeof(kmem_slab_t));
-        slab->data = (void*)(((uintptr_t)slab->data + 7) & ~7UL);
-        
-        size_t available = PAGE_SIZE - ((uintptr_t)slab->data - (uintptr_t)slab);
+        slab = (kmem_slab_t *) hhdm_phys_to_virt(pmm_pfn_to_phys(pfn));
+
+        zx_page_t *page = pfn_to_page(pfn);
+        page->slab_cache = cache;
+
+        slab->data = (void *) ((uintptr_t) slab + sizeof(kmem_slab_t));
+        slab->data = (void *) (((uintptr_t) slab->data + 7) & ~7UL);
+
+        size_t available = PAGE_SIZE - ((uintptr_t) slab->data - (uintptr_t) slab);
         slab->free_count = available / cache->obj_size;
         slab->next_free_idx = 0;
-        
+
         list_add_tail(&slab->node, &cache->partial_slabs);
     }
 
     while (mag->count < MAG_SIZE && slab->free_count > 0) {
-        void *obj = (char*)slab->data + (slab->next_free_idx * cache->obj_size);
+        void *obj = (char *) slab->data + (slab->next_free_idx * cache->obj_size);
         mag->objects[mag->count++] = obj;
         slab->next_free_idx++;
         slab->free_count--;
@@ -89,10 +94,17 @@ static bool kmem_magazine_swap(kmem_cache_t *cache, int cpu_id, bool filling) {
 
     if (filling) {
         if (list_empty(&cache->full_mags)) {
-            // Need an empty magazine to refill
             if (list_empty(&cache->empty_mags)) {
+                if (cache == &mag_cache) {
+                    spin_unlock_irqrestore(&cache->depot_lock, flags);
+                    return false;
+                }
                 spin_unlock_irqrestore(&cache->depot_lock, flags);
-                return false;
+                kmem_magazine_t *new_mag = (kmem_magazine_t *) kmem_cache_alloc(&mag_cache);
+                if (!new_mag) return false;
+                new_mag->count = 0;
+                spin_lock_irqsave(&cache->depot_lock, &flags);
+                list_add_tail(&new_mag->node, &cache->empty_mags);
             }
             kmem_magazine_t *m = list_entry(cache->empty_mags.next, kmem_magazine_t, node);
             list_del(&m->node);
@@ -103,7 +115,7 @@ static bool kmem_magazine_swap(kmem_cache_t *cache, int cpu_id, bool filling) {
             }
             list_add_tail(&m->node, &cache->full_mags);
         }
-        
+
         list_node_t *node = cache->full_mags.next;
         list_del(node);
         if (cache->cpu_mags[cpu_id]) {
@@ -113,7 +125,7 @@ static bool kmem_magazine_swap(kmem_cache_t *cache, int cpu_id, bool filling) {
     } else {
         list_add_tail(&cache->cpu_mags[cpu_id]->node, &cache->full_mags);
         if (list_empty(&cache->empty_mags)) {
-            cache->cpu_mags[cpu_id] = nullptr; 
+            cache->cpu_mags[cpu_id] = nullptr;
         } else {
             list_node_t *node = cache->empty_mags.next;
             list_del(node);
@@ -125,28 +137,42 @@ static bool kmem_magazine_swap(kmem_cache_t *cache, int cpu_id, bool filling) {
     return true;
 }
 
-void* kmem_cache_alloc(kmem_cache_t *cache) {
-    int cpu = 0; 
+void *kmem_cache_alloc(kmem_cache_t *cache) {
+    irqflags_t flags = arch_local_save_flags();
+    arch_local_irq_disable();
+
+    int cpu = smp_processor_id();
+
     kmem_magazine_t *mag = cache->cpu_mags[cpu];
 
     if (mag && mag->count > 0) {
-        return mag->objects[--mag->count];
+        void *obj = mag->objects[--mag->count];
+        arch_local_irq_restore(flags);
+        return obj;
     }
 
     if (kmem_magazine_swap(cache, cpu, true)) {
         mag = cache->cpu_mags[cpu];
-        return mag->objects[--mag->count];
+        void *obj = mag->objects[--mag->count];
+        arch_local_irq_restore(flags);
+        return obj;
     }
 
-    return nullptr; 
+    arch_local_irq_restore(flags);
+    return nullptr;
 }
 
 void kmem_cache_free(kmem_cache_t *cache, void *obj) {
-    int cpu = 0;
+    irqflags_t flags = arch_local_save_flags();
+    arch_local_irq_disable();
+
+    int cpu = smp_processor_id();
+
     kmem_magazine_t *mag = cache->cpu_mags[cpu];
 
     if (mag && mag->count < MAG_SIZE) {
         mag->objects[mag->count++] = obj;
+        arch_local_irq_restore(flags);
         return;
     }
 
@@ -155,10 +181,12 @@ void kmem_cache_free(kmem_cache_t *cache, void *obj) {
     if (mag) {
         mag->objects[mag->count++] = obj;
     }
+
+    arch_local_irq_restore(flags);
 }
 
-kmem_cache_t* kmem_cache_create(const char *name, size_t size, uint8_t storage_key) {
-    kmem_cache_t *cp = (kmem_cache_t*)kmem_cache_alloc(&cache_cache);
+kmem_cache_t *kmem_cache_create(const char *name, size_t size, uint8_t storage_key) {
+    kmem_cache_t *cp = (kmem_cache_t *) kmem_cache_alloc(&cache_cache);
     if (!cp) return nullptr;
 
     cp->name = name;
@@ -172,7 +200,7 @@ kmem_cache_t* kmem_cache_create(const char *name, size_t size, uint8_t storage_k
     memset(cp->cpu_mags, 0, sizeof(cp->cpu_mags));
 
     for (int i = 0; i < 4; i++) {
-        kmem_magazine_t *m = (kmem_magazine_t*)kmem_cache_alloc(&mag_cache);
+        kmem_magazine_t *m = (kmem_magazine_t *) kmem_cache_alloc(&mag_cache);
         if (m) {
             m->count = 0;
             list_add_tail(&m->node, &cp->empty_mags);
@@ -200,6 +228,17 @@ void slab_init(void) {
     list_init(&mag_cache.empty_mags);
     list_init(&mag_cache.partial_slabs);
     list_init(&mag_cache.full_slabs);
+
+    // Seed the mag_cache with empty magazines so it can bootstrap itself.
+    uint64_t pfn = pmm_alloc_page();
+    if (pfn == PMM_INVALID_PFN) panic("slab_init: no memory for bootstrap");
+
+    char *page = (char *) hhdm_phys_to_virt(pmm_pfn_to_phys(pfn));
+    for (size_t i = 0; i + sizeof(kmem_magazine_t) <= PAGE_SIZE; i += sizeof(kmem_magazine_t)) {
+        kmem_magazine_t *m = (kmem_magazine_t *) (page + i);
+        m->count = 0;
+        list_add_tail(&m->node, &mag_cache.empty_mags);
+    }
 
     printk("slab: magazine-slab pools populated\n");
 }

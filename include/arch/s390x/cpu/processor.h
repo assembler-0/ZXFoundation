@@ -1,25 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // include/arch/s390x/cpu/processor.h
 //
-/// @brief s390x CPU control primitives: spin hints and hypervisor yield.
-///
-///        cpu_relax()
-///        ===========
-///        On s390x there is no ISA-level spin-wait hint (no equivalent of
-///        x86 PAUSE or ARM YIELD).  A compiler barrier is the correct
-///        implementation: it prevents the compiler from collapsing or
-///        hoisting the spin-loop body while adding zero hardware overhead.
-///        The CPU's out-of-order engine handles bus traffic naturally.
-///
-///        zx_smp_yield()
-///        ==============
-///        DIAG 44 is a hypervisor diagnose call (z/VM, Hercules).  On bare
-///        metal it causes a privileged-operation exception from problem state
-///        and is implementation-defined in supervisor state — it must NOT be
-///        called unconditionally.  zx_smp_yield() gates the call on a
-///        boot-time flag (zx_has_diag44) populated from STFLE/SCLP during
-///        early init.  Use it only in explicit yield points (idle loop,
-///        long-poll paths) — never as a generic spin hint.
+/// @brief s390x CPU control primitives
 
 #pragma once
 
@@ -56,4 +38,11 @@ static inline void arch_set_storage_key(uint64_t paddr, uint8_t key) {
         "sske %[key], %[paddr]\n"
         : : [key] "d" ((uint64_t)key), [paddr] "a" (paddr) : "memory"
     );
+}
+
+/// @brief Get the logical processor ID for the executing CPU.
+static inline int smp_processor_id(void) {
+    uint16_t cpu_addr;
+    __asm__ volatile ("stap %0" : "=Q" (cpu_addr));
+    return cpu_addr & 0x3F;
 }

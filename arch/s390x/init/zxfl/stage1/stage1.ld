@@ -1,14 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* arch/s390x/init/zxfl/stage1/stage1.ld */
 
-/*
- * core.zxfoundationloader00.sys layout:
- *   0x0000 - 0x0017 : IPL PSW + padding (.text.ipl, 24 bytes)
- *   0x0018 - 0x0057 : unused (padding to 0x58)
- *   0x0058 - ...    : stage1_entry + C code + rodata + data
- *   ...  - 0x2FFF   : fit within 12288 bytes total
- */
-
 ENTRY(__zx_ipl_entry)
 
 SECTIONS

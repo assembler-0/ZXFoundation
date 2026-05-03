@@ -38,10 +38,6 @@
 #include <arch/s390x/init/zxfl/diag.h>
 #include <zxfoundation/zconfig.h>
 
-// ---------------------------------------------------------------------------
-// z/Architecture paging constants (PoP SA22-7832, Chapter 3)
-// ---------------------------------------------------------------------------
-
 /// ASCE Designation-Type field (bits 60-61).
 /// DT=11 means the root table is a Region-First table (5-level paging).
 #define Z_ASCE_DT_R1        0x0CULL
@@ -85,19 +81,6 @@
 /// Entries per page table.
 #define PAGE_TABLE_ENTRIES   256U
 
-// ---------------------------------------------------------------------------
-// Static tables for the top 3 levels (R1, R2, R3).
-//
-// One of each is sufficient:
-//   R1: identity uses entry 0, HHDM uses entry 2047.
-//   R2: shared — identity uses entry 0, HHDM uses entry 2016.
-//       These indices never overlap, so sharing one R2 table is safe.
-//   R3: shared — both identity and HHDM map the same physical RAM.
-//
-// Lower levels (segment tables, page tables) are dynamically allocated
-// from a bump pool above the kernel image.
-// ---------------------------------------------------------------------------
-
 static uint64_t r1_table[2048] __attribute__((aligned(16384)));
 static uint64_t r2_table[2048] __attribute__((aligned(16384)));
 static uint64_t r3_table[2048] __attribute__((aligned(16384)));
@@ -134,12 +117,6 @@ static uint64_t *alloc_page_table(void) {
 }
 
 /// @brief Build 5-level page tables, enable DAT, and LPSWE into the kernel.
-///
-///        The loader ONLY accepts kernels with a higher-half entry point
-///        (e_entry >= CONFIG_KERNEL_VIRT_OFFSET).  This is enforced in
-///        elfload.c; by the time we reach here, 'entry' is guaranteed to
-///        be an HHDM virtual address.
-///
 /// @param entry      Kernel entry point (HHDM virtual address from ELF e_entry).
 /// @param boot_proto Physical address of the zxfl_boot_protocol_t struct.
 [[noreturn]] void zxfl_mmu_setup_and_jump(uint64_t entry, uint64_t boot_proto) {
@@ -148,10 +125,6 @@ static uint64_t *alloc_page_table(void) {
 
     const bool has_edat1 = stfle_has_facility(proto->stfle_fac, STFLE_BIT_EDAT1);
 
-    // -----------------------------------------------------------------------
-    // 1. Determine how much physical memory to map.
-    //    Cap at 4 TB — one R3 table's worth.
-    // -----------------------------------------------------------------------
     uint64_t map_bytes = proto->mem_total_bytes;
     if (map_bytes < 0x200000ULL) map_bytes = 0x200000ULL;
     map_bytes = (map_bytes + SEG_SIZE - 1) & ~(SEG_SIZE - 1);
@@ -163,18 +136,12 @@ static uint64_t *alloc_page_table(void) {
     const uint32_t num_seg_tables = (uint32_t)((total_segments + SEG_TABLE_ENTRIES - 1)
                                                 / SEG_TABLE_ENTRIES);
 
-    // -----------------------------------------------------------------------
-    // 2. Initialize R1, R2, R3 tables to Invalid with correct TT bits.
-    // -----------------------------------------------------------------------
     for (uint32_t i = 0; i < 2048; i++) {
         r1_table[i] = Z_I | Z_TL_2048 | Z_TT_R1;
         r2_table[i] = Z_I | Z_TL_2048 | Z_TT_R2;
         r3_table[i] = Z_I | Z_TL_2048 | Z_TT_R3;
     }
 
-    // -----------------------------------------------------------------------
-    // 3. Set up the table pool above the kernel image.
-    // -----------------------------------------------------------------------
     uint64_t pool_base = (proto->kernel_phys_end + 0xFFFFFULL) & ~0xFFFFFULL;
     if (pool_base < 0x2000000ULL) pool_base = 0x2000000ULL;
     pool_next = pool_base;
@@ -183,9 +150,6 @@ static uint64_t *alloc_page_table(void) {
         print("zxfl: EDAT-1 missing, using 4KB page fallback\n");
     }
 
-    // -----------------------------------------------------------------------
-    // 4. Allocate and populate segment tables.
-    // -----------------------------------------------------------------------
     for (uint32_t st = 0; st < num_seg_tables; st++) {
         uint64_t *seg_table = alloc_seg_table();
 
@@ -208,51 +172,26 @@ static uint64_t *alloc_page_table(void) {
             }
         }
 
-        // Wire into R3.
         r3_table[st] = (uint64_t)(uintptr_t)seg_table | Z_TL_2048 | Z_TT_R3;
     }
 
-    // -----------------------------------------------------------------------
-    // 5. Wire the 5-level hierarchy.
-    //
-    //    Virtual address decomposition (CONFIG_KERNEL_VIRT_OFFSET = 0xFFFF800000000000):
-    //      RFX = (addr >> 53) & 0x7FF
-    //      RSX = (addr >> 42) & 0x7FF
-    //
-    //    Identity map (VA = 0x0):
-    //      RFX = 0,    RSX = 0    → R1[0] → R2, R2[0] → R3
-    //    HHDM map (VA = 0xFFFF800000000000):
-    //      RFX = 2047, RSX = 2016 → R1[2047] → R2, R2[2016] → R3
-    //
-    //    R1[0] and R1[2047] both point to the SAME R2 table.
-    //    R2[0] and R2[2016] both point to the SAME R3 table.
-    //    This works because the RSX indices don't overlap.
-    // -----------------------------------------------------------------------
     uint32_t rfx_identity = 0;
     uint32_t rfx_hhdm     = (uint32_t)((virt_base >> 53) & 0x7FFULL);
     uint32_t rsx_identity = 0;
     uint32_t rsx_hhdm     = (uint32_t)((virt_base >> 42) & 0x7FFULL);
 
-    // R1 → R2 (shared).
     r1_table[rfx_identity] = (uint64_t)(uintptr_t)r2_table | Z_TL_2048 | Z_TT_R1;
     r1_table[rfx_hhdm]     = (uint64_t)(uintptr_t)r2_table | Z_TL_2048 | Z_TT_R1;
 
-    // R2 → R3 (shared).
     r2_table[rsx_identity] = (uint64_t)(uintptr_t)r3_table | Z_TL_2048 | Z_TT_R2;
     r2_table[rsx_hhdm]     = (uint64_t)(uintptr_t)r3_table | Z_TL_2048 | Z_TT_R2;
 
-    // -----------------------------------------------------------------------
-    // 6. Convert boot protocol pointers from physical to HHDM virtual.
-    // -----------------------------------------------------------------------
     uint64_t v_proto = hhdm_phys_to_virt(boot_proto);
     uint64_t v_stack = hhdm_phys_to_virt(proto->kernel_stack_top);
     proto->kernel_stack_top = v_stack;
     proto->mem_map_addr     = hhdm_phys_to_virt(proto->mem_map_addr);
     proto->cmdline_addr     = hhdm_phys_to_virt(proto->cmdline_addr);
 
-    // -----------------------------------------------------------------------
-    // 7. Configure control registers and load the ASCE.
-    // -----------------------------------------------------------------------
     uint64_t cr0;
     __asm__ volatile("stctg 0,0,%0" : "=Q"(cr0));
 
@@ -264,16 +203,14 @@ static uint64_t *alloc_page_table(void) {
 
     __asm__ volatile("lctlg 0,0,%0" :: "Q"(cr0));
 
-    // ASCE: Region-First table origin | DT=11 | TL=11.
     uint64_t asce = (uint64_t)(uintptr_t)r1_table | Z_ASCE_DT_R1 | Z_ASCE_TL_2048;
     __asm__ volatile("lctlg 1,1,%0" :: "Q"(asce) : "memory");
 
-    // Purge TLB — required after loading a new ASCE.
+    proto->cr1_snapshot = asce;
+    proto->cr0_snapshot = cr0;
+
     __asm__ volatile("ptlb" ::: "memory");
 
-    // -----------------------------------------------------------------------
-    // 8. LPSWE into the kernel (atomically enables DAT + jumps to VMA).
-    // -----------------------------------------------------------------------
     static uint64_t jump_psw[2] __attribute__((aligned(16)));
     jump_psw[0] = 0x0404000180000000ULL;   // DAT=1, EA=1, BA=1
     jump_psw[1] = entry;                    // HHDM virtual entry point

@@ -7,6 +7,7 @@
 #include <zxfoundation/sync/rcu.h>
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/slab.h>
+#include <zxfoundation/memory/kmalloc.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/lowcore.h>
@@ -78,7 +79,7 @@ bad:
     }
 
     if (boot->flags & ZXFL_FLAG_SMP) {
-        printk("sys: smp: %u processors detected via sigp sense\n", boot->cpu_count);
+        printk("sys: smp: %u processors detected\n", boot->cpu_count);
         for (uint32_t i = 0; i < boot->cpu_count; i++) {
             printk("     cpu[%u] addr=0x%04x state=%u bsp=%s\n",
                    i,
@@ -91,8 +92,17 @@ bad:
     if (boot->flags & ZXFL_FLAG_TOD) {
         printk("sys: tod: 0x%016llx (boot timestamp)\n", (unsigned long long)boot->tod_boot);
     }
-    
-    printk("sys: asce: 0x%016llx (loader 5-level mm root)\n", (unsigned long long)boot->cr1_snapshot);
+
+    if (boot->module_count > 0) {
+        printk("sys: modules: %u loaded\n", boot->module_count);
+        for (uint32_t i = 0; i < boot->module_count; i++) {
+            printk("     mod[%u] %s (phys=0x%llx, size=%llu bytes)\n",
+                   i,
+                   boot->modules[i].name,
+                   (unsigned long long)boot->modules[i].phys_start,
+                   (unsigned long long)boot->modules[i].size_bytes);
+        }
+    }
 
     zx_cpu_features_init(boot);
     
@@ -101,8 +111,9 @@ bad:
     pmm_init(boot);
 
     slab_init();
+    kmalloc_init();
 
-    printk("sys: core.zxfoundation.nucleus init complete\n");
+    printk("sys: core.zxfoundation.nucleus initialization complete\n");
 
     while (true) {
         __asm__ volatile("nop");

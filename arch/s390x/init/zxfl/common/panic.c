@@ -4,7 +4,7 @@
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/panic.h>
 
-static const uint64_t panic_psw[2] __attribute__((aligned(8))) = {
+static constexpr uint64_t panic_psw[2] __attribute__((aligned(8))) = {
     0x0000800180000000ULL,  // 64-bit disabled-wait
     0x0000000000000000ULL,  // halt at 0x0 (always mapped)
 };

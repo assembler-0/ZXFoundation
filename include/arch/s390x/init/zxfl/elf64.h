@@ -2,16 +2,12 @@
 // include/arch/s390x/init/zxfl/elf64.h
 //
 /// @brief Minimal ELF64 type definitions for the ZXFL bootloader.
-///        Freestanding — no libc headers included.
 
 #ifndef ZXFOUNDATION_ZXFL_ELF64_H
 #define ZXFOUNDATION_ZXFL_ELF64_H
 
 #include <zxfoundation/types.h>
 
-// ---------------------------------------------------------------------------
-// ELF64 magic and identification
-// ---------------------------------------------------------------------------
 #define ELF_MAGIC0      0x7FU
 #define ELF_MAGIC1      'E'
 #define ELF_MAGIC2      'L'
@@ -22,9 +18,6 @@
 #define PT_LOAD         1U      ///< Loadable segment
 #define ELFCLASS64      2U      ///< 64-bit objects
 
-// ---------------------------------------------------------------------------
-// ELF64 header (64 bytes)
-// ---------------------------------------------------------------------------
 typedef struct {
     uint8_t  e_ident[16];   ///< Magic, class, data, version, OS/ABI, padding
     uint16_t e_type;        ///< Object file type (ET_EXEC)
@@ -42,9 +35,6 @@ typedef struct {
     uint16_t e_shstrndx;    ///< Section name string table index
 } elf64_ehdr_t;
 
-// ---------------------------------------------------------------------------
-// ELF64 program header (56 bytes)
-// ---------------------------------------------------------------------------
 typedef struct {
     uint32_t p_type;        ///< Segment type (PT_LOAD = 1)
     uint32_t p_flags;       ///< Segment flags (PF_X=1, PF_W=2, PF_R=4)
@@ -55,10 +45,6 @@ typedef struct {
     uint64_t p_memsz;       ///< Size of segment in memory (>= p_filesz for BSS)
     uint64_t p_align;       ///< Alignment (power of 2; 0 or 1 = no alignment)
 } elf64_phdr_t;
-
-// ---------------------------------------------------------------------------
-// Validation helpers
-// ---------------------------------------------------------------------------
 
 /// @brief Return non-zero if the ELF magic bytes are valid.
 static inline int elf64_check_magic(const elf64_ehdr_t *h) {

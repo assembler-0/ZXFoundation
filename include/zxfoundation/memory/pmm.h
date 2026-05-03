@@ -2,31 +2,6 @@
 // include/zxfoundation/memory/pmm.h
 //
 /// @brief Physical Memory Manager (PMM) — page-granularity frame allocator.
-///
-///        DESIGN
-///        ======
-///        The PMM uses a dual-bitmap over the entire physical address space:
-///          free_map  — bit set means the frame is available.
-///          poison_map — bit set means the frame was freed and not yet
-///                       reallocated; a set bit here on alloc is a
-///                       use-after-free indicator.
-///
-///        Both bitmaps are stored in a statically-sized region carved out
-///        of the first usable RAM region at init time.  The maximum
-///        addressable physical memory is PMM_MAX_PHYS_PAGES frames.
-///
-///        LOCKING
-///        =======
-///        A single spinlock serializes all alloc/free operations.  This is
-///        correct for a uniprocessor kernel and safe for SMP with low
-///        allocation rates.  A per-zone lock or lock-free bitmap can be
-///        added later without changing the API.
-///
-///        FRAME NUMBERING
-///        ===============
-///        Physical frame number (PFN) = physical_address >> PAGE_SHIFT.
-///        All API functions work in PFNs.  Callers convert to/from byte
-///        addresses using pmm_pfn_to_phys() / pmm_phys_to_pfn().
 
 #pragma once
 

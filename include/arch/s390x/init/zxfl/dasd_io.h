@@ -28,10 +28,6 @@ typedef struct __attribute__((packed, aligned(8))) {
 #define CCW_FLAG_SLI            0x20U   ///< Suppress Length Indication
 #define CCW_FLAG_CC_SLI         (CCW_FLAG_CC | CCW_FLAG_SLI)
 
-// ---------------------------------------------------------------------------
-// Operation Request Block (ORB)
-// ---------------------------------------------------------------------------
-
 /// @brief ORB passed to SSCH.  4-byte aligned per PoP.
 typedef struct __attribute__((packed, aligned(4))) {
     uint32_t intparm;       ///< Interruption parameter (returned in IRB)
@@ -43,10 +39,6 @@ typedef struct __attribute__((packed, aligned(4))) {
 
 /// ORB flag: Format-1 CCWs, LPM=0xFF (all paths), no prefetch
 #define ORB_FLAGS_F1_LPM_FF     0x0080FF00U
-
-// ---------------------------------------------------------------------------
-// DASD seek / search arguments
-// ---------------------------------------------------------------------------
 
 /// @brief Seek argument: 6 bytes, big-endian CCHH.
 typedef struct __attribute__((packed)) {

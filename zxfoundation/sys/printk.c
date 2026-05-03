@@ -4,14 +4,23 @@
 #include <lib/vsprintf.h>
 #include <zxfoundation/sys/printk.h>
 
+#include <zxfoundation/spinlock.h>
+
 static printk_putc_sink global_sink = nullptr;
+static spinlock_t console_lock = SPINLOCK_INIT;
 
 void printk_flush(const char *buf, size_t size) {
     if (!global_sink) return;
+    
+    irqflags_t flags;
+    spin_lock_irqsave(&console_lock, &flags);
+    
     while (size--) {
         global_sink(*buf);
         buf++;
     }
+    
+    spin_unlock_irqrestore(&console_lock, flags);
 }
 
 int vprintk(const char *fmt, va_list ap) {

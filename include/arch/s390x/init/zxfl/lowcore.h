@@ -2,31 +2,11 @@
 // include/arch/s390x/init/zxfl/lowcore.h
 //
 /// @brief z/Architecture lowcore layout and loader setup API.
-///
-///        The z/Architecture lowcore occupies physical addresses 0x000–0x1FF
-///        (the first 512 bytes of memory).  It is a hardware-defined structure:
-///        the CPU reads and writes specific offsets for PSW saves, new PSWs,
-///        prefix register, etc.
-///
-///        The loader must install valid "new PSW" entries for at least the
-///        restart, external, I/O, machine-check, and program-check slots
-///        before handing off to the kernel.  Without these, any interrupt
-///        (including a spurious machine check from Hercules) will cause the
-///        CPU to load a zero PSW and halt with an addressing exception.
-///
-///        We install disabled-wait PSWs pointing to distinct halt addresses
-///        so that if an unexpected interrupt fires before the kernel installs
-///        its own handlers, the operator can identify which interrupt type
-///        caused the halt from the PSW address.
 
 #ifndef ZXFOUNDATION_ZXFL_LOWCORE_H
 #define ZXFOUNDATION_ZXFL_LOWCORE_H
 
 #include <zxfoundation/types.h>
-
-// ---------------------------------------------------------------------------
-// z/Architecture PSW (16 bytes, big-endian)
-// ---------------------------------------------------------------------------
 
 /// @brief 64-bit z/Architecture PSW.
 ///        Stored as two 64-bit words: psw_mask and psw_addr.
@@ -39,12 +19,6 @@ typedef struct __attribute__((packed, aligned(8))) {
 ///        Bit 16 (wait) = 1, bits 31+32 (64-bit addressing) = 1.
 ///        All interrupt mask bits (13=I/O, 14=ext, 15=mck) = 0.
 #define ZXFL_PSW_MASK_64BIT_DISABLED    UINT64_C(0x0000800180000000)
-
-// ---------------------------------------------------------------------------
-// Lowcore layout (physical 0x000–0x1FF)
-// Offsets are per z/Architecture Principles of Operation, SA22-7832.
-// Only the fields the loader touches are named; the rest are uint8_t arrays.
-// ---------------------------------------------------------------------------
 
 /// @brief Overlay of the z/Architecture lowcore.
 ///        Cast a pointer to physical address 0x0 to this type.

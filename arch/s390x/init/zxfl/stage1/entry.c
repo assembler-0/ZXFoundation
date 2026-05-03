@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/stage1/entry.c
 
-//! P.S.: could've done this in raw assembly but having some logs is nice
+/// P.S.: could've done this in raw assembly but having some logs is nice
 
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
