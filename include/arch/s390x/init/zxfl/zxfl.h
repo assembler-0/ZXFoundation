@@ -151,3 +151,12 @@ typedef struct {
 } zxfl_boot_protocol_t;
 
 #endif /* ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H */
+
+/// @brief Setup minimal page tables and enable DAT in loader.
+void zxfl_mmu_setup(void);
+
+/// @brief Jump to kernel with DAT enabled.
+[[noreturn]] void zxfl_mmu_jump_kernel(uint64_t entry, uint64_t boot_proto);
+
+/// @brief Setup page tables, enable DAT, and jump to kernel (combined).
+[[noreturn]] void zxfl_mmu_setup_and_jump(uint64_t entry, uint64_t boot_proto);

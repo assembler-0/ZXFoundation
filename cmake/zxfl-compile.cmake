@@ -11,7 +11,7 @@ set(ZXFL_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/string.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/lowcore.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/smp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/mmu.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stsi.c
 )
 

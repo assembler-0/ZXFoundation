@@ -15,6 +15,7 @@
 ///        expected to be low.  If we ever need backoff, add it here.
 
 #include <zxfoundation/atomic.h>
+#include <arch/s390x/cpu/processor.h>
 
 // ---------------------------------------------------------------------------
 // atomic_t (32-bit, CS)
@@ -147,23 +148,21 @@ int64_t atomic64_xchg(atomic64_t *a, int64_t new_val) {
 //   bits[15: 0] = serving (incremented on unlock())
 //
 // A CPU holds the lock when its ticket == serving.
-// The DIAG 44 instruction yields the CPU timeslice on Hercules/z/VM,
-// preventing a busy-wait from starving the CPU that holds the lock.
+// cpu_relax() is the correct s390x spin hint (compiler barrier only).
+// Use zx_smp_yield() in the idle loop if hypervisor yield is desired.
 
 #include <zxfoundation/spinlock.h>
 
 void spin_lock(spinlock_t *lock) {
     // Atomically grab the next ticket by adding 1 to the high half (0x10000).
     // The low half (now_serving) is untouched by this add.
+    // We subtract 0x10000 from the result because atomic_add_return returns the
+    // NEW value, but our ticket is the one we just "grabbed" (the old value).
     const int32_t ticket_word = atomic_add_return(&lock->tickets, 0x10000);
-    const uint16_t my_ticket  = (uint16_t)((uint32_t)ticket_word >> 16);
+    const uint16_t my_ticket  = (uint16_t)((uint32_t)(ticket_word - 0x10000) >> 16);
 
-    while ((uint16_t)(uint32_t)atomic_read(&lock->tickets) != my_ticket) {
-        // Yield the timeslice on Hercules/z/VM to avoid starving the lock holder.
-        // On bare metal this is a no-op (DIAG is a privileged instruction that
-        // the hypervisor intercepts; on real hardware it traps and returns).
-        __asm__ volatile ("diag 0,0,0x44" ::: "memory");
-    }
+    while ((uint16_t)(uint32_t)atomic_read(&lock->tickets) != my_ticket)
+        cpu_relax();
 
     // Acquire barrier: all subsequent loads/stores must see stores from the
     // previous lock holder.  On s390x TSO a compiler barrier is sufficient

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// arch/s390x/init/zxfl/common/elfload.c
+
 #include <arch/s390x/init/zxfl/elfload.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
@@ -6,11 +9,12 @@
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 
-static void zxfl_bzero(uintptr_t addr, size_t size) {
+/// @brief Zero memory using 64-bit MVCL.
+static void zxfl_bzero(uint64_t addr, uint64_t size) {
     if (size == 0) return;
-    register uint64_t r2 __asm__("2") = (uint64_t)addr;
-    register uint64_t r3 __asm__("3") = (uint64_t)size;
-    register uint64_t r4 __asm__("4") = (uint64_t)addr;
+    register uint64_t r2 __asm__("2") = addr;
+    register uint64_t r3 __asm__("3") = size;
+    register uint64_t r4 __asm__("4") = addr;
     register uint64_t r5 __asm__("5") = 0;
     register uint32_t r0 __asm__("0") = 0;
 
@@ -23,16 +27,6 @@ static void zxfl_bzero(uintptr_t addr, size_t size) {
     );
 }
 
-/// @brief Convert a byte offset within a dataset extent into a (cyl, head, rec)
-///        tuple.  The extent begins at (begin_cyl, begin_head).
-///
-///        Layout assumption: fixed-block records of DASD_BLOCK_SIZE bytes,
-///        ZXVL_RECS_PER_TRACK records per track, DASD_3390_HEADS_PER_CYL
-///        heads per cylinder.  This matches the sysres.conf FB 4096 4096
-///        allocation for core.zxfoundation.nucleus.
-///
-///        We deliberately avoid division where possible by using the fact
-///        that DASD_BLOCK_SIZE is a power of two.
 #define ZXVL_RECS_PER_TRACK     12U
 
 static void offset_to_cchhr(const dscb1_extent_t *ext,
@@ -41,7 +35,7 @@ static void offset_to_cchhr(const dscb1_extent_t *ext,
                              uint8_t  *out_rec) {
     uint32_t block_num  = (uint32_t)(byte_offset / DASD_BLOCK_SIZE);
     uint32_t track_num  = block_num / ZXVL_RECS_PER_TRACK;
-    uint32_t rec_in_trk = block_num % ZXVL_RECS_PER_TRACK; // 0-based
+    uint32_t rec_in_trk = block_num % ZXVL_RECS_PER_TRACK;
 
     uint32_t abs_head = (uint32_t)ext->begin_head + track_num;
     uint32_t abs_cyl  = (uint32_t)ext->begin_cyl  + abs_head / DASD_3390_HEADS_PER_CYL;
@@ -49,54 +43,38 @@ static void offset_to_cchhr(const dscb1_extent_t *ext,
 
     *out_cyl  = (uint16_t)abs_cyl;
     *out_head = (uint16_t)abs_head;
-    *out_rec  = (uint8_t)(rec_in_trk + 1); // DASD records are 1-based
+    *out_rec  = (uint8_t)(rec_in_trk + 1);
 }
 
 static uint8_t io_block[DASD_BLOCK_SIZE] __attribute__((aligned(DASD_BLOCK_SIZE)));
 
-/// @brief Load one PT_LOAD segment from DASD into physical memory.
-///
-///        The segment may span multiple DASD tracks and cylinders.
-///        We read block-by-block, copying only the bytes that belong to
-///        the segment (handling partial first/last blocks).
-///
-///        p_filesz bytes are read from disk; (p_memsz - p_filesz) bytes
-///        are zeroed in memory (BSS).  The load address is p_paddr.
 static int load_segment(uint32_t schid,
                         const dscb1_extent_t *ext,
                         const elf64_phdr_t *ph) {
-    if (ph->p_filesz == 0 && ph->p_memsz == 0) return 0;
+    if (ph->p_memsz == 0) return 0;
 
-    zxfl_bzero((uint32_t)ph->p_paddr, (uint32_t)ph->p_memsz);
+    // Zero entire memory span for the segment (BSS + data area)
+    zxfl_bzero(ph->p_paddr, ph->p_memsz);
 
     uint64_t file_remaining = ph->p_filesz;
     uint64_t file_offset    = ph->p_offset;
-    uintptr_t mem_dest      = (uintptr_t)ph->p_paddr;
+    uint64_t mem_dest       = ph->p_paddr;
 
     while (file_remaining > 0) {
-        uint16_t cyl;
-        uint16_t head;
+        uint16_t cyl, head;
         uint8_t  rec;
         offset_to_cchhr(ext, file_offset, &cyl, &head, &rec);
 
-        int rc = dasd_read_record(schid, cyl, head, rec,
-                                  CCW_CMD_READ_DATA,
-                                  io_block, DASD_BLOCK_SIZE);
-        if (rc < 0) {
+        if (dasd_read_record(schid, cyl, head, rec, CCW_CMD_READ_DATA, io_block, DASD_BLOCK_SIZE) < 0) {
             print("zxfl: io error loading segment\n");
             return -1;
         }
 
-        // How many bytes of this block belong to the segment?
         uint32_t block_off = (uint32_t)(file_offset % DASD_BLOCK_SIZE);
         uint32_t avail     = DASD_BLOCK_SIZE - block_off;
-        uint32_t copy_len  = (file_remaining < avail)
-                             ? (uint32_t)file_remaining
-                             : avail;
+        uint32_t copy_len  = (file_remaining < avail) ? (uint32_t)file_remaining : avail;
 
-        zxfl_memcpy((void *)mem_dest,
-                    io_block + block_off,
-                    copy_len);
+        zxfl_memcpy((void *)(uintptr_t)mem_dest, io_block + block_off, copy_len);
 
         mem_dest       += copy_len;
         file_offset    += copy_len;
@@ -109,94 +87,68 @@ static int load_segment(uint32_t schid,
 int zxfl_load_elf64(uint32_t schid,
                     const dscb1_extent_t *ext,
                     uint64_t *out_entry,
-                    uint32_t *out_load_base,
-                    uint32_t *out_load_size,
+                    uint64_t *out_load_base,
+                    uint64_t *out_load_size,
                     uint64_t hs_nonce) {
-    uint16_t cyl  = ext->begin_cyl;
-    uint16_t head = ext->begin_head;
-    uint8_t  rec  = 1;
-
-    int rc = dasd_read_record(schid, cyl, head, rec,
-                              CCW_CMD_READ_DATA,
-                              io_block, DASD_BLOCK_SIZE);
-    if (rc < 0) {
-        print("zxfl: cannot read elf header block\n");
+    if (dasd_read_record(schid, ext->begin_cyl, ext->begin_head, 1, CCW_CMD_READ_DATA, io_block, DASD_BLOCK_SIZE) < 0) {
+        print("zxfl: cannot read elf header\n");
         return -1;
     }
 
     const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)(uintptr_t)io_block;
-    if (!elf64_check_magic(ehdr)) {
-        print("zxfl: bad elf magic\n");
-        return -1;
-    }
-    if (ehdr->e_machine != EM_S390) {
-        print("zxfl: wrong elf machine type\n");
-        return -1;
-    }
-    if (ehdr->e_phnum == 0) {
-        print("zxfl: no program headers\n");
+    if (!elf64_check_magic(ehdr) || ehdr->e_machine != EM_S390 || ehdr->e_phnum == 0) {
+        print("zxfl: bad elf format\n");
         return -1;
     }
 
     *out_entry = ehdr->e_entry;
 
-    uint8_t phdr_block[DASD_BLOCK_SIZE] __attribute__((aligned(DASD_BLOCK_SIZE)));
-    const elf64_phdr_t *phdrs;
-
-    if (ehdr->e_phoff + (uint64_t)ehdr->e_phnum * sizeof(elf64_phdr_t)
-            <= DASD_BLOCK_SIZE) {
-        zxfl_memcpy(phdr_block, io_block + ehdr->e_phoff,
-                    (uint32_t)(ehdr->e_phnum * sizeof(elf64_phdr_t)));
-        phdrs = (const elf64_phdr_t *)(uintptr_t)phdr_block;
-    } else {
-        uint16_t pc; uint16_t ph_head; uint8_t pr;
-        offset_to_cchhr(ext, ehdr->e_phoff, &pc, &ph_head, &pr);
-        rc = dasd_read_record(schid, pc, ph_head, pr,
-                              CCW_CMD_READ_DATA,
-                              phdr_block, DASD_BLOCK_SIZE);
-        if (rc < 0) {
-            print("zxfl: cannot read phdr block\n");
-            return -1;
-        }
-        uint32_t off_in_block = (uint32_t)(ehdr->e_phoff % DASD_BLOCK_SIZE);
-        phdrs = (const elf64_phdr_t *)(uintptr_t)(phdr_block + off_in_block);
-    }
-
-    uint32_t load_min = 0xFFFFFFFFU;
-    uint32_t load_max = 0U;
-
-    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
-        if (phdrs[i].p_type != PT_LOAD) continue;
-        if (phdrs[i].p_memsz == 0)      continue;
-
-        rc = load_segment(schid, ext, &phdrs[i]);
-        if (rc < 0) return -1;
-
-        uint32_t seg_base = (uint32_t)phdrs[i].p_paddr;
-        uint32_t seg_end  = seg_base + (uint32_t)phdrs[i].p_memsz;
-        if (seg_base < load_min) load_min = seg_base;
-        if (seg_end  > load_max) load_max = seg_end;
-    }
-
-    if (load_min == 0xFFFFFFFFU) {
-        print("zxfl: no pt_load segments\n");
+    // Load Program Headers
+    static elf64_phdr_t phdrs[16]; // Fixed size for simplicity in mission-critical loader
+    if (ehdr->e_phnum > 16) {
+        print("zxfl: too many segments\n");
         return -1;
     }
 
-    print("zxvl: ZXVerifiedLoad 26h1\n");
+    uint32_t ph_size = ehdr->e_phnum * sizeof(elf64_phdr_t);
+    if (ehdr->e_phoff + ph_size <= DASD_BLOCK_SIZE) {
+        zxfl_memcpy(phdrs, io_block + ehdr->e_phoff, ph_size);
+    } else {
+        uint16_t pc, ph_head; uint8_t pr;
+        offset_to_cchhr(ext, ehdr->e_phoff, &pc, &ph_head, &pr);
+        if (dasd_read_record(schid, pc, ph_head, pr, CCW_CMD_READ_DATA, io_block, DASD_BLOCK_SIZE) < 0) return -1;
+        uint32_t off = (uint32_t)(ehdr->e_phoff % DASD_BLOCK_SIZE);
+        zxfl_memcpy(phdrs, io_block + off, ph_size);
+    }
+
+    uint64_t load_min = 0xFFFFFFFFFFFFFFFFULL;
+    uint64_t load_max = 0ULL;
+
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        if (phdrs[i].p_type != PT_LOAD || phdrs[i].p_memsz == 0) continue;
+
+        if (load_segment(schid, ext, &phdrs[i]) < 0) return -1;
+
+        if (phdrs[i].p_paddr < load_min) load_min = phdrs[i].p_paddr;
+        uint64_t seg_end = phdrs[i].p_paddr + phdrs[i].p_memsz;
+        if (seg_end > load_max) load_max = seg_end;
+    }
+
+    if (load_min == 0xFFFFFFFFFFFFFFFFULL) return -1;
+
+    // Verification Logic
     print("zxvl: inspecting nucleus\n");
     {
-        const uintptr_t lock_base = (uintptr_t)load_min + ZXVL_LOCK_OFFSET;
-        const volatile uint32_t *p_hi       = (volatile uint32_t *)(lock_base);
-        const volatile uint32_t *p_sentinel = (volatile uint32_t *)(lock_base + 4U);
-        const volatile uint32_t *p_lo       = (volatile uint32_t *)(lock_base + ZXVL_LOCK_GAP);
+        const uint64_t lock_base = load_min + ZXVL_LOCK_OFFSET;
+        const volatile uint32_t *p_hi       = (volatile uint32_t *)(uintptr_t)lock_base;
+        const volatile uint32_t *p_sentinel = (volatile uint32_t *)(uintptr_t)(lock_base + 4);
+        const volatile uint32_t *p_lo       = (volatile uint32_t *)(uintptr_t)(lock_base + ZXVL_LOCK_GAP);
 
         if (*p_sentinel != ZXVL_LOCK_SENTINEL) {
             print("zxvl: nucleus lock sentinel missing\n");
             return -1;
         }
-        const uint64_t lock_word = ((uint64_t)*p_hi << 32) | (uint64_t)*p_lo;
-        if ((lock_word ^ ZXVL_LOCK_MASK) != ZXVL_LOCK_EXPECTED) {
+        if (((((uint64_t)*p_hi << 32) | (uint64_t)*p_lo) ^ ZXVL_LOCK_MASK) != ZXVL_LOCK_EXPECTED) {
             print("zxvl: nucleus lock failed\n");
             return -1;
         }
@@ -204,18 +156,14 @@ int zxfl_load_elf64(uint32_t schid,
 
     {
         typedef uint64_t (*hs_fn_t)(uint64_t);
-        auto stub    = (hs_fn_t)((uintptr_t)load_min + ZXVL_HS_OFFSET);
-        const uint64_t challenge = ZXVL_SEED ^ hs_nonce;
-        const uint64_t response  = stub(challenge);
-        const uint64_t expected  =
-            ((hs_nonce << 17) | (hs_nonce >> 47)) + ZXVL_HS_RESPONSE;
-        if (response != expected) {
+        auto stub = (hs_fn_t)(uintptr_t)(load_min + ZXVL_HS_OFFSET);
+        if (stub(ZXVL_SEED ^ hs_nonce) != (((hs_nonce << 17) | (hs_nonce >> 47)) + ZXVL_HS_RESPONSE)) {
             print("zxvl: nucleus handshake failed\n");
             return -1;
         }
     }
-    print("zxvl: nucleus verified\n");
 
+    print("zxvl: nucleus verified\n");
     *out_load_base = load_min;
     *out_load_size = load_max - load_min;
     return 0;

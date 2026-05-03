@@ -28,7 +28,7 @@
 
 #pragma once
 
-#include <zxfoundation/types.h>
+#include <arch/s390x/cpu/irq.h>
 #include <zxfoundation/atomic.h>
 
 // ---------------------------------------------------------------------------
@@ -66,52 +66,6 @@ void spin_unlock(spinlock_t *lock);
 /// @brief Try to acquire the lock without spinning.
 /// @return true if the lock was acquired, false if it was already held.
 bool spin_trylock(spinlock_t *lock);
-
-// ---------------------------------------------------------------------------
-// IRQ-save variants
-// ---------------------------------------------------------------------------
-
-/// @brief s390x PSW mask type — holds the full 64-bit PSW mask word.
-typedef uint64_t irqflags_t;
-
-/// @brief Read the current PSW mask (EPSW instruction).
-static inline irqflags_t arch_local_save_flags(void) {
-    uint32_t hi, lo;
-    // EPSW Rx, Ry: stores PSW bits 0-31 into Rx, bits 32-63 into Ry.
-    __asm__ volatile (
-        "epsw %[hi], %[lo]\n"
-        : [hi] "=d" (hi), [lo] "=d" (lo)
-        :
-        : "cc"
-    );
-    return ((uint64_t)hi << 32) | (uint64_t)lo;
-}
-
-/// @brief Disable all maskable interrupts on the local CPU.
-///        SSM 0 clears the I/O, external, and machine-check mask bits.
-static inline void arch_local_irq_disable(void) {
-    __asm__ volatile (
-        "ssm    %0\n"
-        :
-        : "Q" ((uint8_t)0x00)
-        : "memory"
-    );
-}
-
-/// @brief Restore the PSW mask to a previously saved value.
-static inline void arch_local_irq_restore(irqflags_t flags) {
-    // LPSWE would change the full PSW including the address — we only want
-    // to restore the mask byte (bits 24-31 of the PSW mask word, which
-    // contains the I/O, ext, and mck enable bits).
-    // SSM takes a single byte from memory.
-    uint8_t mask_byte = (uint8_t)(flags >> 24);
-    __asm__ volatile (
-        "ssm    %0\n"
-        :
-        : "Q" (mask_byte)
-        : "memory"
-    );
-}
 
 /// @brief Acquire the spinlock and disable local interrupts.
 /// @param lock   The spinlock to acquire.

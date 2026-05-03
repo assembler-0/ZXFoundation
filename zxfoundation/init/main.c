@@ -4,9 +4,15 @@
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sync/rcu.h>
+#include <zxfoundation/memory/pmm.h>
+#include <zxfoundation/memory/slab.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <arch/s390x/init/zxfl/lowcore.h>
+#include <arch/s390x/cpu/processor.h>
 #include <drivers/console/diag.h>
+#include <lib/string.h>
 
 /// @brief Called from head64.S to extract the loader-provided stack top.
 ///        Returning 0 causes head64.S to fall back to the BSS stack.
@@ -48,6 +54,16 @@ bad:
 
     printk("sys: ZXFoundation %s copyright (C) 2026 assembler-0 All rights reserved.\n",
            CONFIG_ULTRASPARK_RELEASE);
+
+    zx_cpu_features_init(boot);
+    
+    zxfl_lowcore_setup();
+    
+    rcu_init();
+
+    pmm_init(boot);
+
+    slab_init();
 
     printk("sys: core.zxfoundation.nucleus init complete\n");
 

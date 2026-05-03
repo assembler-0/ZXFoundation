@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 // s390x init
 // ---------------------------------------------------------------------------
-#define CONFIG_KERNEL_LOAD_ADDRESS          0x40000
+#define CONFIG_KERNEL_LOAD_ADDRESS          0x100000
 #define CONFIG_BOOT_STACK_SIZE              16384
 #define CONFIG_S390X_SAVE_AREA              160
 
@@ -48,6 +48,7 @@
 // Computed / derived
 // ---------------------------------------------------------------------------
 #define CONFIG_HAVE_CONSOLE                 1
-#define CONFIG_PAGE_SIZE                    4096
+#define CONFIG_PAGE_SIZE                    4096UL
+#define CONFIG_KERNEL_VIRT_OFFSET           0xFFFF800000000000ULL
 
 #endif /* ZXFOUNDATION_ZCONFIG_H */
