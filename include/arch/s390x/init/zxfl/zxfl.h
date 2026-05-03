@@ -129,12 +129,6 @@ typedef struct {
     uint32_t stfle_count;       ///< Actual dwords returned by STFLE
     uint32_t _pad4;
 
-    // ---- SMP (24 bytes) ----
-    uint32_t cpu_count;         ///< Total CPUs detected
-    uint32_t bsp_cpu_addr;      ///< Boot CPU address (z/Arch CPU address)
-    uint64_t cpu_map_addr;      ///< Physical address of zxfl_cpu_info_t[]
-    uint64_t _pad5;
-
     // ---- LOWCORE (8 bytes) ----
     uint64_t lowcore_phys;      ///< Physical address of BSP lowcore (always 0x0)
 

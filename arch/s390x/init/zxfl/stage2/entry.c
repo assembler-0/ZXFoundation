@@ -19,7 +19,6 @@
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/lowcore.h>
-#include <arch/s390x/init/zxfl/smp.h>
 #include <arch/s390x/init/zxfl/stfle.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
@@ -27,6 +26,7 @@
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/panic.h>
 #include <arch/s390x/init/zxfl/parmfile.h>
+#include <zxfoundation/errno.h>
 
 #define ZX_NUCLEUS_NAME         "CORE.ZXFOUNDATION.NUCLEUS"
 #define ZX_PARMFILE_NAME        "ETC.ZXFOUNDATION.PARM"
@@ -212,17 +212,10 @@ static void load_parmfile(uint32_t schid) {
     s_proto.stfle_count = stfle_detect(s_proto.stfle_fac, STFLE_MAX_DWORDS);
     s_proto.flags |= ZXFL_FLAG_STFLE;
 
-    const uint16_t bsp_addr = zxfl_smp_current_cpu_addr();
-    s_proto.cpu_count    = zxfl_smp_enumerate(s_cpu_map, ZXFL_CPU_MAP_MAX);
-    s_proto.bsp_cpu_addr = (uint32_t)bsp_addr;
-    s_proto.cpu_map_addr = (uint64_t)(uintptr_t)s_cpu_map;
-    s_proto.flags |= ZXFL_FLAG_SMP;
-    zxfl_smp_stop_aps(s_cpu_map, s_proto.cpu_count, bsp_addr);
-
     setup_control_regs();
 
     load_parmfile(schid);
-    s_proto.cmdline_addr = (uint64_t)(uintptr_t)s_cmdline;
+    s_proto.cmdline_addr = (uintptr_t)s_cmdline;
     s_proto.cmdline_len  = 0;
     for (uint32_t i = 0; s_cmdline[i] != '\0'; i++)
         s_proto.cmdline_len++;
