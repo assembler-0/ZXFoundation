@@ -5,6 +5,9 @@
 #define ZXFOUNDATION_ZXVL_PRIVATE_H
 
 #include <zxfoundation/types.h>
+#include <arch/s390x/init/zxfl/zxfl.h>
+
+void zxfl_system_detect(zxfl_boot_protocol_t *proto);
 
 #define ZXVL_SEED               UINT64_C(0xA5F0C3E1B2D49687)
 

@@ -60,6 +60,40 @@ bad:
     printk("sys: ZXFoundation %s copyright (C) 2026 assembler-0 All rights reserved.\n",
            CONFIG_ULTRASPARK_RELEASE);
 
+    if (boot->flags & ZXFL_FLAG_SYSINFO) {
+        printk("sys: machine: %s %s model %s (s/n %s) plant %s\n",
+               boot->sysinfo.manufacturer,
+               boot->sysinfo.type,
+               boot->sysinfo.model,
+               boot->sysinfo.sequence,
+               boot->sysinfo.plant);
+        printk("sys: lpar: %s (id %u)\n",
+               boot->sysinfo.lpar_name[0] ? boot->sysinfo.lpar_name : "<bare-metal>",
+               boot->sysinfo.lpar_number);
+        printk("sys: cpus: %u total, %u configured, %u standby (rating %u)\n",
+               boot->sysinfo.cpus_total,
+               boot->sysinfo.cpus_configured,
+               boot->sysinfo.cpus_standby,
+               boot->sysinfo.capability);
+    }
+
+    if (boot->flags & ZXFL_FLAG_SMP) {
+        printk("sys: smp: %u processors detected via sigp sense\n", boot->cpu_count);
+        for (uint32_t i = 0; i < boot->cpu_count; i++) {
+            printk("     cpu[%u] addr=0x%04x state=%u bsp=%s\n",
+                   i,
+                   boot->cpu_map[i].cpu_addr,
+                   boot->cpu_map[i].state,
+                   boot->cpu_map[i].cpu_addr == boot->bsp_cpu_addr ? "yes" : "no");
+        }
+    }
+
+    if (boot->flags & ZXFL_FLAG_TOD) {
+        printk("sys: tod: 0x%016llx (boot timestamp)\n", (unsigned long long)boot->tod_boot);
+    }
+    
+    printk("sys: asce: 0x%016llx (loader 5-level mm root)\n", (unsigned long long)boot->cr1_snapshot);
+
     zx_cpu_features_init(boot);
     
     rcu_init();

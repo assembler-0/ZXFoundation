@@ -1,24 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // include/arch/s390x/init/zxfl/zxfl.h
 //
-/// @brief ZXFL boot protocol v3 — the contract between the bootloader and kernel.
+/// @brief ZXFoundation Boot Protocol — contract between loader and kernel.
 ///
-///        The bootloader fills a zxfl_boot_protocol_t and passes a pointer
-///        to it in R2 when jumping to the kernel entry point.  All pointer
-///        fields are physical addresses (DAT is off at kernel entry).
+///        This header defines the data structures passed from the ZXFL
+///        bootloader to the ZXFoundation kernel nucleus at boot time.
+///        The loader fills the zxfl_boot_protocol_t struct in physical
+///        memory, converts pointer fields to HHDM virtual addresses,
+///        and passes the struct address in R2 at kernel entry.
 ///
-///        KERNEL-BINDING MECHANISM
-///        ========================
-///        The loader computes a 64-bit binding_token at runtime:
-///
-///            binding_token = ZXFL_SEED ^ stfle_fac[0] ^ (uint64_t)ipl_schid
-///
-///        ZXFL_SEED is a 64-bit compile-time constant defined ONLY in the
-///        loader's private header (arch/s390x/init/zxfl/zxvl_private.h).
-///        It is never stored in this struct.  The kernel must independently
-///        recompute the token using the same formula and the same seed to
-///        verify authenticity.  An outsider's kernel has no seed and cannot
-///        produce a valid token.
+///        ZXFoundationLoader is the EXCLUSIVE loader for ZXFoundation.
+///        It enforces:
+///          - Higher-half virtual entry point (>= CONFIG_KERNEL_VIRT_OFFSET)
+///          - ET_EXEC ELF type (no relocatable kernels)
+///          - Binding token authentication
+///          - Security lock + handshake verification
 
 #ifndef ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
 #define ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
@@ -26,22 +22,33 @@
 #include <zxfoundation/types.h>
 #include <arch/s390x/init/zxfl/stfle.h>
 
-/// @brief Magic signature: ASCII "ZXFL" = 0x5A58464C
-#define ZXFL_MAGIC              0x5A58464CU
+// ---------------------------------------------------------------------------
+// Protocol version and magic
+// ---------------------------------------------------------------------------
 
-/// @brief Protocol version
-#define ZXFL_VERSION_3          0x00000003U
+#define ZXFL_MAGIC              0x5A58464CU   // "ZXFL"
+#define ZXFL_VERSION_4          0x00000004U
 
-/// @brief Loader identity: major.minor
-#define ZXFL_LOADER_MAJOR       0x0001U
-#define ZXFL_LOADER_MINOR       0x0000U
+#define ZXFL_LOADER_MAJOR       1U
+#define ZXFL_LOADER_MINOR       0U
 
-/// @brief Protocol flags (zxfl_boot_protocol_t::flags)
-#define ZXFL_FLAG_SMP           (1U << 0)   ///< cpu_map is valid
+// ---------------------------------------------------------------------------
+// Loader identity seed (used to derive the binding token).
+// ---------------------------------------------------------------------------
+#define ZXFL_SEED               UINT64_C(0xA5F0C3E1B2D49687)
+
+// ---------------------------------------------------------------------------
+// Protocol flags — each flag indicates that a corresponding data section
+// in the boot protocol has been populated and is valid.
+// ---------------------------------------------------------------------------
+
+#define ZXFL_FLAG_SMP           (1U << 0)   ///< cpu_map[] is valid
 #define ZXFL_FLAG_MEM_MAP       (1U << 1)   ///< mem_map is valid
 #define ZXFL_FLAG_CMDLINE       (1U << 2)   ///< cmdline_addr is valid
 #define ZXFL_FLAG_LOWCORE       (1U << 3)   ///< lowcore_phys is valid
 #define ZXFL_FLAG_STFLE         (1U << 4)   ///< stfle_fac[] is valid
+#define ZXFL_FLAG_SYSINFO       (1U << 5)   ///< system identification is valid
+#define ZXFL_FLAG_TOD           (1U << 6)   ///< tod_boot is valid
 
 /// @brief Maximum memory regions in the static map.
 #define ZXFL_MEM_MAP_MAX        16U
@@ -60,6 +67,14 @@
 #define ZXFL_CPU_STOPPED        0x02U   ///< CPU is stopped (AP, ready for SIGP)
 #define ZXFL_CPU_UNKNOWN        0x00U   ///< State could not be determined
 
+/// @brief CPU type values in zxfl_cpu_info_t::type.
+#define ZXFL_CPU_TYPE_CP        0x00U   ///< General-purpose CP
+#define ZXFL_CPU_TYPE_IFL       0x01U   ///< Integrated Facility for Linux
+#define ZXFL_CPU_TYPE_UNKNOWN   0xFFU   ///< Unknown type
+
+/// @brief Physical lowcore address (always 0 on z/Architecture).
+#define ZXFL_LOWCORE_PHYS       0x0ULL
+
 // ---------------------------------------------------------------------------
 // Auxiliary structures
 // ---------------------------------------------------------------------------
@@ -75,50 +90,48 @@ typedef struct {
 /// @brief One entry in the CPU map.
 typedef struct {
     uint16_t cpu_addr;  ///< z/Arch CPU address (used with SIGP)
-    uint8_t  type;      ///< 0=IFL, 1=CP, 0xFF=unknown
+    uint8_t  type;      ///< ZXFL_CPU_TYPE_* constant
     uint8_t  state;     ///< ZXFL_CPU_* constant
     uint32_t _pad;
 } zxfl_cpu_info_t;
 
+/// @brief System identification — populated from STSI.
+///        All strings are EBCDIC from the hardware; the loader converts
+///        them to ASCII before filling this struct.
+typedef struct {
+    char     manufacturer[16]; ///< STSI 1.1.1 manufacturer (NUL-padded ASCII)
+    char     type[4];          ///< STSI 1.1.1 machine type (e.g. "2096")
+    char     model[16];        ///< STSI 1.1.1 model identifier
+    char     sequence[16];     ///< STSI 1.1.1 serial number
+    char     plant[4];         ///< STSI 1.1.1 manufacturing plant
+    char     lpar_name[8];     ///< STSI 2.2.2 LPAR name (NUL-padded ASCII)
+    uint16_t lpar_number;      ///< STSI 2.2.2 LPAR number
+    uint16_t cpus_total;       ///< STSI 1.2.2 total CPUs in CEC
+    uint16_t cpus_configured;  ///< STSI 1.2.2 configured CPUs
+    uint16_t cpus_standby;     ///< STSI 1.2.2 standby CPUs
+    uint32_t capability;       ///< STSI 1.2.2 CPU capability rating
+    uint32_t _pad;
+} zxfl_sysinfo_t;
+
 // ---------------------------------------------------------------------------
-// Boot protocol
+// Boot protocol structure
 // ---------------------------------------------------------------------------
 
-/// @brief Passed by pointer in R2 to the kernel entry point.
-///
-///        ADDRESS CONVENTION (mirrors Limine boot protocol):
-///        ===================================================
-///        - POINTER fields (addresses of structures, arrays, strings) are
-///          HHDM virtual — the loader adds CONFIG_KERNEL_VIRT_OFFSET before
-///          jumping to the kernel.  The kernel dereferences them directly.
-///          Affected fields: mem_map_addr, cmdline_addr, kernel_stack_top.
-///
-///        - PHYSICAL RANGE fields (base addresses and sizes of memory regions,
-///          the kernel image extents, and lowcore_phys) remain PHYSICAL.
-///          The kernel uses them for PFN arithmetic and must NOT add the HHDM
-///          offset.  Affected fields: kernel_phys_start, kernel_phys_end,
-///          kernel_entry (physical ELF entry, used only by the loader),
-///          lowcore_phys (always 0x0), zxfl_mem_region_t::base/length.
-///
-///        The struct is 8-byte aligned; all uint64_t fields are at natural
-///        offsets — no implicit compiler padding is needed or relied upon.
 typedef struct {
     // ---- HEADER (16 bytes) ----
     uint32_t magic;             ///< ZXFL_MAGIC
-    uint32_t version;           ///< ZXFL_VERSION_3
+    uint32_t version;           ///< ZXFL_VERSION_4
     uint32_t flags;             ///< ZXFL_FLAG_* bitmask
     uint32_t _pad0;
 
     // ---- BINDING TOKEN (8 bytes) ----
-    /// Computed as: ZXFL_SEED ^ stfle_fac[0] ^ (uint64_t)ipl_schid.
-    /// The kernel must recompute and compare to authenticate the loader.
     uint64_t binding_token;
 
     // ---- LOADER IDENTITY (16 bytes) ----
     uint16_t loader_major;      ///< ZXFL_LOADER_MAJOR
     uint16_t loader_minor;      ///< ZXFL_LOADER_MINOR
     uint32_t loader_timestamp;  ///< Compile-time timestamp (ZXFL_BUILD_TS macro)
-    uint64_t loader_build_id;   ///< Reserved for future use; set to 0
+    uint64_t loader_build_id;   ///< Reserved; set to 0
 
     // ---- DEVICE (16 bytes) ----
     uint32_t ipl_schid;         ///< Subchannel ID of the IPL device
@@ -129,12 +142,12 @@ typedef struct {
 
     // ---- KERNEL IMAGE (24 bytes) ----
     uint64_t kernel_phys_start; ///< Physical base of the loaded kernel image
-    uint64_t kernel_phys_end;   ///< Physical end (exclusive) of the kernel image
-    uint64_t kernel_entry;      ///< Actual entry point used (e_entry or relocated)
+    uint64_t kernel_phys_end;   ///< Physical end (exclusive)
+    uint64_t kernel_entry;      ///< Entry point (HHDM virtual address)
 
     // ---- MEMORY MAP (24 bytes) ----
     uint64_t mem_total_bytes;   ///< Total detected RAM (bytes)
-    uint64_t mem_map_addr;      ///< Virtual (HHDM) address of zxfl_mem_region_t[]
+    uint64_t mem_map_addr;      ///< HHDM virtual address of zxfl_mem_region_t[]
     uint32_t mem_map_count;     ///< Number of valid entries in mem_map
     uint32_t _pad3;
 
@@ -147,26 +160,34 @@ typedef struct {
     uint64_t lowcore_phys;      ///< Physical address of BSP lowcore (always 0x0)
 
     // ---- COMMAND LINE (16 bytes) ----
-    uint64_t cmdline_addr;      ///< Virtual (HHDM) address of NUL-terminated ASCII cmdline
+    uint64_t cmdline_addr;      ///< HHDM virtual address of NUL-terminated cmdline
     uint32_t cmdline_len;       ///< Length in bytes (excluding NUL)
     uint32_t _pad6;
 
-    // ---- LOADER-PROVIDED KERNEL STACK (8 bytes) ----
-    /// The loader allocates a 16KB stack for the kernel's initial thread.
-    /// head64.S uses this instead of its own BSS stack, so the stack
-    /// layout is controlled by the loader. An opaque frame is written
-    /// below this address (see ZXFL_STACK_FRAME_* in zxvl_private.h).
-    uint64_t kernel_stack_top;  ///< Virtual (HHDM) address of initial kernel stack top
+    // ---- KERNEL STACK (8 bytes) ----
+    uint64_t kernel_stack_top;  ///< HHDM virtual address of initial stack top
 
-    // ---- CONTROL REGISTER SNAPSHOT (16 bytes) ----
-    /// Taken after the loader configures CRs, immediately before kernel jump.
-    uint64_t cr0_snapshot;
-    uint64_t cr14_snapshot;
+    // ---- CONTROL REGISTER SNAPSHOT (24 bytes) ----
+    uint64_t cr0_snapshot;      ///< CR0 at time of kernel jump
+    uint64_t cr1_snapshot;      ///< CR1 (ASCE) at time of kernel jump
+    uint64_t cr14_snapshot;     ///< CR14 at time of kernel jump
+
+    // ---- SMP / CPU MAP (512 + 8 bytes) ----
+    zxfl_cpu_info_t cpu_map[ZXFL_CPU_MAP_MAX]; ///< CPU map (valid when FLAG_SMP)
+    uint32_t cpu_count;         ///< Number of valid entries in cpu_map
+    uint16_t bsp_cpu_addr;      ///< CPU address of the boot processor
+    uint16_t _pad7;
+
+    // ---- SYSTEM IDENTIFICATION (72 bytes) ----
+    zxfl_sysinfo_t sysinfo;     ///< Machine info (valid when FLAG_SYSINFO)
+
+    // ---- TOD CLOCK (8 bytes) ----
+    uint64_t tod_boot;          ///< TOD clock value at boot (STCK)
+
 } zxfl_boot_protocol_t;
 
-/// @brief Setup page tables, enable DAT, and jump to kernel (combined).
-///        Called by stage2 entry after filling the boot protocol.
-/// @param entry      Kernel entry point (ELF e_entry, virtual address).
+/// @brief Setup page tables, enable DAT, and jump to kernel.
+/// @param entry      Kernel entry point (HHDM virtual address from ELF).
 /// @param boot_proto Physical address of zxfl_boot_protocol_t.
 [[noreturn]] void zxfl_mmu_setup_and_jump(uint64_t entry, uint64_t boot_proto);
 

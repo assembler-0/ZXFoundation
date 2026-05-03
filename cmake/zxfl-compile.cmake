@@ -18,6 +18,7 @@ set(ZXFL_STAGE2_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/parmfile.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/mmu.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/system.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stsi.c
 )
 

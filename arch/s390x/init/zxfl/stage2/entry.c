@@ -140,8 +140,12 @@ static void load_parmfile(uint32_t schid) {
     s_proto.flags |= ZXFL_FLAG_MEM_MAP;
     s_proto.lowcore_phys = 0;
     s_proto.flags |= ZXFL_FLAG_LOWCORE;
+    
+    print("zxfl01: detecting system (stsi/smp/tod)\n");
+    zxfl_system_detect(&s_proto);
+    
     s_proto.magic = ZXFL_MAGIC;
-    s_proto.version = ZXFL_VERSION_3;
+    s_proto.version = ZXFL_VERSION_4;
     s_proto.loader_major = ZXFL_LOADER_MAJOR;
     s_proto.loader_minor = ZXFL_LOADER_MINOR;
     s_proto.loader_timestamp = ZXVL_BUILD_TS;
