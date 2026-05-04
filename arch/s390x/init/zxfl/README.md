@@ -43,33 +43,7 @@ The hardware ASCE (Address Space Control Element) in Control Register 1 (`%cr1`)
 The kernel receives hardware detection and mapping data via the `zxfl_boot_protocol_t` structure passed in `%r2`. The structure conforms to Version 4 of the ZXFL specification.
 
 ### 4.1 Structure Layout
-The layout of the boot protocol structure is guaranteed to adhere to the following definitions:
-
-```c
-typedef struct {
-    uint32_t magic;           // 0x5A58464C ("ZXFL")
-    uint32_t version;         // Version 4
-    uint64_t flags;           // Feature presence flags
-    uint64_t mem_size_bytes;  // Total discovered contiguous physical memory
-    
-    // Boot Command Line
-    char     cmdline[256];
-    
-    // SMP Diagnostics
-    uint32_t cpu_count;
-    uint32_t bsp_cpu_addr;
-    zxfl_cpu_map_entry_t cpu_map[64];
-    
-    // System Identification (STSI)
-    zxfl_sysinfo_t sysinfo;
-    
-    // TOD Clock
-    uint64_t tod_boot;
-    
-    // Subsystem States
-    uint64_t cr1_snapshot;    // The ASCE loaded by the bootloader
-} zxfl_boot_protocol_t;
-```
+The layout of the boot protocol structure can be found in `include/arch/s390x/init/zxfl/zxfl.h`
 
 ### 4.2 Data Integrity
 The magic number must be validated by the kernel upon entry. A mismatch implies corruption or invalid loader transition. The data structures are located within the HHDM and are safe to access immediately with DAT enabled.

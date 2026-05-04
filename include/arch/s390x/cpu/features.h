@@ -2,6 +2,7 @@
 
 #define ZX_SYS_FEATURE_DIAG44 0
 #define ZX_SYS_FEATURE_EDAT1  1
+#define ZX_SYS_FEATURE_EDAT2  2
 
 #include <arch/s390x/init/zxfl/zxfl.h>
 

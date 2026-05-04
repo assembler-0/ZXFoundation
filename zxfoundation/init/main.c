@@ -56,7 +56,7 @@ bad:
 
     validate_stack_frame(boot);
 
-    printk("sys: ZXFoundation %s copyright (C) 2026 assembler-0 All rights reserved.\n",
+    printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
            CONFIG_ULTRASPARK_RELEASE);
 
     if (boot->flags & ZXFL_FLAG_SYSINFO) {
