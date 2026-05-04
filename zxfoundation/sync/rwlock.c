@@ -9,7 +9,7 @@ void read_lock(rwlock_t *rw) {
     do {
         do {
             cur = atomic_read(&rw->count);
-        } while (cur == RW_WRITER && (cpu_relax(), true));
+        } while (cur == RW_WRITER && (arch_cpu_relax(), true));
         // CAS: increment reader count only if still not RW_WRITER.
     } while (atomic_cmpxchg(&rw->count, cur, cur + 1) != cur);
     barrier(); // acquire
@@ -22,7 +22,7 @@ void read_unlock(rwlock_t *rw) {
 
 void write_lock(rwlock_t *rw) {
     while (atomic_cmpxchg(&rw->count, 0, RW_WRITER) != 0)
-        cpu_relax();
+        arch_cpu_relax();
     barrier(); // acquire
 }
 

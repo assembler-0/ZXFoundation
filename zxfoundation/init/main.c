@@ -9,14 +9,12 @@
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/slab.h>
 #include <zxfoundation/memory/kmalloc.h>
-#include <zxfoundation/memory/heap.h>
 #include <arch/s390x/mmu.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/lowcore.h>
-#include <arch/s390x/cpu/processor.h>
+#include <arch/s390x/cpu/features.h>
 #include <drivers/console/diag.h>
-#include <lib/string.h>
 
 /// @brief Called from head64.S to extract the loader-provided stack top.
 ///        Returning 0 causes head64.S to fall back to the BSS stack.
@@ -104,11 +102,11 @@ bad:
         }
     }
 
-    zx_cpu_features_init(boot);
+    arch_cpu_features_init(boot);
     rcu_init();
 
     pmm_init(boot);
-    mmu_init(boot);
+    mmu_init();
     vmm_init();
 
     slab_init();

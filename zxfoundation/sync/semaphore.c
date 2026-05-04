@@ -47,7 +47,7 @@ slow:;
     spin_unlock_irqrestore(&s->wait_lock, flags);
 
     while (!atomic_read(&entry.done))
-        cpu_relax();
+        arch_cpu_relax();
 
     barrier(); // acquire
 }

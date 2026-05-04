@@ -162,7 +162,7 @@ void spin_lock(spinlock_t *lock) {
     const uint16_t my_ticket  = (uint16_t)((uint32_t)(ticket_word - 0x10000) >> 16);
 
     while ((uint16_t)(uint32_t)atomic_read(&lock->tickets) != my_ticket)
-        cpu_relax();
+        arch_cpu_relax();
 
     // Acquire barrier: all subsequent loads/stores must see stores from the
     // previous lock holder.  On s390x TSO a compiler barrier is sufficient

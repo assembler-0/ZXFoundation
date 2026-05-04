@@ -63,7 +63,7 @@ typedef struct {
 ///        Constructs the kernel-singleton page table (inheriting the
 ///        bootloader-built ASCE) and records kernel segment mappings.
 ///        Called once from vmm_init() with DAT already enabled.
-void mmu_init(const zxfl_boot_protocol_t *boot);
+void mmu_init();
 
 /// @brief Return a pointer to the kernel's page-table handle.
 mmu_pgtbl_t *mmu_kernel_pgtbl(void);

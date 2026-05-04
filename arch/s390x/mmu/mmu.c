@@ -10,6 +10,7 @@
 #include <zxfoundation/zconfig.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/mmu.h>
+#include <arch/s390x/cpu/features.h>
 
 static mmu_pgtbl_t kernel_pgtbl;
 static bool        mmu_ready    = false;
@@ -322,14 +323,14 @@ void mmu_load_pgtbl(const mmu_pgtbl_t *pgtbl) {
     );
 }
 
-void mmu_init(const zxfl_boot_protocol_t *boot) {
+void mmu_init() {
     uint64_t cr1;
     __asm__ volatile("stctg 1,1,%0" : "=Q"(cr1));
 
     kernel_pgtbl.asce    = cr1;
     kernel_pgtbl.r1_phys = cr1 & ~0xFFFULL;
 
-    edat1_enabled = boot && stfle_has_facility(boot->stfle_fac, STFLE_BIT_EDAT1);
+    edat1_enabled = arch_cpu_has_sys_feature(ZX_SYS_FEATURE_EDAT1);
 
     uint64_t *r1 = (uint64_t *)(uintptr_t)hhdm_phys_to_virt(kernel_pgtbl.r1_phys);
     uint32_t scrubbed = 0;

@@ -37,7 +37,7 @@ void mutex_lock(mutex_t *m) {
     spin_unlock_irqrestore(&m->wait_lock, flags);
 
     while (!atomic_read(&entry.done))
-        cpu_relax();
+        arch_cpu_relax();
 
     barrier(); // acquire
 }

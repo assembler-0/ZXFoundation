@@ -224,7 +224,7 @@ void *kmem_cache_alloc(kmem_cache_t *cache) {
     irqflags_t f = arch_local_save_flags();
     arch_local_irq_disable();
 
-    int cpu = smp_processor_id();
+    int cpu = arch_smp_processor_id();
     kmem_magazine_t *mag = cache->cpu_mags[cpu];
 
     if (mag && mag->count > 0) {
@@ -250,7 +250,7 @@ void kmem_cache_free(kmem_cache_t *cache, void *obj) {
     irqflags_t f = arch_local_save_flags();
     arch_local_irq_disable();
 
-    int cpu = smp_processor_id();
+    int cpu = arch_smp_processor_id();
     kmem_magazine_t *mag = cache->cpu_mags[cpu];
 
     if (mag && mag->count < MAG_SIZE) {

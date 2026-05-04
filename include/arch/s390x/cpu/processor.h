@@ -6,28 +6,21 @@
 #pragma once
 
 #include <zxfoundation/atomic.h>
-#include <arch/s390x/init/zxfl/zxfl.h>
-
-/// @brief Set to true during early init if DIAG 44 is safe to issue.
-extern bool zx_has_diag44;
-
-/// @brief Detect CPU features from the ZXFL boot protocol.
-///        Must be called once from zxfoundation_global_initialize().
-void zx_cpu_features_init(const zxfl_boot_protocol_t *boot);
+#include <arch/s390x/cpu/features.h>
 
 /// @brief Generic spin-loop hint.  Use inside every busy-wait loop.
-static inline void cpu_relax(void) {
+static inline void arch_cpu_relax(void) {
     barrier();
 }
 
 /// @brief Yield the virtual CPU timeslice to the hypervisor.
 ///        Only issues DIAG 44 when confirmed safe at runtime.
 ///        Do NOT use as a drop-in for cpu_relax() in tight spin loops.
-static inline void zx_smp_yield(void) {
-    if (zx_has_diag44)
+static inline void arch_smp_yield(void) {
+    if (arch_cpu_has_sys_feature(ZX_SYS_FEATURE_DIAG44))
         __asm__ volatile ("diag 0,0,0x44" ::: "memory");
     else
-        cpu_relax();
+        arch_cpu_relax();
 }
 
 /// @brief Set the Storage Key for a 4KB physical block.
@@ -41,7 +34,7 @@ static inline void arch_set_storage_key(uint64_t paddr, uint8_t key) {
 }
 
 /// @brief Get the logical processor ID for the executing CPU.
-static inline int smp_processor_id(void) {
+static inline int arch_smp_processor_id(void) {
     uint16_t cpu_addr;
     __asm__ volatile ("stap %0" : "=Q" (cpu_addr));
     return cpu_addr & 0x3F;

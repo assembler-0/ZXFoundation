@@ -21,7 +21,7 @@ void waitqueue_wait(waitqueue_t *wq, wq_entry_t *entry) {
     spin_unlock_irqrestore(&wq->lock, flags);
 
     while (!atomic_read(&entry->done))
-        cpu_relax();
+        arch_cpu_relax();
 
     barrier();
 }
