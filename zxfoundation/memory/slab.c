@@ -2,48 +2,10 @@
 // zxfoundation/memory/slab.c
 //
 /// @brief Magazine-depot slab allocator — updated for page-descriptor PMM API.
-///
-///        FAST PATH (alloc)
-///        =================
-///          1. Disable local IRQs (arch_local_irq_disable).
-///          2. Read current CPU id via smp_processor_id().
-///          3. If cpu_mags[cpu] has objects, pop one — done in O(1) with no lock.
-///          4. Otherwise swap the CPU mag with a full magazine from the depot.
-///          5. If no full mag exists, allocate a new slab page from the PMM,
-///             slice it into objects, and fill an empty magazine.
-///          6. Restore local IRQs.
-///
-///        FAST PATH (free)
-///        ================
-///          1. Disable local IRQs.
-///          2. If cpu_mags[cpu] has room, push the object — O(1) with no lock.
-///          3. Otherwise, swap the CPU mag with an empty magazine from the depot.
-///          4. Restore local IRQs.
-///
-///        All depot accesses (slow paths) take the per-cache depot_lock with
-///        irqsave.  The IRQ disable in steps 1/6 prevents the scheduler from
-///        migrating the thread between steps 2 and 6, ensuring the per-CPU
-///        magazine pointer remains valid.
-///
-///        SLAB PAGE LAYOUT
-///        ================
-///        A slab is exactly one 4 KB PMM page.  The kmem_slab_t header lives
-///        at the start of the page, followed by a free-index array, then the
-///        object storage.  Objects are bump-allocated sequentially; freed
-///        objects are tracked via a compact free-index stack, so re-use of
-///        freed slots avoids fragmentation.
-///
-///        STORAGE KEYS
-///        ============
-///        When a new slab page is allocated, arch_set_storage_key() tags the
-///        physical frame with cache->storage_key | 0x10 (0x10 = fetch-protection
-///        disabled, key bits set).  The 0x10 bit enables normal fetch access
-///        from key-0 code while protecting the frame from other keys.
 
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/memory/slab.h>
-#include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/spinlock.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/sys/panic.h>

@@ -220,8 +220,14 @@ oom:
 }
 
 int mmu_map_large_page(mmu_pgtbl_t *pgtbl, uint64_t va, uint64_t pa, uint32_t prot) {
-    if (va & ~Z_EDAT1_PAGE_MASK) panic("mmu_map_large_page: va not 1 MB aligned");
-    if (pa & ~Z_EDAT1_PAGE_MASK) panic("mmu_map_large_page: pa not 1 MB aligned");
+    if (va & ~Z_EDAT1_PAGE_MASK) {
+        printk("mmu: mmu_map_large_page: va not 1 MB aligned");
+        return -1;
+    }
+    if (pa & ~Z_EDAT1_PAGE_MASK) {
+        printk("mmu: mmu_map_large_page: pa not 1 MB aligned");
+        return -1;
+    }
 
     if (!edat1_enabled) {
         for (uint32_t i = 0; i < Z_EDAT1_NR_PAGES; i++) {
@@ -279,8 +285,14 @@ oom:
 }
 
 int mmu_map_huge_page(mmu_pgtbl_t *pgtbl, uint64_t va, uint64_t pa, uint32_t prot) {
-    if (va & ~Z_EDAT2_PAGE_MASK) panic("mmu_map_huge_page: va not 2 GB aligned");
-    if (pa & ~Z_EDAT2_PAGE_MASK) panic("mmu_map_huge_page: pa not 2 GB aligned");
+    if (va & ~Z_EDAT2_PAGE_MASK) {
+        printk("mmu: mmu_map_huge_page: va not 2 GB aligned");
+        return -1;
+    }
+    if (pa & ~Z_EDAT2_PAGE_MASK) {
+        printk("mmu: mmu_map_huge_page: pa not 2 GB aligned");
+        return -1;
+    }
 
     if (!edat2_enabled) {
         for (uint32_t i = 0; i < Z_TABLE_ENTRIES; i++) {
