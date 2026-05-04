@@ -2,33 +2,6 @@
 // include/zxfoundation/memory/pmm.h
 //
 /// @brief Physical Memory Manager (PMM) — zone-aware buddy allocator.
-///
-///        ARCHITECTURE
-///        ============
-///        The PMM is the lowest-level physical frame allocator.  Above it sit,
-///        in order: the slab allocator, kmalloc, and the vmalloc heap.
-///
-///        The buddy system manages frames in power-of-two order blocks
-///        (order 0 = 4 KB, order MAX_ORDER = 4 MB).  Each zone (DMA, NORMAL)
-///        has its own set of per-order free lists.
-///
-///        SMP SAFETY
-///        ==========
-///        Each zone carries a dedicated ticket-spinlock.  All alloc/free
-///        operations acquire that lock.  pmm_alloc_page() disables local
-///        IRQs around the lock acquisition (irqsave) so that interrupt
-///        handlers cannot re-enter the PMM on the same CPU.
-///
-///        A caller that already holds a spinlock should use
-///        pmm_alloc_page_noirq() which assumes IRQs are already disabled.
-///
-///        ZONES
-///        =====
-///          ZONE_DMA    [0 .. 16 MB)   — for legacy DASD channel commands.
-///          ZONE_NORMAL [16 MB .. end) — general kernel use.
-///
-///        Allocation falls back from NORMAL → DMA only when NORMAL is
-///        exhausted and the caller sets the ZX_GFP_DMA_FALLBACK flag.
 
 #pragma once
 
@@ -53,10 +26,6 @@
 /// DMA zone boundary: 16 MB.
 #define ZONE_DMA_LIMIT      (16UL * 1024 * 1024)
 
-// ---------------------------------------------------------------------------
-// GFP flags — get-free-pages allocation hints
-// ---------------------------------------------------------------------------
-
 typedef uint32_t gfp_t;
 
 /// Allocate from ZONE_NORMAL (default).
@@ -70,10 +39,6 @@ typedef uint32_t gfp_t;
 /// Caller already holds a lock with IRQs disabled; skip irqsave.
 #define ZX_GFP_NOIRQ        (1U << 3)
 
-// ---------------------------------------------------------------------------
-// Buddy free-list node
-// ---------------------------------------------------------------------------
-
 /// @brief One entry in a zone's per-order free list.
 ///        The list is intrusive: next/prev are PFNs, not pointers, so that
 ///        the list can survive across HHDM remap without pointer fixups.
@@ -83,10 +48,6 @@ typedef struct pmm_free_area {
     /// Number of free blocks at this order.
     uint64_t count;
 } pmm_free_area_t;
-
-// ---------------------------------------------------------------------------
-// Zone descriptor
-// ---------------------------------------------------------------------------
 
 /// @brief One memory zone with its own buddy free lists and lock.
 typedef struct pmm_zone {
@@ -98,10 +59,6 @@ typedef struct pmm_zone {
     pmm_free_area_t  free_area[MAX_ORDER + 1];
 } pmm_zone_t;
 
-// ---------------------------------------------------------------------------
-// PMM statistics
-// ---------------------------------------------------------------------------
-
 typedef struct {
     uint64_t total_pages;
     uint64_t free_pages;
@@ -109,10 +66,6 @@ typedef struct {
     uint64_t dma_free_pages;
     uint64_t normal_free_pages;
 } pmm_stats_t;
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /// @brief Initialize the PMM from the ZXFL boot memory map.
 ///        Must be called exactly once, before any alloc/free.
@@ -156,10 +109,6 @@ uint64_t pmm_get_max_pfn(void);
 /// @brief Return the zone descriptor for a given zone_id.
 ///        The zone lock must NOT be held by the caller.
 pmm_zone_t *pmm_get_zone(zone_id_t id);
-
-// ---------------------------------------------------------------------------
-// Inline conversion helpers
-// ---------------------------------------------------------------------------
 
 static inline uint64_t pmm_phys_to_pfn(uint64_t phys) { return phys >> PAGE_SHIFT; }
 static inline uint64_t pmm_pfn_to_phys(uint64_t pfn)  { return pfn  << PAGE_SHIFT; }

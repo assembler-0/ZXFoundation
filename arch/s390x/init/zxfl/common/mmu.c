@@ -59,15 +59,15 @@
 /// Region Table Entry: Table-Length field (bits 62-63).
 #define Z_TL_2048            0x03ULL
 
-/// Segment Table Entry: Format-Control bit (bit 54).
+/// Segment Table Entry: Format-Control bit (bit 53 IBM = LSB bit 10).
 /// With EDAT-1, the STE directly maps a 1 MB large page.
-#define Z_STE_FC             0x200ULL
+#define Z_STE_FC             0x400ULL
 
 /// Page Table Entry: Invalid bit (bit 53).
 #define Z_PTE_I              0x400ULL
 
 /// STFLE facility bit for EDAT-1 (enhanced DAT 1).
-#define STFLE_BIT_EDAT1      78U
+/// Defined in stfle.h as STFLE_BIT_EDAT1 = 8.
 
 /// Bytes per 1 MB segment.
 #define SEG_SIZE             (1024ULL * 1024ULL)
@@ -147,7 +147,7 @@ static uint64_t *alloc_page_table(void) {
     pool_next = pool_base;
 
     if (!has_edat1) {
-        print("zxfl: EDAT-1 missing, using 4KB page fallback\n");
+        print("zxfl: EDAT-1 not available, THP disabled in kernel\n");
     }
 
     for (uint32_t st = 0; st < num_seg_tables; st++) {
@@ -161,15 +161,15 @@ static uint64_t *alloc_page_table(void) {
             uint64_t phys = s * SEG_SIZE;
             uint32_t sx   = (uint32_t)(s % SEG_TABLE_ENTRIES);
 
-            if (has_edat1) {
-                seg_table[sx] = phys | Z_STE_FC | Z_TT_SEG;
-            } else {
-                uint64_t *pt = alloc_page_table();
-                for (uint32_t p = 0; p < PAGE_TABLE_ENTRIES; p++) {
-                    pt[p] = phys + ((uint64_t)p * 4096ULL);
-                }
-                seg_table[sx] = (uint64_t)(uintptr_t)pt | Z_TT_SEG;
+            // Always use 4KB page tables for the bootloader HHDM mapping.
+            // EDAT-1 FC=1 STEs are reserved for the kernel's own vmalloc
+            // mappings after boot.  Using FC=1 here causes addressing
+            // exceptions on some Hercules configurations.
+            uint64_t *pt = alloc_page_table();
+            for (uint32_t p = 0; p < PAGE_TABLE_ENTRIES; p++) {
+                pt[p] = phys + ((uint64_t)p * 4096ULL);
             }
+            seg_table[sx] = (uint64_t)(uintptr_t)pt | Z_TT_SEG;
         }
 
         r3_table[st] = (uint64_t)(uintptr_t)seg_table | Z_TL_2048 | Z_TT_R3;
@@ -205,6 +205,11 @@ static uint64_t *alloc_page_table(void) {
 
     uint64_t asce = (uint64_t)(uintptr_t)r1_table | Z_ASCE_DT_R1 | Z_ASCE_TL_2048;
     __asm__ volatile("lctlg 1,1,%0" :: "Q"(asce) : "memory");
+
+    // Record the page-table pool high-water mark so the kernel PMM can
+    // reserve [pool_base, pgtbl_pool_end) and not hand out pages that
+    // overlap with the live DAT hierarchy.
+    proto->pgtbl_pool_end = (pool_next + 4095ULL) & ~4095ULL;
 
     proto->cr1_snapshot = asce;
     proto->cr0_snapshot = cr0;

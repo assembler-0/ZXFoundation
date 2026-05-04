@@ -151,6 +151,12 @@ typedef struct {
     uint64_t cr1_snapshot;      ///< CR1 (ASCE) at time of kernel jump
     uint64_t cr14_snapshot;     ///< CR14 at time of kernel jump
 
+    // ---- PAGE TABLE POOL (8 bytes) ----
+    uint64_t pgtbl_pool_end;    ///< Physical end (exclusive) of the bootloader's
+                                ///<   page-table bump pool.  The kernel PMM must
+                                ///<   reserve [pool_base, pgtbl_pool_end) to avoid
+                                ///<   overwriting live DAT tables.
+
     // ---- SMP / CPU MAP (512 + 8 bytes) ----
     zxfl_cpu_info_t cpu_map[ZXFL_CPU_MAP_MAX]; ///< CPU map (valid when FLAG_SMP)
     uint32_t cpu_count;         ///< Number of valid entries in cpu_map

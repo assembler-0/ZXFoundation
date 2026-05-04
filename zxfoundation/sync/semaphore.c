@@ -5,10 +5,6 @@
 #include <arch/s390x/cpu/processor.h>
 
 void semaphore_down(semaphore_t *s) {
-    // Fast path: if count > 0, decrement and return.
-    // We use a CAS loop rather than atomic_dec_return so we can avoid
-    // going negative on the fast path (which would require a slow-path
-    // correction and is harder to reason about).
     int32_t cur;
     do {
         cur = atomic_read(&s->count);

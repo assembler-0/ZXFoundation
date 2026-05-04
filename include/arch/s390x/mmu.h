@@ -3,47 +3,13 @@
 //
 /// @brief z/Architecture MMU: page-table manipulation and TLB management.
 ///
-///        PAGING HIERARCHY (PoP SA22-7832-13, §3)
-///        =========================================
-///          ASCE (CR1, DT=11) → R1[2048] → R2[2048] → R3[2048]
-///                           → Seg[2048] → PT[256] → 4 KB page
-///
-///        ENTRY FORMATS
-///        =============
-///          Region entries (R1/R2/R3): 64-bit
-///            [63:53] Table origin (right-shifted by 11 = 2 KB aligned)
-///            [51:50] TT — Table-Type (11=R1, 10=R2, 01=R3, 00=seg)
-///            [49:48] TL — Table length (11=2048 entries)
-///            [32]    I  — Invalid
-///
-///          Segment Table Entry: 64-bit
-///            [63:53] PT origin (2 KB aligned) OR large-page PFN
-///            [54]    FC — Format Control (1=large 1 MB page via EDAT-1)
-///            [32]    I  — Invalid
-///
-///          Page Table Entry: 64-bit
-///            [63:53] Page-Frame Real Address (4 KB frame origin)
-///            [55]    P  — Protected (read-only)
-///            [53]    I  — Invalid  (Z_PTE_I)
-///
-///        SMP TLB COHERENCY
-///        =================
-///        After modifying a PTE that was previously valid, the kernel MUST
-///        invalidate TLBs on all CPUs sharing the ASCE.  On z/Architecture
-///        the IPTE instruction performs hardware-broadcast invalidation
-///        atomically — no software IPI is required.  PTLB is reserved for
-///        full address-space teardown on the local CPU only.
-
 #pragma once
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/zconfig.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/memory/vm_flags.h>
-
-// ---------------------------------------------------------------------------
-// Entry-level bit constants
-// ---------------------------------------------------------------------------
+#include <arch/s390x/init/zxfl/zxfl.h>
 
 /// ASCE designation type: R1 root (5-level paging).
 #define Z_ASCE_DT_R1        0x0CULL
@@ -64,17 +30,13 @@
 #define Z_TL_2048           0x03ULL
 
 /// Segment Table Entry — Format-Control (FC=1 → 1 MB large page, EDAT-1).
-/// Bit 54 BE = bit 9 LE.
-#define Z_STE_FC            0x200ULL
+/// Bit 53 (IBM) = LSB bit 10 of the 64-bit STE.
+#define Z_STE_FC            0x400ULL
 
 /// Page Table Entry — Invalid bit (bit 53 BE = bit 10 LE).
 #define Z_PTE_I             0x400ULL
 /// Page Table Entry — Protected (read-only, bit 55 BE = bit 8 LE).
 #define Z_PTE_P             0x100ULL
-
-// ---------------------------------------------------------------------------
-// Virtual-address index extraction
-// ---------------------------------------------------------------------------
 
 /// Region-First index (bits 63:53 of the 64-bit virtual address).
 static inline uint32_t va_rfx(uint64_t va) { return (uint32_t)((va >> 53) & 0x7FFUL); }
@@ -89,10 +51,6 @@ static inline uint32_t va_px(uint64_t va)  { return (uint32_t)((va >> 12) & 0xFF
 /// Byte offset within page (bits 11:0).
 static inline uint32_t va_bx(uint64_t va)  { return (uint32_t)(va & 0xFFFUL);         }
 
-// ---------------------------------------------------------------------------
-// mmu_pgtbl_t — opaque handle to a live paging hierarchy
-// ---------------------------------------------------------------------------
-
 /// @brief Handle to a z/Architecture 5-level paging structure.
 ///        The R1 table is 16 KB, 16 KB-aligned.  All subordinate tables
 ///        are 4 KB blocks allocated from the PMM.
@@ -101,15 +59,11 @@ typedef struct {
     uint64_t r1_phys;   ///< Physical address of the R1 table.
 } mmu_pgtbl_t;
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// @brief Initialize the kernel MMU subsystem.
 ///        Constructs the kernel-singleton page table (inheriting the
 ///        bootloader-built ASCE) and records kernel segment mappings.
 ///        Called once from vmm_init() with DAT already enabled.
-void mmu_init(void);
+void mmu_init(const zxfl_boot_protocol_t *boot);
 
 /// @brief Return a pointer to the kernel's page-table handle.
 mmu_pgtbl_t *mmu_kernel_pgtbl(void);
@@ -153,14 +107,20 @@ void mmu_unmap_page(mmu_pgtbl_t *pgtbl, uint64_t va);
 /// @return Physical address, or ~0ULL if unmapped.
 uint64_t mmu_virt_to_phys(const mmu_pgtbl_t *pgtbl, uint64_t va);
 
+/// @brief Query whether a virtual address is backed by a 1 MB large page (EDAT-1 FC=1).
+///        Used by the VMM during teardown to determine compound page freeing.
+/// @param pgtbl  Page table to walk.
+/// @param va     Virtual address (any alignment).
+/// @return true if the STE for this VA has FC=1, false otherwise.
+bool mmu_is_large_page(const mmu_pgtbl_t *pgtbl, uint64_t va);
+
+/// @brief Return true if EDAT-1 (CR0 bit 40) is active — required for 1 MB large pages.
+bool mmu_has_edat1(void);
+
 /// @brief Install a page-table handle into CR1 and issue PTLB.
 ///        Caller must have IRQs disabled.
 /// @param pgtbl  Handle to activate.
 void mmu_load_pgtbl(const mmu_pgtbl_t *pgtbl);
-
-// ---------------------------------------------------------------------------
-// TLB management inlines
-// ---------------------------------------------------------------------------
 
 /// @brief Purge the entire local TLB (PTLB).
 ///        Only use during address-space teardown; prefer mmu_ipte()

@@ -29,19 +29,14 @@ void call_rcu(rcu_head_t *head, void (*func)(rcu_head_t *)) {
 }
 
 void synchronize_rcu(void) {
-    // Full barrier: all prior stores (including rcu_assign_pointer stores)
-    // are visible to all CPUs before we proceed to flush callbacks.
-    // On a non-preemptive single-CPU kernel this is the entire grace period.
     smp_mb();
 
-    // Drain the pending list atomically.
     irqflags_t flags;
     spin_lock_irqsave(&rcu_lock, &flags);
     rcu_head_t *list = rcu_pending;
     rcu_pending = nullptr;
     spin_unlock_irqrestore(&rcu_lock, flags);
 
-    // Invoke callbacks outside the lock — they may call call_rcu() again.
     while (list) {
         rcu_head_t *next = list->next;
         list->func(list);

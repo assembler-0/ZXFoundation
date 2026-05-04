@@ -14,6 +14,7 @@
 
 #define STFLE_BIT_ZARCH         2U      ///< z/Architecture installed
 #define STFLE_BIT_STFLE         7U      ///< STFLE itself
+#define STFLE_BIT_EDAT1         8U      ///< Enhanced-DAT facility 1 (1 MB FC=1 segment entries)
 #define STFLE_BIT_EIMM          21U     ///< Extended-immediate facility
 #define STFLE_BIT_GEN_INST      25U     ///< General-instructions-extension
 #define STFLE_BIT_EXECUTE_EXT   35U     ///< Execute-extensions facility

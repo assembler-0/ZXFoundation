@@ -52,16 +52,8 @@
 #include <lib/list.h>
 #include <lib/string.h>
 
-// ---------------------------------------------------------------------------
-// Magazine size and CPU count cap
-// ---------------------------------------------------------------------------
-
 #define MAG_SIZE        31      ///< Objects per magazine.
 #define SLAB_MAX_CPUS   64      ///< Maximum CPUs supported.
-
-// ---------------------------------------------------------------------------
-// Internal structures
-// ---------------------------------------------------------------------------
 
 typedef struct kmem_magazine {
     list_node_t  node;
@@ -78,8 +70,6 @@ typedef struct kmem_slab {
     uint16_t     free_top;     ///< Top of the recycled-index stack.
     zx_page_t   *page;         ///< Back-pointer to the owning PMM page.
     void        *obj_base;     ///< Pointer to the first object in the slab.
-    // Free-index stack follows at (char*)slab + sizeof(kmem_slab_t),
-    // stored as uint16_t[total].
 } kmem_slab_t;
 
 struct kmem_cache {
@@ -96,27 +86,15 @@ struct kmem_cache {
     kmem_magazine_t *cpu_mags[SLAB_MAX_CPUS];
 };
 
-// ---------------------------------------------------------------------------
-// Bootstrap caches (statically allocated so they need no kmalloc)
-// ---------------------------------------------------------------------------
-
 static kmem_cache_t cache_cache;    ///< Allocates kmem_cache_t objects.
 static kmem_cache_t mag_cache;      ///< Allocates kmem_magazine_t objects.
-
-// ---------------------------------------------------------------------------
-// Slab page helper: compute obj_base, total objects, and free-index region
-// ---------------------------------------------------------------------------
 
 /// @brief Given a slab header at 'slab' (start of a PMM page), compute
 ///        object layout for a cache with obj_size.
 static void slab_compute_layout(kmem_slab_t *slab, size_t obj_size) {
-    // Header occupies sizeof(kmem_slab_t).  The free-index stack follows
-    // (uint16_t per slot), then object storage aligned to 8 bytes.
     uintptr_t hdr_end = (uintptr_t)slab + sizeof(kmem_slab_t);
     uint16_t capacity = 0;
 
-    // Iterate to find how many objects fit when accounting for the index array.
-    // This is solved iteratively because the index array size depends on capacity.
     for (;;) {
         uint16_t try_cap = capacity + 1;
         uintptr_t idx_end = hdr_end + (uintptr_t)try_cap * sizeof(uint16_t);
@@ -143,18 +121,12 @@ static inline uint16_t *slab_free_stack(kmem_slab_t *slab) {
     return (uint16_t *)((uintptr_t)slab + sizeof(kmem_slab_t));
 }
 
-// ---------------------------------------------------------------------------
-// Internal: allocate a new slab page from the PMM
-// ---------------------------------------------------------------------------
-
 static kmem_slab_t *slab_new_page(kmem_cache_t *cache) {
     zx_page_t *page = pmm_alloc_page(ZX_GFP_NORMAL | ZX_GFP_ZERO);
     if (!page) return nullptr;
 
-    // Apply storage key to the physical frame.
     arch_set_storage_key(pmm_page_to_phys(page), cache->storage_key | 0x10);
 
-    // The slab header lives at the very start of the HHDM-virtual page.
     kmem_slab_t *slab = (kmem_slab_t *)(uintptr_t)
         hhdm_phys_to_virt(pmm_page_to_phys(page));
 
@@ -166,12 +138,7 @@ static kmem_slab_t *slab_new_page(kmem_cache_t *cache) {
     return slab;
 }
 
-// ---------------------------------------------------------------------------
-// Internal: refill a magazine from the slab pool
-// ---------------------------------------------------------------------------
-
 static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag) {
-    // Prefer a partial slab; fall back to allocating a fresh one.
     kmem_slab_t *slab = nullptr;
     if (!list_empty(&cache->partial_slabs))
         slab = list_entry(cache->partial_slabs.next, kmem_slab_t, node);
@@ -187,10 +154,8 @@ static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag) {
     while (mag->count < MAG_SIZE && slab->free_count > 0) {
         uint16_t idx;
         if (slab->free_top > 0) {
-            // Recycle a previously freed slot.
             idx = free_stack[--slab->free_top];
         } else {
-            // Bump-allocate a fresh slot.
             idx = slab->next_free++;
         }
         mag->objects[mag->count++] =
@@ -206,20 +171,14 @@ static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag) {
     return mag->count > 0;
 }
 
-// ---------------------------------------------------------------------------
-// Internal: magazine depot swap
-// ---------------------------------------------------------------------------
-
 static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling) {
     irqflags_t f;
     spin_lock_irqsave(&cache->depot_lock, &f);
 
     if (filling) {
         if (list_empty(&cache->full_mags)) {
-            // No full mags — get an empty one and fill it.
             if (list_empty(&cache->empty_mags)) {
                 if (cache == &mag_cache) {
-                    // Bootstrap dead-end: the mag_cache can't call kmem_cache_alloc.
                     spin_unlock_irqrestore(&cache->depot_lock, f);
                     return false;
                 }
@@ -247,7 +206,6 @@ static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling) {
             list_add_tail(&cache->cpu_mags[cpu]->node, &cache->empty_mags);
         cache->cpu_mags[cpu] = list_entry(n, kmem_magazine_t, node);
     } else {
-        // We're returning a full CPU mag to the depot and want an empty one.
         list_add_tail(&cache->cpu_mags[cpu]->node, &cache->full_mags);
         if (list_empty(&cache->empty_mags)) {
             cache->cpu_mags[cpu] = nullptr;
@@ -261,10 +219,6 @@ static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling) {
     spin_unlock_irqrestore(&cache->depot_lock, f);
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// Public: kmem_cache_alloc / kmem_cache_free
-// ---------------------------------------------------------------------------
 
 void *kmem_cache_alloc(kmem_cache_t *cache) {
     irqflags_t f = arch_local_save_flags();
@@ -313,10 +267,6 @@ void kmem_cache_free(kmem_cache_t *cache, void *obj) {
     arch_local_irq_restore(f);
 }
 
-// ---------------------------------------------------------------------------
-// Public: kmem_cache_create / kmem_cache_destroy
-// ---------------------------------------------------------------------------
-
 kmem_cache_t *kmem_cache_create(const char *name, size_t size, uint8_t storage_key) {
     kmem_cache_t *cp = (kmem_cache_t *)kmem_cache_alloc(&cache_cache);
     if (!cp) return nullptr;
@@ -360,10 +310,6 @@ void kmem_cache_destroy(kmem_cache_t *cache) {
     kmem_cache_free(&cache_cache, cache);
 }
 
-// ---------------------------------------------------------------------------
-// slab_init — bootstrap the two root caches
-// ---------------------------------------------------------------------------
-
 static void init_static_cache(kmem_cache_t *c, const char *name, size_t obj_size) {
     c->name        = name;
     c->obj_size    = (obj_size + 7UL) & ~7UL;
@@ -380,9 +326,6 @@ void slab_init(void) {
     init_static_cache(&cache_cache, "kmem_cache_t",    sizeof(kmem_cache_t));
     init_static_cache(&mag_cache,   "kmem_magazine_t", sizeof(kmem_magazine_t));
 
-    // Bootstrap mag_cache: manually carve magazines from a fresh PMM page
-    // so that magazine_swap() has something to hand out before it can call
-    // kmem_cache_alloc(&mag_cache) recursively.
     zx_page_t *boot_page = pmm_alloc_page(ZX_GFP_NORMAL | ZX_GFP_ZERO);
     if (!boot_page) panic("slab_init: cannot allocate bootstrap page");
 

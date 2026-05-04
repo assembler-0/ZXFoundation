@@ -2,24 +2,6 @@
 // include/zxfoundation/memory/slab.h
 //
 /// @brief Magazine-depot slab allocator.
-///
-///        ARCHITECTURE
-///        ============
-///        The slab layer sits above the PMM and provides O(1) typed-object
-///        allocation with per-CPU magazines for lock-free fast paths.
-///
-///        Layers (top → bottom):
-///          kmalloc()  ← size-class slab caches
-///          kmem_cache_alloc() ← per-CPU magazine → depot → slab
-///          pmm_alloc_page()  ← physical frame
-///
-///        STORAGE KEYS (z/Architecture)
-///        ==============================
-///        Each cache carries a storage_key field.  When a new slab page is
-///        obtained from the PMM, arch_set_storage_key() is called to tag
-///        the physical frame with the key.  Key 0x0 = kernel data (default).
-///        Subsystems that need hardware memory protection (e.g., secure
-///        crypto buffers) can create a cache with a non-zero key.
 
 #pragma once
 

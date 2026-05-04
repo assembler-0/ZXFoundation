@@ -1,38 +1,39 @@
 // SPDX-License-Identifier: Apache-2.0
 // zxfoundation/memory/vmm.c
 //
-/// @brief Virtual Memory Manager — RB-tree VMA management + vmalloc.
+/// @brief Virtual Memory Manager — RB-tree VMA management + vmalloc + THP.
+///
+///        TRANSPARENT HUGE PAGE (THP) PROMOTION
+///        ======================================
+///        When vmm_insert_vma() maps a new VMA, it examines each 1 MB chunk:
+///
+///          1. Is the VA chunk 1 MB-aligned?
+///          2. Does the chunk fit entirely within the VMA?
+///          3. Can the PMM satisfy a contiguous order-8 (256-page) allocation?
+///
+///        If ALL three conditions hold, the chunk is mapped with a single
+///        mmu_map_large_page() call (EDAT-1 FC=1 segment entry) — yielding
+///        a single TLB entry for the entire 1 MB region instead of 256.
+///
+///        If ANY condition fails (e.g. PMM fragmentation), the chunk falls
+///        back transparently to 256 individual 4 KB page mappings.  This
+///        guarantees forward progress — THP is an optimisation, never a
+///        hard requirement.
+///
+///        During teardown (vmm_remove_vma), the code queries
+///        mmu_is_large_page() for each 1 MB boundary to determine whether
+///        to free a compound order-8 block or 256 individual pages.
 ///
 ///        VMA RB-TREE
 ///        ===========
-///        The RB-tree is keyed by vm_area_t::vm_start.  Since vm_start
-///        values are unique (VMAs may not overlap), the comparator is a
-///        simple numeric comparison.
-///
-///        vmm_find_vma() has a one-entry MRU cache (space->mru_vma).  On a
-///        cache hit, it validates that the queried address falls within
-///        [mru->vm_start, mru->vm_end) and returns directly — O(1).
-///        On a miss it performs the O(log n) RB-tree walk and updates mru.
+///        The RB-tree is keyed by vm_area_t::vm_start.  vmm_find_vma()
+///        has a one-entry MRU cache for O(1) sequential-fault patterns.
 ///
 ///        VMALLOC BUMP
 ///        ============
 ///        A lock-protected cursor (vmalloc_next) advances monotonically
-///        through [VMALLOC_START, VMALLOC_END).  Freed regions are not
-///        reclaimed (a production extension would track free intervals
-///        in a second RB-tree; the current bump is correct and safe).
-///
-///        EARLY BOOT
-///        ==========
-///        Before slab/kmalloc is up, vm_area_t descriptors are allocated
-///        from a 32-entry static pool.  vmm_notify_slab_ready() is called
-///        by kmalloc_init() to switch to dynamic allocation.
-///
-///        KOBJECT INTEGRATION
-///        ===================
-///        vm_space_t is intentionally NOT embedded in a kobject today.
-///        The kernel has only one address space (kernel_vm_space) which
-///        lives forever.  When user processes are added, vm_space_t will
-///        gain a kobject header for reference-counted lifetime management.
+///        through [VMALLOC_START, VMALLOC_END) with 1 MB alignment to
+///        maximise THP eligibility.
 
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/pmm.h>
@@ -52,7 +53,7 @@
 vm_space_t kernel_vm_space;
 
 // ---------------------------------------------------------------------------
-// vmalloc bump cursor
+// vmalloc bump cursor — 1 MB aligned to maximise THP
 // ---------------------------------------------------------------------------
 
 static uint64_t   vmalloc_next = VMALLOC_START;
@@ -78,7 +79,7 @@ static vm_area_t *vma_alloc(void) {
 }
 
 static void vma_free(vm_area_t *vma) {
-    if (!slab_available) return; // early-pool VMAs are never freed individually
+    if (!slab_available) return;
     kfree(vma);
 }
 
@@ -86,9 +87,6 @@ static void vma_free(vm_area_t *vma) {
 // RB-tree helpers: insert / find / remove
 // ---------------------------------------------------------------------------
 
-/// @brief Insert vma into space->vma_tree.
-///        Caller must hold space->lock.
-///        Returns false if the range overlaps an existing VMA.
 static bool vma_rb_insert(vm_space_t *space, vm_area_t *vma) {
     rb_node_t **link = &space->vma_tree.root;
     rb_node_t  *parent = nullptr;
@@ -97,14 +95,12 @@ static bool vma_rb_insert(vm_space_t *space, vm_area_t *vma) {
         parent = *link;
         vm_area_t *cur = rb_entry(parent, vm_area_t, rb_node);
 
-        if (vma->vm_end <= cur->vm_start) {
+        if (vma->vm_end <= cur->vm_start)
             link = &parent->left;
-        } else if (vma->vm_start >= cur->vm_end) {
+        else if (vma->vm_start >= cur->vm_end)
             link = &parent->right;
-        } else {
-            // Overlap — reject.
-            return false;
-        }
+        else
+            return false; // overlap
     }
 
     rb_link_node(&vma->rb_node, parent, link);
@@ -113,8 +109,6 @@ static bool vma_rb_insert(vm_space_t *space, vm_area_t *vma) {
     return true;
 }
 
-/// @brief Find the VMA whose range contains 'addr'.
-///        Caller must hold space->lock or guarantee exclusive access.
 static vm_area_t *vma_rb_find(const vm_space_t *space, uint64_t addr) {
     const rb_node_t *n = space->vma_tree.root;
     while (n) {
@@ -129,14 +123,122 @@ static vm_area_t *vma_rb_find(const vm_space_t *space, uint64_t addr) {
     return nullptr;
 }
 
-/// @brief Remove vma from space->vma_tree.
-///        Caller must hold space->lock.
 static void vma_rb_remove(vm_space_t *space, vm_area_t *vma) {
     rb_erase(&space->vma_tree, &vma->rb_node);
     space->vma_count--;
-    // Invalidate MRU if it pointed at the removed VMA.
     if (space->mru_vma == vma)
         space->mru_vma = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// THP: map a 1 MB chunk with a single EDAT-1 large page
+// ---------------------------------------------------------------------------
+
+/// @brief Attempt to map a 1 MB-aligned VA chunk as a single large page.
+///        Allocates order-8 (256 contiguous 4 KB pages) from the PMM.
+///        If successful, installs an EDAT-1 FC=1 STE via mmu_map_large_page.
+/// @return true if the large page was successfully mapped, false on fallback.
+static bool thp_try_map_large(mmu_pgtbl_t *pgtbl, uint64_t va,
+                              uint32_t prot, gfp_t gfp) {
+    // Allocate a contiguous 1 MB compound block.
+    // The buddy allocator guarantees 2^8 * 4 KB = 1 MB natural alignment.
+    zx_page_t *head = pmm_alloc_pages(LARGE_PAGE_ORDER, gfp | ZX_GFP_ZERO);
+    if (!head)
+        return false;  // fragmented — fall back to 4 KB
+
+    uint64_t pa = pmm_page_to_phys(head);
+
+    // Mark compound page structure for correct freeing during teardown.
+    head->flags |= PF_HEAD;
+    head->compound_order = LARGE_PAGE_ORDER;
+    for (uint32_t i = 1; i < LARGE_PAGE_NR_PAGES; i++) {
+        zx_page_t *tail = pfn_to_page(page_to_pfn(head) + i);
+        tail->flags |= PF_TAIL;
+        tail->tail_offset = i;
+    }
+
+    // Install the EDAT-1 large page STE.
+    if (mmu_map_large_page(pgtbl, va, pa, prot) != 0) {
+        // MMU table allocation failed — release compound block.
+        // Clear compound flags before freeing.
+        head->flags &= ~PF_HEAD;
+        for (uint32_t i = 1; i < LARGE_PAGE_NR_PAGES; i++) {
+            zx_page_t *tail = pfn_to_page(page_to_pfn(head) + i);
+            tail->flags &= ~PF_TAIL;
+        }
+        pmm_free_pages(head, LARGE_PAGE_ORDER);
+        return false;
+    }
+
+    return true;
+}
+
+/// @brief Map a range of 4 KB pages (fallback path or non-aligned region).
+/// @return 0 on success, -1 on failure (pages already mapped are rolled back).
+static int map_small_pages(mmu_pgtbl_t *pgtbl, uint64_t va_start,
+                           uint64_t va_end, uint32_t prot, gfp_t gfp) {
+    for (uint64_t va = va_start; va < va_end; va += PAGE_SIZE) {
+        zx_page_t *page = pmm_alloc_page(gfp);
+        if (!page) {
+            // Roll back.
+            for (uint64_t rv = va_start; rv < va; rv += PAGE_SIZE) {
+                uint64_t pa = mmu_virt_to_phys(pgtbl, rv);
+                mmu_unmap_page(pgtbl, rv);
+                if (pa != ~0ULL) pmm_free_page(phys_to_page(pa));
+            }
+            return -1;
+        }
+        if (mmu_map_page(pgtbl, va, pmm_page_to_phys(page), prot) != 0) {
+            pmm_free_page(page);
+            for (uint64_t rv = va_start; rv < va; rv += PAGE_SIZE) {
+                uint64_t pa = mmu_virt_to_phys(pgtbl, rv);
+                mmu_unmap_page(pgtbl, rv);
+                if (pa != ~0ULL) pmm_free_page(phys_to_page(pa));
+            }
+            return -1;
+        }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Teardown helper: unmap & free pages, respecting large/small page mix
+// ---------------------------------------------------------------------------
+
+/// @brief Unmap and free all backing pages in [va_start, va_end).
+///        Automatically detects 1 MB large pages and frees compound blocks.
+static void unmap_and_free_range(mmu_pgtbl_t *pgtbl, uint64_t va_start,
+                                 uint64_t va_end) {
+    uint64_t va = va_start;
+    while (va < va_end) {
+        // Check if this VA sits on a 1 MB boundary backed by a large page.
+        if (!(va & (LARGE_PAGE_SIZE - 1)) &&
+            (va + LARGE_PAGE_SIZE <= va_end) &&
+            mmu_is_large_page(pgtbl, va)) {
+
+            // Get the compound head's physical address from the STE.
+            uint64_t pa = mmu_virt_to_phys(pgtbl, va);
+            // mmu_unmap_page handles large-page teardown (invalidates STE + IPTE).
+            mmu_unmap_page(pgtbl, va);
+            if (pa != ~0ULL) {
+                zx_page_t *head = phys_to_page(pa & LARGE_PAGE_MASK);
+                head->flags &= ~PF_HEAD;
+                for (uint32_t i = 1; i < LARGE_PAGE_NR_PAGES; i++) {
+                    zx_page_t *tail = pfn_to_page(page_to_pfn(head) + i);
+                    tail->flags &= ~PF_TAIL;
+                }
+                pmm_free_pages(head, LARGE_PAGE_ORDER);
+            }
+            va += LARGE_PAGE_SIZE;
+        } else {
+            // Standard 4 KB page.
+            uint64_t pa = mmu_virt_to_phys(pgtbl, va);
+            mmu_unmap_page(pgtbl, va);
+            if (pa != ~0ULL)
+                pmm_free_page(phys_to_page(pa));
+            va += PAGE_SIZE;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +252,7 @@ void vmm_init(void) {
     kernel_vm_space.mru_vma    = nullptr;
     kernel_vm_space.pgtbl_root = mmu_kernel_pgtbl()->r1_phys;
 
-    printk("vmm: kernel space ready (vmalloc %016llx – %016llx)\n",
+    printk("vmm: kernel space ready (vmalloc %016llx – %016llx, THP enabled)\n",
            (unsigned long long)VMALLOC_START,
            (unsigned long long)VMALLOC_END);
 }
@@ -164,65 +266,101 @@ void vmm_notify_slab_ready(void) {
 // ---------------------------------------------------------------------------
 
 vm_area_t *vmm_find_vma(vm_space_t *space, uint64_t virt) {
-    // Fast O(1) MRU check — covers sequential page-fault patterns.
     vm_area_t *mru = space->mru_vma;
     if (mru && virt >= mru->vm_start && virt < mru->vm_end)
         return mru;
 
-    // O(log n) RB-tree walk.
     vm_area_t *found = vma_rb_find(space, virt);
     if (found)
-        space->mru_vma = found; // update MRU
+        space->mru_vma = found;
     return found;
 }
 
 // ---------------------------------------------------------------------------
-// vmm_insert_vma
+// vmm_insert_vma — THP-aware page wiring
 // ---------------------------------------------------------------------------
 
 int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
-    if (!vma || vma->vm_start >= vma->vm_end) return -1;
-    if (vma->vm_start & (PAGE_SIZE - 1))       return -1;
+    if (!vma) {
+        printk("vmm_insert_vma: NULL VMA\n");
+        return -1;
+    }
+    if (vma->vm_start >= vma->vm_end) {
+        printk("vmm_insert_vma: invalid range [%llx, %llx)\n",
+               (unsigned long long)vma->vm_start, (unsigned long long)vma->vm_end);
+        return -1;
+    }
+    if (vma->vm_start & (PAGE_SIZE - 1)) {
+        printk("vmm_insert_vma: unaligned start %llx\n",
+               (unsigned long long)vma->vm_start);
+        return -1;
+    }
 
     mmu_pgtbl_t *pgtbl = mmu_kernel_pgtbl();
+    uint64_t va = vma->vm_start;
+    uint64_t end = vma->vm_end;
+    uint32_t thp_count = 0;
 
-    // Map backing pages before acquiring the space lock to minimise lock hold time.
-    for (uint64_t va = vma->vm_start; va < vma->vm_end; va += PAGE_SIZE) {
-        zx_page_t *page = pmm_alloc_page(gfp);
-        if (!page) {
-            // Roll back already-mapped pages.
-            for (uint64_t rv = vma->vm_start; rv < va; rv += PAGE_SIZE) {
-                uint64_t pa = mmu_virt_to_phys(pgtbl, rv);
-                mmu_unmap_page(pgtbl, rv);
-                if (pa != ~0ULL) pmm_free_page(phys_to_page(pa));
-            }
-            return -1;
-        }
-        if (mmu_map_page(pgtbl, va, pmm_page_to_phys(page), vma->vm_prot) != 0) {
-            pmm_free_page(page);
-            for (uint64_t rv = vma->vm_start; rv < va; rv += PAGE_SIZE) {
-                uint64_t pa = mmu_virt_to_phys(pgtbl, rv);
-                mmu_unmap_page(pgtbl, rv);
-                if (pa != ~0ULL) pmm_free_page(phys_to_page(pa));
-            }
+    // --- Phase 1: Map leading sub-MB fragment with 4 KB pages ---
+    uint64_t first_large = (va + LARGE_PAGE_SIZE - 1) & LARGE_PAGE_MASK;
+    if (first_large > end) first_large = end;
+
+    if (va < first_large) {
+        if (map_small_pages(pgtbl, va, first_large, vma->vm_prot, gfp) != 0) {
+            printk("vmm_insert_vma: Phase 1 failure [%llx, %llx)\n",
+                   (unsigned long long)va, (unsigned long long)first_large);
             return -1;
         }
     }
 
+    // --- Phase 2: Map 1 MB-aligned interior with THP (fallback to 4K) ---
+    uint64_t last_large = end & LARGE_PAGE_MASK;
+    for (uint64_t lva = first_large; lva < last_large; lva += LARGE_PAGE_SIZE) {
+        if (thp_try_map_large(pgtbl, lva, vma->vm_prot, gfp)) {
+            thp_count++;
+        } else {
+            // Fallback: map this 1 MB chunk as 256 × 4 KB pages.
+            if (map_small_pages(pgtbl, lva, lva + LARGE_PAGE_SIZE,
+                                vma->vm_prot, gfp) != 0) {
+                // OOM — roll back everything mapped so far.
+                printk("vmm_insert_vma: Phase 2 failure at %llx\n", (unsigned long long)lva);
+                unmap_and_free_range(pgtbl, vma->vm_start, lva);
+                return -1;
+            }
+        }
+    }
+
+    // --- Phase 3: Map trailing sub-MB fragment with 4 KB pages ---
+    if (last_large < end && last_large >= first_large) {
+        if (map_small_pages(pgtbl, last_large, end, vma->vm_prot, gfp) != 0) {
+            printk("vmm_insert_vma: Phase 3 failure [%llx, %llx)\n",
+                   (unsigned long long)last_large, (unsigned long long)end);
+            unmap_and_free_range(pgtbl, vma->vm_start, last_large);
+            return -1;
+        }
+    }
+
+    // --- Phase 4: Insert VMA into the RB-tree ---
     irqflags_t f;
     spin_lock_irqsave(&space->lock, &f);
     bool ok = vma_rb_insert(space, vma);
     spin_unlock_irqrestore(&space->lock, f);
 
     if (!ok) {
-        // Overlap detected — undo the page mappings we just made.
-        for (uint64_t va = vma->vm_start; va < vma->vm_end; va += PAGE_SIZE) {
-            uint64_t pa = mmu_virt_to_phys(pgtbl, va);
-            mmu_unmap_page(pgtbl, va);
-            if (pa != ~0ULL) pmm_free_page(phys_to_page(pa));
-        }
+        // Overlap — undo all mappings.
+        printk("vmm_insert_vma: Phase 4 failure (overlap) [%llx, %llx)\n",
+               (unsigned long long)vma->vm_start, (unsigned long long)vma->vm_end);
+        unmap_and_free_range(pgtbl, vma->vm_start, vma->vm_end);
         return -1;
     }
+
+    if (thp_count > 0) {
+        printk("vmm: THP promoted %u × 1 MB large pages in [%016llx, %016llx)\n",
+               thp_count,
+               (unsigned long long)vma->vm_start,
+               (unsigned long long)vma->vm_end);
+    }
+
     return 0;
 }
 
@@ -236,20 +374,15 @@ void vmm_remove_vma(vm_space_t *space, vm_area_t *vma) {
     vma_rb_remove(space, vma);
     spin_unlock_irqrestore(&space->lock, f);
 
-    // Unmap and free backing pages (IOREMAP VMAs don't own their pages).
     if (!(vma->vm_prot & VM_IOREMAP)) {
         mmu_pgtbl_t *pgtbl = mmu_kernel_pgtbl();
-        for (uint64_t va = vma->vm_start; va < vma->vm_end; va += PAGE_SIZE) {
-            uint64_t pa = mmu_virt_to_phys(pgtbl, va);
-            mmu_unmap_page(pgtbl, va);
-            if (pa != ~0ULL) pmm_free_page(phys_to_page(pa));
-        }
+        unmap_and_free_range(pgtbl, vma->vm_start, vma->vm_end);
     }
     vma_free(vma);
 }
 
 // ---------------------------------------------------------------------------
-// vmm_alloc — virtually-contiguous, physically-discontiguous
+// vmm_alloc — virtually-contiguous, physically-discontiguous (THP-aware)
 // ---------------------------------------------------------------------------
 
 uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
@@ -257,17 +390,27 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
     size = (size + PAGE_SIZE - 1) & PAGE_MASK;
 
     vm_area_t *vma = vma_alloc();
-    if (!vma) return 0;
+    if (!vma) {
+        printk("vmm_alloc: vma_alloc failed\n");
+        return 0;
+    }
 
+    // Align bump cursor to 1 MB for maximum THP eligibility.
     irqflags_t f;
     spin_lock_irqsave(&vmalloc_lock, &f);
-    if (vmalloc_next + size > VMALLOC_END || vmalloc_next + size < vmalloc_next) {
+    uint64_t aligned = (vmalloc_next + LARGE_PAGE_SIZE - 1) & LARGE_PAGE_MASK;
+    // For small allocations (< 1MB), don't waste a full 1MB gap.
+    if (size < LARGE_PAGE_SIZE)
+        aligned = vmalloc_next;
+    if (aligned + size > VMALLOC_END || aligned + size < aligned) {
+        printk("vmm_alloc: out of vmalloc space (next=0x%llx, size=0x%llx)\n",
+               (unsigned long long)vmalloc_next, (unsigned long long)size);
         spin_unlock_irqrestore(&vmalloc_lock, f);
         vma_free(vma);
         return 0;
     }
-    uint64_t va_start = vmalloc_next;
-    vmalloc_next += size;
+    uint64_t va_start = aligned;
+    vmalloc_next = aligned + size;
     spin_unlock_irqrestore(&vmalloc_lock, f);
 
     vma->vm_start = va_start;
@@ -275,6 +418,7 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
     vma->vm_prot  = prot | VM_KERNEL;
 
     if (vmm_insert_vma(&kernel_vm_space, vma, gfp) != 0) {
+        printk("vmm_alloc: vmm_insert_vma failed\n");
         vma_free(vma);
         return 0;
     }
@@ -317,12 +461,30 @@ uint64_t vmm_map_phys(uint64_t phys, uint64_t size, vm_prot_t prot) {
     spin_unlock_irqrestore(&vmalloc_lock, f);
 
     mmu_pgtbl_t *pgtbl = mmu_kernel_pgtbl();
-    for (uint64_t off = 0; off < size; off += PAGE_SIZE) {
-        if (mmu_map_page(pgtbl, va_start + off, phys + off, prot | VM_KERNEL) != 0) {
+
+    // For ioremap, also use THP when both phys and virt are 1 MB aligned.
+    uint64_t off = 0;
+    while (off < size) {
+        uint64_t va = va_start + off;
+        uint64_t pa = phys + off;
+        uint64_t remaining = size - off;
+
+        if (!(va & (LARGE_PAGE_SIZE - 1)) &&
+            !(pa & (LARGE_PAGE_SIZE - 1)) &&
+            remaining >= LARGE_PAGE_SIZE) {
+            if (mmu_map_large_page(pgtbl, va, pa, prot | VM_KERNEL) == 0) {
+                off += LARGE_PAGE_SIZE;
+                continue;
+            }
+            // Fall through to 4K mapping on failure.
+        }
+        if (mmu_map_page(pgtbl, va, pa, prot | VM_KERNEL) != 0) {
+            // Roll back.
             for (uint64_t rv = 0; rv < off; rv += PAGE_SIZE)
                 mmu_unmap_page(pgtbl, va_start + rv);
             return 0;
         }
+        off += PAGE_SIZE;
     }
 
     vm_area_t *vma = vma_alloc();

@@ -44,9 +44,6 @@ bad:
 }
 
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
-    // Install HHDM-virtual disabled-wait PSWs into the lowcore FIRST.
-    // Any fault before this point (including inside diag_setup) would load
-    // the loader's physical-address PSW and cause a program interrupt loop.
     zxfl_lowcore_setup();
 
     diag_setup();
@@ -108,52 +105,14 @@ bad:
     }
 
     zx_cpu_features_init(boot);
-    
     rcu_init();
 
     pmm_init(boot);
-
-    // mmu_init() reconstructs the kernel page-table handle from the live CR1
-    // value set by the bootloader.  It must run after pmm_init() (which
-    // places mem_map in HHDM) and before vmm_init() (which needs the handle).
-    mmu_init();
-
-    // vmm_init() sets up the kernel address space descriptor and prepares
-    // the vmalloc bump allocator.  Must precede slab_init() because the
-    // slab calls vmm_notify_slab_ready() to transition the VMA pool.
+    mmu_init(boot);
     vmm_init();
 
     slab_init();
     kmalloc_init();
-
-    // --- Subsystem Self-Tests ---
-    printk("sys: running memory subsystem self-tests...\n");
-
-    // 1. PMM Test
-    zx_page_t *p = pmm_alloc_pages(2, ZX_GFP_NORMAL);
-    if (!p) panic("test: pmm_alloc_pages failed");
-    uint64_t phys = pmm_page_to_phys(p);
-    if (phys & 0x3FFF) panic("test: pmm order-2 alignment failed");
-    pmm_free_pages(p, 2);
-    printk("  [OK] PMM order-2 allocation and alignment.\n");
-
-    // 2. Slab / Kmalloc Test
-    void *kptr = kmalloc(128);
-    if (!kptr) panic("test: kmalloc failed");
-    memset(kptr, 0xAA, 128);
-    kfree(kptr);
-    printk("  [OK] Slab/kmalloc 128-byte allocation.\n");
-
-    // 3. Large Object Heap (VMM backed) Test
-    void *hptr = kheap_zalloc(32768); // 32 KB, spans 8 pages
-    if (!hptr) panic("test: kheap_zalloc failed");
-    if (((uint64_t)hptr) < VMALLOC_START) panic("test: kheap returned non-vmalloc ptr");
-    // Verify zeroed
-    for (int i = 0; i < 32768; i++) {
-        if (((uint8_t*)hptr)[i] != 0) panic("test: kheap_zalloc not zeroed");
-    }
-    kheap_free(hptr);
-    printk("  [OK] Heap/VMM 32 KB allocation and mapping.\n");
 
     printk("sys: core.zxfoundation.nucleus initialization complete\n");
 

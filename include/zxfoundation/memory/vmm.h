@@ -44,8 +44,14 @@
 // vmalloc region boundaries
 // ---------------------------------------------------------------------------
 
-#define VMALLOC_START   0xFFFFC00000000000ULL
-#define VMALLOC_END     0xFFFFE00000000000ULL
+#define VMALLOC_START       0xFFFFC00000000000ULL
+#define VMALLOC_END         0xFFFFE00000000000ULL
+
+/// 1 MB large page geometry (EDAT-1 segment-table direct mapping).
+#define LARGE_PAGE_SIZE     (1ULL << 20)             ///< 1 MB
+#define LARGE_PAGE_MASK     (~(LARGE_PAGE_SIZE - 1)) ///< Mask to 1 MB boundary.
+#define LARGE_PAGE_ORDER    8U                       ///< 2^8 = 256 pages = 1 MB
+#define LARGE_PAGE_NR_PAGES (1U << LARGE_PAGE_ORDER) ///< 256
 
 // ---------------------------------------------------------------------------
 // vm_area_t — one virtual memory region

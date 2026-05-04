@@ -2,37 +2,9 @@
 // include/zxfoundation/sync/rcu.h
 //
 /// @brief Minimal Read-Copy-Update (RCU) for a non-preemptive kernel.
-///
-///        DESIGN
-///        ======
-///        In a non-preemptive kernel, a grace period is simply the
-///        interval during which every CPU has passed through at least one
-///        point where it is not in an RCU read-side critical section.
-///        Since there is no preemption, any CPU that is not in rcu_read_lock()
-///        is implicitly outside the read-side critical section.
-///
-///        This implementation uses a global generation counter.
-///        synchronize_rcu() increments the generation and then waits
-///        (spinning) until all CPUs have observed the new generation.
-///        For a single-CPU kernel this degenerates to a pair of barriers.
-///
-///        rcu_assign_pointer / rcu_dereference are the only primitives
-///        needed by callers.  The barrier semantics are:
-///          - rcu_assign_pointer: smp_mb() before the store so all prior
-///            writes to the new object are visible before the pointer
-///            becomes visible.
-///          - rcu_dereference: compiler barrier (data dependency on s390x
-///            TSO is sufficient; no hardware fence needed for the load).
-///
-///        CALLBACKS
-///        =========
-///        call_rcu() registers a callback to be invoked after the next
-///        grace period.  The callback list is flushed by synchronize_rcu().
-///        This is a simple linked list — no batching yet.
 
 #pragma once
 
-#include <zxfoundation/types.h>
 #include <zxfoundation/atomic.h>
 
 /// @brief RCU callback node.  Embed in the object being freed.
@@ -45,12 +17,12 @@ typedef struct rcu_head {
 ///        On a non-preemptive kernel this is a compiler barrier only —
 ///        it prevents the compiler from moving loads out of the section.
 static inline void rcu_read_lock(void) {
-    __asm__ volatile ("" ::: "memory");
+    barrier();
 }
 
 /// @brief Exit an RCU read-side critical section.
 static inline void rcu_read_unlock(void) {
-    __asm__ volatile ("" ::: "memory");
+    barrier();
 }
 
 /// @brief Safely publish a pointer to a newly initialized object.

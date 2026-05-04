@@ -148,6 +148,11 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     uint64_t bss_phys = hhdm_virt_to_phys((uintptr_t)__bss_end);
     uint64_t kernel_end = (boot->kernel_phys_end > bss_phys) ? boot->kernel_phys_end : bss_phys;
 
+    printk("pmm: boot->kernel_phys_end = 0x%llx, bss_phys = 0x%llx, pgtbl_pool_end = 0x%llx\n",
+           (unsigned long long)boot->kernel_phys_end,
+           (unsigned long long)bss_phys,
+           (unsigned long long)boot->pgtbl_pool_end);
+
     // --- Zero-initialise zone structures ---
     for (int z = 0; z < ZONE_MAX; z++) {
         spin_lock_init(&zones[z].lock);
@@ -191,7 +196,15 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     zx_mem_map = (zx_page_t *)(uintptr_t)hhdm_phys_to_virt(map_phys);
 
     // --- Compute the end of the reserved early region ---
+    // Must cover: lowcore + kernel image + BSS + mem_map +
+    // the bootloader's page-table bump pool (live DAT tables!).
     uint64_t reserve_phys_end = map_phys + map_pages * PAGE_SIZE;
+    if (boot->pgtbl_pool_end > reserve_phys_end)
+        reserve_phys_end = boot->pgtbl_pool_end;
+
+    printk("pmm: reserve_phys_end = 0x%llx (pool_end = 0x%llx)\n",
+           (unsigned long long)reserve_phys_end,
+           (unsigned long long)boot->pgtbl_pool_end);
 
     // --- Walk the boot memory map and populate the buddy free lists ---
     for (uint32_t i = 0; i < boot->mem_map_count; i++) {

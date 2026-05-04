@@ -2,22 +2,6 @@
 // include/zxfoundation/memory/heap.h
 //
 /// @brief Large-object kernel heap — vmalloc-backed allocations > 8 KB.
-///
-///        OVERVIEW
-///        ========
-///        kmalloc() handles objects up to 8 KB via power-of-2 slab caches.
-///        For anything larger (kernel buffers, DMA descriptors, module images)
-///        the heap layer allocates a virtual region from the vmalloc arena,
-///        backed by individual PMM pages.
-///
-///        All allocations are 8-byte aligned.  A hidden heap_hdr_t is placed
-///        at the base of each region so kheap_free() can determine the size
-///        without an external lookup.
-///
-///        THREAD SAFETY
-///        =============
-///        kheap_alloc() / kheap_free() are fully SMP-safe: they call into
-///        vmm_alloc() / vmm_free() which carry their own spinlocks.
 
 #pragma once
 
