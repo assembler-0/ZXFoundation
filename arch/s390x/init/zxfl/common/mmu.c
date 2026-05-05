@@ -162,10 +162,6 @@ static uint64_t *alloc_page_table(void) {
             uint64_t phys = s * SEG_SIZE;
             uint32_t sx   = (uint32_t)(s % SEG_TABLE_ENTRIES);
 
-            // Always use 4KB page tables for the bootloader HHDM mapping.
-            // EDAT-1 FC=1 STEs are reserved for the kernel's own vmalloc
-            // mappings after boot.  Using FC=1 here causes addressing
-            // exceptions on some Hercules configurations.
             uint64_t *pt = alloc_page_table();
             for (uint32_t p = 0; p < PAGE_TABLE_ENTRIES; p++) {
                 pt[p] = phys + ((uint64_t)p * 4096ULL);
@@ -207,19 +203,15 @@ static uint64_t *alloc_page_table(void) {
     uint64_t asce = (uint64_t)(uintptr_t)r1_table | Z_ASCE_DT_R1 | Z_ASCE_TL_2048;
     __asm__ volatile("lctlg 1,1,%0" :: "Q"(asce) : "memory");
 
-    // Record the page-table pool high-water mark so the kernel PMM can
-    // reserve [pool_base, pgtbl_pool_end) and not hand out pages that
-    // overlap with the live DAT hierarchy.
     proto->pgtbl_pool_end = (pool_next + 4095ULL) & ~4095ULL;
-
     proto->cr1_snapshot = asce;
     proto->cr0_snapshot = cr0;
 
     __asm__ volatile("ptlb" ::: "memory");
 
     static uint64_t jump_psw[2] __attribute__((aligned(16)));
-    jump_psw[0] = 0x0404000180000000ULL;   // DAT=1, EA=1, BA=1
-    jump_psw[1] = entry;                    // HHDM virtual entry point
+    jump_psw[0] = 0x0400000180000000ULL;
+    jump_psw[1] = entry;
 
     __asm__ volatile(
         "lgr   %%r2, %[proto]\n"
