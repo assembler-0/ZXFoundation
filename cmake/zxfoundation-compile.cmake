@@ -66,7 +66,6 @@ target_link_options(core.zxfoundation.nucleus PRIVATE
     -static
     --no-dynamic-linker
     -ztext
-    -zmax-page-size=0x1000
     --no-warn-rwx-segments
     --no-pie -g
     -m${TARGET_EMULATION_MODE}

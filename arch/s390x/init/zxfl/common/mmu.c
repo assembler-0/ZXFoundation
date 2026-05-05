@@ -148,7 +148,7 @@ static uint64_t *alloc_page_table(void) {
     pool_next = pool_base;
 
     if (!has_edat1) {
-        print("zxfl: EDAT-1 not available, THP disabled in kernel\n");
+        print("zxfl: EDAT-1 not available\n");
     }
 
     for (uint32_t st = 0; st < num_seg_tables; st++) {

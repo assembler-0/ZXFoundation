@@ -1,0 +1,5 @@
+*.sys
+core.*
+gen_checksums
+*.o
+*.3390

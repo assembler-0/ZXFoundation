@@ -9,25 +9,12 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/zconfig.h>
 #include <zxfoundation/spinlock.h>
-#include <zxfoundation/memory/page.h>
-#include <zxfoundation/memory/vm_flags.h>
-#include <arch/s390x/init/zxfl/zxfl.h>
-
-// ---------------------------------------------------------------------------
-// ASCE constants
-// ---------------------------------------------------------------------------
 
 /// ASCE designation type: R1 root (5-level paging).
 #define Z_ASCE_DT_R1        0x0CULL
 /// ASCE table-length: 2048 entries.
 #define Z_ASCE_TL_2048      0x03ULL
-
-// ---------------------------------------------------------------------------
-// Entry bit constants — sourced from Linux arch/s390/include/asm/pgtable.h
-// and IBM z/Architecture Principles of Operation SA22-7832.
-// ---------------------------------------------------------------------------
 
 /// Invalid bit (bit 58 BE = bit 5 LE) — shared by region and segment entries.
 /// Linux: _REGION_ENTRY_INVALID = 0x20, _SEGMENT_ENTRY_INVALID = 0x20.
@@ -44,11 +31,6 @@
 /// Linux: _REGION_ENTRY_LENGTH = 0x03.
 #define Z_TL_2048           0x03ULL
 
-// ---------------------------------------------------------------------------
-// EDAT-1: 1 MB large page via Segment Table Entry (STE) with FC=1.
-// Linux: _SEGMENT_ENTRY_LARGE = 0x0400, _SEGMENT_ENTRY_ORIGIN_LARGE = ~0xfffffUL.
-// ---------------------------------------------------------------------------
-
 /// STE Format-Control bit (FC=1 → 1 MB large page, requires EDAT-1, STFLE bit 8).
 #define Z_STE_FC            0x0400ULL
 /// STE protection bit (read-only). Linux: _SEGMENT_ENTRY_PROTECT = 0x200.
@@ -64,12 +46,6 @@
 #define Z_EDAT1_NR_PAGES    256U
 /// PMM buddy order for one EDAT-1 large page (2^8 = 256 pages = 1 MB).
 #define Z_EDAT1_ORDER       8U
-
-// ---------------------------------------------------------------------------
-// EDAT-2: 2 GB large page via Region-Third Entry (R3E) with FC=1.
-// Linux: _REGION3_ENTRY_LARGE = 0x0400, _REGION3_ENTRY_ORIGIN_LARGE = ~0x7fffffffUL.
-// Requires STFLE facility bit 78.
-// ---------------------------------------------------------------------------
 
 /// R3 Format-Control bit (FC=1 → 2 GB large page, requires EDAT-2, STFLE bit 78).
 /// Linux: _REGION3_ENTRY_LARGE = 0x0400.
@@ -88,18 +64,10 @@
 /// PMM buddy order for one EDAT-2 large page (2^19 = 524288 pages = 2 GB).
 #define Z_EDAT2_ORDER       19U
 
-// ---------------------------------------------------------------------------
-// Page Table Entry (PTE) bits
-// ---------------------------------------------------------------------------
-
 /// PTE Invalid bit (bit 53 BE = bit 10 LE). Linux: _PAGE_INVALID = 0x400.
 #define Z_PTE_I             0x400ULL
 /// PTE Protected (read-only, bit 55 BE = bit 8 LE). Linux: _PAGE_PROTECT = 0x200.
 #define Z_PTE_P             0x200ULL
-
-// ---------------------------------------------------------------------------
-// Table geometry
-// ---------------------------------------------------------------------------
 
 /// Number of entries in R1/R2/R3/segment tables.
 #define Z_TABLE_ENTRIES     2048U
@@ -109,10 +77,6 @@
 #define Z_TABLE_ORDER       2U
 /// PMM buddy order for a 4 KB page table (2^0 = 1 page = 4 KB).
 #define Z_PT_ORDER          0U
-
-// ---------------------------------------------------------------------------
-// Virtual address field extractors
-// ---------------------------------------------------------------------------
 
 /// Region-First index (bits 63:53 of the 64-bit virtual address).
 static inline uint32_t va_rfx(uint64_t va) { return (uint32_t)((va >> 53) & 0x7FFUL); }
@@ -127,10 +91,6 @@ static inline uint32_t va_px(uint64_t va)  { return (uint32_t)((va >> 12) & 0xFF
 /// Byte offset within page (bits 11:0).
 static inline uint32_t va_bx(uint64_t va)  { return (uint32_t)(va & 0xFFFUL);         }
 
-// ---------------------------------------------------------------------------
-// mmu_pgtbl_t — handle to a 5-level paging structure
-// ---------------------------------------------------------------------------
-
 /// @brief Handle to a z/Architecture 5-level paging structure.
 ///        The R1 table is 16 KB (order=2), 16 KB-aligned.
 ///        lock serialises all structural modifications to this page table
@@ -143,9 +103,6 @@ typedef struct {
     uint64_t   r1_phys; ///< Physical address of the R1 table.
 } mmu_pgtbl_t;
 
-// ---------------------------------------------------------------------------
-// Subsystem lifecycle
-// ---------------------------------------------------------------------------
 
 /// @brief Initialize the kernel MMU subsystem.
 ///        Inherits the bootloader-built ASCE from CR1, detects EDAT-1/2.
@@ -154,10 +111,6 @@ void mmu_init(void);
 
 /// @brief Return a pointer to the kernel's page-table handle.
 mmu_pgtbl_t *mmu_kernel_pgtbl(void);
-
-// ---------------------------------------------------------------------------
-// Page-table lifecycle
-// ---------------------------------------------------------------------------
 
 /// @brief Allocate and zero-initialise a new R1-rooted page-table hierarchy.
 /// @return Handle with valid asce/r1_phys, or {0,0} on PMM failure.
@@ -168,10 +121,6 @@ mmu_pgtbl_t mmu_pgtbl_alloc(void);
 ///        Does NOT free the physical frames that were mapped.
 /// @param pgtbl  Handle returned by mmu_pgtbl_alloc().
 void mmu_pgtbl_free(mmu_pgtbl_t pgtbl);
-
-// ---------------------------------------------------------------------------
-// Mapping
-// ---------------------------------------------------------------------------
 
 /// @brief Map a single 4 KB page.
 ///        If a valid PTE already exists it is first invalidated with IPTE.
@@ -201,20 +150,12 @@ int mmu_map_large_page(mmu_pgtbl_t *pgtbl, uint64_t va, uint64_t pa, uint32_t pr
 /// @return 0 on success, -1 on PMM failure.
 int mmu_map_huge_page(mmu_pgtbl_t *pgtbl, uint64_t va, uint64_t pa, uint32_t prot);
 
-// ---------------------------------------------------------------------------
-// Unmapping
-// ---------------------------------------------------------------------------
-
 /// @brief Unmap a single 4 KB page, issuing IPTE for SMP coherency.
 ///        The PTE is written with Z_PTE_I set.  The backing frame is NOT freed.
 ///        Acquires pgtbl->lock internally.
 /// @param pgtbl  Page table handle.
 /// @param va     Virtual address (page-aligned) to unmap.
 void mmu_unmap_page(mmu_pgtbl_t *pgtbl, uint64_t va);
-
-// ---------------------------------------------------------------------------
-// Query
-// ---------------------------------------------------------------------------
 
 /// @brief Translate a virtual address to its physical address.
 ///        Lock-free: safe to call concurrently with other readers.
@@ -240,10 +181,6 @@ bool mmu_has_edat1(void);
 
 /// @brief Return true if EDAT-2 (STFLE bit 78) is active.
 bool mmu_has_edat2(void);
-
-// ---------------------------------------------------------------------------
-// CR1 / TLB management
-// ---------------------------------------------------------------------------
 
 /// @brief Install a page-table handle into CR1 and issue PTLB.
 ///        Caller must have IRQs disabled.

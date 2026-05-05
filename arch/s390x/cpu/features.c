@@ -2,20 +2,9 @@
 // arch/s390x/cpu/features.c
 //
 /// @brief Boot-time CPU feature detection via STFLE facility list.
-///
-///        DIAG44: facility bit 74 (z/VM DIAG 44 available).
-///        EDAT-1: facility bit  8 (1 MB STE large pages).
-///        EDAT-2: facility bit 78 (2 GB R3 large pages).
-///
-///        Bit numbers are authoritative from:
-///          Linux arch/s390/include/asm/cpufeature.h
-///          IBM z/Architecture Principles of Operation SA22-7832
-
-#include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/stfle.h>
 #include <arch/s390x/cpu/features.h>
-#include <zxfoundation/sys/printk.h>
 
 static bool sys_features_table[] = {
     [ZX_SYS_FEATURE_DIAG44] = false,

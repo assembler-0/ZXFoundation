@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/head64.S
 
-#include <zxfoundation/zconfig.h>
+#define CONFIG_KERNEL_VIRT_OFFSET           0xFFFF800000000000ULL
 
     .machinemode zarch
     .section .text.handshake, "ax"
@@ -53,7 +52,7 @@ __zx_start_kernel64:
     stg     %r1, 8(%r3)
 
     lgr     %r2, %r11
-    brasl   %r14, zxfoundation_global_initialize
+    brasl   %r14, kmain
 
 .Lhalt:
     larl    %r1, .Ldisabled_wait_psw
