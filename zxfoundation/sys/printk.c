@@ -3,8 +3,7 @@
 
 #include <lib/vsprintf.h>
 #include <zxfoundation/sys/printk.h>
-
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 
 static printk_putc_sink global_sink = nullptr;
 static spinlock_t console_lock = SPINLOCK_INIT;

@@ -6,7 +6,7 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/memory/slab.h>
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/sys/panic.h>
 #include <arch/s390x/cpu/processor.h>
@@ -83,8 +83,8 @@ static inline uint16_t *slab_free_stack(kmem_slab_t *slab) {
     return (uint16_t *)((uintptr_t)slab + sizeof(kmem_slab_t));
 }
 
-static kmem_slab_t *slab_new_page(kmem_cache_t *cache) {
-    zx_page_t *page = pmm_alloc_page(ZX_GFP_NORMAL | ZX_GFP_ZERO);
+static kmem_slab_t *slab_new_page(kmem_cache_t *cache, gfp_t gfp) {
+    zx_page_t *page = pmm_alloc_page(gfp | ZX_GFP_ZERO);
     if (!page) return nullptr;
 
     arch_set_storage_key(pmm_page_to_phys(page), cache->storage_key | 0x10);
@@ -100,13 +100,13 @@ static kmem_slab_t *slab_new_page(kmem_cache_t *cache) {
     return slab;
 }
 
-static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag) {
+static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag, gfp_t gfp) {
     kmem_slab_t *slab = nullptr;
     if (!list_empty(&cache->partial_slabs))
         slab = list_entry(cache->partial_slabs.next, kmem_slab_t, node);
 
     if (!slab) {
-        slab = slab_new_page(cache);
+        slab = slab_new_page(cache, gfp);
         if (!slab) return false;
         list_add_tail(&slab->node, &cache->partial_slabs);
     }
@@ -133,7 +133,7 @@ static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag) {
     return mag->count > 0;
 }
 
-static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling) {
+static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling, gfp_t gfp) {
     irqflags_t f;
     spin_lock_irqsave(&cache->depot_lock, &f);
 
@@ -145,7 +145,7 @@ static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling) {
                     return false;
                 }
                 spin_unlock_irqrestore(&cache->depot_lock, f);
-                kmem_magazine_t *nm = (kmem_magazine_t *)kmem_cache_alloc(&mag_cache);
+                kmem_magazine_t *nm = (kmem_magazine_t *)kmem_cache_alloc(&mag_cache, gfp);
                 if (!nm) return false;
                 nm->count = 0;
                 spin_lock_irqsave(&cache->depot_lock, &f);
@@ -154,7 +154,7 @@ static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling) {
             kmem_magazine_t *m = list_entry(cache->empty_mags.next,
                                             kmem_magazine_t, node);
             list_del(&m->node);
-            if (!cache_refill_magazine(cache, m)) {
+            if (!cache_refill_magazine(cache, m, gfp)) {
                 list_add_tail(&m->node, &cache->empty_mags);
                 spin_unlock_irqrestore(&cache->depot_lock, f);
                 return false;
@@ -182,7 +182,7 @@ static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling) {
     return true;
 }
 
-void *kmem_cache_alloc(kmem_cache_t *cache) {
+void *kmem_cache_alloc(kmem_cache_t *cache, gfp_t gfp) {
     irqflags_t f = arch_local_save_flags();
     arch_local_irq_disable();
 
@@ -195,7 +195,7 @@ void *kmem_cache_alloc(kmem_cache_t *cache) {
         return obj;
     }
 
-    if (magazine_swap(cache, cpu, true)) {
+    if (magazine_swap(cache, cpu, true, gfp)) {
         mag = cache->cpu_mags[cpu];
         void *obj = mag->objects[--mag->count];
         arch_local_irq_restore(f);
@@ -221,7 +221,7 @@ void kmem_cache_free(kmem_cache_t *cache, void *obj) {
         return;
     }
 
-    magazine_swap(cache, cpu, false);
+    magazine_swap(cache, cpu, false, ZX_GFP_NORMAL);
     mag = cache->cpu_mags[cpu];
     if (mag)
         mag->objects[mag->count++] = obj;
@@ -230,7 +230,7 @@ void kmem_cache_free(kmem_cache_t *cache, void *obj) {
 }
 
 kmem_cache_t *kmem_cache_create(const char *name, size_t size, uint8_t storage_key) {
-    kmem_cache_t *cp = (kmem_cache_t *)kmem_cache_alloc(&cache_cache);
+    kmem_cache_t *cp = (kmem_cache_t *)kmem_cache_alloc(&cache_cache, ZX_GFP_NORMAL);
     if (!cp) return nullptr;
 
     cp->name        = name;
@@ -245,7 +245,7 @@ kmem_cache_t *kmem_cache_create(const char *name, size_t size, uint8_t storage_k
 
     // Seed with a few empty magazines.
     for (int i = 0; i < 4; i++) {
-        kmem_magazine_t *m = (kmem_magazine_t *)kmem_cache_alloc(&mag_cache);
+        kmem_magazine_t *m = (kmem_magazine_t *)kmem_cache_alloc(&mag_cache, ZX_GFP_NORMAL);
         if (m) { m->count = 0; list_add_tail(&m->node, &cp->empty_mags); }
     }
 

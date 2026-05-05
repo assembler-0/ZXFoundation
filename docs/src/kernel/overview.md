@@ -31,17 +31,19 @@ The kernel entry point is `zxfoundation_global_initialize(zxfl_boot_protocol_t *
 | kmalloc    | `zxfoundation/memory/kmalloc.c`   | Active  |
 | Heap       | `zxfoundation/memory/heap.c`      | Active  |
 | MMU        | `arch/s390x/mmu/mmu.c`            | Active  |
-| Spinlock   | `include/zxfoundation/spinlock.h` | Active  |
+| Per-CPU    | `arch/s390x/cpu/percpu.c`         | Active  |
+| qspinlock  | `arch/s390x/cpu/qspinlock.c`      | Active  |
 | Mutex      | `zxfoundation/sync/mutex.c`       | Active  |
 | RW Lock    | `zxfoundation/sync/rwlock.c`      | Active  |
 | Semaphore  | `zxfoundation/sync/semaphore.c`   | Active  |
 | Wait queue | `zxfoundation/sync/waitqueue.c`   | Active  |
-| RCU        | `zxfoundation/sync/rcu.c`         | Stub    |
+| RCU        | `zxfoundation/sync/rcu.c`         | Active  |
+| SRCU       | `zxfoundation/sync/srcu.c`        | Active  |
 | kobject    | `zxfoundation/object/kobject.c`   | Active  |
 | printk     | `zxfoundation/sys/printk.c`       | Active  |
 | panic      | `zxfoundation/sys/panic.c`        | Active  |
+| Trap       | `arch/s390x/trap/`                | Active  |
+| SMP        | `arch/s390x/cpu/smp.c`            | Active  |
+| Scheduler  | `zxfoundation/sched/`             | Active  |
 | IRQ        | `arch/s390x/irq/`                 | Stub    |
-| Trap       | `arch/s390x/trap/`                | Stub    |
 | Time       | `arch/s390x/time/`                | Stub    |
-| Scheduler  | `zxfoundation/sched/`             | Stub    |
-| SMP        | `arch/s390x/cpu/`                 | Partial |

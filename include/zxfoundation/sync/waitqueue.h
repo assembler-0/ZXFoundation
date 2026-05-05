@@ -22,20 +22,19 @@
 
 #pragma once
 
-#include <zxfoundation/types.h>
-#include <zxfoundation/atomic.h>
-#include <zxfoundation/spinlock.h>
+#include <arch/s390x/cpu/atomic.h>
+#include <zxfoundation/sync/spinlock.h>
 
 /// @brief One waiter node.  Stack-allocated by the sleeping thread.
 typedef struct wq_entry {
     atomic_t         done;   ///< Set to 1 by the waker.
-    struct wq_entry *next;   ///< Next entry in the queue (NULL = tail).
+    struct wq_entry *next;   ///< Next entry in the queue (nullptr = tail).
 } wq_entry_t;
 
 /// @brief Wait-queue head.
 typedef struct {
     spinlock_t  lock;
-    wq_entry_t *head;   ///< First waiter (NULL = empty).
+    wq_entry_t *head;   ///< First waiter (nullptr = empty).
 } waitqueue_t;
 
 #define WAITQUEUE_INIT  { .lock = SPINLOCK_INIT, .head = nullptr }

@@ -10,7 +10,7 @@
 #include <arch/s390x/mmu/mmu.h>
 #include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/zconfig.h>
 #include <lib/rbtree.h>
 
@@ -27,7 +27,7 @@ static bool       slab_available = false;
 
 static vm_area_t *vma_alloc(void) {
     if (slab_available)
-        return (vm_area_t *)kmalloc(sizeof(vm_area_t));
+        return (vm_area_t *)kmalloc(sizeof(vm_area_t), ZX_GFP_NORMAL);
     if (early_vma_idx >= EARLY_VMA_POOL_SIZE)
         panic("vmm: early vma pool exhausted");
     vm_area_t *v = &early_vma_pool[early_vma_idx++];
@@ -205,7 +205,7 @@ vm_area_t *vmm_find_vma(vm_space_t *space, uint64_t virt) {
 
 int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
     if (!vma) {
-        printk("vmm_insert_vma: NULL VMA\n");
+        printk("vmm_insert_vma: nullptr VMA\n");
         return -1;
     }
     if (vma->vm_start >= vma->vm_end) {

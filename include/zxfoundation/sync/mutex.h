@@ -6,8 +6,8 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/atomic.h>
-#include <zxfoundation/spinlock.h>
+#include <arch/s390x/cpu/atomic.h>
+#include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/sync/waitqueue.h>
 
 typedef struct {

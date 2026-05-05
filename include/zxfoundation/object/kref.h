@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include <zxfoundation/atomic.h>
+#include <arch/s390x/cpu/atomic.h>
 
 typedef struct {
     atomic_t refcount;

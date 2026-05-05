@@ -9,7 +9,7 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 
 /// ASCE designation type: R1 root (5-level paging).
 #define Z_ASCE_DT_R1        0x0CULL

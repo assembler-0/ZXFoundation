@@ -7,16 +7,10 @@
 // ---------------------------------------------------------------------------
 // Release
 // ---------------------------------------------------------------------------
-#define CONFIG_ULTRASPARK_RELEASE           "26h1"
+#define CONFIG_ZX_RELEASE           "26h1"
 
 // ---------------------------------------------------------------------------
-// Debugging
-// ---------------------------------------------------------------------------
-/* #undef CONFIG_DEBUG */
-#define CONFIG_EARLY_PRINTK                 1
-
-// ---------------------------------------------------------------------------
-// Console drivers
+// Console driverX
 // ---------------------------------------------------------------------------
 #define CONFIG_SCLP_CONSOLE                 1
 #define CONFIG_SCLP_SERVC_MAX_RETRIES       100
@@ -38,9 +32,6 @@
 // ---------------------------------------------------------------------------
 // Trap / panic
 // ---------------------------------------------------------------------------
-// PSW address stored in the disabled-wait PSW on panic.
-// The value is deliberately non-zero and non-aligned so it is visually
-// distinct from a normal halt (addr=0) in QEMU logs and operator consoles.
 #define CONFIG_PANIC_HALT_ADDR              0x0000000000DEAD00ULL
 
 // ---------------------------------------------------------------------------

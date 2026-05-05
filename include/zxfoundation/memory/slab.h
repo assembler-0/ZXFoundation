@@ -7,6 +7,7 @@
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/memory/page.h>
+#include <zxfoundation/memory/pmm.h>
 
 typedef struct kmem_cache kmem_cache_t;
 
@@ -24,12 +25,13 @@ void vmm_notify_slab_ready(void);
 /// @param name         Static string for diagnostics.
 /// @param size         Object size in bytes (internally padded to 8-byte boundary).
 /// @param storage_key  s390x storage key for all slab pages (0 = default kernel).
-/// @return New cache handle, or NULL on OOM.
+/// @return New cache handle, or nullptr on OOM.
 kmem_cache_t *kmem_cache_create(const char *name, size_t size, uint8_t storage_key);
 
 /// @brief Allocate one object from the cache.
-/// @return Pointer to the object, or NULL on OOM.
-void *kmem_cache_alloc(kmem_cache_t *cache);
+/// @param gfp  PMM flags used if a new slab page must be allocated.
+/// @return Pointer to the object, or nullptr on OOM.
+void *kmem_cache_alloc(kmem_cache_t *cache, gfp_t gfp);
 
 /// @brief Return an object to its cache.
 ///        The pointer MUST have been returned by kmem_cache_alloc() on this cache.

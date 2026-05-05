@@ -6,8 +6,7 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/zconfig.h>
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/memory/page.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 
@@ -74,13 +73,13 @@ void pmm_init(const zxfl_boot_protocol_t *boot);
 
 /// @brief Allocate a single 4 KB frame.
 /// @param gfp   Allocation flags (ZX_GFP_*).
-/// @return Page descriptor pointer, or NULL on failure.
+/// @return Page descriptor pointer, or nullptr on failure.
 zx_page_t *pmm_alloc_page(gfp_t gfp);
 
 /// @brief Allocate a contiguous power-of-two block of 2^order frames.
 /// @param order  Block size exponent (0 = 4 KB, MAX_ORDER = 4 MB).
 /// @param gfp    Allocation flags.
-/// @return Head page descriptor, or NULL on failure.
+/// @return Head page descriptor, or nullptr on failure.
 zx_page_t *pmm_alloc_pages(uint32_t order, gfp_t gfp);
 
 /// @brief Free a single 4 KB frame back to the buddy pool.

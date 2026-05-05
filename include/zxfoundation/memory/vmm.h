@@ -34,7 +34,7 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/memory/vm_flags.h>
@@ -129,12 +129,12 @@ int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp);
 /// @param vma    VMA to remove (must be in space->vma_tree).
 void vmm_remove_vma(vm_space_t *space, vm_area_t *vma);
 
-/// @brief Find the VMA containing 'virt', or NULL if unmapped.
+/// @brief Find the VMA containing 'virt', or nullptr if unmapped.
 ///        Checks mru_vma first for O(1) sequential access patterns.
 /// @param space  Address space to search (caller must hold space->lock or
 ///               guarantee no concurrent modifications).
 /// @param virt   Virtual address to look up.
-/// @return Matching vm_area_t *, or NULL.
+/// @return Matching vm_area_t *, or nullptr.
 vm_area_t *vmm_find_vma(vm_space_t *space, uint64_t virt);
 
 /// @brief Print all VMAs in the space to the console (debug helper).

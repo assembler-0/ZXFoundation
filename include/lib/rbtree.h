@@ -101,24 +101,24 @@ static inline void rb_set_parent_color(rb_node_t *n, rb_node_t *p, unsigned colo
 #define rb_entry(ptr, type, member) \
     ((type *)((char *)(ptr) - __builtin_offsetof(type, member)))
 
-/// @brief Null-safe rb_entry: returns NULL if ptr is NULL.
+/// @brief Null-safe rb_entry: returns nullptr if ptr is nullptr.
 #define rb_entry_safe(ptr, type, member) \
-    ({ typeof(ptr) _p = (ptr); _p ? rb_entry(_p, type, member) : NULL; })
+    ({ typeof(ptr) _p = (ptr); _p ? rb_entry(_p, type, member) : nullptr; })
 
 // ---------------------------------------------------------------------------
 // Tree traversal
 // ---------------------------------------------------------------------------
 
-/// @brief Return the left-most (minimum) node in the tree, or NULL.
+/// @brief Return the left-most (minimum) node in the tree, or nullptr.
 rb_node_t *rb_first(const rb_root_t *tree);
 
-/// @brief Return the right-most (maximum) node in the tree, or NULL.
+/// @brief Return the right-most (maximum) node in the tree, or nullptr.
 rb_node_t *rb_last(const rb_root_t *tree);
 
-/// @brief Return the in-order successor of node, or NULL.
+/// @brief Return the in-order successor of node, or nullptr.
 rb_node_t *rb_next(const rb_node_t *node);
 
-/// @brief Return the in-order predecessor of node, or NULL.
+/// @brief Return the in-order predecessor of node, or nullptr.
 rb_node_t *rb_prev(const rb_node_t *node);
 
 // ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ rb_node_t *rb_prev(const rb_node_t *node);
 ///          2. Call rb_link_node() to attach the new node.
 ///          3. Call rb_insert_fixup() to restore RB invariants.
 /// @param node    The new (RED) node to insert.
-/// @param parent  Parent node (NULL if tree is empty).
+/// @param parent  Parent node (nullptr if tree is empty).
 /// @param link    &parent->left or &parent->right (or &tree->root).
 void rb_link_node(rb_node_t *node, rb_node_t *parent, rb_node_t **link);
 

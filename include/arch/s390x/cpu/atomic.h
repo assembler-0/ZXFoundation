@@ -20,10 +20,6 @@
 
 #include <zxfoundation/types.h>
 
-// ---------------------------------------------------------------------------
-// Memory barriers
-// ---------------------------------------------------------------------------
-
 /// @brief Full memory barrier (serialization instruction).
 ///        BCR 14,0 is the canonical s390x serialization fence.
 ///        It prevents all load/store reordering across the barrier on

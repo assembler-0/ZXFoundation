@@ -8,11 +8,13 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/slab.h>
+#include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/kmalloc.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/lowcore.h>
 #include <arch/s390x/cpu/features.h>
+#include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/mmu/mmu.h>
 #include <drivers/console/diag.h>
 #include <crypto/sha256.h>
@@ -71,7 +73,7 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
     diag_setup();
     printk_initialize(diag_putc);
     printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
-           CONFIG_ULTRASPARK_RELEASE);
+           CONFIG_ZX_RELEASE);
 
     if (!boot || boot->magic != ZXFL_MAGIC)
         panic("sys: protocol missing or corrupt");
@@ -127,6 +129,7 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
         }
     }
 
+    percpu_init_bsp();
     arch_cpu_features_init(boot);
     rcu_init();
 
@@ -139,7 +142,5 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
 
     printk("sys: core.zxfoundation.nucleus initialization complete\n");
 
-    while (true) {
-        __asm__ volatile("nop");
-    }
+    while (true) arch_cpu_relax();
 }

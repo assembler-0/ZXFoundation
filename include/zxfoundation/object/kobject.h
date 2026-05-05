@@ -29,7 +29,7 @@
 #pragma once
 
 #include <zxfoundation/object/kref.h>
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 
 /// @brief Kobject lifecycle state.
 typedef enum {
@@ -61,7 +61,7 @@ typedef struct kobject {
 
 /// @brief Initialize a kobject.  Sets refcount to 1.
 /// @param obj   The kobject to initialize.
-/// @param ops   Operations table (must not be NULL; release is mandatory).
+/// @param ops   Operations table (must not be nullptr; release is mandatory).
 /// @param name  Static name string for diagnostics.
 void kobject_init(kobject_t *obj, const kobject_ops_t *ops, const char *name);
 

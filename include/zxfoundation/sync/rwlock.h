@@ -6,7 +6,7 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/atomic.h>
+#include <arch/s390x/cpu/atomic.h>
 
 #define RW_WRITER   INT32_MIN   ///< Sentinel: writer holds the lock.
 

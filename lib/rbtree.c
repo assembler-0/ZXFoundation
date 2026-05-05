@@ -182,7 +182,7 @@ void rb_insert_fixup(rb_root_t *tree, rb_node_t *node) {
 // rb_erase helpers
 // ---------------------------------------------------------------------------
 
-/// @brief Replace 'u' in the tree with 'v' (v may be NULL).
+/// @brief Replace 'u' in the tree with 'v' (v may be nullptr).
 ///        Used during erase to splice out a node.
 static void transplant(rb_root_t *tree, rb_node_t *u, rb_node_t *v) {
     rb_node_t *pu = rb_parent(u);
@@ -197,7 +197,7 @@ static void transplant(rb_root_t *tree, rb_node_t *u, rb_node_t *v) {
 }
 
 /// @brief Fix double-black after erase spliced out a BLACK node.
-///        'x' is the child that replaced the spliced node (may be NULL,
+///        'x' is the child that replaced the spliced node (may be nullptr,
 ///        in which case 'xp' is its parent).
 static void erase_fixup(rb_root_t *tree, rb_node_t *x, rb_node_t *xp) {
     rb_node_t *sibling;
@@ -282,7 +282,7 @@ void rb_erase(rb_root_t *tree, rb_node_t *node) {
     unsigned   orig_color;
 
     if (!node->left) {
-        // Node has no left child: replace with right child (may be NULL).
+        // Node has no left child: replace with right child (may be nullptr).
         orig_color = rb_color(node);
         child      = node->right;
         parent     = rb_parent(node);

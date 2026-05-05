@@ -3,12 +3,11 @@
 //
 /// @brief System detection: SMP CPUs, STSI branding, TOD clock.
 
+#include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/stsi.h>
+#include <arch/s390x/init/zxfl/ebcdic.h>
 #include <arch/s390x/init/zxfl/string.h>
-
-extern void *memcpy(void *dst, const void *src, size_t n);
-extern void ebcdic_to_ascii_buf(char *buf, size_t len);
 
 static void copy_ebcdic_field(char *dest, const char *src, uint32_t len) {
     if (len == 0) return;
@@ -68,7 +67,7 @@ static int sigp_sense(uint16_t cpu_addr) {
 
 static void detect_smp(zxfl_boot_protocol_t *proto) {
     uint16_t bsp;
-    __asm__ volatile ("stap %0" : "=Q" (bsp));
+    arch_cpu_addr(bsp);
     
     proto->bsp_cpu_addr = bsp;
     proto->cpu_count = 0;

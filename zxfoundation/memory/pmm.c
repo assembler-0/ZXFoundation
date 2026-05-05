@@ -5,7 +5,7 @@
 
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/page.h>
-#include <zxfoundation/spinlock.h>
+#include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>

@@ -28,12 +28,16 @@
 
 - [Overview](kernel/overview.md)
 - [Early Init](kernel/init.md)
+- [Per-CPU Data](kernel/percpu.md)
+- [Trap Handler](kernel/trap.md)
 - [Memory](kernel/memory/index.md)
   - [PMM](kernel/memory/pmm.md)
   - [VMM](kernel/memory/vmm.md)
   - [Slab & Kmalloc](kernel/memory/slab.md)
 - [SMP](kernel/smp.md)
 - [Synchronization](kernel/sync.md)
+- [RCU & SRCU](kernel/rcu.md)
+- [Scheduler](kernel/sched.md)
 - [Subsystem Stubs](kernel/subsystems.md)
 
 ---

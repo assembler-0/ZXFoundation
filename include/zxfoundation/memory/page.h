@@ -5,7 +5,7 @@
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/zconfig.h>
-#include <zxfoundation/atomic.h>
+#include <arch/s390x/cpu/atomic.h>
 
 
 #define PF_BUDDY        (1U << 0)   ///< In buddy free list.

@@ -16,9 +16,11 @@ include_directories(SYSTEM
 )
 
 file(GLOB CPU_SOURCES      "arch/s390x/cpu/*.c")
+file(GLOB CPU_SOURCES_S    "arch/s390x/cpu/*.S")
 file(GLOB SYNC_SOURCES     "zxfoundation/sync/*.c")
 file(GLOB OBJECT_SOURCES   "zxfoundation/object/*.c")
 file(GLOB MEMORY_SOURCES   "zxfoundation/memory/*.c")
+file(GLOB SCHED_SOURCES    "zxfoundation/sched/*.c")
 
 file(GLOB CRYPTO_SOURCES   "crypto/*.c")
 
@@ -34,8 +36,10 @@ set(ZX_SOURCES_64
     ${CONSOLE_SOURCES}
     ${LIB_SOURCES}
     ${CPU_SOURCES}
+    ${CPU_SOURCES_S}
     ${SYNC_SOURCES}
     ${OBJECT_SOURCES}
     ${MEMORY_SOURCES}
+    ${SCHED_SOURCES}
     ${CRYPTO_SOURCES}
 )

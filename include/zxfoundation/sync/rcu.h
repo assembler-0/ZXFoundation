@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include <zxfoundation/atomic.h>
+#include <arch/s390x/cpu/atomic.h>
 
 /// @brief RCU callback node.  Embed in the object being freed.
 typedef struct rcu_head {
@@ -54,3 +54,8 @@ void synchronize_rcu(void);
 
 /// @brief Initialize the RCU subsystem.  Called once at kernel startup.
 void rcu_init(void);
+
+/// @brief Report a quiescent state for the current CPU.
+///        Must be called from the idle loop and any other long-running
+///        non-read-side context (e.g. scheduler tick).
+void rcu_report_qs(void);
