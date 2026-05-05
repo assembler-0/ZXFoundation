@@ -53,10 +53,12 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -g${DSYM_LEVEL}
 )
 
-# linking
-set(zxfoundation_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/link.ld" CACHE STRING "zxfoundation linker script")
+set(zxfoundation_LINKER_SCRIPT
+    "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/link.ld"
+    CACHE STRING "zxfoundation linker script")
 
-set_target_properties(core.zxfoundation.nucleus PROPERTIES LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
+set_target_properties(core.zxfoundation.nucleus PROPERTIES
+    LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
 
 target_link_options(core.zxfoundation.nucleus PRIVATE
     -T ${zxfoundation_LINKER_SCRIPT}
@@ -68,4 +70,17 @@ target_link_options(core.zxfoundation.nucleus PRIVATE
     --no-warn-rwx-segments
     --no-pie -g
     -m${TARGET_EMULATION_MODE}
+)
+
+# ---------------------------------------------------------------------------
+# Post-build
+# ---------------------------------------------------------------------------
+add_dependencies(core.zxfoundation.nucleus tools)
+
+add_custom_command(
+    TARGET core.zxfoundation.nucleus POST_BUILD
+    COMMAND "${GEN_CHECKSUMS}" "${CMAKE_BINARY_DIR}/core.zxfoundation.nucleus"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "zxfoundation::build: signing kernel segments (gen_checksums)"
+    VERBATIM
 )

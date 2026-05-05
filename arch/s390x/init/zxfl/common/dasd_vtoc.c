@@ -70,7 +70,7 @@ static int dscb_match(uint8_t *buf, uint32_t buf_len,
         return 0; // F4, F5, empty, or unrecognised — not an error
     }
 
-    if (zxfl_memcmp(buf, dsname_ebcdic, 44U) != 0) return 0;
+    if (memcmp(buf, dsname_ebcdic, 44U) != 0) return 0;
 
     const uint8_t *ext = buf + extent_off;
     out_extent->begin_cyl  = (uint16_t)((ext[2] << 8) | ext[3]);
@@ -84,7 +84,7 @@ int dasd_find_dataset(uint32_t schid,
                       const char *dsname,
                       dscb1_extent_t *out_extent) {
     uint8_t target[44];
-    zxfl_memset(target, 0x40U, 44U);
+    memset(target, 0x40U, 44U);
     for (int i = 0; dsname[i] != '\0' && i < 44; i++)
         target[i] = ascii_to_ebcdic((uint8_t)dsname[i]);
 

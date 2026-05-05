@@ -10,20 +10,19 @@
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <zxfoundation/zconfig.h>
 
-/// @brief Zero memory using 64-bit MVCL.
+/// @brief Zero memory using MVCL pad-fill mode (srclen=0, pad=0x00).
 static void zxfl_bzero(uint64_t addr, uint64_t size) {
     if (size == 0) return;
     register uint64_t r2 __asm__("2") = addr;
     register uint64_t r3 __asm__("3") = size;
-    register uint64_t r4 __asm__("4") = addr;
-    register uint64_t r5 __asm__("5") = 0;
-    register uint32_t r0 __asm__("0") = 0;
+    register uint64_t r4 __asm__("4") = addr;  // source addr (unused; srclen=0)
+    register uint64_t r5 __asm__("5") = 0;     // srclen=0, pad byte=0x00
 
     __asm__ volatile (
         "1: mvcl %[r2], %[r4]\n"
         "   jo   1b\n"
         : [r2] "+d" (r2), [r3] "+d" (r3), [r4] "+d" (r4), [r5] "+d" (r5)
-        : "d" (r0)
+        :
         : "cc", "memory"
     );
 }
@@ -54,12 +53,13 @@ static int load_segment(uint32_t schid,
                         const elf64_phdr_t *ph) {
     if (ph->p_memsz == 0) return 0;
 
-    // Zero entire memory span for the segment (BSS + data area)
-    zxfl_bzero(ph->p_paddr, ph->p_memsz);
+    const uint64_t phys_dest = ph->p_paddr - CONFIG_KERNEL_VIRT_OFFSET;
+
+    zxfl_bzero(phys_dest, ph->p_memsz);
 
     uint64_t file_remaining = ph->p_filesz;
     uint64_t file_offset    = ph->p_offset;
-    uint64_t mem_dest       = ph->p_paddr;
+    uint64_t mem_dest       = phys_dest;
 
     while (file_remaining > 0) {
         uint16_t cyl, head;
@@ -75,7 +75,7 @@ static int load_segment(uint32_t schid,
         uint32_t avail     = DASD_BLOCK_SIZE - block_off;
         uint32_t copy_len  = (file_remaining < avail) ? (uint32_t)file_remaining : avail;
 
-        zxfl_memcpy((void *)(uintptr_t)mem_dest, io_block + block_off, copy_len);
+        memcpy((void *)(uintptr_t)mem_dest, io_block + block_off, copy_len);
 
         mem_dest       += copy_len;
         file_offset    += copy_len;
@@ -124,13 +124,13 @@ int zxfl_load_elf64(uint32_t schid,
 
     uint32_t ph_size = phnum * sizeof(elf64_phdr_t);
     if (phoff + ph_size <= DASD_BLOCK_SIZE) {
-        zxfl_memcpy(phdrs, io_block + phoff, ph_size);
+        memcpy(phdrs, io_block + phoff, ph_size);
     } else {
         uint16_t pc, ph_head; uint8_t pr;
         offset_to_cchhr(ext, phoff, &pc, &ph_head, &pr);
         if (dasd_read_record(schid, pc, ph_head, pr, CCW_CMD_READ_DATA, io_block, DASD_BLOCK_SIZE) < 0) return -1;
         uint32_t off = (uint32_t)(phoff % DASD_BLOCK_SIZE);
-        zxfl_memcpy(phdrs, io_block + off, ph_size);
+        memcpy(phdrs, io_block + off, ph_size);
     }
 
     uint64_t load_min = 0xFFFFFFFFFFFFFFFFULL;
@@ -141,8 +141,9 @@ int zxfl_load_elf64(uint32_t schid,
 
         if (load_segment(schid, ext, &phdrs[i]) < 0) return -1;
 
-        if (phdrs[i].p_paddr < load_min) load_min = phdrs[i].p_paddr;
-        uint64_t seg_end = phdrs[i].p_paddr + phdrs[i].p_memsz;
+        const uint64_t phys = phdrs[i].p_paddr - CONFIG_KERNEL_VIRT_OFFSET;
+        if (phys < load_min) load_min = phys;
+        uint64_t seg_end = phys + phdrs[i].p_memsz;
         if (seg_end > load_max) load_max = seg_end;
     }
 
@@ -174,7 +175,6 @@ int zxfl_load_elf64(uint32_t schid,
         }
     }
 
-    print("zxvl: nucleus verified\n");
     *out_load_base = load_min;
     *out_load_size = load_max - load_min;
     return 0;

@@ -9,9 +9,9 @@
 
 #include <zxfoundation/types.h>
 
-void *zxfl_memset(void *dst, int c, size_t n);
-void *zxfl_memcpy(void *dst, const void *src, size_t n);
-bool zxfl_memcmp(void *s1, void *s2, size_t n);
+void *memset(void *dst, int c, size_t n);
+void *memcpy(void *dst, const void *src, size_t n);
+bool memcmp(const void *s1, const void *s2, size_t n);
 size_t zxfl_strlen(const char *s);
 
 

@@ -9,20 +9,14 @@
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/slab.h>
 #include <zxfoundation/memory/kmalloc.h>
-#include <arch/s390x/mmu.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/lowcore.h>
 #include <arch/s390x/cpu/features.h>
+#include <arch/s390x/mmu.h>
 #include <drivers/console/diag.h>
-
-/// @brief Called from head64.S to extract the loader-provided stack top.
-///        Returning 0 causes head64.S to fall back to the BSS stack.
-uint64_t zx_get_loader_stack_top(const zxfl_boot_protocol_t *boot) {
-    if (!boot || boot->magic != ZXFL_MAGIC)
-        return 0;
-    return boot->kernel_stack_top;
-}
+#include <crypto/sha256.h>
+#include <lib/string.h>
 
 /// @brief Validate the opaque stack frame written by the loader.
 ///        The frame sits at boot->kernel_stack_top (the loader set
@@ -41,11 +35,43 @@ bad:
         panic("sys: stack frame corruption/not found — unauthorized loader");
 }
 
+/// @brief Re-verify kernel segment checksums from the HHDM-mapped image.
+static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
+    const uint64_t virt_base = boot->kernel_phys_start + CONFIG_KERNEL_VIRT_OFFSET;
+    const zxvl_checksum_table_t *tbl =
+        (const zxvl_checksum_table_t *)(uintptr_t)(virt_base + ZXVL_CKSUM_TABLE_OFFSET);
+
+    if (tbl->magic != ZXVL_CKSUM_MAGIC) {
+        printk("sys: WARNING — no kernel checksum table, integrity unverified\n");
+        return;
+    }
+    if (tbl->version != ZXVL_CKSUM_VERSION || tbl->count == 0 ||
+        tbl->count > ZXVL_CKSUM_MAX_ENTRIES)
+        panic("sys: kernel checksum table corrupt");
+
+    const uint32_t algo = tbl->algo;
+    if (algo != ZXVL_CKSUM_ALGO_SHA256)
+        panic("sys: kernel checksum algorithm unsupported");
+
+    for (uint32_t i = 0; i < tbl->count; i++) {
+        const zxvl_cksum_entry_t *e = &tbl->entries[i];
+        if (e->size == 0) continue;
+        const uint64_t virt_seg = e->phys_start + CONFIG_KERNEL_VIRT_OFFSET;
+        uint8_t actual[ZXFL_SHA256_DIGEST_SIZE];
+        zxfl_sha256((const void *)(uintptr_t)virt_seg, (size_t)e->size, actual);
+        if (memcmp(actual, e->digest, ZXFL_SHA256_DIGEST_SIZE) != 0)
+            panic("sys: kernel segment checksum mismatch — image tampered");
+    }
+    printk("sys: kernel checksums verified (%u segments)\n", tbl->count);
+}
+
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
     zxfl_lowcore_setup();
 
     diag_setup();
     printk_initialize(diag_putc);
+    printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
+           CONFIG_ULTRASPARK_RELEASE);
 
     if (!boot || boot->magic != ZXFL_MAGIC)
         panic("sys: protocol missing or corrupt");
@@ -56,8 +82,7 @@ bad:
 
     validate_stack_frame(boot);
 
-    printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
-           CONFIG_ULTRASPARK_RELEASE);
+    verify_kernel_checksums(boot);
 
     if (boot->flags & ZXFL_FLAG_SYSINFO) {
         printk("sys: machine: %s %s model %s (s/n %s) plant %s\n",

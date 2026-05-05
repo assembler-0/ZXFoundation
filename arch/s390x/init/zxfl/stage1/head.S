@@ -31,7 +31,6 @@ stage1_entry:
     jz      .Lbss_done
 .Lbss_loop:
     aghi    %r3, -1
-    mvc     0(1,%r2), 0(%r2)            // extend zero one byte at a time
     mvi     0(%r2), 0
     la      %r2, 1(%r2)
     brctg   %r3, .Lbss_loop

@@ -5,24 +5,19 @@
 
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/stsi.h>
-#include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
 
-extern void *zxfl_memcpy(void *dst, const void *src, size_t n);
+extern void *memcpy(void *dst, const void *src, size_t n);
 extern void ebcdic_to_ascii_buf(char *buf, size_t len);
 
 static void copy_ebcdic_field(char *dest, const char *src, uint32_t len) {
-    zxfl_memcpy(dest, src, len);
+    if (len == 0) return;
+    memcpy(dest, src, len);
     ebcdic_to_ascii_buf(dest, len);
-    // Trim trailing spaces
-    for (int i = (int)len - 1; i >= 0; i--) {
-        if (dest[i] == ' ') {
-            dest[i] = '\0';
-        } else {
-            break;
-        }
-    }
-    dest[len] = '\0'; // Ensure termination
+    uint32_t end = len;
+    while (end > 0 && dest[end - 1] == ' ')
+        end--;
+    dest[end < len ? end : len - 1] = '\0';
 }
 
 static void detect_stsi(zxfl_boot_protocol_t *proto) {
@@ -115,7 +110,7 @@ static void detect_tod(zxfl_boot_protocol_t *proto) {
 }
 
 void zxfl_system_detect(zxfl_boot_protocol_t *proto) {
-    zxfl_memset(&proto->sysinfo, 0, sizeof(proto->sysinfo));
+    memset(&proto->sysinfo, 0, sizeof(proto->sysinfo));
     detect_stsi(proto);
     detect_smp(proto);
     detect_tod(proto);

@@ -35,6 +35,7 @@
 ///          table because their RSX indices do not overlap (0 vs 2016).
 
 #include <arch/s390x/init/zxfl/zxfl.h>
+#include <arch/s390x/init/zxfl/stfle.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <zxfoundation/zconfig.h>
 

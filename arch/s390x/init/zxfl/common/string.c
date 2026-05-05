@@ -3,7 +3,7 @@
 
 #include <arch/s390x/init/zxfl/string.h>
 
-void *zxfl_memset(void *dst, int c, size_t n) {
+void *memset(void *dst, int c, size_t n) {
     uint8_t *p = (uint8_t *)dst;
     uint8_t  v = (uint8_t)c;
     for (size_t i = 0; i < n; i++)
@@ -11,7 +11,7 @@ void *zxfl_memset(void *dst, int c, size_t n) {
     return dst;
 }
 
-void *zxfl_memcpy(void *dst, const void *src, size_t n) {
+void *memcpy(void *dst, const void *src, size_t n) {
     uint8_t       *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     for (size_t i = 0; i < n; i++)
@@ -26,7 +26,7 @@ size_t zxfl_strlen(const char *s) {
     return n;
 }
 
-bool zxfl_memcmp(void *s1, void *s2, size_t n) {
+bool memcmp(const void *s1, const void *s2, size_t n) {
     const unsigned char *p1 = (const unsigned char *)s1;
     const unsigned char *p2 = (const unsigned char *)s2;
 

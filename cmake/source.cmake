@@ -20,6 +20,8 @@ file(GLOB SYNC_SOURCES     "zxfoundation/sync/*.c")
 file(GLOB OBJECT_SOURCES   "zxfoundation/object/*.c")
 file(GLOB MEMORY_SOURCES   "zxfoundation/memory/*.c")
 
+file(GLOB CRYPTO_SOURCES   "crypto/*.c")
+
 set(ZX_SOURCES_64
     ${INIT_SOURCES}
     ${ARCH_INIT_SOURCES_C}
@@ -35,4 +37,5 @@ set(ZX_SOURCES_64
     ${SYNC_SOURCES}
     ${OBJECT_SOURCES}
     ${MEMORY_SOURCES}
+    ${CRYPTO_SOURCES}
 )

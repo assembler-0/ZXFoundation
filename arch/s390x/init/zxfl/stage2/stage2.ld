@@ -10,18 +10,19 @@ SECTIONS
     . = 0x20000;
 
     .text : {
+        KEEP(*(.text.stage2_entry))
         *(.text .text.*)
     }
 
-    .rodata : {
+    .rodata : ALIGN(8) {
         *(.rodata .rodata.*)
     }
 
-    .data : {
+    .data : ALIGN(8) {
         *(.data .data.*)
     }
 
-    .bss : {
+    .bss : ALIGN(8) {
         __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)

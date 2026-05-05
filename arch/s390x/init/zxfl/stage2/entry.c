@@ -12,6 +12,7 @@
 #include <arch/s390x/init/zxfl/parmfile.h>
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/mmu.h>
+#include <zxfoundation/zconfig.h>
 
 #define ZX_NUCLEUS_NAME         "CORE.ZXFOUNDATION.NUCLEUS"
 #define ZX_PARMFILE_NAME        "ETC.ZXFOUNDATION.PARM"
@@ -158,7 +159,7 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
                         if (dasd_read_record(schid, c, h, r, CCW_CMD_READ_DATA, mod_block, DASD_BLOCK_SIZE) < 0) {
                             break;
                         }
-                        zxfl_memcpy((void *) (uintptr_t) (current_phys + loaded), mod_block, DASD_BLOCK_SIZE);
+                        memcpy((void *) (uintptr_t) (current_phys + loaded), mod_block, DASD_BLOCK_SIZE);
                         loaded += DASD_BLOCK_SIZE;
                     }
 
@@ -209,11 +210,23 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
     if (zxfl_load_elf64(schid, &kernel_ext, &entry_point, &load_base, &load_size,
                         ZXVL_COMPUTE_TOKEN(s_proto.stfle_fac[0], schid)) < 0)
         panic("zxfl01: load error");
+
+    zxvl_verify_nucleus_checksums(load_base);
+    print("zxfl01: nucleus verified\n");
+
     s_proto.kernel_phys_start = load_base;
     s_proto.kernel_phys_end = load_modules(schid, s_cmdline, load_base + load_size);
     s_proto.kernel_entry = entry_point;
-    s_proto.mem_map_count = probe_memory(s_mem_map, ZXFL_MEM_MAP_MAX, s_proto.kernel_phys_start,
-                                         s_proto.kernel_phys_end, mem_limit);
+
+    {
+        const uint64_t virt_off = CONFIG_KERNEL_VIRT_OFFSET;
+        uint64_t phys_start = s_proto.kernel_phys_start;
+        uint64_t phys_end   = s_proto.kernel_phys_end;
+        if (phys_start >= virt_off) phys_start -= virt_off;
+        if (phys_end   >= virt_off) phys_end   -= virt_off;
+        s_proto.mem_map_count = probe_memory(s_mem_map, ZXFL_MEM_MAP_MAX,
+                                             phys_start, phys_end, mem_limit);
+    }
     s_proto.mem_map_addr = (uint64_t) (uintptr_t) s_mem_map;
     s_proto.mem_total_bytes = sum_usable_ram(s_mem_map, s_proto.mem_map_count);
     s_proto.flags |= ZXFL_FLAG_MEM_MAP;
