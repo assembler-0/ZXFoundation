@@ -59,8 +59,7 @@ int dasd_eckd_probe(uint32_t schid, dasd_eckd_geo_t *out_geo) {
     if (out_geo->dev_type != ECKD_DEV_TYPE_3390 &&
         out_geo->dev_type != ECKD_DEV_TYPE_3380 &&
         out_geo->dev_type != ECKD_DEV_TYPE_9345) {
-        print("eckd: unsupported device type\n");
-        return -1;
+        print("eckd: unknown device type, attempting rdc\n");
     }
 
     // ---- Read Device Characteristics ------------------------------------

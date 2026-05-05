@@ -6,6 +6,8 @@
 #include <arch/s390x/init/zxfl/stfle.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
+#include <arch/s390x/init/zxfl/dasd_eckd.h>
+#include <arch/s390x/init/zxfl/dasd_fba.h>
 #include <arch/s390x/init/zxfl/elfload.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/panic.h>
@@ -44,6 +46,32 @@ static void setup_control_regs(void) {
 
 static void snapshot_control_regs(zxfl_boot_protocol_t *proto) {
     __asm__ volatile ("stctg 14,14,%0" : "=Q" (proto->cr14_snapshot));
+}
+
+/// @brief Probe the IPL device as ECKD or FBA and populate ipl_dev_type/model.
+///
+///        ECKD is tried first because 3390 is the dominant IPL device type.
+///        If ECKD probe fails (Sense ID returns a non-ECKD type), FBA is tried.
+///        On failure of both, the fields remain zero — the kernel must tolerate
+///        this for virtual/emulated environments that don't implement Sense ID.
+static void probe_ipl_device(uint32_t schid, zxfl_boot_protocol_t *proto) {
+    dasd_eckd_geo_t eckd_geo;
+    if (dasd_eckd_probe(schid, &eckd_geo) == 0) {
+        proto->ipl_dev_type  = eckd_geo.dev_type;
+        proto->ipl_dev_model = eckd_geo.dev_model;
+        print("zxfl01: ipl device: eckd\n");
+        return;
+    }
+
+    dasd_fba_geo_t fba_geo;
+    if (dasd_fba_probe(schid, &fba_geo) == 0) {
+        proto->ipl_dev_type  = fba_geo.dev_type;
+        proto->ipl_dev_model = fba_geo.dev_model;
+        print("zxfl01: ipl device: fba\n");
+        return;
+    }
+
+    print("zxfl01: ipl device: unknown (sense id failed)\n");
 }
 
 static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
@@ -97,10 +125,11 @@ static uint64_t sum_usable_ram(const zxfl_mem_region_t *map, uint32_t count) {
 }
 
 static void load_parmfile(uint32_t schid) {
-    dscb1_extent_t ext;
-    if (dasd_find_dataset(schid, ZX_PARMFILE_NAME, &ext) < 0) return;
+    dasd_dataset_t ds;
+    if (dasd_find_dataset_extents(schid, ZX_PARMFILE_NAME, &ds) < 0) return;
     static uint8_t parm_block[DASD_BLOCK_SIZE];
-    if (dasd_read_record(schid, ext.begin_cyl, ext.begin_head, 1, CCW_CMD_READ_DATA, parm_block, DASD_BLOCK_SIZE) < 0)
+    if (dasd_read_record(schid, ds.extents[0].begin_cyl, ds.extents[0].begin_head,
+                         1, CCW_CMD_READ_DATA, parm_block, DASD_BLOCK_SIZE) < 0)
         return;
     uint32_t i = 0;
     while (i < sizeof(s_cmdline) - 1U) {
@@ -194,6 +223,7 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
     s_proto.stfle_count = stfle_detect(s_proto.stfle_fac, STFLE_MAX_DWORDS);
     s_proto.flags |= ZXFL_FLAG_STFLE;
     setup_control_regs();
+    probe_ipl_device(schid, &s_proto);
     load_parmfile(schid);
     s_proto.cmdline_addr = (uintptr_t) s_cmdline;
     s_proto.cmdline_len = 0;
@@ -201,13 +231,13 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
     s_proto.flags |= ZXFL_FLAG_CMDLINE;
     uint64_t mem_limit = parse_syssize(s_cmdline, s_proto.cmdline_len);
     if (mem_limit == 0) mem_limit = MEM_PROBE_DEFAULT_MAX;
-    dscb1_extent_t kernel_ext;
-    if (dasd_find_dataset(schid, ZX_NUCLEUS_NAME, &kernel_ext) < 0) panic("zxfl01: nucleus not found");
+    dasd_dataset_t kernel_ds;
+    if (dasd_find_dataset_extents(schid, ZX_NUCLEUS_NAME, &kernel_ds) < 0) panic("zxfl01: nucleus not found");
     uint64_t entry_point = 0;
     uint64_t load_base = 0;
     uint64_t load_size = 0;
     print("zxfl01: preparing core.zxfoundation.nucleus\n");
-    if (zxfl_load_elf64(schid, &kernel_ext, &entry_point, &load_base, &load_size,
+    if (zxfl_load_elf64(schid, &kernel_ds, &entry_point, &load_base, &load_size,
                         ZXVL_COMPUTE_TOKEN(s_proto.stfle_fac[0], schid)) < 0)
         panic("zxfl01: load error");
 

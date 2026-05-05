@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// include/arch/s390x/init/zxfl/mmu.h
 #pragma once
 
 #include <zxfoundation/types.h>
+#include <zxfoundation/zconfig.h>
 
 /// @brief Setup page tables, enable DAT, and jump to kernel.
 /// @param entry      Kernel entry point (HHDM virtual address from ELF).

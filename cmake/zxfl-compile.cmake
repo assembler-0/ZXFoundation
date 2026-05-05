@@ -15,6 +15,7 @@ set(ZXFL_STAGE2_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/lowcore.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_eckd.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_fba.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_tape.c
     ${CMAKE_CURRENT_SOURCE_DIR}/crypto/sha256.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/zxvl_verify.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/parmfile.c

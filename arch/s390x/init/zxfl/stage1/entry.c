@@ -51,8 +51,11 @@
         dst += DASD_BLOCK_SIZE;
     }
 
-    if (*(volatile uint64_t *)STAGE2_LOAD_ADDR == 0)
-        panic("zxfl00: core.zxfoundationloader01.sys load empty\n");
+    const volatile uint32_t *magic = (const volatile uint32_t *)STAGE2_LOAD_ADDR;
+    if (magic[0] != 0x7F454C46U)   // "\x7fELF" — stage2 is a flat binary, not ELF;
+        if (*(volatile uint64_t *)STAGE2_LOAD_ADDR == 0 ||
+            *(volatile uint64_t *)STAGE2_LOAD_ADDR == 0x0000800180000000ULL)
+            panic("zxfl00: core.zxfoundationloader01.sys load corrupt\n");
 
     print("zxfl00: launching core.zxfoundationloader00.sys\n");
     jump_to_stage2((uint64_t)schid);
