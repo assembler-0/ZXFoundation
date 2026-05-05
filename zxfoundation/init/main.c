@@ -13,7 +13,7 @@
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/lowcore.h>
 #include <arch/s390x/cpu/features.h>
-#include <arch/s390x/mmu.h>
+#include <arch/s390x/mmu/mmu.h>
 #include <drivers/console/diag.h>
 #include <crypto/sha256.h>
 #include <lib/string.h>

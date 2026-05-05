@@ -1,0 +1,15 @@
+[book]
+title = "ZXFoundation Development Guide — Release 26h1"
+authors = ["assembler-0"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "coal"
+git-repository-url = "https://github.com/assembler-0/ZXFoundation"
+edit-url-template = "https://github.com/assembler-0/ZXFoundation/edit/main/docs/src/{path}"
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1

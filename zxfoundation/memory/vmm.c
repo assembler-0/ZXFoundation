@@ -7,7 +7,7 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/memory/page.h>
-#include <arch/s390x/mmu.h>
+#include <arch/s390x/mmu/mmu.h>
 #include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/spinlock.h>

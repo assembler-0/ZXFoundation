@@ -8,7 +8,7 @@
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <zxfoundation/spinlock.h>
-#include <arch/s390x/mmu.h>
+#include <arch/s390x/mmu/mmu.h>
 #include <arch/s390x/cpu/features.h>
 #include <zxfoundation/memory/vmm.h>
 

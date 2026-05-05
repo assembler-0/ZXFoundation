@@ -4,7 +4,7 @@ cmake-build-*
 .p/
 .idea/
 mytoolchain.cmake
-*build*
+book
 compile_flags.txt
 .kiro
 flatboot/

@@ -7,25 +7,34 @@ PHDRS {
     checksums_seg PT_LOAD FLAGS(4);
 }
 
+nucleus_vma_base = 0xFFFF800000100000;
+
 SECTIONS {
-    .text.handshake 0xFFFF800000100000 : {
+    . = nucleus_vma_base;
+    __zx_vma_start = .;
+    
+    .text.handshake : {
         KEEP(*(.text.handshake))
     } :nucleus
 
-    .text 0xFFFF800000100400 : {
+    .text nucleus_vma_base + 0x400 : {
         KEEP(*(.text.__zx_start_kernel64))
         *(.text .text.*)
     } :nucleus
 
     .rodata : ALIGN(8) {
+        __rodata_start = .;
         *(.rodata .rodata.*)
+        __rodata_end = .;
     } :nucleus
 
     .data : ALIGN(8) {
+        __data_start = .;
         *(.data .data.*)
+        __data_end = .;
     } :nucleus
 
-    .zxfl_lock 0xFFFF800000170000 : {
+    .zxfl_lock nucleus_vma_base + 0x70000 : {
         KEEP(*(.zxfl_lock))
         LONG(0xCCBBCC35)
         LONG(0x5A58464C)
@@ -40,22 +49,11 @@ SECTIONS {
         __bss_end = .;
     } :nucleus
 
-    /*
-     * .zxvl_checksums lives in its own PT_LOAD (checksums_seg) so that
-     * gen_checksums can identify and skip it during hashing.  It is
-     * placed at a fixed virtual address (load_min + 0x80000 = 0x180000
-     * physical) matching ZXVL_CKSUM_TABLE_OFFSET.
-     *
-     * The section is populated by the zxvl_cksum_anchor symbol defined
-     * in arch/s390x/init/zxvl_anchor.c, which reserves exactly
-     * sizeof(zxvl_checksum_table_t) bytes.  gen_checksums patches the
-     * real digests into this region after linking.
-     */
-    .zxvl_checksums 0xFFFF800000180000 : {
+    .zxvl_checksums nucleus_vma_base + 0x80000 : {
         KEEP(*(.zxvl_checksums))
     } :checksums_seg
 
-    __kernel_virt_end = .;
+    __zx_vma_end = .;
 
     /DISCARD/ : { *(.comment) *(.eh_frame) *(.note.GNU-stack) }
 }
