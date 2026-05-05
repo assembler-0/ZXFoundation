@@ -32,11 +32,11 @@ The file is modified in place. It must be a valid ELF64 file with a `.zxvl_check
 
 ```
 zxvl_checksum_table_t (packed):
-  uint32_t  magic;       // 0x5A58564C
-  uint32_t  version;     // 0x00000001
-  uint32_t  algo;        // 0x00000001 (SHA-256)
-  uint32_t  count;       // number of entries
-  entries[16]:
+    uint32_t  magic;       // 0x5A58564C
+    uint32_t  version;     // 0x00000001
+    uint32_t  algo;        // 0x00000001 (SHA-256)
+    uint32_t  count;       // number of entries
+    entries[16]:
     uint64_t  phys_start  // physical address of segment
     uint64_t  size        // p_filesz
     uint8_t   digest[32]  // SHA-256
@@ -55,6 +55,4 @@ __attribute__((section(".zxvl_checksums")))
 static volatile zxvl_checksum_table_t zxvl_cksum_table = { 0 };
 ```
 
-The linker script must place `.zxvl_checksums` at:
-
-$$va = \texttt{HHDM\_BASE} + \texttt{load\_min\_offset} + \texttt{0x80000}$$
+The linker script must place `.zxvl_checksums` at `HHDM_BASE + 0x80000`

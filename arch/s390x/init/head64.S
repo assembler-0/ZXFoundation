@@ -2,25 +2,22 @@
 // arch/s390x/init/head64.S
 
 #include <zxfoundation/zconfig.h>
+#include <arch/s390x/init/zxfl/zxvl_private.h>
 
     .machinemode zarch
     .section .text.handshake, "ax"
     .globl __zxfl_handshake_stub
-.equ ZXFL_SEED_HI, 0xA5F0C3E1
-.equ ZXFL_SEED_LO, 0xB2D49687
-.equ HS_RESPONSE_HI,  0xDEADBEEF
-.equ HS_RESPONSE_LO,  0x0BADF00D
 
 __zxfl_handshake_stub:
-    llihf   %r0, ZXFL_SEED_HI
-    iilf    %r0, ZXFL_SEED_LO
+    llihf   %r0, ZXVL_SEED_HI
+    iilf    %r0, ZXVL_SEED_LO
     xgr     %r2, %r0
     lgr     %r0, %r2
     sllg    %r0, %r0, 17
     srlg    %r1, %r2, 47
     ogr     %r0, %r1
-    llihf   %r1, HS_RESPONSE_HI
-    iilf    %r1, HS_RESPONSE_LO
+    llihf   %r1, ZXVL_HS_RESPONSE_HI
+    iilf    %r1, ZXVL_HS_RESPONSE_LO
     lgr     %r2, %r0
     agr     %r2, %r1
     br      %r14

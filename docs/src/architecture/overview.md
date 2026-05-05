@@ -49,18 +49,18 @@ Bits 64–127: Instruction address (64-bit)
 
 The lowcore is the 4 KB region at physical address `0x0`. Its layout is fixed by the architecture.
 
-| Offset | Content |
-|--------|---------|
-| `0x000` | IPL PSW |
-| `0x008` | IPL CCW1 |
-| `0x010` | IPL CCW2 |
-| `0x068` | Restart new PSW |
+| Offset  | Content                     |
+|---------|-----------------------------|
+| `0x000` | IPL PSW                     |
+| `0x008` | IPL CCW1                    |
+| `0x010` | IPL CCW2                    |
+| `0x068` | Restart new PSW             |
 | `0x0B8` | Subchannel ID of IPL device |
-| `0x1C0` | External new PSW |
-| `0x1C8` | SVC new PSW |
-| `0x1D0` | Program new PSW |
-| `0x1D8` | Machine check new PSW |
-| `0x1E0` | I/O new PSW |
+| `0x1C0` | External new PSW            |
+| `0x1C8` | SVC new PSW                 |
+| `0x1D0` | Program new PSW             |
+| `0x1D8` | Machine check new PSW       |
+| `0x1E0` | I/O new PSW                 |
 
 The **prefix register** (set by `SPX`, read by `STPX`) maps a per-CPU physical page to the logical lowcore address `0x0`. Each CPU has its own private lowcore page; the BSP uses physical page 0, APs use separately allocated pages.
 
@@ -118,13 +118,13 @@ The ASCE is a 64-bit value in CR1 encoding the physical address of the root tabl
 
 ### 5-Level Page Table Hierarchy
 
-| Level | Name | Entries | Coverage per entry |
-|-------|------|---------|-------------------|
-| ASCE → | R1 (Region-First) | 2048 | 8 PB |
-| R1 → | R2 (Region-Second) | 2048 | 4 TB |
-| R2 → | R3 (Region-Third) | 2048 | 2 GB |
-| R3 → | Segment Table | 2048 | 1 MB |
-| Seg → | Page Table | 256 | 4 KB |
+| Level  | Name               | Entries | Coverage per entry |
+|--------|--------------------|---------|--------------------|
+| ASCE → | R1 (Region-First)  | 2048    | 8 PB               |
+| R1 →   | R2 (Region-Second) | 2048    | 4 TB               |
+| R2 →   | R3 (Region-Third)  | 2048    | 2 GB               |
+| R3 →   | Segment Table      | 2048    | 1 MB               |
+| Seg →  | Page Table         | 256     | 4 KB               |
 
 Each R1–Segment table is 16 KB (2048 × 8 bytes). Each page table is 4 KB (256 × 8 bytes).
 
@@ -141,10 +141,10 @@ Each R1–Segment table is 16 KB (2048 × 8 bytes). Each page table is 4 KB (256
 
 ### Large Pages (EDAT)
 
-| Facility | STFLE bit | Page size | Mechanism |
-|----------|-----------|-----------|-----------|
-| EDAT-1 | 8 | 1 MB | FC=1 in Segment Table Entry |
-| EDAT-2 | 78 | 2 GB | FC=1 in Region-Third Entry |
+| Facility | STFLE bit | Page size | Mechanism                   |
+|----------|-----------|-----------|-----------------------------|
+| EDAT-1   | 8         | 1 MB      | FC=1 in Segment Table Entry |
+| EDAT-2   | 78        | 2 GB      | FC=1 in Region-Third Entry  |
 
 ---
 
@@ -172,20 +172,20 @@ The HHDM offset is `0xFFFF800000000000`. The bootloader builds this mapping befo
 
 ## 8. Physical Memory Zones
 
-| Zone | Range | Purpose |
-|------|-------|---------|
-| `ZONE_DMA` | `[0, 16 MB)` | Channel I/O buffers (31-bit CDA constraint) |
-| `ZONE_NORMAL` | `[16 MB, RAM limit)` | General kernel allocations |
+| Zone          | Range                | Purpose                                     |
+|---------------|----------------------|---------------------------------------------|
+| `ZONE_DMA`    | `[0, 16 MB)`         | Channel I/O buffers (31-bit CDA constraint) |
+| `ZONE_NORMAL` | `[16 MB, RAM limit)` | General kernel allocations                  |
 
 ---
 
 ## 9. Control Registers
 
-| Register | Purpose |
-|----------|---------|
-| CR0 | I/O/external interrupt subclass masks, feature enables |
-| CR1 | Primary ASCE (page table root) |
-| CR6 | I/O interrupt subclass mask (extended) |
-| CR14 | Machine check interrupt mask |
+| Register | Purpose                                                |
+|----------|--------------------------------------------------------|
+| CR0      | I/O/external interrupt subclass masks, feature enables |
+| CR1      | Primary ASCE (page table root)                         |
+| CR6      | I/O interrupt subclass mask (extended)                 |
+| CR14     | Machine check interrupt mask                           |
 
 The bootloader saves CR0, CR1, and CR14 snapshots in the boot protocol so the kernel can inspect the handover state.

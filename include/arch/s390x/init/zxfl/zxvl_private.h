@@ -4,31 +4,26 @@
 #ifndef ZXFOUNDATION_ZXVL_PRIVATE_H
 #define ZXFOUNDATION_ZXVL_PRIVATE_H
 
-#include <zxfoundation/types.h>
-#include <arch/s390x/init/zxfl/zxfl.h>
-#include <crypto/sha256.h>
-
-void zxfl_system_detect(zxfl_boot_protocol_t *proto);
-
 /// @brief Binding token
-#define ZXVL_SEED               UINT64_C(0xA5F0C3E1B2D49687)
-
-#define ZXVL_COMPUTE_TOKEN(stfle0, schid) \
-    (ZXVL_SEED ^ (uint64_t)(stfle0) ^ (uint64_t)(schid))
+#define ZXVL_SEED               0xA5F0C3E1B2D49687UL
+#define ZXVL_SEED_HI            0xA5F0C3E1U
+#define ZXVL_SEED_LO            0xB2D49687U
 
 /// @brief Handshake stub (at load_min + ZXVL_HS_OFFSET)
 #define ZXVL_HS_OFFSET          0x0UL
-#define ZXVL_HS_CHALLENGE       UINT64_C(0xFEEDFACECAFEBABE)
-#define ZXVL_HS_RESPONSE        UINT64_C(0xDEADBEEF0BADF00D)
+#define ZXVL_HS_CHALLENGE       0xFEEDFACECAFEBABEUL
+#define ZXVL_HS_RESPONSE        0xDEADBEEF0BADF00DUL
+#define ZXVL_HS_RESPONSE_HI     0xDEADBEEFU
+#define ZXVL_HS_RESPONSE_LO     0x0BADF00DU
 
 /// @brief Stack frame canaries
-#define ZXVL_FRAME_MAGIC_A      UINT64_C(0xC0FFEE00FACADE42)
-#define ZXVL_FRAME_MAGIC_B      UINT64_C(0x1337BABE0DDBA115)
+#define ZXVL_FRAME_MAGIC_A      0xC0FFEE00FACADE42UL
+#define ZXVL_FRAME_MAGIC_B      0x1337BABE0DDBA115UL
 #define ZXVL_FRAME_SIZE         64U
 
 /// @brief Structural lock (at load_min + ZXVL_LOCK_OFFSET)
-#define ZXVL_LOCK_MASK          UINT64_C(0x3C1E0F8704B2D596)
-#define ZXVL_LOCK_EXPECTED      UINT64_C(0xF0A5C3B2E1D49687)
+#define ZXVL_LOCK_MASK          0x3C1E0F8704B2D596UL
+#define ZXVL_LOCK_EXPECTED      0xF0A5C3B2E1D49687UL
 #define ZXVL_LOCK_EMBED_HI      0xCCBBCC35U
 #define ZXVL_LOCK_EMBED_LO      0xE5664311U
 #define ZXVL_LOCK_OFFSET        0x70000U
@@ -43,6 +38,15 @@ void zxfl_system_detect(zxfl_boot_protocol_t *proto);
 #define ZXVL_CKSUM_MAX_ENTRIES  16U
 #define ZXVL_CKSUM_TABLE_OFFSET 0x80000U
 
+#ifndef __ASSEMBLER__
+
+#include <arch/s390x/init/zxfl/zxfl.h>
+#include <crypto/sha256.h>
+#include <zxfoundation/types.h>
+
+#define ZXVL_COMPUTE_TOKEN(stfle0, schid) \
+    (ZXVL_SEED ^ (uint64_t)(stfle0) ^ (uint64_t)(schid))
+
 typedef struct __attribute__((packed)) {
     uint64_t phys_start;
     uint64_t size;
@@ -54,6 +58,7 @@ typedef struct __attribute__((packed)) {
     zxvl_cksum_entry_t entries[ZXVL_CKSUM_MAX_ENTRIES];
 } zxvl_checksum_table_t;
 
+void zxfl_system_detect(zxfl_boot_protocol_t *proto);
 
 /// @brief Verify all kernel PT_LOAD segments against the embedded checksum table.
 ///
@@ -69,5 +74,7 @@ void zxvl_verify_nucleus_checksums(uint64_t load_min);
                          (_ZX_CH2(__TIME__, 3) << 16) | \
                          (_ZX_CH2(__TIME__, 6) <<  8) | \
                           0x5AU)
+
+#endif /* !__ASSEMBLER__ */
 
 #endif /* ZXFOUNDATION_ZXVL_PRIVATE_H */

@@ -94,17 +94,28 @@ The loader verifies: `((hi << 32 | lo) ^ 0x3C1E0F8704B2D596) == 0xF0A5C3B2E1D496
 
 The stub must be the very first code at the physical load base. It receives a nonce in `%r2` and must return the response in `%r2`. `ZXVL_HS_RESPONSE = 0xDEADBEEF0BADF00D`.
 
-```c
-__attribute__((section(".zxfl_hs"), used, naked))
-static void zxfl_handshake_stub(void) {
-    __asm__ volatile(
-        "rllg  %r2, %r2, 17\n"       /* rotl(nonce, 17) */
-        "llihf %r0, 0xDEADBEEF\n"    /* high 32 bits of response */
-        "oilf  %r0, 0x0BADF00D\n"    /* low 32 bits of response */
-        "agr   %r2, %r0\n"           /* + ZXVL_HS_RESPONSE */
-        "br    %r14\n"
-    );
-}
+```asm
+    .machinemode zarch
+    .section .text.handshake, "ax"
+    .globl __zxfl_handshake_stub
+.equ ZXFL_SEED_HI, 0xA5F0C3E1
+.equ ZXFL_SEED_LO, 0xB2D49687
+.equ HS_RESPONSE_HI,  0xDEADBEEF
+.equ HS_RESPONSE_LO,  0x0BADF00D
+
+__zxfl_handshake_stub:
+    llihf   %r0, ZXFL_SEED_HI
+    iilf    %r0, ZXFL_SEED_LO
+    xgr     %r2, %r0
+    lgr     %r0, %r2
+    sllg    %r0, %r0, 17
+    srlg    %r1, %r2, 47
+    ogr     %r0, %r1
+    llihf   %r1, HS_RESPONSE_HI
+    iilf    %r1, HS_RESPONSE_LO
+    lgr     %r2, %r0
+    agr     %r2, %r1
+    br      %r14
 ```
 
 The stub must not clobber `%r14` (return address) or `%r15` (stack pointer). It must be callable with `BRASL` and return via `BR %r14`.

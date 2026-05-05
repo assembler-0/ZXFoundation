@@ -22,7 +22,7 @@ The double verification (loader + kernel) ensures that neither a compromised loa
 
 The checksum table is embedded in the kernel ELF at a fixed offset:
 
-$$\texttt{table\_phys} = \texttt{load\_min} + \texttt{ZXVL\_CKSUM\_TABLE\_OFFSET}$$
+`table_phys = load_min + ZXVL_CKSUM_TABLE_OFFSET`
 
 where `ZXVL_CKSUM_TABLE_OFFSET = 0x80000`.
 
@@ -36,12 +36,12 @@ See [gen_checksums §3](../tools/gen_checksums.md#3-checksum-table-layout) for t
 
 Key fields:
 
-| Field | Value |
-|-------|-------|
-| `magic` | `0x5A58564C` ("ZXVL") |
-| `version` | `0x00000001` |
-| `algo` | `0x00000001` (SHA-256) |
-| `count` | Number of verified segments |
+| Field     | Value                       |
+|-----------|-----------------------------|
+| `magic`   | `0x5A58564C` ("ZXVL")       |
+| `version` | `0x00000001`                |
+| `algo`    | `0x00000001` (SHA-256)      |
+| `count`   | Number of verified segments |
 
 ---
 

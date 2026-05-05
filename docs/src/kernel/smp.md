@@ -19,14 +19,14 @@ At kernel entry, `proto->cpu_count` contains the number of detected CPUs and `pr
 
 All APs are in the **stopped** state when the kernel receives control. The bootloader never starts APs. The kernel BSP is responsible for starting each AP:
 
-| Step | Action |
-|------|--------|
-| 1 | Allocate a private prefix area (4 KB, page-aligned) for the AP |
-| 2 | Allocate a private stack for the AP |
-| 3 | Install interrupt new PSWs in the AP's prefix area |
-| 4 | `SIGP Initial CPU Reset` — clear the AP's state |
-| 5 | `SIGP Set Prefix` — point the AP's prefix register at its private lowcore |
-| 6 | `SIGP Restart` — start the AP at the restart new PSW in its prefix area |
+| Step | Action                                                                    |
+|------|---------------------------------------------------------------------------|
+| 1    | Allocate a private prefix area (4 KB, page-aligned) for the AP            |
+| 2    | Allocate a private stack for the AP                                       |
+| 3    | Install interrupt new PSWs in the AP's prefix area                        |
+| 4    | `SIGP Initial CPU Reset` — clear the AP's state                           |
+| 5    | `SIGP Set Prefix` — point the AP's prefix register at its private lowcore |
+| 6    | `SIGP Restart` — start the AP at the restart new PSW in its prefix area   |
 
 > **Note:** AP startup is not yet implemented. The current kernel halts after BSP initialization.
 
@@ -57,13 +57,13 @@ mmu_ipte(va):
 
 ## 5. SIGP Reference
 
-| Order | Code | Use |
-|-------|------|-----|
-| Sense | `0x01` | Query CPU state |
-| External Call | `0x02` | Send external interrupt to CPU |
-| Emergency Signal | `0x03` | Send emergency signal |
-| Initial CPU Reset | `0x06` | Clear CPU state before restart |
-| Set Prefix | `0x0D` | Set prefix register on target CPU |
-| Store Status | `0x0E` | Save CPU registers to prefix area |
-| Set Architecture | `0x12` | Switch to z/Architecture mode |
-| Restart | `0x06` + Restart PSW | Start AP at restart new PSW |
+| Order             | Code                 | Use                               |
+|-------------------|----------------------|-----------------------------------|
+| Sense             | `0x01`               | Query CPU state                   |
+| External Call     | `0x02`               | Send external interrupt to CPU    |
+| Emergency Signal  | `0x03`               | Send emergency signal             |
+| Initial CPU Reset | `0x06`               | Clear CPU state before restart    |
+| Set Prefix        | `0x0D`               | Set prefix register on target CPU |
+| Store Status      | `0x0E`               | Save CPU registers to prefix area |
+| Set Architecture  | `0x12`               | Switch to z/Architecture mode     |
+| Restart           | `0x06` + Restart PSW | Start AP at restart new PSW       |

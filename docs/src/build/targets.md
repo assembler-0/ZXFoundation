@@ -45,7 +45,7 @@ Requires `dasdload` (from the Hercules package) on `PATH`.
 
 1. Remove any existing `sysres.3390`.
 2. Copy `scripts/etc.zxfoundation.parm` to the build directory.
-3. Run `dasdload -z scripts/sysres.conf sysres.3390` — create a 3390 DASD image and write all datasets.
+3. Run `dasdload -z scripts/sysres.conf sysres.3390` — create a 3390 (compressed) DASD image and write all datasets.
 4. Copy `scripts/hercules.cnf` to the build directory.
 
 `sysres.conf` defines the dataset layout: Stage 0, Stage 1, nucleus, and parmfile.
@@ -55,14 +55,12 @@ Requires `dasdload` (from the Hercules package) on `PATH`.
 ## Running
 
 ```sh
-cmake --build build --target dasd
+cmake --build build # this build everything including DASD image
 hercules -f build/hercules.cnf
 ```
 
 In the Hercules console:
 
 ```
-ipl 0200
+ipl 0100
 ```
-
-`0200` is the subchannel address of the IPL device as defined in `hercules.cnf`.
