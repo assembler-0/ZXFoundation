@@ -16,9 +16,6 @@
 
 vm_space_t kernel_vm_space;
 
-static uint64_t   vmalloc_next = VMALLOC_START;
-static spinlock_t vmalloc_lock = SPINLOCK_INIT;
-
 #define EARLY_VMA_POOL_SIZE 32
 
 static vm_area_t  early_vma_pool[EARLY_VMA_POOL_SIZE];
@@ -30,8 +27,7 @@ static vm_area_t *vma_alloc(void) {
         return (vm_area_t *)kmalloc(sizeof(vm_area_t), ZX_GFP_NORMAL);
     if (early_vma_idx >= EARLY_VMA_POOL_SIZE)
         panic("vmm: early vma pool exhausted");
-    vm_area_t *v = &early_vma_pool[early_vma_idx++];
-    return v;
+    return &early_vma_pool[early_vma_idx++];
 }
 
 static void vma_free(vm_area_t *vma) {
@@ -80,6 +76,69 @@ static void vma_rb_remove(vm_space_t *space, vm_area_t *vma) {
     space->vma_count--;
     if (space->mru_vma == vma)
         space->mru_vma = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Gap search — find the first hole of at least `size` bytes in [lo, hi).
+// Walks the in-order sequence of VMAs; gaps between consecutive VMAs and
+// before the first / after the last VMA are all considered.
+// Returns the start of the gap, or 0 on failure.
+// Caller must hold space->lock.
+// ---------------------------------------------------------------------------
+static uint64_t vma_find_gap(const vm_space_t *space,
+                              uint64_t lo, uint64_t hi, uint64_t size,
+                              uint64_t align) {
+    uint64_t cursor = lo;
+
+    // Walk the in-order sequence via rb_for_each (sorted by vm_start).
+    rb_node_t *n;
+    rb_for_each(n, (rb_root_t *)&space->vma_tree) {
+        vm_area_t *cur = rb_entry(n, vm_area_t, rb_node);
+        if (cur->vm_start >= hi) break;
+
+        // Align cursor up.
+        uint64_t aligned = (cursor + align - 1) & ~(align - 1);
+        if (aligned + size <= cur->vm_start && aligned + size <= hi)
+            return aligned;
+
+        if (cur->vm_end > cursor)
+            cursor = cur->vm_end;
+    }
+
+    // Check the gap after the last VMA.
+    uint64_t aligned = (cursor + align - 1) & ~(align - 1);
+    if (aligned + size <= hi)
+        return aligned;
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// VMA merge — try to absorb adjacent VMAs with identical prot into `vma`.
+// Called after a successful rb_insert; `vma` is already in the tree.
+// ---------------------------------------------------------------------------
+static void vma_try_merge(vm_space_t *space, vm_area_t *vma) {
+    // Merge with the predecessor if it ends exactly where vma starts.
+    rb_node_t *prev_n = rb_prev(&vma->rb_node);
+    if (prev_n) {
+        vm_area_t *prev = rb_entry(prev_n, vm_area_t, rb_node);
+        if (prev->vm_end == vma->vm_start && prev->vm_prot == vma->vm_prot) {
+            vma->vm_start = prev->vm_start;
+            vma_rb_remove(space, prev);
+            vma_free(prev);
+        }
+    }
+
+    // Merge with the successor if it starts exactly where vma ends.
+    rb_node_t *next_n = rb_next(&vma->rb_node);
+    if (next_n) {
+        vm_area_t *next = rb_entry(next_n, vm_area_t, rb_node);
+        if (vma->vm_end == next->vm_start && vma->vm_prot == next->vm_prot) {
+            vma->vm_end = next->vm_end;
+            vma_rb_remove(space, next);
+            vma_free(next);
+        }
+    }
 }
 
 /// @brief Attempt to map a 1 MB-aligned VA chunk as a single large page.
@@ -261,6 +320,8 @@ int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
     irqflags_t f;
     spin_lock_irqsave(&space->lock, &f);
     bool ok = vma_rb_insert(space, vma);
+    if (ok)
+        vma_try_merge(space, vma);
     spin_unlock_irqrestore(&space->lock, f);
 
     if (!ok) {
@@ -303,23 +364,22 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
         return 0;
     }
 
-    // Align bump cursor to 1 MB for maximum THP eligibility.
+    // Prefer 1 MB alignment for THP eligibility on large allocations.
+    uint64_t align = (size >= LARGE_PAGE_SIZE) ? LARGE_PAGE_SIZE : PAGE_SIZE;
+
     irqflags_t f;
-    spin_lock_irqsave(&vmalloc_lock, &f);
-    uint64_t aligned = (vmalloc_next + LARGE_PAGE_SIZE - 1) & LARGE_PAGE_MASK;
-    // For small allocations (< 1MB), don't waste a full 1MB gap.
-    if (size < LARGE_PAGE_SIZE)
-        aligned = vmalloc_next;
-    if (aligned + size > VMALLOC_END || aligned + size < aligned) {
-        printk("vmm_alloc: out of vmalloc space (next=0x%llx, size=0x%llx)\n",
-               (unsigned long long)vmalloc_next, (unsigned long long)size);
-        spin_unlock_irqrestore(&vmalloc_lock, f);
+    spin_lock_irqsave(&kernel_vm_space.lock, &f);
+    uint64_t va_start = vma_find_gap(&kernel_vm_space,
+                                     VMALLOC_START, VMALLOC_END,
+                                     size, align);
+    spin_unlock_irqrestore(&kernel_vm_space.lock, f);
+
+    if (!va_start) {
+        printk("vmm_alloc: no vmalloc gap for size=0x%llx\n",
+               (unsigned long long)size);
         vma_free(vma);
         return 0;
     }
-    uint64_t va_start = aligned;
-    vmalloc_next = aligned + size;
-    spin_unlock_irqrestore(&vmalloc_lock, f);
 
     vma->vm_start = va_start;
     vma->vm_end   = va_start + size;
@@ -350,15 +410,16 @@ uint64_t vmm_map_phys(uint64_t phys, uint64_t size, vm_prot_t prot) {
     if (!size) return 0;
     size = (size + PAGE_SIZE - 1) & PAGE_MASK;
 
+    uint64_t align = (size >= LARGE_PAGE_SIZE) ? LARGE_PAGE_SIZE : PAGE_SIZE;
+
     irqflags_t f;
-    spin_lock_irqsave(&vmalloc_lock, &f);
-    if (vmalloc_next + size > VMALLOC_END) {
-        spin_unlock_irqrestore(&vmalloc_lock, f);
-        return 0;
-    }
-    uint64_t va_start = vmalloc_next;
-    vmalloc_next += size;
-    spin_unlock_irqrestore(&vmalloc_lock, f);
+    spin_lock_irqsave(&kernel_vm_space.lock, &f);
+    uint64_t va_start = vma_find_gap(&kernel_vm_space,
+                                     VMALLOC_START, VMALLOC_END,
+                                     size, align);
+    spin_unlock_irqrestore(&kernel_vm_space.lock, f);
+
+    if (!va_start) return 0;
 
     mmu_pgtbl_t *pgtbl = mmu_kernel_pgtbl();
 

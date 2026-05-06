@@ -8,7 +8,7 @@
 # @copyright (C) 2025-2026 assembler-0
 # ============================================================================
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.10)
 project(ZXFoundation
     LANGUAGES C ASM
 )
@@ -21,6 +21,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/toolchain")
 
 include(dependencies) 		  # Host dependencies
+include(ccache)				  # CCache configuration
 include(configuration) 		  # Build options
 include(platform)       	  # Platform checks
 include(standard)   	      # C/C++ Standards

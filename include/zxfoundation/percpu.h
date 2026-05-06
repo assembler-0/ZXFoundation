@@ -35,6 +35,7 @@
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/sync/spinlock.h>
+#include <zxfoundation/memory/pmm.h>
 #include <arch/s390x/cpu/processor.h>
 
 #define PERCPU_OFFSET   0x200UL   ///< Offset from prefix base to per-CPU block.
@@ -52,6 +53,7 @@ typedef struct percpu {
     uint8_t     in_rcu_read_side;   ///< 1 if inside rcu_read_lock().
     uint8_t     _pad0[7];
     uint64_t    ap_stack_top;       ///< AP initial stack pointer (physical, set before SIGP Restart).
+    pmm_pcplist_t pcp[ZONE_MAX];    ///< Per-CPU PMM page cache, one per zone.
 } percpu_t;
 
 /// @brief Global array of per-CPU area pointers, indexed by logical CPU ID.
@@ -67,40 +69,27 @@ void percpu_init_bsp(void);
 /// @return Physical address of the new lowcore, or 0 on failure.
 uint64_t percpu_init_ap(uint16_t cpu_id, uint16_t cpu_addr);
 
-// ---------------------------------------------------------------------------
-// Access macros
-// ---------------------------------------------------------------------------
+/// @brief Obtain a pointer to the current CPU's per-CPU area.
+///
+///        arch_cpu_addr() issues STAP, which stores the CPU *address* (a
+///        16-bit hardware identifier, e.g. 0x0002 for the third CPU).  It
+///        is NOT the prefix base and must NOT be used as a pointer directly.
+///        arch_smp_processor_id() masks it to a logical index (cpu_addr &
+///        0x3F) which is used to index percpu_areas[], giving the correct
+///        HHDM-mapped pointer to the per-CPU block.
+#define percpu_ptr() (percpu_areas[arch_smp_processor_id()])
 
 /// @brief Read a field from the current CPU's per-CPU area.
-#define percpu_get(field) ({                                        \
-    uint16_t __cpu_addr;                                            \
-    percpu_t *__p = (percpu_t *)(__cpu_addr + PERCPU_OFFSET);       \
-    __p->field;                                                     \
-})
+#define percpu_get(field)       (percpu_ptr()->field)
 
 /// @brief Increment a field in the current CPU's per-CPU area (in place).
-#define percpu_inc(field) do {                                      \
-    uint16_t __cpu_addr;                                            \
-    arch_cpu_addr(__cpu_addr);                                      \
-    percpu_t *__p = (percpu_t *)(__cpu_addr + PERCPU_OFFSET);       \
-    __p->field++;                                                   \
-} while (0)
+#define percpu_inc(field)       do { percpu_ptr()->field++; } while (0)
 
 /// @brief Decrement a field in the current CPU's per-CPU area (in place).
-#define percpu_dec(field) do {                                      \
-    uint16_t __cpu_addr;                                            \
-    arch_cpu_addr(__cpu_addr);                                      \
-    percpu_t *__p = (percpu_t *)(__cpu_addr + PERCPU_OFFSET);       \
-    __p->field--;                                                   \
-} while (0)
+#define percpu_dec(field)       do { percpu_ptr()->field--; } while (0)
 
 /// @brief Write a field in the current CPU's per-CPU area.
-#define percpu_set(field, val) do {                                 \
-    uint16_t __cpu_addr;                                            \
-    arch_cpu_addr(__cpu_addr);                                      \
-    percpu_t *__p = (percpu_t *)(__cpu_addr + PERCPU_OFFSET);       \
-    __p->field = (val);                                             \
-} while (0)
+#define percpu_set(field, val)  do { percpu_ptr()->field = (val); } while (0)
 
 /// @brief Read a field from another CPU's per-CPU area.
 #define percpu_get_on(cpu, field) (percpu_areas[cpu]->field)

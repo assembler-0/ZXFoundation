@@ -3,6 +3,8 @@
 
 #include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/memory/slab.h>
+#include <zxfoundation/memory/vmalloc.h>
+#include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/sys/panic.h>
 #include <zxfoundation/sys/printk.h>
@@ -59,4 +61,31 @@ void kfree(void *ptr) {
         return;
     }
     kmem_cache_free(page->slab_cache, ptr);
+}
+
+void *kvmalloc(size_t size, gfp_t gfp) {
+    if (size <= KMALLOC_MAX_SIZE) {
+        void *p = kmalloc(size, gfp);
+        if (p) return p;
+        // Fall through to vmalloc on slab OOM (fragmentation).
+    }
+    // vmalloc does not support ZX_GFP_DMA — physically discontiguous pages
+    // cannot satisfy a DMA constraint.  Fail loudly rather than silently
+    // returning memory that violates the caller's requirement.
+    if (gfp & ZX_GFP_DMA) return nullptr;
+
+    void *p = vmalloc(size);
+    if (p && (gfp & ZX_GFP_ZERO)) {
+        uint8_t *b = (uint8_t *)p;
+        for (size_t i = 0; i < size; i++) b[i] = 0;
+    }
+    return p;
+}
+
+void kvfree(void *ptr) {
+    if (!ptr) return;
+    if (is_vmalloc_addr(ptr))
+        vfree(ptr);
+    else
+        kfree(ptr);
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/stage2/entry.c
 
+#include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/stfle.h>
@@ -33,19 +34,19 @@ static uint8_t s_kernel_stack[16384] __attribute__((aligned(16)));
 
 static void setup_control_regs(void) {
     uint64_t cr0;
-    __asm__ volatile ("stctg 0,0,%0" : "=Q" (cr0));
+    arch_ctl_store(cr0, 0, 0);
     cr0 &= ~(UINT64_C(1) << (63U - 45U));
     cr0 &= ~(UINT64_C(1) << (63U - 46U));
     cr0 &= ~(UINT64_C(1) << (63U - 36U));
-    __asm__ volatile ("lctlg 0,0,%0" :: "Q" (cr0));
+    arch_ctl_load(cr0, 0, 0);
     const uint64_t cr6 = 0;
     const uint64_t cr14 = 0;
-    __asm__ volatile ("lctlg  6, 6,%0" :: "Q" (cr6));
-    __asm__ volatile ("lctlg 14,14,%0" :: "Q" (cr14));
+    arch_ctl_load(cr6, 6, 6);
+    arch_ctl_load(cr14, 14, 14);
 }
 
 static void snapshot_control_regs(zxfl_boot_protocol_t *proto) {
-    __asm__ volatile ("stctg 14,14,%0" : "=Q" (proto->cr14_snapshot));
+    arch_ctl_store(proto->cr14_snapshot, 14, 14);
 }
 
 /// @brief Probe the IPL device as ECKD or FBA and populate ipl_dev_type/model.

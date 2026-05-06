@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 // Loader identity seed (used to derive the binding token).
 // ---------------------------------------------------------------------------
-#define ZXFL_SEED               UINT64_C(0xA5F0C3E1B2D49687)
+#define ZXFL_SEED               0xA5F0C3E1B2D49687UL
 
 // ---------------------------------------------------------------------------
 // Protocol flags — each flag indicates that a corresponding data section

@@ -12,7 +12,6 @@ set(ZXFL_STAGE1_COMMON_SOURCES
 
 set(ZXFL_STAGE2_COMMON_SOURCES
     ${ZXFL_STAGE1_COMMON_SOURCES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/lowcore.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_eckd.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_fba.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_tape.c
@@ -23,6 +22,8 @@ set(ZXFL_STAGE2_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/mmu.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/system.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stsi.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/psw.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/lowcore.c
 )
 
 set(ZXFL_COMMON_FLAGS

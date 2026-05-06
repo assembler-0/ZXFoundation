@@ -253,7 +253,32 @@ kmem_cache_t *kmem_cache_create(const char *name, size_t size, uint8_t storage_k
 }
 
 void kmem_cache_destroy(kmem_cache_t *cache) {
-    // Return all full-slab pages to the PMM.
+    for (int cpu = 0; cpu < SLAB_MAX_CPUS; cpu++) {
+        kmem_magazine_t *mag = cache->cpu_mags[cpu];
+        if (!mag) continue;
+
+        irqflags_t f = arch_local_save_flags();
+        arch_local_irq_disable();
+
+        while (mag->count > 0) {
+            void *obj = mag->objects[--mag->count];
+            // Walk partial_slabs to find the owning slab and return the object.
+            zx_page_t *pg = virt_to_page(obj);
+            if (pg->flags & PF_SLAB) {
+                kmem_slab_t *slab = (kmem_slab_t *)(uintptr_t)
+                    hhdm_phys_to_virt(pmm_page_to_phys(pg));
+                uint16_t idx = (uint16_t)(
+                    ((uintptr_t)obj - (uintptr_t)slab->obj_base) / cache->obj_size);
+                uint16_t *free_stack = slab_free_stack(slab);
+                free_stack[slab->free_top++] = idx;
+                slab->free_count++;
+            }
+        }
+        arch_local_irq_restore(f);
+        cache->cpu_mags[cpu] = nullptr;
+    }
+
+    // Return all slab pages to the PMM.
     list_node_t *n, *tmp;
     list_for_each_safe(n, tmp, &cache->partial_slabs) {
         kmem_slab_t *s = list_entry(n, kmem_slab_t, node);

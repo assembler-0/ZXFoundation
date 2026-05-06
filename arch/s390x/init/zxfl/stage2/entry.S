@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/stage2/entry.S
 
+#include <arch/s390x/cpu/psw.h>
+
     .machinemode zarch
     .section .text, "ax"
     .globl stage2_entry
 stage2_entry:
     lgr     %r13, %r2                   // save schid across calls
 
-    brasl   %r14, zxfl_lowcore_setup
+    brasl   %r14, zx_lowcore_setup_early
 
     larl    %r1, .Lzero_byte
     ssm     0(%r1)                      // mask all interrupts off
@@ -35,7 +37,7 @@ stage2_entry:
 
     .align 8
 .Ldisabled_wait_psw:
-    .quad   0x0000800180000000
+    .quad   PSW_MASK_DISABLED_WAIT      // disabled-wait, 64-bit (bit 14 = wait)
     .quad   0x0000000000000000          // halt at 0x0 (always mapped)
 
 .Lzero_byte:

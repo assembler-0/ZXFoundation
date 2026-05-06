@@ -8,14 +8,16 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/slab.h>
+#include <zxfoundation/memory/cma.h>
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/kmalloc.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
-#include <arch/s390x/init/zxfl/lowcore.h>
+#include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/features.h>
 #include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/mmu/mmu.h>
+#include <arch/s390x/cpu/smp.h>
 #include <drivers/console/diag.h>
 #include <crypto/sha256.h>
 #include <lib/string.h>
@@ -68,7 +70,7 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
 }
 
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
-    zxfl_lowcore_setup();
+    zx_lowcore_setup_late();
 
     diag_setup();
     printk_initialize(diag_putc);
@@ -134,11 +136,16 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
     rcu_init();
 
     pmm_init(boot);
+    cma_init(boot);
+    pmm_pcplist_init(0);
+
     mmu_init();
     vmm_init();
 
     slab_init();
     kmalloc_init();
+
+    smp_init(boot);
 
     printk("sys: core.zxfoundation.nucleus initialization complete\n");
 

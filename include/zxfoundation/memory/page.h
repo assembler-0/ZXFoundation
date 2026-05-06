@@ -6,6 +6,7 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/zconfig.h>
 #include <arch/s390x/cpu/atomic.h>
+#include <lib/list.h>
 
 
 #define PF_BUDDY        (1U << 0)   ///< In buddy free list.
@@ -43,10 +44,16 @@ typedef struct zx_page {
         uint32_t tail_offset;          ///< PF_TAIL: index delta to head.
         uint32_t buddy_next;           ///< Buddy free-list: next PFN link.
     };
-    uint64_t  _pad2;       ///< Pads struct to exactly 32 bytes.
+    // 4 bytes implicit padding (union ends at +24; list_node_t requires 8-byte alignment → lru at +32).
+
+    /// @brief LRU list linkage (active/inactive reclaimer lists).
+    list_node_t lru;       ///< offset 32, size 16.
+
+    /// @brief Address-space mapping pointer (page cache / anonymous).
+    void       *mapping;   ///< offset 48, size 8.
 } zx_page_t;
 
-_Static_assert(sizeof(zx_page_t) == 32, "zx_page_t must be 32 bytes");
+_Static_assert(sizeof(zx_page_t) == 48, "zx_page_t must be 48 bytes");
 
 /// @brief Overlaid on the head zx_page_t for a large page.
 ///        PF_HEAD is set; the following 255 tail pages have PF_TAIL.

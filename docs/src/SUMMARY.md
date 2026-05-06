@@ -35,6 +35,7 @@
   - [VMM](kernel/memory/vmm.md)
   - [Slab & Kmalloc](kernel/memory/slab.md)
 - [SMP](kernel/smp.md)
+- [PSW Manager](kernel/psw.md)
 - [Synchronization](kernel/sync.md)
 - [RCU & SRCU](kernel/rcu.md)
 - [Scheduler](kernel/sched.md)

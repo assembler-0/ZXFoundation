@@ -10,6 +10,8 @@
 #include <zxfoundation/sync/spinlock.h>
 #include <arch/s390x/mmu/mmu.h>
 #include <arch/s390x/cpu/features.h>
+#include <arch/s390x/cpu/lowcore.h>
+#include <arch/s390x/cpu/processor.h>
 #include <zxfoundation/memory/vmm.h>
 
 static mmu_pgtbl_t kernel_pgtbl;
@@ -464,16 +466,13 @@ bool mmu_is_huge_page(const mmu_pgtbl_t *pgtbl, uint64_t va) {
 
 
 void mmu_load_pgtbl(const mmu_pgtbl_t *pgtbl) {
-    __asm__ volatile(
-        "lctlg 1,1,%0\n"
-        "ptlb\n"
-        :: "Q"(pgtbl->asce) : "memory"
-    );
+    arch_ctl_load(pgtbl->asce, 1, 1);
+    __asm__ volatile("ptlb" ::: "memory");
 }
 
 void mmu_init(void) {
     uint64_t cr1;
-    __asm__ volatile("stctg 1,1,%0" : "=Q"(cr1));
+    arch_ctl_store(cr1, 1, 1);
 
     spin_lock_init(&kernel_pgtbl.lock);
     kernel_pgtbl.asce    = cr1;
@@ -495,6 +494,10 @@ void mmu_init(void) {
     }
     if (scrubbed)
         mmu_flush_tlb_local();
+
+    // Store the kernel ASCE in the BSP lowcore so APs can read it via a
+    // prefix-relative load (no DAT needed) during their bringup sequence.
+    zx_lowcore()->kernel_asce = kernel_pgtbl.asce;
 
     printk("mmu: ASCE=%016llx R1=%016llx EDAT-1=%s EDAT-2=%s (scrubbed %u)\n",
            (unsigned long long)kernel_pgtbl.asce,

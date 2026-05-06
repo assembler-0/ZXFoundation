@@ -10,6 +10,8 @@
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
+#include <arch/s390x/cpu/processor.h>
+#include <zxfoundation/percpu.h>
 #include <lib/string.h>
 
 /// Two physical memory zones: DMA (< 16 MB) and NORMAL (>= 16 MB).
@@ -23,7 +25,6 @@ static uint64_t max_pfn_global = 0;
 
 /// True once pmm_init() completes.
 static bool pmm_ready = false;
-
 /// @brief Push a block onto the zone's per-order free list (LIFO).
 ///        Caller holds zone->lock.
 static void free_area_push(pmm_zone_t *zone, uint32_t order, uint64_t pfn) {
@@ -103,6 +104,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
         spin_lock_init(&zones[z].lock);
         zones[z].id = (zone_id_t)z;
         zones[z].free_pages = 0;
+        zones[z].atomic_reserve = PMM_ATOMIC_RESERVE;
         for (uint32_t o = 0; o <= MAX_ORDER; o++) {
             zones[z].free_area[o].head  = PMM_INVALID_PFN;
             zones[z].free_area[o].count = 0;
@@ -233,7 +235,16 @@ zx_page_t *pmm_alloc_pages(uint32_t order, gfp_t gfp) {
             continue; // try next zone
         }
 
-        // Pop the block from found_order.
+        // Non-atomic callers must leave the atomic reserve intact.
+        if (!(gfp & ZX_GFP_ATOMIC) &&
+            zone->free_pages <= zone->atomic_reserve + (1ULL << order)) {
+            if (!(gfp & ZX_GFP_NOIRQ))
+                spin_unlock_irqrestore(&zone->lock, flags);
+            else
+                spin_unlock(&zone->lock);
+            continue;
+        }
+
         uint64_t pfn = free_area_pop(zone, found_order);
         zone->free_pages -= (1ULL << found_order);
 
@@ -269,7 +280,54 @@ zx_page_t *pmm_alloc_pages(uint32_t order, gfp_t gfp) {
     return nullptr; // OOM
 }
 
+/// @brief Refill a CPU's pcplist for zone zid by popping PCP_BATCH pages
+///        from the buddy allocator under the zone lock.
+static void pcp_refill(pmm_pcplist_t *pcp, zone_id_t zid) {
+    for (uint32_t i = 0; i < PCP_BATCH; i++) {
+        zx_page_t *p = pmm_alloc_pages(0, ZX_GFP_NORMAL | ZX_GFP_NOIRQ |
+                                          (zid == ZONE_DMA ? ZX_GFP_DMA : 0));
+        if (!p) break;
+        pcp->pages[pcp->count++] = page_to_pfn(p);
+    }
+}
+
+/// @brief Drain PCP_BATCH pages from a CPU's pcplist back to the buddy pool.
+static void pcp_drain(pmm_pcplist_t *pcp) {
+    uint32_t drain = (pcp->count > PCP_BATCH) ? PCP_BATCH : pcp->count;
+    for (uint32_t i = 0; i < drain; i++) {
+        uint64_t pfn = pcp->pages[--pcp->count];
+        pmm_free_pages(pfn_to_page(pfn), 0);
+    }
+}
+
 zx_page_t *pmm_alloc_page(gfp_t gfp) {
+    // PCP fast path: only for order-0 NORMAL/DMA, non-ATOMIC, non-NOIRQ.
+    if (!(gfp & (ZX_GFP_ATOMIC | ZX_GFP_NOIRQ)) && pmm_ready) {
+        zone_id_t zid = (gfp & ZX_GFP_DMA) ? ZONE_DMA : ZONE_NORMAL;
+        irqflags_t f  = arch_local_save_flags();
+        arch_local_irq_disable();
+
+        int cpu = arch_smp_processor_id();
+        if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
+            pmm_pcplist_t *pcp = &percpu_areas[cpu]->pcp[zid];
+            if (pcp->count == 0)
+                pcp_refill(pcp, zid);
+            if (pcp->count > 0) {
+                uint64_t pfn  = pcp->pages[--pcp->count];
+                arch_local_irq_restore(f);
+                zx_page_t *pg = pfn_to_page(pfn);
+                pg->flags = 0;
+                atomic_set(&pg->refcount, 1);
+                if (gfp & ZX_GFP_ZERO) {
+                    uint8_t *va = (uint8_t *)(uintptr_t)
+                        hhdm_phys_to_virt(pmm_pfn_to_phys(pfn));
+                    for (uint64_t b = 0; b < PAGE_SIZE; b++) va[b] = 0;
+                }
+                return pg;
+            }
+        }
+        arch_local_irq_restore(f);
+    }
     return pmm_alloc_pages(0, gfp);
 }
 
@@ -320,7 +378,38 @@ void pmm_free_pages(zx_page_t *page, uint32_t order) {
 }
 
 void pmm_free_page(zx_page_t *page) {
+    if (!page) return;
+    // PCP fast path: cache the page locally, drain to buddy when full.
+    if (pmm_ready && !(page->flags & (PF_RESERVED | PF_SLAB))) {
+        irqflags_t f = arch_local_save_flags();
+        arch_local_irq_disable();
+
+        int cpu = arch_smp_processor_id();
+        if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
+            zone_id_t zid    = (zone_id_t)page->zone_id;
+            pmm_pcplist_t *pcp = &percpu_areas[cpu]->pcp[zid];
+            if (pcp->count < PCP_HIGH) {
+                pcp->pages[pcp->count++] = page_to_pfn(page);
+                arch_local_irq_restore(f);
+                return;
+            }
+            pcp_drain(pcp);
+            pcp->pages[pcp->count++] = page_to_pfn(page);
+            arch_local_irq_restore(f);
+            return;
+        }
+        arch_local_irq_restore(f);
+    }
     pmm_free_pages(page, 0);
+}
+
+void pmm_pcplist_init(uint16_t cpu_id) {
+    if (cpu_id >= MAX_CPUS || !percpu_areas[cpu_id]) return;
+    for (uint32_t z = 0; z < ZONE_MAX; z++) {
+        pmm_pcplist_t *pcp = &percpu_areas[cpu_id]->pcp[z];
+        pcp->count   = 0;
+        pcp->zone_id = z;
+    }
 }
 
 

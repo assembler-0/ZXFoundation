@@ -3,6 +3,7 @@
 file(GLOB INIT_SOURCES    "zxfoundation/init/*.c")
 file(GLOB ARCH_INIT_SOURCES_C "arch/s390x/init/*.c")
 file(GLOB ARCH_INIT_SOURCES_64 "arch/s390x/init/*.S")
+file(GLOB ARCH_S390X_SOURCES "arch/s390x/*.c")
 file(GLOB ARCH_MM_SOURCES "arch/s390x/mmu/*.c")
 file(GLOB ARCH_MM_SOURCES_S "arch/s390x/mmu/*.S")
 file(GLOB SYS_SOURCES     "zxfoundation/sys/*.c")
@@ -27,6 +28,7 @@ file(GLOB CRYPTO_SOURCES   "crypto/*.c")
 set(ZX_SOURCES_64
     ${INIT_SOURCES}
     ${ARCH_INIT_SOURCES_C}
+    ${ARCH_S390X_SOURCES}
     ${ARCH_MM_SOURCES}
     ${ARCH_MM_SOURCES_S}
     ${ARCH_INIT_SOURCES_64}

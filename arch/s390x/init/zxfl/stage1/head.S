@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/stage1/head.S
 
+#include <arch/s390x/cpu/psw.h>
+
     .machinemode zarch
     .section .text.ipl, "ax"
     .globl __zx_ipl_entry
@@ -50,7 +52,7 @@ stage1_entry:
 
     .align 8
 .Ldisabled_wait_psw:
-    .quad   0x0000800180000000          // 64-bit disabled-wait PSW (bit16=wait, bits31+32=64bit)
+    .quad   PSW_MASK_DISABLED_WAIT      // disabled-wait, 64-bit (bit 14 = wait)
     .quad   0x00000000DEAD0001          // halt address (operator-visible)
 
     .section .bss

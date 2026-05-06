@@ -10,7 +10,7 @@
 void zxfl_system_detect(zxfl_boot_protocol_t *proto);
 
 /// @brief Binding token
-#define ZXVL_SEED               UINT64_C(0xA5F0C3E1B2D49687)
+#define ZXVL_SEED               0xA5F0C3E1B2D49687UL
 
 #define ZXVL_COMPUTE_TOKEN(stfle0, schid) \
     (ZXVL_SEED ^ (uint64_t)(stfle0) ^ (uint64_t)(schid))

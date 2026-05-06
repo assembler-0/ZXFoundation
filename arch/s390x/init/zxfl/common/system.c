@@ -66,8 +66,7 @@ static int sigp_sense(uint16_t cpu_addr) {
 }
 
 static void detect_smp(zxfl_boot_protocol_t *proto) {
-    uint16_t bsp;
-    arch_cpu_addr(bsp);
+    uint16_t bsp = arch_cpu_addr();
     
     proto->bsp_cpu_addr = bsp;
     proto->cpu_count = 0;
@@ -102,9 +101,7 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
 }
 
 static void detect_tod(zxfl_boot_protocol_t *proto) {
-    uint64_t tod;
-    __asm__ volatile ("stck %0" : "=Q" (tod) : : "cc", "memory");
-    proto->tod_boot = tod;
+    proto->tod_boot = arch_get_tod_clock();
     proto->flags |= ZXFL_FLAG_TOD;
 }
 

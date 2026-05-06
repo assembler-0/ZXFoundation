@@ -3,6 +3,8 @@
 
 #include <zxfoundation/zconfig.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <arch/s390x/cpu/lowcore.h>
+#include <arch/s390x/cpu/psw.h>
 
     .machinemode zarch
     .section .text.handshake, "ax"
@@ -38,7 +40,6 @@ __zx_start_kernel64:
     jo      .Lmvcl_retry
 .Lbss_done:
 
-    // Restore boot protocol pointer and set up save area.
     lgr     %r2, %r11
     lg      %r15, 392(%r2)                 // kernel_stack_top from boot protocol
     aghi    %r15, -160                     // 160-byte register save area
@@ -59,14 +60,39 @@ __zx_start_kernel64:
 
     .align 8
 .Ldisabled_wait_psw:
-    .quad   0x0000800180000000, 0x0000000000000000
+    .quad   PSW_MASK_DISABLED_WAIT, 0x0000000000000000
 
     .align 8
 .Lpgm_psw_mask:
-    .quad   0x0000800180000000
+    .quad   PSW_MASK_DISABLED_WAIT
 .Lpgm_psw_addr:
     .quad   (CONFIG_KERNEL_VIRT_OFFSET + 0xDEAD30)
 .Lpgm_psw_slot:
-    .quad   (CONFIG_KERNEL_VIRT_OFFSET + 0x0A0)
+    .quad   (CONFIG_KERNEL_VIRT_OFFSET + PSW_LC_PROGRAM)
+
+    .section .text.ap_entry, "ax", @progbits
+    .globl ap_entry
+ap_entry:
+    lg      %r15, 0x360(0)
+    aghi    %r15, -160
+
+    lctlg   %c1, %c1, 0x388(0)
+
+    lpswe   0x290(0)
+
+    .globl ap_dat_on
+ap_dat_on:
+    lg      %r15, 0x348(0)
+    aghi    %r15, -160
+    brasl   %r14, ap_startup
+
+.Lap_halt:
+    larl    %r1, .Lap_disabled_wait
+    lpswe   0(%r1)
+    j       .Lap_halt
+
+    .align 8
+.Lap_disabled_wait:
+    .quad   PSW_MASK_DISABLED_WAIT, 0x0000000000DEAD07
 
     .section .note.GNU-stack, "", @progbits

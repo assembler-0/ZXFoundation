@@ -34,6 +34,7 @@
 ///          Both identity (RFX=0) and HHDM (RFX=2047) share the same R2
 ///          table because their RSX indices do not overlap (0 vs 2016).
 
+#include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/stfle.h>
 #include <arch/s390x/init/zxfl/diag.h>
@@ -190,7 +191,7 @@ static uint64_t *alloc_page_table(void) {
     proto->cmdline_addr     = hhdm_phys_to_virt(proto->cmdline_addr);
 
     uint64_t cr0;
-    __asm__ volatile("stctg 0,0,%0" : "=Q"(cr0));
+    arch_ctl_store(cr0, 0, 0);
 
     if (has_edat1) {
         cr0 |= (1ULL << (63 - 40));   // CR0.40: Enhanced-DAT enablement
@@ -198,10 +199,10 @@ static uint64_t *alloc_page_table(void) {
 
     cr0 &= ~(1ULL << (63 - 29));      // CR0.29: ASCE-type = 0 (primary-space)
 
-    __asm__ volatile("lctlg 0,0,%0" :: "Q"(cr0));
+    arch_ctl_load(cr0, 0, 0);
 
     uint64_t asce = (uint64_t)(uintptr_t)r1_table | Z_ASCE_DT_R1 | Z_ASCE_TL_2048;
-    __asm__ volatile("lctlg 1,1,%0" :: "Q"(asce) : "memory");
+    arch_ctl_load(asce, 1, 1);
 
     proto->pgtbl_pool_end = (pool_next + 4095ULL) & ~4095ULL;
     proto->cr1_snapshot = asce;

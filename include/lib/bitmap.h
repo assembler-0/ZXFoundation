@@ -2,19 +2,6 @@
 // include/lib/bitmap.h
 //
 /// @brief Generic fixed-width bitmap over an array of uint64_t words.
-///
-///        Bit ordering: within each word, bit 0 of the logical bitmap maps
-///        to the MSB of the word (bit 63 of the uint64_t).  This matches
-///        the s390x convention used by hardware facility lists (STFLE) and
-///        makes visual inspection of memory dumps natural on big-endian
-///        systems.
-///
-///        All functions are static inline — zero call overhead, no .c file
-///        needed.  The caller declares storage as:
-///
-///            uint64_t my_bitmap[BITMAP_WORDS(n)];
-///
-///        and passes it with the logical bit count n to each function.
 
 #pragma once
 
@@ -26,10 +13,6 @@
 
 /// @brief Size in bytes of a bitmap holding n bits.
 #define BITMAP_BYTES(n)     (BITMAP_WORDS(n) * sizeof(uint64_t))
-
-// ---------------------------------------------------------------------------
-// Single-bit operations
-// ---------------------------------------------------------------------------
 
 /// @brief Set bit i (mark as 1).
 static inline void bitmap_set(uint64_t *bm, uint64_t i) {
@@ -62,10 +45,6 @@ static inline bool bitmap_test_and_clear(uint64_t *bm, uint64_t i) {
     bm[i / 64]   &= ~mask;
     return (old & mask) != 0;
 }
-
-// ---------------------------------------------------------------------------
-// Range operations
-// ---------------------------------------------------------------------------
 
 /// @brief Set all bits in [start, start+len).
 static inline void bitmap_set_range(uint64_t *bm, uint64_t start, uint64_t len) {
@@ -109,9 +88,14 @@ static inline void bitmap_clear_range(uint64_t *bm, uint64_t start, uint64_t len
         bm[w1] &= ~(UINT64_C(1) << (63 - b));
 }
 
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
+/// @brief Test whether all bits [start, start+count) are clear (free).
+static bool bitmap_range_free(const uint64_t *bm, uint64_t start, uint64_t count) {
+    for (uint64_t i = start; i < start + count; i++) {
+        if (bm[i / 64] & (UINT64_C(1) << (i % 64)))
+            return false;
+    }
+    return true;
+}
 
 /// @brief Find the first set bit at or after position start.
 /// @param nbits  Total number of valid bits in the bitmap.
@@ -200,10 +184,6 @@ static inline uint64_t bitmap_find_next_set_run(const uint64_t *bm,
     return nbits;
 }
 
-// ---------------------------------------------------------------------------
-// Whole-bitmap utilities
-// ---------------------------------------------------------------------------
-
 /// @brief Zero all bits in a bitmap of nwords words.
 static inline void bitmap_zero(uint64_t *bm, uint64_t nwords) {
     memset(bm, 0, nwords * sizeof(uint64_t));
@@ -216,3 +196,4 @@ static inline uint64_t bitmap_popcount(const uint64_t *bm, uint64_t nwords) {
         count += (uint64_t)__builtin_popcountll(bm[w]);
     return count;
 }
+

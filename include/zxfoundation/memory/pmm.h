@@ -37,6 +37,25 @@ typedef uint32_t gfp_t;
 #define ZX_GFP_ZERO         (1U << 2)
 /// Caller already holds a lock with IRQs disabled; skip irqsave.
 #define ZX_GFP_NOIRQ        (1U << 3)
+/// Interrupt-context allocation: may draw from the per-zone atomic reserve.
+///        Must NOT sleep or trigger reclaim.  Use only from hard-IRQ context.
+#define ZX_GFP_ATOMIC       (1U << 4)
+
+/// Pages held back per zone for ZX_GFP_ATOMIC callers.
+#define PMM_ATOMIC_RESERVE  64U
+
+/// Per-CPU free-list cache: pages held per CPU to avoid zone-lock contention.
+#define PCP_HIGH            16U   ///< Drain to zone when count exceeds this.
+#define PCP_BATCH           8U    ///< Pages moved per refill / drain.
+
+/// @brief Per-CPU page cache for order-0 (4 KB) allocations.
+///        One instance per CPU per zone, embedded in percpu_t (added below).
+///        Access is IRQ-disabled; no spinlock needed.
+typedef struct pmm_pcplist {
+    uint32_t count;                 ///< Pages currently cached.
+    uint32_t zone_id;               ///< Owning zone.
+    uint64_t pages[PCP_HIGH + PCP_BATCH]; ///< PFN stack.
+} pmm_pcplist_t;
 
 /// @brief One entry in a zone's per-order free list.
 ///        The list is intrusive: next/prev are PFNs, not pointers, so that
@@ -55,6 +74,7 @@ typedef struct pmm_zone {
     uint64_t         pfn_start;
     uint64_t         pfn_end;
     uint64_t         free_pages;    ///< Total 4 KB pages currently free.
+    uint64_t         atomic_reserve;///< Pages reserved for ZX_GFP_ATOMIC callers.
     pmm_free_area_t  free_area[MAX_ORDER + 1];
 } pmm_zone_t;
 
@@ -70,6 +90,11 @@ typedef struct {
 ///        Must be called exactly once, before any alloc/free.
 /// @param boot  Validated pointer to the ZXFL boot protocol.
 void pmm_init(const zxfl_boot_protocol_t *boot);
+
+/// @brief Initialize per-CPU page caches for a given CPU.
+///        Called once per CPU during percpu_init_bsp / percpu_init_ap.
+/// @param cpu_id  Logical CPU ID (0 = BSP).
+void pmm_pcplist_init(uint16_t cpu_id);
 
 /// @brief Allocate a single 4 KB frame.
 /// @param gfp   Allocation flags (ZX_GFP_*).
