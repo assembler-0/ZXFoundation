@@ -6,13 +6,12 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/sync/spinlock.h>
-#include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/processor.h>
 #include <zxfoundation/percpu.h>
-#include <lib/string.h>
 
 /// Two physical memory zones: DMA (< 16 MB) and NORMAL (>= 16 MB).
 static pmm_zone_t zones[ZONE_MAX];
@@ -89,7 +88,7 @@ extern uint8_t __bss_end[];
 
 void pmm_init(const zxfl_boot_protocol_t *boot) {
     if (!boot)
-        panic("pmm_init: missing protocol");
+        zx_system_check(ZX_SYSCHK_CORE_UNINITIALIZED, "pmm_init: missing protocol");
 
     // --- Determine true kernel footprint ---
     uint64_t bss_phys = hhdm_virt_to_phys((uintptr_t)__bss_end);
@@ -116,7 +115,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     zones[ZONE_NORMAL].pfn_end   = 0; // set below
 
     if (!(boot->flags & ZXFL_FLAG_MEM_MAP) || !boot->mem_map_count)
-        panic("pmm_init: no memory map in boot protocol");
+        zx_system_check(ZX_SYSCHK_CORE_UNINITIALIZED, "pmm_init: no memory map in boot protocol");
 
     const zxfl_mem_region_t *map =
         (const zxfl_mem_region_t *)(uintptr_t)boot->mem_map_addr;
@@ -198,7 +197,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
 }
 
 zx_page_t *pmm_alloc_pages(uint32_t order, gfp_t gfp) {
-    if (!pmm_ready) panic("pmm_alloc_pages: pmm not initialized");
+    if (!pmm_ready) zx_system_check(ZX_SYSCHK_CORE_UNINITIALIZED, "pmm_alloc_pages: pmm not initialized");
     if (order > MAX_ORDER) {
         printk("pmm: pmm_alloc_pages: order %u > MAX_ORDER", order);
         return nullptr;
@@ -332,17 +331,17 @@ zx_page_t *pmm_alloc_page(gfp_t gfp) {
 }
 
 void pmm_free_pages(zx_page_t *page, uint32_t order) {
-    if (!pmm_ready) panic("pmm_free_pages: null not initialized");
+    if (!pmm_ready) zx_system_check(ZX_SYSCHK_CORE_UNINITIALIZED, "pmm_free_pages: null not initialized");
     if (!page) {
         printk("pmm: pmm_free_pages: null page");
         return;
     }
 
     if (page->flags & PF_POISON)
-        panic("pmm_free_pages: double-free PFN %llu",
+        zx_system_check(ZX_SYSCHK_MEM_DOUBLE_FREE, "pmm_free_pages: double-free PFN %llu",
               (unsigned long long)page_to_pfn(page));
     if (page->flags & PF_BUDDY)
-        panic("pmm_free_pages: freeing already-free PFN %llu",
+        zx_system_check(ZX_SYSCHK_MEM_DOUBLE_FREE, "pmm_free_pages: freeing already-free PFN %llu",
               (unsigned long long)page_to_pfn(page));
 
     zone_id_t zid   = (zone_id_t)page->zone_id;

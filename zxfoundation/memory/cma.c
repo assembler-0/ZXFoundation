@@ -7,7 +7,7 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/zconfig.h>
 #include <lib/string.h>
 #include <lib/bitmap.h>
@@ -147,7 +147,7 @@ void cma_free(zx_page_t *page, uint32_t order) {
         atomic_set(&page->refcount, 0);
         return;
     }
-    panic("cma_free: PFN %llu not in any CMA region", (unsigned long long)pfn);
+    zx_system_check(ZX_SYSCHK_CORE_INTERNAL_ERROR, "cma_free: PFN %llu not in any CMA region", (unsigned long long)pfn);
 }
 
 void cma_dump(void) {

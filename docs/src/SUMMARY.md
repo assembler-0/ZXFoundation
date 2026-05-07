@@ -28,6 +28,7 @@
 
 - [Overview](kernel/overview.md)
 - [Early Init](kernel/init.md)
+- [System Check](kernel/syschk.md)
 - [Per-CPU Data](kernel/percpu.md)
 - [Trap Handler](kernel/trap.md)
 - [Memory](kernel/memory/index.md)
@@ -38,6 +39,7 @@
 - [PSW Manager](kernel/psw.md)
 - [Synchronization](kernel/sync.md)
 - [RCU & SRCU](kernel/rcu.md)
+- [Red-Black Tree](kernel/rbtree.md)
 - [Scheduler](kernel/sched.md)
 - [Subsystem Stubs](kernel/subsystems.md)
 

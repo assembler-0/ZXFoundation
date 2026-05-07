@@ -8,14 +8,14 @@
 #include <zxfoundation/memory/slab.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/sys/panic.h>
-#include <arch/s390x/cpu/processor.h>
+#include <zxfoundation/sys/syschk.h>
+#include <zxfoundation/percpu.h>
 #include <zxfoundation/zconfig.h>
+#include <arch/s390x/cpu/processor.h>
 #include <lib/list.h>
 #include <lib/string.h>
 
 #define MAG_SIZE        31      ///< Objects per magazine.
-#define SLAB_MAX_CPUS   64      ///< Maximum CPUs supported.
 
 typedef struct kmem_magazine {
     list_node_t  node;
@@ -45,7 +45,7 @@ struct kmem_cache {
     list_node_t     partial_slabs;
     list_node_t     full_slabs;
 
-    kmem_magazine_t *cpu_mags[SLAB_MAX_CPUS];
+    kmem_magazine_t *cpu_mags[MAX_CPUS];
 };
 
 static kmem_cache_t cache_cache;    ///< Allocates kmem_cache_t objects.
@@ -66,7 +66,7 @@ static void slab_compute_layout(kmem_slab_t *slab, size_t obj_size) {
         capacity = try_cap;
     }
     if (capacity == 0)
-        panic("slab: object size %zu > PAGE_SIZE", obj_size);
+        zx_system_check(ZX_SYSCHK_CORE_INTERNAL_ERROR, "slab: object size %zu > PAGE_SIZE", obj_size);
 
     uintptr_t idx_end  = hdr_end + (uintptr_t)capacity * sizeof(uint16_t);
     uintptr_t obj_start = (idx_end + 7UL) & ~7UL;
@@ -253,7 +253,7 @@ kmem_cache_t *kmem_cache_create(const char *name, size_t size, uint8_t storage_k
 }
 
 void kmem_cache_destroy(kmem_cache_t *cache) {
-    for (int cpu = 0; cpu < SLAB_MAX_CPUS; cpu++) {
+    for (unsigned int cpu = 0; cpu < MAX_CPUS; cpu++) {
         kmem_magazine_t *mag = cache->cpu_mags[cpu];
         if (!mag) continue;
 
@@ -314,7 +314,7 @@ void slab_init(void) {
     init_static_cache(&mag_cache,   "kmem_magazine_t", sizeof(kmem_magazine_t));
 
     zx_page_t *boot_page = pmm_alloc_page(ZX_GFP_NORMAL | ZX_GFP_ZERO);
-    if (!boot_page) panic("slab_init: cannot allocate bootstrap page");
+    if (!boot_page) zx_system_check(ZX_SYSCHK_MEM_OOM, "slab_init: cannot allocate bootstrap page");
 
     char *raw = (char *)(uintptr_t)hhdm_phys_to_virt(pmm_page_to_phys(boot_page));
     size_t mag_sz = (sizeof(kmem_magazine_t) + 7UL) & ~7UL;

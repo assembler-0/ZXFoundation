@@ -8,3 +8,6 @@
 ///        Writes restart PSW, allocates lowcore + stack, issues SIGP.
 /// @param boot  Validated ZXFL boot protocol.
 void smp_init(const zxfl_boot_protocol_t *boot);
+
+/// @brief Shut down all APs that were started by smp_init().
+void smp_teardown();

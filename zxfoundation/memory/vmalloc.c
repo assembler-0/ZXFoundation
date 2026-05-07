@@ -6,7 +6,7 @@
 #include <zxfoundation/memory/vmalloc.h>
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/page.h>
-#include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/zconfig.h>
 
 /// Guard canary embedded before the user pointer to detect underflows.
@@ -41,7 +41,7 @@ void vfree(void *ptr) {
     vmalloc_hdr_t *hdr = (vmalloc_hdr_t *)((uintptr_t)ptr - sizeof(vmalloc_hdr_t));
 
     if (hdr->magic != VMALLOC_MAGIC)
-        panic("vfree: corrupted vmalloc header at %p (magic=%016llx)",
+        zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "vfree: corrupted vmalloc header at %p (magic=%016llx)",
               ptr, (unsigned long long)hdr->magic);
 
     uint64_t base = (uint64_t)(uintptr_t)hdr;

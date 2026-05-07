@@ -3,7 +3,7 @@
 
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
-#include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sync/rcu.h>
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/vmm.h>
@@ -36,7 +36,7 @@ static void validate_stack_frame(const zxfl_boot_protocol_t *boot) {
     const uint64_t expected_b = ZXVL_FRAME_MAGIC_B ^ boot->binding_token;
     if (frame[1] != expected_b)
 bad:
-        panic("sys: stack frame corruption/not found — unauthorized loader");
+    zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: stack frame corruption/not found — unauthorized loader");
 }
 
 /// @brief Re-verify kernel segment checksums from the HHDM-mapped image.
@@ -51,11 +51,11 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
     }
     if (tbl->version != ZXVL_CKSUM_VERSION || tbl->count == 0 ||
         tbl->count > ZXVL_CKSUM_MAX_ENTRIES)
-        panic("sys: kernel checksum table corrupt");
+        zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: kernel checksum table corrupt");
 
     const uint32_t algo = tbl->algo;
     if (algo != ZXVL_CKSUM_ALGO_SHA256)
-        panic("sys: kernel checksum algorithm unsupported");
+        zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: kernel checksum algorithm unsupported");
 
     for (uint32_t i = 0; i < tbl->count; i++) {
         const zxvl_cksum_entry_t *e = &tbl->entries[i];
@@ -64,12 +64,13 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
         uint8_t actual[ZXFL_SHA256_DIGEST_SIZE];
         zxfl_sha256((const void *)(uintptr_t)virt_seg, (size_t)e->size, actual);
         if (memcmp(actual, e->digest, ZXFL_SHA256_DIGEST_SIZE) != 0)
-            panic("sys: kernel segment checksum mismatch — image tampered");
+            zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: kernel segment checksum mismatch — image tampered");
     }
     printk("sys: kernel checksums verified (%u segments)\n", tbl->count);
 }
 
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
+    zx_system_check_set_filter(nullptr);
     zx_lowcore_setup_late();
 
     diag_setup();
@@ -78,11 +79,11 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
            CONFIG_ZX_RELEASE);
 
     if (!boot || boot->magic != ZXFL_MAGIC)
-        panic("sys: protocol missing or corrupt");
+        zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: protocol missing or corrupt");
 
     const uint64_t expected = ZXVL_COMPUTE_TOKEN(boot->stfle_fac[0], boot->ipl_schid);
     if (boot->binding_token != expected)
-        panic("sys: binding token mismatch — unauthorized loader");
+        zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: binding token mismatch — unauthorized loader");
 
     validate_stack_frame(boot);
 

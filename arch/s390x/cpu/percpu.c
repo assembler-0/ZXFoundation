@@ -4,7 +4,7 @@
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/zconfig.h>
-#include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sys/syschk.h>
 #include <lib/string.h>
 
 percpu_t *percpu_areas[MAX_CPUS];
@@ -31,12 +31,12 @@ void percpu_init_bsp(void) {
 ///        physical address is returned so the caller can issue SPX.
 uint64_t percpu_init_ap(uint16_t cpu_id, uint16_t cpu_addr) {
     if (cpu_id >= MAX_CPUS)
-        panic("percpu: cpu_id %u exceeds MAX_CPUS", cpu_id);
+        zx_system_check(ZX_SYSCHK_CORE_ASSERT, "percpu: cpu_id %u exceeds MAX_CPUS", cpu_id);
 
     // Allocate one 4 KB page for the AP's lowcore.
     zx_page_t *page = pmm_alloc_page(ZX_GFP_ZERO);
     if (!page)
-        panic("percpu: OOM allocating lowcore for cpu %u", cpu_id);
+        zx_system_check(ZX_SYSCHK_MEM_OOM, "percpu: OOM allocating lowcore for cpu %u", cpu_id);
 
     uint64_t phys = pmm_page_to_phys(page);
     percpu_t *p   = (percpu_t *)hhdm_phys_to_virt(phys + PERCPU_OFFSET);

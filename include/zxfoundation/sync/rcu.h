@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // include/zxfoundation/sync/rcu.h
 //
-/// @brief Minimal Read-Copy-Update (RCU) for a non-preemptive kernel.
+/// @brief Minimal Read-Copy-Update (RCU)
 
 #pragma once
 
@@ -14,15 +14,13 @@ typedef struct rcu_head {
 } rcu_head_t;
 
 /// @brief Enter an RCU read-side critical section.
-///        On a non-preemptive kernel this is a compiler barrier only —
-///        it prevents the compiler from moving loads out of the section.
 static inline void rcu_read_lock(void) {
-    barrier();
+    barrier(); // TODO: implement RCU read lock
 }
 
 /// @brief Exit an RCU read-side critical section.
 static inline void rcu_read_unlock(void) {
-    barrier();
+    barrier(); // TODO: implement RCU read unlock
 }
 
 /// @brief Safely publish a pointer to a newly initialized object.

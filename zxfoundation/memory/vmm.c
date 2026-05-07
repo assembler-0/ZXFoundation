@@ -1,48 +1,115 @@
 // SPDX-License-Identifier: Apache-2.0
 // zxfoundation/memory/vmm.c
 //
-/// @brief Virtual Memory Manager — RB-tree VMA management + vmalloc + THP.
+/// @brief Virtual Memory Manager — augmented RB-tree VMA management + vmalloc + THP.
 
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/memory/page.h>
 #include <arch/s390x/mmu/mmu.h>
-#include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/sync/spinlock.h>
+#include <zxfoundation/sync/rcu.h>
 #include <zxfoundation/zconfig.h>
 #include <lib/rbtree.h>
 
 vm_space_t kernel_vm_space;
 
+// ---------------------------------------------------------------------------
+// VMA allocator — static early pool, then kmalloc
+// ---------------------------------------------------------------------------
+
 #define EARLY_VMA_POOL_SIZE 32
 
-static vm_area_t  early_vma_pool[EARLY_VMA_POOL_SIZE];
-static uint32_t   early_vma_idx  = 0;
-static bool       slab_available = false;
+static vm_area_t early_vma_pool[EARLY_VMA_POOL_SIZE];
+static uint32_t  early_vma_idx  = 0;
+static bool      slab_available = false;
 
 static vm_area_t *vma_alloc(void) {
     if (slab_available)
         return (vm_area_t *)kmalloc(sizeof(vm_area_t), ZX_GFP_NORMAL);
     if (early_vma_idx >= EARLY_VMA_POOL_SIZE)
-        panic("vmm: early vma pool exhausted");
+        zx_system_check(ZX_SYSCHK_MEM_OOM, "vmm: early vma pool exhausted");
     return &early_vma_pool[early_vma_idx++];
 }
 
-static void vma_free(vm_area_t *vma) {
-    if (!slab_available) return;
-    kfree(vma);
+static void vma_rcu_free(rcu_head_t *head) {
+    vm_area_t *vma = (vm_area_t *)((char *)head
+                     - __builtin_offsetof(vm_area_t, rcu));
+    if (slab_available)
+        kfree(vma);
 }
 
-static bool vma_rb_insert(vm_space_t *space, vm_area_t *vma) {
-    rb_node_t **link = &space->vma_tree.root;
-    rb_node_t  *parent = nullptr;
+
+static void vma_aug_propagate(rb_node_t *n) {
+    rb_node_aug_t   *aug = (rb_node_aug_t *)n;
+    const vm_area_t *vma = rb_entry(n, vm_area_t, rb_node.node);
+
+    uint64_t max_end = vma->vm_end;
+    if (n->left) {
+        uint64_t le = ((rb_node_aug_t *)n->left)->subtree_max_end;
+        if (le > max_end) max_end = le;
+    }
+    if (n->right) {
+        uint64_t re = ((rb_node_aug_t *)n->right)->subtree_max_end;
+        if (re > max_end) max_end = re;
+    }
+    aug->subtree_max_end = max_end;
+}
+
+static void vma_aug_copy(rb_node_t *dst, const rb_node_t *src) {
+    ((rb_node_aug_t *)dst)->subtree_max_end =
+        ((const rb_node_aug_t *)src)->subtree_max_end;
+}
+
+const rb_aug_callbacks_t vmm_aug_callbacks = {
+    .propagate = vma_aug_propagate,
+    .copy      = vma_aug_copy,
+};
+
+// ---------------------------------------------------------------------------
+// Gap-search accessors for rcu_rb_aug_find_gap()
+// ---------------------------------------------------------------------------
+
+static uint64_t vma_node_start(const rb_node_t *n) {
+    return rb_entry(n, vm_area_t, rb_node.node)->vm_start;
+}
+static uint64_t vma_node_end(const rb_node_t *n) {
+    return rb_entry(n, vm_area_t, rb_node.node)->vm_end;
+}
+
+// ---------------------------------------------------------------------------
+// vmm_rb_root_t — Layer 4 operations
+// ---------------------------------------------------------------------------
+
+static int vma_addr_cmp(const rb_node_t *n, const void *arg) {
+    const vm_area_t *vma  = rb_entry(n, vm_area_t, rb_node.node);
+    uint64_t         addr = *(const uint64_t *)arg;
+    if (addr < vma->vm_start) return  1;
+    if (addr >= vma->vm_end)  return -1;
+    return 0;
+}
+
+vm_area_t *vmm_rb_find_vma(vmm_rb_root_t *root, uint64_t addr) {
+    // RCU-correct O(1)/O(log n) search: generation-checked hint fast path,
+    // rcu_dereference miss path.  Must be called inside rcu_read_lock().
+    rb_node_t *n = rcu_rb_aug_find_cached(&root->aug_root, &root->gen,
+                                           root->pcpu, vma_addr_cmp, &addr);
+    if (n)
+        return rb_entry(n, vm_area_t, rb_node.node);
+    return nullptr;
+}
+
+/// @brief Internal insert — caller must already hold aug_root.lock.
+static bool vmm_rb_insert_locked(vmm_rb_root_t *root, vm_area_t *vma) {
+    rcu_rb_root_aug_t *ar     = &root->aug_root;
+    rb_node_t        **link   = &ar->aug.base.root;
+    rb_node_t         *parent = nullptr;
 
     while (*link) {
         parent = *link;
-        vm_area_t *cur = rb_entry(parent, vm_area_t, rb_node);
-
+        const vm_area_t *cur = rb_entry(parent, vm_area_t, rb_node.node);
         if (vma->vm_end <= cur->vm_start)
             link = &parent->left;
         else if (vma->vm_start >= cur->vm_end)
@@ -51,108 +118,78 @@ static bool vma_rb_insert(vm_space_t *space, vm_area_t *vma) {
             return false; // overlap
     }
 
-    rb_link_node(&vma->rb_node, parent, link);
-    rb_insert_fixup(&space->vma_tree, &vma->rb_node);
-    space->vma_count++;
+    vma->rb_node.subtree_max_end = 0;
+    rb_insert_aug(&ar->aug, &vma->rb_node.node, parent, link);
+    // Bump gen and publish AFTER the structural change is complete.
+    rb_cache_invalidate(&root->gen, root->pcpu);
+    rcu_assign_pointer(ar->aug.base.root, ar->aug.base.root);
     return true;
 }
 
-static vm_area_t *vma_rb_find(const vm_space_t *space, uint64_t addr) {
-    const rb_node_t *n = space->vma_tree.root;
-    while (n) {
-        vm_area_t *cur = rb_entry(n, vm_area_t, rb_node);
-        if (addr < cur->vm_start)
-            n = n->left;
-        else if (addr >= cur->vm_end)
-            n = n->right;
-        else
-            return cur;
-    }
-    return nullptr;
+bool vmm_rb_insert_vma(vmm_rb_root_t *root, vm_area_t *vma) {
+    irqflags_t flags;
+    spin_lock_irqsave(&root->aug_root.lock, &flags);
+    bool ok = vmm_rb_insert_locked(root, vma);
+    spin_unlock_irqrestore(&root->aug_root.lock, flags);
+    return ok;
 }
 
-static void vma_rb_remove(vm_space_t *space, vm_area_t *vma) {
-    rb_erase(&space->vma_tree, &vma->rb_node);
-    space->vma_count--;
-    if (space->mru_vma == vma)
-        space->mru_vma = nullptr;
+void vmm_rb_erase_vma(vmm_rb_root_t *root, vm_area_t *vma,
+                      void (*free_fn)(rcu_head_t *)) {
+    irqflags_t flags;
+    spin_lock_irqsave(&root->aug_root.lock, &flags);
+    rb_cache_invalidate(&root->gen, root->pcpu);
+    rb_erase_aug(&root->aug_root.aug, &vma->rb_node.node);
+    rcu_assign_pointer(root->aug_root.aug.base.root,
+                       root->aug_root.aug.base.root);
+    spin_unlock_irqrestore(&root->aug_root.lock, flags);
+
+    call_rcu(&vma->rcu, free_fn);
 }
 
-// ---------------------------------------------------------------------------
-// Gap search — find the first hole of at least `size` bytes in [lo, hi).
-// Walks the in-order sequence of VMAs; gaps between consecutive VMAs and
-// before the first / after the last VMA are all considered.
-// Returns the start of the gap, or 0 on failure.
-// Caller must hold space->lock.
-// ---------------------------------------------------------------------------
-static uint64_t vma_find_gap(const vm_space_t *space,
-                              uint64_t lo, uint64_t hi, uint64_t size,
-                              uint64_t align) {
-    uint64_t cursor = lo;
-
-    // Walk the in-order sequence via rb_for_each (sorted by vm_start).
-    rb_node_t *n;
-    rb_for_each(n, (rb_root_t *)&space->vma_tree) {
-        vm_area_t *cur = rb_entry(n, vm_area_t, rb_node);
-        if (cur->vm_start >= hi) break;
-
-        // Align cursor up.
-        uint64_t aligned = (cursor + align - 1) & ~(align - 1);
-        if (aligned + size <= cur->vm_start && aligned + size <= hi)
-            return aligned;
-
-        if (cur->vm_end > cursor)
-            cursor = cur->vm_end;
-    }
-
-    // Check the gap after the last VMA.
-    uint64_t aligned = (cursor + align - 1) & ~(align - 1);
-    if (aligned + size <= hi)
-        return aligned;
-
-    return 0;
+static uint64_t vma_find_gap(vmm_rb_root_t *root,
+                              uint64_t lo, uint64_t hi,
+                              uint64_t size, uint64_t align) {
+    return rcu_rb_aug_find_gap(&root->aug_root, size, align, lo, hi,
+                               vma_node_start, vma_node_end);
 }
 
-// ---------------------------------------------------------------------------
-// VMA merge — try to absorb adjacent VMAs with identical prot into `vma`.
-// Called after a successful rb_insert; `vma` is already in the tree.
-// ---------------------------------------------------------------------------
-static void vma_try_merge(vm_space_t *space, vm_area_t *vma) {
-    // Merge with the predecessor if it ends exactly where vma starts.
-    rb_node_t *prev_n = rb_prev(&vma->rb_node);
+static void vma_try_merge(vmm_rb_root_t *root, vm_area_t *vma) {
+    rb_node_t *prev_n = rb_prev(&vma->rb_node.node);
     if (prev_n) {
-        vm_area_t *prev = rb_entry(prev_n, vm_area_t, rb_node);
+        vm_area_t *prev = rb_entry(prev_n, vm_area_t, rb_node.node);
         if (prev->vm_end == vma->vm_start && prev->vm_prot == vma->vm_prot) {
             vma->vm_start = prev->vm_start;
-            vma_rb_remove(space, prev);
-            vma_free(prev);
+            rb_erase_aug(&root->aug_root.aug, &prev->rb_node.node);
+            root->aug_root.aug.cb->propagate(&vma->rb_node.node);
+            rb_cache_invalidate(&root->gen, root->pcpu);
+            rcu_assign_pointer(root->aug_root.aug.base.root,
+                               root->aug_root.aug.base.root);
+            call_rcu(&prev->rcu, vma_rcu_free);
         }
     }
 
-    // Merge with the successor if it starts exactly where vma ends.
-    rb_node_t *next_n = rb_next(&vma->rb_node);
+    rb_node_t *next_n = rb_next(&vma->rb_node.node);
     if (next_n) {
-        vm_area_t *next = rb_entry(next_n, vm_area_t, rb_node);
+        vm_area_t *next = rb_entry(next_n, vm_area_t, rb_node.node);
         if (vma->vm_end == next->vm_start && vma->vm_prot == next->vm_prot) {
             vma->vm_end = next->vm_end;
-            vma_rb_remove(space, next);
-            vma_free(next);
+            rb_erase_aug(&root->aug_root.aug, &next->rb_node.node);
+            root->aug_root.aug.cb->propagate(&vma->rb_node.node);
+            rb_cache_invalidate(&root->gen, root->pcpu);
+            rcu_assign_pointer(root->aug_root.aug.base.root,
+                               root->aug_root.aug.base.root);
+            call_rcu(&next->rcu, vma_rcu_free);
         }
     }
 }
 
-/// @brief Attempt to map a 1 MB-aligned VA chunk as a single large page.
-///        Allocates order-8 (256 contiguous 4 KB pages) from the PMM.
-///        If successful, installs an EDAT-1 FC=1 STE via mmu_map_large_page.
-/// @return true if the large page was successfully mapped, false on fallback.
 static bool thp_try_map_large(mmu_pgtbl_t *pgtbl, uint64_t va,
-                              uint32_t prot, gfp_t gfp) {
+                               uint32_t prot, gfp_t gfp) {
     zx_page_t *head = pmm_alloc_pages(LARGE_PAGE_ORDER, gfp | ZX_GFP_ZERO);
-    if (!head)
-        return false;  // fragmented — fall back to 4 KB
+    if (!head) return false;
 
     uint64_t pa = pmm_page_to_phys(head);
-
     head->flags |= PF_HEAD;
     head->compound_order = LARGE_PAGE_ORDER;
     for (uint32_t i = 1; i < LARGE_PAGE_NR_PAGES; i++) {
@@ -170,18 +207,14 @@ static bool thp_try_map_large(mmu_pgtbl_t *pgtbl, uint64_t va,
         pmm_free_pages(head, LARGE_PAGE_ORDER);
         return false;
     }
-
     return true;
 }
 
-/// @brief Map a range of 4 KB pages (fallback path or non-aligned region).
-/// @return 0 on success, -1 on failure (pages already mapped are rolled back).
 static int map_small_pages(mmu_pgtbl_t *pgtbl, uint64_t va_start,
-                           uint64_t va_end, uint32_t prot, gfp_t gfp) {
+                            uint64_t va_end, uint32_t prot, gfp_t gfp) {
     for (uint64_t va = va_start; va < va_end; va += PAGE_SIZE) {
         zx_page_t *page = pmm_alloc_page(gfp);
         if (!page) {
-            // Roll back.
             for (uint64_t rv = va_start; rv < va; rv += PAGE_SIZE) {
                 uint64_t pa = mmu_virt_to_phys(pgtbl, rv);
                 mmu_unmap_page(pgtbl, rv);
@@ -202,16 +235,13 @@ static int map_small_pages(mmu_pgtbl_t *pgtbl, uint64_t va_start,
     return 0;
 }
 
-/// @brief Unmap and free all backing pages in [va_start, va_end).
-///        Automatically detects 1 MB large pages and frees compound blocks.
-static void unmap_and_free_range(mmu_pgtbl_t *pgtbl, uint64_t va_start,
-                                 uint64_t va_end) {
+static void unmap_and_free_range(mmu_pgtbl_t *pgtbl,
+                                  uint64_t va_start, uint64_t va_end) {
     uint64_t va = va_start;
     while (va < va_end) {
         if (!(va & (LARGE_PAGE_SIZE - 1)) &&
             (va + LARGE_PAGE_SIZE <= va_end) &&
             mmu_is_large_page(pgtbl, va)) {
-
             uint64_t pa = mmu_virt_to_phys(pgtbl, va);
             mmu_unmap_page(pgtbl, va);
             if (pa != ~0ULL) {
@@ -227,22 +257,18 @@ static void unmap_and_free_range(mmu_pgtbl_t *pgtbl, uint64_t va_start,
         } else {
             uint64_t pa = mmu_virt_to_phys(pgtbl, va);
             mmu_unmap_page(pgtbl, va);
-            if (pa != ~0ULL)
-                pmm_free_page(phys_to_page(pa));
+            if (pa != ~0ULL) pmm_free_page(phys_to_page(pa));
             va += PAGE_SIZE;
         }
     }
 }
 
-
 void vmm_init(void) {
-    spin_lock_init(&kernel_vm_space.lock);
-    kernel_vm_space.vma_tree   = (rb_root_t)RB_ROOT_INIT;
+    kernel_vm_space.vma_tree   = (vmm_rb_root_t)VMM_RB_ROOT_INIT;
     kernel_vm_space.vma_count  = 0;
-    kernel_vm_space.mru_vma    = nullptr;
     kernel_vm_space.pgtbl_root = mmu_kernel_pgtbl()->r1_phys;
 
-    printk("vmm: kernel space ready (vmalloc %016llx – %016llx, THP enabled)\n",
+    printk("vmm: vmalloc %016llx – %016llx\n",
            (unsigned long long)VMALLOC_START,
            (unsigned long long)VMALLOC_END);
 }
@@ -252,106 +278,86 @@ void vmm_notify_slab_ready(void) {
 }
 
 vm_area_t *vmm_find_vma(vm_space_t *space, uint64_t virt) {
-    vm_area_t *mru = space->mru_vma;
-    if (mru && virt >= mru->vm_start && virt < mru->vm_end)
-        return mru;
-
-    vm_area_t *found = vma_rb_find(space, virt);
-    if (found)
-        space->mru_vma = found;
+    rcu_read_lock();
+    vm_area_t *found = vmm_rb_find_vma(&space->vma_tree, virt);
+    rcu_read_unlock();
     return found;
 }
 
 int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
-    if (!vma) {
-        printk("vmm_insert_vma: nullptr VMA\n");
-        return -1;
-    }
-    if (vma->vm_start >= vma->vm_end) {
-        printk("vmm_insert_vma: invalid range [%llx, %llx)\n",
-               (unsigned long long)vma->vm_start, (unsigned long long)vma->vm_end);
-        return -1;
-    }
-    if (vma->vm_start & (PAGE_SIZE - 1)) {
-        printk("vmm_insert_vma: unaligned start %llx\n",
-               (unsigned long long)vma->vm_start);
+    if (!vma || vma->vm_start >= vma->vm_end ||
+        (vma->vm_start & (PAGE_SIZE - 1))) {
+        printk("vmm_insert_vma: invalid VMA [%llx, %llx)\n",
+               (unsigned long long)(vma ? vma->vm_start : 0),
+               (unsigned long long)(vma ? vma->vm_end   : 0));
         return -1;
     }
 
     mmu_pgtbl_t *pgtbl = mmu_kernel_pgtbl();
-    uint64_t va = vma->vm_start;
-    uint64_t end = vma->vm_end;
+    uint64_t va = vma->vm_start, end = vma->vm_end;
     uint32_t thp_count = 0;
 
     uint64_t first_large = (va + LARGE_PAGE_SIZE - 1) & LARGE_PAGE_MASK;
     if (first_large > end) first_large = end;
 
-    if (va < first_large) {
-        if (map_small_pages(pgtbl, va, first_large, vma->vm_prot, gfp) != 0) {
-            printk("vmm_insert_vma: Phase 1 failure [%llx, %llx)\n",
-                   (unsigned long long)va, (unsigned long long)first_large);
-            return -1;
-        }
+    if (va < first_large &&
+        map_small_pages(pgtbl, va, first_large, vma->vm_prot, gfp) != 0) {
+        printk("vmm_insert_vma: small-page phase 1 failed\n");
+        return -1;
     }
 
     uint64_t last_large = end & LARGE_PAGE_MASK;
     for (uint64_t lva = first_large; lva < last_large; lva += LARGE_PAGE_SIZE) {
         if (thp_try_map_large(pgtbl, lva, vma->vm_prot, gfp)) {
             thp_count++;
-        } else {
-            if (map_small_pages(pgtbl, lva, lva + LARGE_PAGE_SIZE,
-                                vma->vm_prot, gfp) != 0) {
-                printk("vmm_insert_vma: Phase 2 failure at %llx\n", (unsigned long long)lva);
-                unmap_and_free_range(pgtbl, vma->vm_start, lva);
-                return -1;
-            }
-        }
-    }
-
-    if (last_large < end && last_large >= first_large) {
-        if (map_small_pages(pgtbl, last_large, end, vma->vm_prot, gfp) != 0) {
-            printk("vmm_insert_vma: Phase 3 failure [%llx, %llx)\n",
-                   (unsigned long long)last_large, (unsigned long long)end);
-            unmap_and_free_range(pgtbl, vma->vm_start, last_large);
+        } else if (map_small_pages(pgtbl, lva, lva + LARGE_PAGE_SIZE,
+                                   vma->vm_prot, gfp) != 0) {
+            unmap_and_free_range(pgtbl, vma->vm_start, lva);
             return -1;
         }
     }
 
+    if (last_large < end && last_large >= first_large &&
+        map_small_pages(pgtbl, last_large, end, vma->vm_prot, gfp) != 0) {
+        unmap_and_free_range(pgtbl, vma->vm_start, last_large);
+        return -1;
+    }
+
     irqflags_t f;
-    spin_lock_irqsave(&space->lock, &f);
-    bool ok = vma_rb_insert(space, vma);
-    if (ok)
-        vma_try_merge(space, vma);
-    spin_unlock_irqrestore(&space->lock, f);
+    spin_lock_irqsave(&space->vma_tree.aug_root.lock, &f);
+    bool ok = vmm_rb_insert_locked(&space->vma_tree, vma);
+    if (ok) {
+        space->vma_count++;
+        vma_try_merge(&space->vma_tree, vma);
+    }
+    spin_unlock_irqrestore(&space->vma_tree.aug_root.lock, f);
 
     if (!ok) {
-        printk("vmm_insert_vma: Phase 4 failure (overlap) [%llx, %llx)\n",
-               (unsigned long long)vma->vm_start, (unsigned long long)vma->vm_end);
+        printk("vmm_insert_vma: overlap [%llx, %llx)\n",
+               (unsigned long long)vma->vm_start,
+               (unsigned long long)vma->vm_end);
         unmap_and_free_range(pgtbl, vma->vm_start, vma->vm_end);
         return -1;
     }
 
-    if (thp_count > 0) {
+    if (thp_count)
         printk("vmm: THP promoted %u × 1 MB large pages in [%016llx, %016llx)\n",
                thp_count,
                (unsigned long long)vma->vm_start,
                (unsigned long long)vma->vm_end);
-    }
-
     return 0;
 }
 
 void vmm_remove_vma(vm_space_t *space, vm_area_t *vma) {
     irqflags_t f;
-    spin_lock_irqsave(&space->lock, &f);
-    vma_rb_remove(space, vma);
-    spin_unlock_irqrestore(&space->lock, f);
+    spin_lock_irqsave(&space->vma_tree.aug_root.lock, &f);
+    space->vma_count--;
+    spin_unlock_irqrestore(&space->vma_tree.aug_root.lock, f);
 
-    if (!(vma->vm_prot & VM_IOREMAP)) {
-        mmu_pgtbl_t *pgtbl = mmu_kernel_pgtbl();
-        unmap_and_free_range(pgtbl, vma->vm_start, vma->vm_end);
-    }
-    vma_free(vma);
+    if (!(vma->vm_prot & VM_IOREMAP))
+        unmap_and_free_range(mmu_kernel_pgtbl(), vma->vm_start, vma->vm_end);
+
+    vmm_rb_erase_vma(&space->vma_tree, vma, vma_rcu_free);
 }
 
 uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
@@ -359,25 +365,20 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
     size = (size + PAGE_SIZE - 1) & PAGE_MASK;
 
     vm_area_t *vma = vma_alloc();
-    if (!vma) {
-        printk("vmm_alloc: vma_alloc failed\n");
-        return 0;
-    }
+    if (!vma) { printk("vmm_alloc: vma_alloc failed\n"); return 0; }
 
-    // Prefer 1 MB alignment for THP eligibility on large allocations.
     uint64_t align = (size >= LARGE_PAGE_SIZE) ? LARGE_PAGE_SIZE : PAGE_SIZE;
 
     irqflags_t f;
-    spin_lock_irqsave(&kernel_vm_space.lock, &f);
-    uint64_t va_start = vma_find_gap(&kernel_vm_space,
-                                     VMALLOC_START, VMALLOC_END,
-                                     size, align);
-    spin_unlock_irqrestore(&kernel_vm_space.lock, f);
+    spin_lock_irqsave(&kernel_vm_space.vma_tree.aug_root.lock, &f);
+    uint64_t va_start = vma_find_gap(&kernel_vm_space.vma_tree,
+                                     VMALLOC_START, VMALLOC_END, size, align);
+    spin_unlock_irqrestore(&kernel_vm_space.vma_tree.aug_root.lock, f);
 
     if (!va_start) {
         printk("vmm_alloc: no vmalloc gap for size=0x%llx\n",
                (unsigned long long)size);
-        vma_free(vma);
+        if (slab_available) kfree(vma);
         return 0;
     }
 
@@ -387,7 +388,7 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
 
     if (vmm_insert_vma(&kernel_vm_space, vma, gfp) != 0) {
         printk("vmm_alloc: vmm_insert_vma failed\n");
-        vma_free(vma);
+        if (slab_available) kfree(vma);
         return 0;
     }
     return va_start;
@@ -395,10 +396,7 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
 
 void vmm_free(uint64_t virt) {
     if (!virt) return;
-    irqflags_t f;
-    spin_lock_irqsave(&kernel_vm_space.lock, &f);
     vm_area_t *vma = vmm_find_vma(&kernel_vm_space, virt);
-    spin_unlock_irqrestore(&kernel_vm_space.lock, f);
     if (!vma) {
         printk("vmm_free: %016llx not in any VMA\n", (unsigned long long)virt);
         return;
@@ -413,32 +411,25 @@ uint64_t vmm_map_phys(uint64_t phys, uint64_t size, vm_prot_t prot) {
     uint64_t align = (size >= LARGE_PAGE_SIZE) ? LARGE_PAGE_SIZE : PAGE_SIZE;
 
     irqflags_t f;
-    spin_lock_irqsave(&kernel_vm_space.lock, &f);
-    uint64_t va_start = vma_find_gap(&kernel_vm_space,
-                                     VMALLOC_START, VMALLOC_END,
-                                     size, align);
-    spin_unlock_irqrestore(&kernel_vm_space.lock, f);
+    spin_lock_irqsave(&kernel_vm_space.vma_tree.aug_root.lock, &f);
+    uint64_t va_start = vma_find_gap(&kernel_vm_space.vma_tree,
+                                     VMALLOC_START, VMALLOC_END, size, align);
+    spin_unlock_irqrestore(&kernel_vm_space.vma_tree.aug_root.lock, f);
 
     if (!va_start) return 0;
 
     mmu_pgtbl_t *pgtbl = mmu_kernel_pgtbl();
-
     uint64_t off = 0;
     while (off < size) {
-        uint64_t va = va_start + off;
-        uint64_t pa = phys + off;
+        uint64_t va = va_start + off, pa = phys + off;
         uint64_t remaining = size - off;
-
-        if (!(va & (LARGE_PAGE_SIZE - 1)) &&
-            !(pa & (LARGE_PAGE_SIZE - 1)) &&
-            remaining >= LARGE_PAGE_SIZE) {
-            if (mmu_map_large_page(pgtbl, va, pa, prot | VM_KERNEL) == 0) {
-                off += LARGE_PAGE_SIZE;
-                continue;
-            }
+        if (!(va & (LARGE_PAGE_SIZE - 1)) && !(pa & (LARGE_PAGE_SIZE - 1)) &&
+            remaining >= LARGE_PAGE_SIZE &&
+            mmu_map_large_page(pgtbl, va, pa, prot | VM_KERNEL) == 0) {
+            off += LARGE_PAGE_SIZE;
+            continue;
         }
         if (mmu_map_page(pgtbl, va, pa, prot | VM_KERNEL) != 0) {
-            // Roll back.
             for (uint64_t rv = 0; rv < off; rv += PAGE_SIZE)
                 mmu_unmap_page(pgtbl, va_start + rv);
             return 0;
@@ -451,25 +442,26 @@ uint64_t vmm_map_phys(uint64_t phys, uint64_t size, vm_prot_t prot) {
         vma->vm_start = va_start;
         vma->vm_end   = va_start + size;
         vma->vm_prot  = prot | VM_KERNEL | VM_IOREMAP;
-        spin_lock_irqsave(&kernel_vm_space.lock, &f);
-        vma_rb_insert(&kernel_vm_space, vma);
-        spin_unlock_irqrestore(&kernel_vm_space.lock, f);
+        spin_lock_irqsave(&kernel_vm_space.vma_tree.aug_root.lock, &f);
+        vmm_rb_insert_locked(&kernel_vm_space.vma_tree, vma);
+        kernel_vm_space.vma_count++;
+        spin_unlock_irqrestore(&kernel_vm_space.vma_tree.aug_root.lock, f);
     }
     return va_start;
 }
 
 void vmm_dump_space(const vm_space_t *space) {
-    irqflags_t f;
-    spin_lock_irqsave((spinlock_t *)&space->lock, &f);
     printk("vmm: address space dump (%llu VMAs)\n",
            (unsigned long long)space->vma_count);
+    rcu_read_lock();
     rb_node_t *n;
-    rb_for_each(n, (rb_root_t *)&space->vma_tree) {
-        vm_area_t *v = rb_entry(n, vm_area_t, rb_node);
-        printk("  [%016llx – %016llx] prot=%08x\n",
+    rb_for_each(n, &((vm_space_t *)space)->vma_tree.aug_root.aug.base) {
+        vm_area_t *v = rb_entry(n, vm_area_t, rb_node.node);
+        printk("  [%016llx – %016llx] prot=%08x max_end=%llx\n",
                (unsigned long long)v->vm_start,
                (unsigned long long)v->vm_end,
-               v->vm_prot);
+               v->vm_prot,
+               (unsigned long long)v->rb_node.subtree_max_end);
     }
-    spin_unlock_irqrestore((spinlock_t *)&space->lock, f);
+    rcu_read_unlock();
 }

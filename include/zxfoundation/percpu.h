@@ -36,10 +36,9 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/memory/pmm.h>
-#include <arch/s390x/cpu/processor.h>
 
-#define PERCPU_OFFSET   0x200UL   ///< Offset from prefix base to per-CPU block.
-#define MAX_CPUS        64U       ///< Maximum CPUs (matches ZXFL_CPU_MAP_MAX).
+#define PERCPU_OFFSET   0x200UL                  ///< Offset from prefix base to per-CPU block.
+#define MAX_CPUS        CONFIG_ZX_MAX_CPUS
 
 /// @brief Per-CPU data structure.  Lives at prefix + 0x200 for each CPU.
 typedef struct percpu {

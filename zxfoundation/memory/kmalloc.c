@@ -6,7 +6,7 @@
 #include <zxfoundation/memory/vmalloc.h>
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/page.h>
-#include <zxfoundation/sys/panic.h>
+#include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
 #include <lib/string.h>
 #include <lib/vsprintf.h>
@@ -24,7 +24,7 @@ void kmalloc_init(void) {
         snprintf(buf, sizeof(buf), "kmalloc-%zu", sz);
         kmalloc_caches[i] = kmem_cache_create(buf, sz, 0);
         if (!kmalloc_caches[i])
-            panic("kmalloc_init: failed to create cache size %zu", sz);
+            zx_system_check(ZX_SYSCHK_MEM_OOM, "kmalloc_init: failed to create cache size %zu", sz);
     }
     vmm_notify_slab_ready();
 }

@@ -7,6 +7,7 @@
 #define ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
 
 #include <zxfoundation/types.h>
+#include <zxfoundation/zconfig.h>
 #include <arch/s390x/init/zxfl/stfle.h>
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@
 #define ZXFL_MEM_MAP_MAX        16U
 
 /// @brief Maximum CPUs in the static cpu_map.
-#define ZXFL_CPU_MAP_MAX        64U
+#define ZXFL_CPU_MAP_MAX        CONFIG_ZX_MAX_CPUS
 
 /// @brief Memory region types.
 #define ZXFL_MEM_USABLE         0x01U   ///< Conventional RAM
