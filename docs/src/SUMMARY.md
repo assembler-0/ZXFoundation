@@ -30,7 +30,7 @@
 - [Early Init](kernel/init.md)
 - [System Check](kernel/syschk.md)
 - [Per-CPU Data](kernel/percpu.md)
-- [Trap Handler](kernel/trap.md)
+- [Interrupt Subsystem](kernel/irq.md)
 - [Memory](kernel/memory/index.md)
   - [PMM](kernel/memory/pmm.md)
   - [VMM](kernel/memory/vmm.md)

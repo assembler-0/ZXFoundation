@@ -94,7 +94,7 @@ typedef struct __attribute__((packed, aligned(8))) {
 /// @param lc_offset  Lowcore offset (PSW_LC_* constant).
 /// @param mask       PSW mask word.
 /// @param addr       PSW instruction address.
-static inline void psw_set_raw(uint64_t lc_offset, uint64_t mask, uint64_t addr) {
+static inline void arch_psw_set_raw(uint64_t lc_offset, uint64_t mask, uint64_t addr) {
     __asm__ volatile (
         "stg %[mask], 0(%[off])\n"
         "stg %[addr], 8(%[off])\n"

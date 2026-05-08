@@ -81,16 +81,16 @@ static void verify_protocol_integrity(zxfl_boot_protocol_t *boot) {
 
 static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     if (boot->flags & ZXFL_FLAG_SYSINFO) {
-        printk("sys: machine: %s %s model %s (s/n %s) plant %s\n",
+        printk("machine: %s %s model %s (s/n %s) plant %s\n",
                boot->sysinfo.manufacturer,
                boot->sysinfo.type,
                boot->sysinfo.model,
                boot->sysinfo.sequence,
                boot->sysinfo.plant);
-        printk("sys: lpar: %s (id %u)\n",
+        printk("lpar: %s (id %u)\n",
                boot->sysinfo.lpar_name[0] ? boot->sysinfo.lpar_name : "<bare-metal>",
                boot->sysinfo.lpar_number);
-        printk("sys: cpus: %u total, %u configured, %u standby (rating %u)\n",
+        printk("cpus: %u total, %u configured, %u standby (rating %u)\n",
                boot->sysinfo.cpus_total,
                boot->sysinfo.cpus_configured,
                boot->sysinfo.cpus_standby,
@@ -99,11 +99,11 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     struct s390x_cpuid id;
     arch_get_cpu_id(&id);
-    printk("sys: cpuid: machine %d version %d\n",
+    printk("cpuid: machine %d version %d\n",
            id.machine, id.version);
 
     if (boot->flags & ZXFL_FLAG_SMP) {
-        printk("sys: smp: %u processors detected\n", boot->cpu_count);
+        printk("smp: %u processors detected\n", boot->cpu_count);
         for (uint32_t i = 0; i < boot->cpu_count; i++) {
             printk("     cpu[%u] addr=0x%04x state=%u bsp=%s\n",
                    i,
@@ -114,11 +114,11 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     }
 
     if (boot->flags & ZXFL_FLAG_TOD) {
-        printk("sys: tod: 0x%016llx (boot timestamp)\n", (unsigned long long)boot->tod_boot);
+        printk("tod: 0x%016llx (boot timestamp)\n", (unsigned long long)boot->tod_boot);
     }
 
     if (boot->module_count > 0) {
-        printk("sys: modules: %u loaded\n", boot->module_count);
+        printk("modules: %u loaded\n", boot->module_count);
         for (uint32_t i = 0; i < boot->module_count; i++) {
             printk("     mod[%u] %s (phys=0x%llx, size=%llu bytes)\n",
                    i,

@@ -9,6 +9,7 @@ file(GLOB ARCH_MM_SOURCES_S "arch/s390x/mmu/*.S")
 file(GLOB SYS_SOURCES     "zxfoundation/sys/*.c")
 file(GLOB TRAP_C_SOURCES  "arch/s390x/trap/*.c")
 file(GLOB TRAP_S_SOURCES  "arch/s390x/trap/*.S")
+file(GLOB IRQ_SOURCES     "zxfoundation/sys/irq/*.c")
 file(GLOB CONSOLE_SOURCES "drivers/console/*.c")
 file(GLOB LIB_SOURCES     "lib/*.c")
 
@@ -28,13 +29,14 @@ file(GLOB CRYPTO_SOURCES   "crypto/*.c")
 set(ZX_SOURCES_64
     ${INIT_SOURCES}
     ${ARCH_INIT_SOURCES_C}
+    ${TRAP_C_SOURCES}
+    ${TRAP_S_SOURCES}
     ${ARCH_S390X_SOURCES}
     ${ARCH_MM_SOURCES}
     ${ARCH_MM_SOURCES_S}
     ${ARCH_INIT_SOURCES_64}
     ${SYS_SOURCES}
-    ${TRAP_C_SOURCES}
-    ${TRAP_S_SOURCES}
+    ${IRQ_SOURCES}
     ${CONSOLE_SOURCES}
     ${LIB_SOURCES}
     ${CPU_SOURCES}

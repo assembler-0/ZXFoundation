@@ -58,7 +58,7 @@ static void snapshot_control_regs(zxfl_boot_protocol_t *proto) {
 static void probe_ipl_device(uint32_t schid, zxfl_boot_protocol_t *proto) {
     dasd_eckd_geo_t eckd_geo;
     if (dasd_eckd_probe(schid, &eckd_geo) == 0) {
-        proto->ipl_dev_type  = eckd_geo.dev_type;
+        proto->ipl_dev_type = eckd_geo.dev_type;
         proto->ipl_dev_model = eckd_geo.dev_model;
         print("zxfl01: ipl device: eckd\n");
         return;
@@ -66,7 +66,7 @@ static void probe_ipl_device(uint32_t schid, zxfl_boot_protocol_t *proto) {
 
     dasd_fba_geo_t fba_geo;
     if (dasd_fba_probe(schid, &fba_geo) == 0) {
-        proto->ipl_dev_type  = fba_geo.dev_type;
+        proto->ipl_dev_type = fba_geo.dev_type;
         proto->ipl_dev_model = fba_geo.dev_model;
         print("zxfl01: ipl device: fba\n");
         return;
@@ -252,9 +252,9 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
     {
         const uint64_t virt_off = CONFIG_KERNEL_VIRT_OFFSET;
         uint64_t phys_start = s_proto.kernel_phys_start;
-        uint64_t phys_end   = s_proto.kernel_phys_end;
+        uint64_t phys_end = s_proto.kernel_phys_end;
         if (phys_start >= virt_off) phys_start -= virt_off;
-        if (phys_end   >= virt_off) phys_end   -= virt_off;
+        if (phys_end >= virt_off) phys_end -= virt_off;
         s_proto.mem_map_count = probe_memory(s_mem_map, ZXFL_MEM_MAP_MAX,
                                              phys_start, phys_end, mem_limit);
     }
