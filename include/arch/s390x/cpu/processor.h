@@ -114,17 +114,11 @@ static inline int arch_is_zvm(void) {
 
 /// @brief Enter the disabled wait state.
 [[noreturn]] static inline void arch_sys_halt(void) {
-    __asm__ volatile(
-        "   larl    %%r1, 1f\n"
-        "   lpswe   0(%%r1)\n"
-        "   .align  8\n"
-        "1: .quad   %0, %1\n"
-        :
-        : "i"(PSW_MASK_DISABLED_WAIT),
-          "i"(CONFIG_PANIC_HALT_ADDR)
-        : "r1", "memory"
-    );
-    __builtin_unreachable();
+    static const zx_psw_t halt_psw __attribute__((aligned(8))) = {
+        .mask = PSW_MASK_DISABLED_WAIT,
+        .addr = CONFIG_PANIC_HALT_ADDR,
+    };
+    arch_load_psw(&halt_psw);
 }
 
 /// SIGP order codes (PoP SA22-7832 Chapter 4).

@@ -2,13 +2,19 @@
 // include/zxfoundation/sys/syschk.h
 //
 /// @brief ZXFoundation System Check (syschk) subsystem.
+///
+///        The halt path acquires no locks, calls no kernel subsystems,
+///        and dereferences no kernel data structures.  It is safe to call
+///        from any context: exception handlers, IRQ handlers, early init,
+///        or a corrupt-memory state.
 
 #pragma once
 
 #include <zxfoundation/types.h>
+#include <arch/s390x/init/zxfl/zxfl.h>
 
 // ---------------------------------------------------------------------------
-// Code encoding helpers
+// Code encoding
 // ---------------------------------------------------------------------------
 
 #define ZX_SYSCHK_CLASS_SHIFT   12u
@@ -28,26 +34,25 @@
 // Severity classes
 // ---------------------------------------------------------------------------
 
-#define ZX_SYSCHK_CLASS_FATAL       0xFu  ///< Unrecoverable; always halts.
-#define ZX_SYSCHK_CLASS_CRITICAL    0xCu  ///< Severe; always halts.
-#define ZX_SYSCHK_CLASS_WARNING     0x3u  ///< Recoverable; filter may suppress.
+#define ZX_SYSCHK_CLASS_FATAL       0xFu
+#define ZX_SYSCHK_CLASS_CRITICAL    0xCu
+#define ZX_SYSCHK_CLASS_WARNING     0x3u
 
 // ---------------------------------------------------------------------------
 // Domains
 // ---------------------------------------------------------------------------
 
-#define ZX_SYSCHK_DOMAIN_CORE   0x0u  ///< Core kernel / init
-#define ZX_SYSCHK_DOMAIN_MEM    0x1u  ///< Memory subsystem
-#define ZX_SYSCHK_DOMAIN_SYNC   0x2u  ///< Synchronization primitives
-#define ZX_SYSCHK_DOMAIN_ARCH   0x3u  ///< Architecture / hardware
-#define ZX_SYSCHK_DOMAIN_SCHED  0x4u  ///< Scheduler
-#define ZX_SYSCHK_DOMAIN_IO     0x5u  ///< I/O subsystem
+#define ZX_SYSCHK_DOMAIN_CORE   0x0u
+#define ZX_SYSCHK_DOMAIN_MEM    0x1u
+#define ZX_SYSCHK_DOMAIN_SYNC   0x2u
+#define ZX_SYSCHK_DOMAIN_ARCH   0x3u
+#define ZX_SYSCHK_DOMAIN_SCHED  0x4u
+#define ZX_SYSCHK_DOMAIN_IO     0x5u
 
 // ---------------------------------------------------------------------------
 // Code table — FATAL
 // ---------------------------------------------------------------------------
 
-/// Core
 #define ZX_SYSCHK_CORE_CORRUPT          ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x01)
 #define ZX_SYSCHK_CORE_UNINITIALIZED    ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x02)
 #define ZX_SYSCHK_CORE_ASSERT           ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x03)
@@ -56,23 +61,19 @@
 #define ZX_SYSCHK_CORE_STACK_CORRUPT    ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x06)
 #define ZX_SYSCHK_CORE_BAD_LOADER       ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x07)
 
-/// Memory
 #define ZX_SYSCHK_MEM_OOM               ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_MEM,  0x01)
 #define ZX_SYSCHK_MEM_CORRUPT           ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_MEM,  0x02)
 #define ZX_SYSCHK_MEM_DOUBLE_FREE       ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_MEM,  0x03)
 #define ZX_SYSCHK_MEM_USE_AFTER_FREE    ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_MEM,  0x04)
 #define ZX_SYSCHK_MEM_OVERRUN           ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_MEM,  0x05)
 
-/// Sync
 #define ZX_SYSCHK_SYNC_DEADLOCK         ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_SYNC, 0x01)
 #define ZX_SYSCHK_SYNC_BAD_UNLOCK       ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_SYNC, 0x02)
 
-/// Arch
 #define ZX_SYSCHK_ARCH_BAD_PSW          ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_ARCH, 0x01)
 #define ZX_SYSCHK_ARCH_UNHANDLED_TRAP   ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_ARCH, 0x02)
 #define ZX_SYSCHK_ARCH_MCHECK           ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_ARCH, 0x03)
 
-/// Sched
 #define ZX_SYSCHK_SCHED_CORRUPT         ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_SCHED, 0x01)
 
 // ---------------------------------------------------------------------------
@@ -92,32 +93,40 @@
 #define ZX_SYSCHK_IO_WARN_TIMEOUT       ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_WARNING, ZX_SYSCHK_DOMAIN_IO,   0x01)
 
 // ---------------------------------------------------------------------------
-// Filter return values
+// Crash record
+//
+// Written to a fixed offset inside the BSP lowcore pad region (0x1400)
+// before halting.  The lowcore is always mapped and accessible regardless
+// of kernel state.  The record is read post-mortem by a debugger or
+// operator console.
 // ---------------------------------------------------------------------------
 
-#define ZX_SYSCHK_SUPPRESS  0   ///< Suppress halt; execution continues.
-#define ZX_SYSCHK_HALT      1   ///< Proceed with halt sequence.
+#define ZX_CRASH_RECORD_MAGIC   0x5A584352554E4348ULL  /* "ZXCRUNCH" */
+#define ZX_CRASH_RECORD_OFFSET  0x1400u                /* within lowcore */
+#define ZX_CRASH_MSG_LEN        128u
+
+typedef struct __attribute__((packed)) {
+    uint64_t magic;                     ///< ZX_CRASH_RECORD_MAGIC
+    uint16_t code;                      ///< zx_syschk_code_t
+    uint8_t  _pad[6];
+    uint64_t psw_mask;                  ///< PSW mask at time of syschk
+    uint64_t psw_addr;                  ///< PSW address at time of syschk
+    char     msg[ZX_CRASH_MSG_LEN];     ///< NUL-terminated reason string
+} zx_crash_record_t;
+
+_Static_assert(sizeof(zx_crash_record_t) <= 256,
+               "zx_crash_record_t must fit in 256 bytes");
 
 typedef uint16_t zx_syschk_code_t;
 
-/// @brief WARNING-class filter function.
-///        Contract: must be async-signal-safe (no locks, no allocation).
-///        Never called for FATAL or CRITICAL codes.
-/// @param code  The system check code being evaluated.
-/// @param msg   Formatted message string (read-only).
-/// @return ZX_SYSCHK_SUPPRESS or ZX_SYSCHK_HALT.
-typedef int (*zx_syschk_filter_fn)(zx_syschk_code_t code, const char *msg);
+/// @brief Initialize the system check subsystem.
+/// @param boot    Pointer to the boot protocol
+void zx_syschk_initialize(const zxfl_boot_protocol_t *boot);
 
 /// @brief Issue a system check.
-///        FATAL/CRITICAL: tears down SMP, halts unconditionally.
-///        WARNING: consults registered filter; halts only if filter returns
-///                 ZX_SYSCHK_HALT or no filter is registered.
+///        All severity classes halt unconditionally.
+///        Acquires no locks.  Safe from any context.
 /// @param code  zx_syschk_code_t encoding class, domain, and type.
 /// @param fmt   printf-style format string.
 /// @param ...   Format arguments.
-void zx_system_check(zx_syschk_code_t code, const char *fmt, ...);
-
-/// @brief Register a WARNING-class filter.
-///        Pass NULL to clear.  Not thread-safe; call before SMP bringup.
-/// @param fn  Filter function pointer, or NULL.
-void zx_system_check_set_filter(zx_syschk_filter_fn fn);
+[[noreturn]] void zx_system_check(zx_syschk_code_t code, const char *fmt, ...);

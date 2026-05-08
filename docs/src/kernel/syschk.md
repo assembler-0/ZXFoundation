@@ -1,19 +1,18 @@
 # System Check (syschk)
 
-**Document Revision:** 26h1.1  
+**Document Revision:** 26h1.3  
 **Status:** Active
 
 ---
 
 ## 1. Overview
 
-The System Check subsystem (syschk) is the kernel's structured mechanism for
-reporting and handling fault conditions that arise during execution.  It
-replaces the flat `zx_system_check(2)` interface with a typed, three-axis
-error taxonomy and a defined halt sequence that includes SMP teardown.
+The System Check subsystem (syschk) is the kernel's mechanism for halting the
+system when a condition is detected from which execution cannot safely continue.
 
-A system check is issued when the kernel detects a condition it cannot safely
-recover from, or chooses to evaluate for recovery via a registered filter.
+The halt path acquires no locks, calls no kernel subsystems, and dereferences
+no kernel data structures.  It is safe to call from any context: exception
+handlers, IRQ handlers, early init, or a state where kernel memory is corrupt.
 
 ---
 
@@ -37,11 +36,14 @@ Every system check is identified by a 16-bit code with three fields:
 
 ### 2.1 Severity Classes
 
-| Class    | Value | Halt Behavior                              |
-|----------|-------|--------------------------------------------|
-| FATAL    | 0xF   | Always halts; SMP teardown performed       |
-| CRITICAL | 0xC   | Always halts; SMP teardown performed       |
-| WARNING  | 0x3   | Filter consulted; may suppress halt        |
+| Class    | Value | Behavior      |
+|----------|-------|---------------|
+| FATAL    | 0xF   | Always halts  |
+| CRITICAL | 0xC   | Always halts  |
+| WARNING  | 0x3   | Always halts  |
+
+All classes halt unconditionally.  The class field exists for post-mortem
+triage, not for runtime branching.
 
 ### 2.2 Domains
 
@@ -58,92 +60,91 @@ Every system check is identified by a 16-bit code with three fields:
 
 ## 3. Halt Sequence
 
-The following diagram describes the execution path when a system check is
-issued.
-
 ```
-zx_syschk(code, fmt, ...)
+zx_system_check(code, msg)
         │
         ▼
   arch_local_irq_disable()
         │
-        ├─── CLASS == WARNING ──► filter registered?
-        │                               │
-        │                         YES ──► call filter(code, msg)
-        │                               │
-        │                         SUPPRESS ──► restore IRQ flags, return
-        │                               │
-        │                         HALT  ──► fall through
+        ▼
+  g_halting set? ──YES──► arch_sys_halt()
         │
-        ├─── g_halting already set? ──► arch_sys_halt()  (re-entrant path)
-        │
+        │ NO
         ▼
   g_halting = 1
-  g_filter  = NULL
         │
         ▼
-  printk system check header + message
+  write zx_crash_record_t to lowcore + 0x1400
+  (magic, code, PSW snapshot, reason string)
         │
         ▼
-  smp_teardown()
-  ┌─ for each CPU in percpu_areas[] except self:
-  │    sigp_busy(cpu_addr, SIGP_STOP, ...)
-  └─ CC=3 (not operational) silently skipped
+  raw SIGP STOP loop over g_cpu_map[]
+  (boot protocol array; no percpu_areas lookup)
+  CC=2 retried; CC=3 skipped
         │
         ▼
-  arch_sys_halt()   ← disabled-wait PSW loaded; machine stops
+  arch_sys_halt()  ← disabled-wait PSW; machine stops
 ```
 
 ---
 
-## 4. WARNING-Class Filter
+## 4. Crash Record
 
-A single filter function may be registered to intercept WARNING-class system
-checks before the halt decision is made.
+Before halting, the issuing CPU writes a `zx_crash_record_t` to a fixed
+offset (0x1400) within the BSP lowcore.  The lowcore is a fixed physical
+address, always mapped, and accessible regardless of kernel heap or DAT state.
 
 ```
-Caller ──► zx_syschk(WARNING code, ...) ──► filter(code, msg)
-                                                    │
-                                          ┌─────────┴──────────┐
-                                     SUPPRESS              HALT
-                                          │                    │
-                                    return to caller     halt sequence
+Offset  Size  Field
+------  ----  -----
+0x00    8     magic  (0x5A584352554E4348 "ZXCRUNCH")
+0x08    2     code   (zx_syschk_code_t)
+0x0A    6     pad
+0x10    8     psw_mask  (EPSW at time of syschk)
+0x18    8     psw_addr  (0; not available from EPSW)
+0x20    128   msg    (NUL-terminated reason string)
 ```
 
-**Contract:**
-- The filter is called only for WARNING-class codes.
-- It must be async-signal-safe: no locks, no memory allocation.
-- It is cleared atomically to `NULL` before any FATAL or CRITICAL halt.
-- It is not called during a re-entrant system check.
-
-Registration is not thread-safe and must occur before SMP bringup.
+The record is read post-mortem by a debugger or operator console.  It is not
+printed to the console during the halt sequence.
 
 ---
 
 ## 5. Re-entrancy
 
-If a second system check fires on any CPU while a halt is already in progress
-(for example, a fault inside `smp_teardown`), the re-entrant call detects the
-`g_halting` flag and proceeds directly to `arch_sys_halt()` without attempting
-another teardown.  This prevents infinite recursion and double-teardown races.
+If a second system check fires on any CPU while a halt is already in progress,
+the re-entrant call detects `g_halting` immediately after IRQ disable and
+proceeds directly to `arch_sys_halt()`.  The crash record is not overwritten.
+
+`g_halting` is a `volatile int`, not an atomic.  If the memory subsystem is
+corrupt, atomic operations cannot be trusted.
 
 ---
 
 ## 6. SMP Teardown
 
-Before entering the disabled-wait state, the issuing CPU sends `SIGP STOP` to
-every other CPU recorded in `percpu_areas[]`.  The `sigp_busy()` helper retries
-on condition code 2 (busy) until the order is accepted.  Condition code 3 (not
-operational) is silently ignored — a CPU that is already stopped cannot corrupt
-shared state.
+The halt path iterates `g_cpu_map[]` — the boot protocol's CPU map, registered
+at init time via `zx_syschk_register_cpu_map()`.  This array is loader-written,
+physically contiguous, and never freed.  It does not depend on `percpu_areas[]`
+or any kernel allocator.
 
-The teardown is best-effort.  If a CPU does not respond, the issuing CPU
-proceeds to halt regardless.
+`sigp()` is a single inline assembly instruction.  It acquires no locks.
+CC=2 (busy) is retried in a tight loop.  CC=3 (not operational) is skipped.
 
 ---
 
-## 7. Revision History
+## 7. WARNING-Class Codes
 
-| Revision | Change                                      |
-|----------|---------------------------------------------|
-| 26h1.1   | Initial release; replaces `zx_system_check` |
+WARNING codes halt unconditionally.  There is no filter mechanism.  If a
+subsystem needs to log a recoverable condition, it should call `printk`
+directly and not use `zx_system_check`.
+
+---
+
+## 8. Revision History
+
+| Revision | Change                                                                                                    |
+|----------|-----------------------------------------------------------------------------------------------------------|
+| 26h1.3   | Removed filter API; all classes halt unconditionally; crash record written to lowcore; raw SIGP loop; no printk on halt path |
+| 26h1.2   | Re-entrant guard moved first; SMP teardown before printk; static BSS message buffer                      |
+| 26h1.1   | Initial release                                                                                           |

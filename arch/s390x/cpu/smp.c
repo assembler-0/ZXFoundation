@@ -98,3 +98,17 @@ void smp_teardown(void) {
         sigp_busy(cpu->cpu_addr, SIGP_STOP, 0, nullptr);
     }
 }
+
+/// @brief Lock-free SIGP STOP over the boot protocol CPU map.
+///        Does not touch percpu_areas[]; safe from the halt path.
+void smp_stop_all_raw(const zxfl_cpu_info_t *cpu_map, uint32_t cpu_count) {
+    const uint16_t my_addr = arch_cpu_addr();
+    for (uint32_t i = 0; i < cpu_count; i++) {
+        const uint16_t addr = cpu_map[i].cpu_addr;
+        if (addr == my_addr)
+            continue;
+        int cc;
+        do { cc = sigp(addr, SIGP_STOP, 0, nullptr); }
+        while (cc == SIGP_CC_BUSY);
+    }
+}

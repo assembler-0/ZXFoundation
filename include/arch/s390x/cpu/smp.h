@@ -10,4 +10,10 @@
 void smp_init(const zxfl_boot_protocol_t *boot);
 
 /// @brief Shut down all APs that were started by smp_init().
-void smp_teardown();
+void smp_teardown(void);
+
+/// @brief Issue SIGP STOP to every CPU in the boot map except the caller.
+///        Lock-free; safe to call from any context including the halt path.
+/// @param cpu_map    Boot protocol CPU map array.
+/// @param cpu_count  Number of entries.
+void smp_stop_all_raw(const zxfl_cpu_info_t *cpu_map, uint32_t cpu_count);

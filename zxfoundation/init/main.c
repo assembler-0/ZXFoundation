@@ -21,6 +21,7 @@
 #include <drivers/console/diag.h>
 #include <crypto/sha256.h>
 #include <lib/string.h>
+#include <zxfoundation/sys/simplelog.h>
 
 /// @brief Validate the opaque stack frame written by the loader.
 ///        The frame sits at boot->kernel_stack_top (the loader set
@@ -69,26 +70,16 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
     printk("sys: kernel checksums verified (%u segments)\n", tbl->count);
 }
 
-[[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
-    zx_system_check_set_filter(nullptr);
-    zx_lowcore_setup_late();
-
-    diag_setup();
-    printk_initialize(diag_putc);
-    printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
-           CONFIG_ZX_RELEASE);
-
+static void verify_protocol_integrity(zxfl_boot_protocol_t *boot) {
     if (!boot || boot->magic != ZXFL_MAGIC)
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: protocol missing or corrupt");
 
     const uint64_t expected = ZXVL_COMPUTE_TOKEN(boot->stfle_fac[0], boot->ipl_schid);
     if (boot->binding_token != expected)
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: binding token mismatch — unauthorized loader");
+}
 
-    validate_stack_frame(boot);
-
-    verify_kernel_checksums(boot);
-
+static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     if (boot->flags & ZXFL_FLAG_SYSINFO) {
         printk("sys: machine: %s %s model %s (s/n %s) plant %s\n",
                boot->sysinfo.manufacturer,
@@ -105,6 +96,11 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
                boot->sysinfo.cpus_standby,
                boot->sysinfo.capability);
     }
+
+    struct s390x_cpuid id;
+    arch_get_cpu_id(&id);
+    printk("sys: cpuid: machine %d version %d\n",
+           id.machine, id.version);
 
     if (boot->flags & ZXFL_FLAG_SMP) {
         printk("sys: smp: %u processors detected\n", boot->cpu_count);
@@ -131,6 +127,23 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
                    (unsigned long long)boot->modules[i].size_bytes);
         }
     }
+}
+
+[[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
+    zx_lowcore_setup_late();
+    zx_syschk_initialize(boot);
+
+    diag_setup();
+    printk_initialize(diag_putc);
+    simplelog_initialize(diag_putc);
+    printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
+           CONFIG_ZX_RELEASE);
+
+    verify_protocol_integrity(boot);
+    validate_stack_frame(boot);
+    verify_kernel_checksums(boot);
+
+    dump_machine_info(boot);
 
     percpu_init_bsp();
     arch_cpu_features_init(boot);

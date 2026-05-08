@@ -106,6 +106,21 @@ static inline void psw_set_raw(uint64_t lc_offset, uint64_t mask, uint64_t addr)
     );
 }
 
+/// @brief Extract the current PSW via EPSW.
+/// @return zx_psw_t with mask populated; addr is not available from EPSW and is set to 0.
+static inline zx_psw_t arch_extract_psw(void) {
+    uint32_t hi, lo;
+    __asm__ volatile("epsw %[hi], %[lo]" : [hi] "=d"(hi), [lo] "=d"(lo) :: "cc");
+    return (zx_psw_t){ .mask = ((uint64_t)hi << 32) | (uint64_t)lo, .addr = 0 };
+}
+
+/// @brief Load a PSW via LPSWE.  The PSW struct must be 8-byte aligned.
+///        This is [[noreturn]] — execution continues at psw->addr.
+[[noreturn]] static inline void arch_load_psw(const zx_psw_t *psw) {
+    __asm__ volatile("lpswe %0" :: "Q"(*psw) : "memory");
+    __builtin_unreachable();
+}
+
 /// @brief Install disabled-wait PSWs into all six new PSW slots.
 void psw_install_new_psws(void);
 
