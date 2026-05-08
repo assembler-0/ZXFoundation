@@ -17,8 +17,6 @@ static volatile uint32_t ap_online_count;
 
 [[noreturn]] void ap_startup(void) {
     __atomic_add_fetch(&ap_online_count, 1u, __ATOMIC_SEQ_CST);
-
-    // TODO: enable external interrupts, set up per-CPU interrupt handlers.
     while (true)
         arch_cpu_relax();
 }
@@ -46,21 +44,26 @@ void smp_init(const zxfl_boot_protocol_t *boot) {
         }
 
         zx_page_t *stack_page = pmm_alloc_page(ZX_GFP_ZERO);
-        if (!stack_page) {
-            printk("smp: OOM allocating stack for cpu %u\n", i);
+        zx_page_t *async_page = pmm_alloc_page(ZX_GFP_ZERO);
+        zx_page_t *mcck_page  = pmm_alloc_page(ZX_GFP_ZERO);
+        if (!stack_page || !async_page || !mcck_page) {
+            printk("smp: OOM allocating stacks for cpu %u\n", i);
+            if (stack_page) pmm_free_page(stack_page);
+            if (async_page) pmm_free_page(async_page);
+            if (mcck_page)  pmm_free_page(mcck_page);
             continue;
         }
-        const uint64_t stack_phys_top = pmm_page_to_phys(stack_page) + PAGE_SIZE;
 
         zx_lowcore_t *lc = zx_lowcore_of(lc_phys);
 
-        lc->kernel_stack = hhdm_phys_to_virt(stack_phys_top);
-
-        lc->restart_stack = stack_phys_top;
+        lc->kernel_stack  = hhdm_phys_to_virt(pmm_page_to_phys(stack_page) + PAGE_SIZE);
+        lc->restart_stack = pmm_page_to_phys(stack_page) + PAGE_SIZE;
+        lc->async_stack   = hhdm_phys_to_virt(pmm_page_to_phys(async_page) + PAGE_SIZE);
+        lc->mcck_stack    = hhdm_phys_to_virt(pmm_page_to_phys(mcck_page)  + PAGE_SIZE);
 
         lc_set_kernel_asce(lc, kernel_asce);
-
         lc_set_restart_psw(lc, ap_entry_phys);
+        lc_install_handler_psws(lc);
 
         lc->return_psw.mask = PSW_MASK_KERNEL_DAT;
         lc->return_psw.addr = (uint64_t)(uintptr_t)ap_dat_on;

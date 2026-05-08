@@ -201,6 +201,16 @@ static inline void lc_set_kernel_asce(zx_lowcore_t *lc, uint64_t asce) {
     lc->kernel_asce = asce;
 }
 
+/// @brief Install the four interrupt handler new PSWs into any lowcore.
+///
+///        Must be called for the BSP lowcore (in zx_lowcore_setup_late) and
+///        for every AP lowcore before SIGP RESTART is issued.  Each CPU's
+///        prefix register points to its own lowcore; the hardware reads the
+///        new PSW from that CPU's lowcore, not the BSP's.
+///
+/// @param lc  HHDM-mapped pointer to the target lowcore.
+void lc_install_handler_psws(zx_lowcore_t *lc);
+
 void zx_lowcore_setup_early(void);
 void zx_lowcore_setup_late(void);
 
