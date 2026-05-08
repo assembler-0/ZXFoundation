@@ -11,6 +11,7 @@
 #include <zxfoundation/memory/cma.h>
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/kmalloc.h>
+#include <zxfoundation/object/koms.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/cpu/lowcore.h>
@@ -158,6 +159,8 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     slab_init();
     kmalloc_init();
+
+    koms_init();
 
     smp_init(boot);
 

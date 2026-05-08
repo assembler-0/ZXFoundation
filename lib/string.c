@@ -19,6 +19,7 @@
  */
 
 #include <zxfoundation/types.h>
+#include <zxfoundation/object/koms.h>
 #include <lib/string.h>
 
 bool is_word_boundary(char c) {
@@ -434,4 +435,14 @@ uint64_t strtoul(const char *nptr, char **endptr, int base) {
 
     if (endptr) *endptr = (char *) s;
     return acc;
+}
+
+/// @brief FNV-1a 32-bit hash of a null-terminated string, masked to bucket count.
+uint32_t ns_hash(const char *name) {
+    uint32_t h = 2166136261U;
+    while (*name) {
+        h ^= (uint8_t) *name++;
+        h *= 16777619U;
+    }
+    return h & (KOBJ_NS_BUCKETS - 1U);
 }

@@ -39,6 +39,7 @@
 - [PSW Manager](kernel/psw.md)
 - [Synchronization](kernel/sync.md)
 - [RCU & SRCU](kernel/rcu.md)
+- [Kernel Object Management](kernel/koms.md)
 - [Red-Black Tree](kernel/rbtree.md)
 - [Scheduler](kernel/sched.md)
 - [Subsystem Stubs](kernel/subsystems.md)

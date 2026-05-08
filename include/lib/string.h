@@ -30,3 +30,5 @@ int strcasecmp(const char *s1, const char *s2);
 int strncasecmp(const char *s1, const char *s2, size_t n);
 size_t strlcpy(char *dst, const char *src, size_t size);
 uint64_t strtoul(const char *nptr, char **endptr, int base);
+
+uint32_t ns_hash(const char *name);
