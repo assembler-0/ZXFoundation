@@ -26,15 +26,15 @@ void percpu_init_bsp(void) {
     percpu_areas[0] = p;
 }
 
-/// @brief Allocate a fresh 4 KB page for an AP's lowcore.
-///        The page is zeroed, the per-CPU block is initialised, and the
-///        physical address is returned so the caller can issue SPX.
+/// @brief Allocate and initialize a per-CPU area for an AP.
+/// @param cpu_id   Logical CPU ID (1..MAX_CPUS-1).
+/// @param cpu_addr z/Arch CPU address (from boot protocol).
+/// @return Physical address of the new lowcore (8 KB, 4 KB-aligned), or 0 on failure.
 uint64_t percpu_init_ap(uint16_t cpu_id, uint16_t cpu_addr) {
     if (cpu_id >= MAX_CPUS)
         zx_system_check(ZX_SYSCHK_CORE_ASSERT, "percpu: cpu_id %u exceeds MAX_CPUS", cpu_id);
 
-    // Allocate one 4 KB page for the AP's lowcore.
-    zx_page_t *page = pmm_alloc_page(ZX_GFP_ZERO);
+    zx_page_t *page = pmm_alloc_pages(1, ZX_GFP_ZERO);
     if (!page)
         zx_system_check(ZX_SYSCHK_MEM_OOM, "percpu: OOM allocating lowcore for cpu %u", cpu_id);
 

@@ -28,15 +28,17 @@ void lc_install_handler_psws(zx_lowcore_t *lc) {
     lc->mcck_new_psw.mask     = PSW_MASK_KERNEL_DAT;
     lc->mcck_new_psw.addr     = (uint64_t)(uintptr_t)trap_mcck_entry;
 
-    // TODO: syscall
+    // TODO: syscall — SVC handler not yet implemented; disabled-wait is safe.
     lc->svc_new_psw.mask      = PSW_MASK_DISABLED_WAIT;
     lc->svc_new_psw.addr      = 0x000000000DEAD1C0ULL;
 }
 
-void zx_lowcore_setup_early(void) {
+/// @brief Install disabled-wait PSWs into all six new PSW slots at physical
+void zx_lowcore_setup_pre_dat(void) {
     psw_install_new_psws();
 }
 
+/// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
 void zx_lowcore_setup_late(void) {
     zx_lowcore_t *lc = zx_lowcore();
 

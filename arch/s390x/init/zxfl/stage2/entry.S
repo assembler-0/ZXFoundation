@@ -9,7 +9,7 @@
 stage2_entry:
     lgr     %r13, %r2                   // save schid across calls
 
-    brasl   %r14, psw_install_new_psws
+    brasl   %r14, zxfl_psw_install_safe_psws
 
     larl    %r1, .Lzero_byte
     ssm     0(%r1)                      // mask all interrupts off

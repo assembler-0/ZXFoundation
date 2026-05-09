@@ -14,6 +14,14 @@
 
 #define LOWCORE_SIZE    0x2000UL
 
+/// @brief Named lowcore field offsets for use in assembly (.S) files.
+///        These MUST stay in sync with the C struct layout below.
+///        Verified by the _Static_assert at the bottom of this file.
+#define LC_RESTART_STACK    0x0360UL    ///< zx_lowcore_t::restart_stack
+#define LC_KERNEL_ASCE      0x0388UL    ///< zx_lowcore_t::kernel_asce
+#define LC_RETURN_PSW       0x0290UL    ///< zx_lowcore_t::return_psw
+#define LC_KERNEL_STACK     0x0348UL    ///< zx_lowcore_t::kernel_stack
+
 #ifndef __ASSEMBLER__
 
 #include <zxfoundation/types.h>
@@ -82,7 +90,7 @@ typedef struct __attribute__((packed, aligned(8192))) {
     uint64_t    pcpu;                           /* 0x0288 */
 
     /* Return PSWs */
-    zx_psw_t    return_psw;                     /* 0x0290 */
+    zx_psw_t    return_psw;                     /* 0x0290  LC_RETURN_PSW   */
     zx_psw_t    return_mcck_psw;                /* 0x02a0 */
 
     /* Timing */
@@ -101,12 +109,12 @@ typedef struct __attribute__((packed, aligned(8192))) {
 
     /* Current process */
     uint64_t    current_task;                   /* 0x0340 */
-    uint64_t    kernel_stack;                   /* 0x0348 */
+    uint64_t    kernel_stack;                   /* 0x0348  LC_KERNEL_STACK  */
 
     /* Stacks */
     uint64_t    async_stack;                    /* 0x0350 */
     uint64_t    nodat_stack;                    /* 0x0358 */
-    uint64_t    restart_stack;                  /* 0x0360 */
+    uint64_t    restart_stack;                  /* 0x0360  LC_RESTART_STACK */
     uint64_t    mcck_stack;                     /* 0x0368 */
 
     /* Restart function/parameter */
@@ -116,7 +124,7 @@ typedef struct __attribute__((packed, aligned(8192))) {
     uint32_t    restart_flags;                  /* 0x0384 */
 
     /* Address space */
-    uint64_t    kernel_asce;                    /* 0x0388 */
+    uint64_t    kernel_asce;                    /* 0x0388  LC_KERNEL_ASCE   */
     uint64_t    user_asce;                      /* 0x0390 */
     uint32_t    lpp;                            /* 0x0398 */
     uint32_t    current_pid;                    /* 0x039c */
@@ -166,6 +174,16 @@ typedef struct __attribute__((packed, aligned(8192))) {
 
 _Static_assert(sizeof(zx_lowcore_t) == LOWCORE_SIZE, "zx_lowcore_t must be 8192 bytes");
 
+/// @brief Compile-time verification that the named assembly offsets match the C struct.
+_Static_assert(__builtin_offsetof(zx_lowcore_t, restart_stack) == LC_RESTART_STACK,
+               "LC_RESTART_STACK mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, kernel_asce)   == LC_KERNEL_ASCE,
+               "LC_KERNEL_ASCE mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, return_psw)    == LC_RETURN_PSW,
+               "LC_RETURN_PSW mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, kernel_stack)  == LC_KERNEL_STACK,
+               "LC_KERNEL_STACK mismatch");
+
 /// @brief Access the BSP lowcore via absolute addressing (DAT off).
 static inline zx_lowcore_t *zx_lowcore_raw(void) {
     return (zx_lowcore_t *)(uintptr_t)0x0;
@@ -211,7 +229,15 @@ static inline void lc_set_kernel_asce(zx_lowcore_t *lc, uint64_t asce) {
 /// @param lc  HHDM-mapped pointer to the target lowcore.
 void lc_install_handler_psws(zx_lowcore_t *lc);
 
-void zx_lowcore_setup_early(void);
+/// @brief Install disabled-wait PSWs into all six new PSW slots at physical
+///        lowcore offsets.  Called pre-DAT (DAT off) during early boot.
+///        This is the only safe lowcore write path before the HHDM is live.
+void zx_lowcore_setup_pre_dat(void);
+
+/// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
+///        Called as the very first action in zxfoundation_global_initialize(),
+///        after the HHDM is active.  Replaces the disabled-wait PSWs installed
+///        by zx_lowcore_setup_pre_dat() with real handler entry points.
 void zx_lowcore_setup_late(void);
 
 #endif /* __ASSEMBLER__ */

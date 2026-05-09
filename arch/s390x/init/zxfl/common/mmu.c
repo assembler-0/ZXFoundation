@@ -210,8 +210,11 @@ static uint64_t *alloc_page_table(void) {
 
     __asm__ volatile("ptlb" ::: "memory");
 
+    // PSW_MASK_KERNEL_DAT = PSW_BIT_DAT | PSW_BIT_EA | PSW_BIT_BA
+    // = 0x0400000180000000.  Using the named constant instead of a literal
+    // ensures this stays in sync with the rest of the kernel's PSW definitions.
     static uint64_t jump_psw[2] __attribute__((aligned(16)));
-    jump_psw[0] = 0x0400000180000000ULL;
+    jump_psw[0] = PSW_MASK_KERNEL_DAT;
     jump_psw[1] = entry;
 
     __asm__ volatile(

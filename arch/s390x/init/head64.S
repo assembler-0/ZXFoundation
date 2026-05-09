@@ -44,11 +44,7 @@ __zx_start_kernel64:
     lg      %r15, 392(%r2)                 // kernel_stack_top from boot protocol
     aghi    %r15, -160                     // 160-byte register save area
 
-    lgrl    %r0, .Lpgm_psw_mask            // R0 = PSW mask (disabled-wait, 64-bit)
-    lgrl    %r1, .Lpgm_psw_addr            // R1 = PSW addr (recognizable halt)
-    lgrl    %r3, .Lpgm_psw_slot            // R3 = HHDM virt addr of pgm_new_psw
-    stg     %r0, 0(%r3)
-    stg     %r1, 8(%r3)
+    brasl   %r14, zx_lowcore_setup_pre_dat
 
     lgr     %r2, %r11
     brasl   %r14, zxfoundation_global_initialize
@@ -62,27 +58,19 @@ __zx_start_kernel64:
 .Ldisabled_wait_psw:
     .quad   PSW_MASK_DISABLED_WAIT, 0x0000000000000000
 
-    .align 8
-.Lpgm_psw_mask:
-    .quad   PSW_MASK_DISABLED_WAIT
-.Lpgm_psw_addr:
-    .quad   (CONFIG_KERNEL_VIRT_OFFSET + 0xDEAD30)
-.Lpgm_psw_slot:
-    .quad   (CONFIG_KERNEL_VIRT_OFFSET + PSW_LC_PROGRAM)
-
     .section .text.ap_entry, "ax", @progbits
     .globl ap_entry
 ap_entry:
-    lg      %r15, 0x360(0)
+    lg      %r15, LC_RESTART_STACK(0)
     aghi    %r15, -160
 
-    lctlg   %c1, %c1, 0x388(0)
+    lctlg   %c1, %c1, LC_KERNEL_ASCE(0)
 
-    lpswe   0x290(0)
+    lpswe   LC_RETURN_PSW(0)
 
     .globl ap_dat_on
 ap_dat_on:
-    lg      %r15, 0x348(0)
+    lg      %r15, LC_KERNEL_STACK(0)
     aghi    %r15, -160
     brasl   %r14, ap_startup
 
