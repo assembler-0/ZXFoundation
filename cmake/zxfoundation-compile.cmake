@@ -17,7 +17,7 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -ftrivial-auto-var-init=pattern
     -fno-stack-protector
     -pipe
-    -mpacked-stack
+    -mno-packed-stack
     -msoft-float
     -mno-vx
     -march=${MARCH_MODE}
@@ -28,6 +28,8 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
 if(COMPILER_ID STREQUAL "clang")
     target_compile_options(core.zxfoundation.nucleus PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
+        -Wno-gnu-statement-expression-from-macro-expansion
+        -Wno-gnu-pointer-arith
     )
 endif()
 
@@ -53,6 +55,17 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -g${DSYM_LEVEL}
 )
 
+if(CONFIG_UBSAN)
+    message(STATUS "zxfoundation::build: CONFIG_UBSAN=ON — UBSAN instrumentation enabled")
+    target_compile_options(core.zxfoundation.nucleus PRIVATE
+        -fsanitize=undefined,bounds,shift,alignment,null,vla-bound,object-size,return
+        -fno-sanitize-recover=all
+    )
+    target_compile_definitions(core.zxfoundation.nucleus PUBLIC
+        CONFIG_UBSAN=1
+    )
+endif()
+
 set(zxfoundation_LINKER_SCRIPT
     "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/link.ld"
     CACHE STRING "zxfoundation linker script")
@@ -66,20 +79,24 @@ target_link_options(core.zxfoundation.nucleus PRIVATE
     -static
     --no-dynamic-linker
     -ztext
-    --no-warn-rwx-segments
     --no-pie -g
     -m${TARGET_EMULATION_MODE}
 )
 
-# ---------------------------------------------------------------------------
-# Post-build
-# ---------------------------------------------------------------------------
-add_dependencies(core.zxfoundation.nucleus tools)
+if(COMPILER_ID STREQUAL "gcc")
+    target_link_options(core.zxfoundation.nucleus PRIVATE
+        --no-warn-rwx-segments
+    )
+endif()
 
-add_custom_command(
-    TARGET core.zxfoundation.nucleus POST_BUILD
-    COMMAND "${GEN_CHECKSUMS}" "${CMAKE_BINARY_DIR}/core.zxfoundation.nucleus"
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "zxfoundation::build: signing kernel segments (gen_checksums)"
-    VERBATIM
-)
+if(GEN_CHECKSUMS)
+    add_dependencies(core.zxfoundation.nucleus tools)
+
+    add_custom_command(
+        TARGET core.zxfoundation.nucleus POST_BUILD
+        COMMAND "${GEN_CHECKSUMS}" "${CMAKE_BINARY_DIR}/core.zxfoundation.nucleus"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "zxfoundation::build: signing kernel segments (gen_checksums)"
+        VERBATIM
+    )
+endif()

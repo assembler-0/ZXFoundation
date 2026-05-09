@@ -8,8 +8,8 @@
 
 | Tool               | Minimum version    | Notes                                  | Required |
 |--------------------|--------------------|----------------------------------------|----------|
-| CMake              | 3.20               | Build system generator                 | true     |
-| Compiler and tools | toolchain-specific | See [toolchains.md](toolchains.md)     | true     |
+| CMake              | 3.10               | Build system generator                 | true     |
+| Compiler and tools | toolchain-specific | See [toolchains.md](toolchains.md)     | *partly* |
 | Ninja              | any                | Recommended generator                  | optional |
 | dasdload           | any                | Needed for image generation (optional) | optional |
 | Hercules           | 4.x                | Helpful for development                | optional |

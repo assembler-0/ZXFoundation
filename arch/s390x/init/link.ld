@@ -48,6 +48,7 @@ SECTIONS {
         __bss_start = .;
         *(COMMON)
         *(.bss .bss.*)
+        . = ALIGN(8);
         __bss_end = .;
     } :nucleus_bss
 

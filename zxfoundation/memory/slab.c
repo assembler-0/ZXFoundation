@@ -100,82 +100,231 @@ static kmem_slab_t *slab_new_page(kmem_cache_t *cache, gfp_t gfp) {
     return slab;
 }
 
-static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag, gfp_t gfp) {
-    kmem_slab_t *slab = nullptr;
-    if (!list_empty(&cache->partial_slabs))
-        slab = list_entry(cache->partial_slabs.next, kmem_slab_t, node);
+/// @brief Fill @mag with objects from the cache's slab pool.
+///
+///        Called with @cache->depot_lock held.  The lock is dropped around
+///        the pmm_alloc_page() call inside slab_new_page() so that the PMM
+///        zone lock and the depot lock are never held simultaneously — this
+///        avoids the lock-inversion hazard that causes deadlocks on SMP and
+///        prevents the PMM's per-CPU path from recursing into the slab.
+///
+///        After the PMM allocation the lock is re-acquired and the list state
+///        is re-validated before committing the new slab, because another CPU
+///        may have populated partial_slabs in the window.
+///
+/// @param cache  Owning cache (depot_lock must be held on entry and exit).
+/// @param mag    Empty magazine to fill.
+/// @param gfp    GFP flags forwarded to the PMM if a new slab is needed.
+/// @param f      Saved IRQ flags for the spin_unlock_irqrestore on the
+///               lock-drop path.
+/// @return true if at least one object was placed in @mag.
+static bool cache_refill_magazine(kmem_cache_t *cache, kmem_magazine_t *mag,
+                                  gfp_t gfp, irqflags_t f) {
+    // Fast path: serve from an existing partial slab without dropping the lock.
+    if (!list_empty(&cache->partial_slabs)) {
+        kmem_slab_t *slab = list_entry(cache->partial_slabs.next,
+                                       kmem_slab_t, node);
+        uint16_t *free_stack = slab_free_stack(slab);
 
-    if (!slab) {
-        slab = slab_new_page(cache, gfp);
-        if (!slab) return false;
-        list_add_tail(&slab->node, &cache->partial_slabs);
-    }
+        while (mag->count < MAG_SIZE && slab->free_count > 0) {
+            uint16_t idx;
+            if (slab->free_top > 0)
+                idx = free_stack[--slab->free_top];
+            else
+                idx = slab->next_free++;
 
-    uint16_t *free_stack = slab_free_stack(slab);
-
-    while (mag->count < MAG_SIZE && slab->free_count > 0) {
-        uint16_t idx;
-        if (slab->free_top > 0) {
-            idx = free_stack[--slab->free_top];
-        } else {
-            idx = slab->next_free++;
+            mag->objects[mag->count++] =
+                (char *)slab->obj_base + (uintptr_t)idx * cache->obj_size;
+            slab->free_count--;
         }
-        mag->objects[mag->count++] =
-            (char *)slab->obj_base + (uintptr_t)idx * cache->obj_size;
-        slab->free_count--;
+
+        if (slab->free_count == 0) {
+            list_del_init(&slab->node);
+            list_add_tail(&slab->node, &cache->full_slabs);
+        }
+
+        return mag->count > 0;
     }
 
-    if (slab->free_count == 0) {
-        list_del(&slab->node);
-        list_add_tail(&slab->node, &cache->full_slabs);
+    // Slow path: no partial slab — must allocate a new page from the PMM.
+    // Drop depot_lock before calling into the PMM to avoid holding two
+    // unrelated locks simultaneously (PMM zone lock + depot_lock).
+    spin_unlock_irqrestore(&cache->depot_lock, f);
+    kmem_slab_t *new_slab = slab_new_page(cache, gfp);
+    spin_lock_irqsave(&cache->depot_lock, &f);
+
+    if (!new_slab)
+        return false;
+
+    // Re-check partial_slabs: another CPU may have added one in the window.
+    // If so, discard our freshly allocated slab to avoid leaking it — note
+    // this is a tiny waste of one page that is acceptable for correctness.
+    // In a production path a free list for surplus slabs would be warranted,
+    // but the boot-time frequency is too low to justify the complexity.
+    if (!list_empty(&cache->partial_slabs)) {
+        // Another CPU beat us; release the new page and serve from theirs.
+        new_slab->page->flags    &= ~PF_SLAB;
+        new_slab->page->slab_cache = nullptr;
+        pmm_free_page(new_slab->page);
+
+        kmem_slab_t *slab = list_entry(cache->partial_slabs.next,
+                                       kmem_slab_t, node);
+        uint16_t *free_stack = slab_free_stack(slab);
+
+        while (mag->count < MAG_SIZE && slab->free_count > 0) {
+            uint16_t idx;
+            if (slab->free_top > 0)
+                idx = free_stack[--slab->free_top];
+            else
+                idx = slab->next_free++;
+
+            mag->objects[mag->count++] =
+                (char *)slab->obj_base + (uintptr_t)idx * cache->obj_size;
+            slab->free_count--;
+        }
+
+        if (slab->free_count == 0) {
+            list_del_init(&slab->node);
+            list_add_tail(&slab->node, &cache->full_slabs);
+        }
+
+        return mag->count > 0;
+    }
+
+    // We own the new slab exclusively — link it and fill.
+    list_add_tail(&new_slab->node, &cache->partial_slabs);
+
+    uint16_t *free_stack = slab_free_stack(new_slab);
+    while (mag->count < MAG_SIZE && new_slab->free_count > 0) {
+        uint16_t idx;
+        if (new_slab->free_top > 0)
+            idx = free_stack[--new_slab->free_top];
+        else
+            idx = new_slab->next_free++;
+
+        mag->objects[mag->count++] =
+            (char *)new_slab->obj_base + (uintptr_t)idx * cache->obj_size;
+        new_slab->free_count--;
+    }
+
+    if (new_slab->free_count == 0) {
+        list_del_init(&new_slab->node);
+        list_add_tail(&new_slab->node, &cache->full_slabs);
     }
 
     return mag->count > 0;
 }
 
+/// @brief Swap the per-CPU magazine with one from the depot.
+///
+///        Two distinct code paths exist:
+///
+///        Filling (caller needs objects):
+///          1. Try to promote a full depot magazine to the CPU slot.
+///          2. If none, obtain an empty magazine from the depot (allocating
+///             one from mag_cache if needed), fill it via cache_refill_magazine,
+///             then promote it.
+///
+///        Draining (caller has a full CPU magazine):
+///          1. Push the full CPU magazine to the full-mag depot list.
+///          2. Pull an empty magazine from the depot (if any) into the CPU slot.
+///
+///        Locking discipline: depot_lock is acquired once at the top.
+///        cache_refill_magazine may transiently drop and re-acquire it around
+///        the pmm_alloc_page() call; the saved flags @f are threaded through
+///        so the IRQ state is correctly maintained across that window.
+///
+/// @param cache    Cache to operate on.
+/// @param cpu      Logical CPU ID of the calling CPU.
+/// @param filling  true = want objects; false = returning a full magazine.
+/// @param gfp      GFP flags for potential PMM / mag_cache allocation.
+/// @return true on success.
 static bool magazine_swap(kmem_cache_t *cache, int cpu, bool filling, gfp_t gfp) {
     irqflags_t f;
     spin_lock_irqsave(&cache->depot_lock, &f);
 
     if (filling) {
-        if (list_empty(&cache->full_mags)) {
-            if (list_empty(&cache->empty_mags)) {
-                if (cache == &mag_cache) {
-                    spin_unlock_irqrestore(&cache->depot_lock, f);
-                    return false;
-                }
-                spin_unlock_irqrestore(&cache->depot_lock, f);
-                kmem_magazine_t *nm = (kmem_magazine_t *)kmem_cache_alloc(&mag_cache, gfp);
-                if (!nm) return false;
-                nm->count = 0;
-                spin_lock_irqsave(&cache->depot_lock, &f);
-                list_add_tail(&nm->node, &cache->empty_mags);
-            }
-            kmem_magazine_t *m = list_entry(cache->empty_mags.next,
-                                            kmem_magazine_t, node);
-            list_del(&m->node);
-            if (!cache_refill_magazine(cache, m, gfp)) {
-                list_add_tail(&m->node, &cache->empty_mags);
+        // --- Fast fill: a full depot magazine is immediately available. ---
+        if (!list_empty(&cache->full_mags)) {
+            list_node_t *n = cache->full_mags.next;
+            list_del_init(n);
+            if (cache->cpu_mags[cpu])
+                list_add_tail(&cache->cpu_mags[cpu]->node, &cache->empty_mags);
+            cache->cpu_mags[cpu] = list_entry(n, kmem_magazine_t, node);
+            spin_unlock_irqrestore(&cache->depot_lock, f);
+            return true;
+        }
+
+        // --- Slow fill: no full depot magazine — must populate an empty one. ---
+
+        // Obtain an empty magazine shell.
+        kmem_magazine_t *nm = nullptr;
+
+        if (!list_empty(&cache->empty_mags)) {
+            list_node_t *en = cache->empty_mags.next;
+            list_del_init(en);
+            nm = list_entry(en, kmem_magazine_t, node);
+        } else {
+            // No empty shell in the depot either.  Bootstrap guard: mag_cache
+            // cannot recursively allocate from itself.
+            if (cache == &mag_cache) {
                 spin_unlock_irqrestore(&cache->depot_lock, f);
                 return false;
             }
-            list_add_tail(&m->node, &cache->full_mags);
+
+            // Drop the depot lock while calling into mag_cache to avoid
+            // holding depot_lock across kmem_cache_alloc's IRQ-disable
+            // section (which itself would call magazine_swap on mag_cache,
+            // a different lock, so no deadlock — but cleaner to drop here).
+            spin_unlock_irqrestore(&cache->depot_lock, f);
+            nm = (kmem_magazine_t *)kmem_cache_alloc(&mag_cache, gfp);
+            spin_lock_irqsave(&cache->depot_lock, &f);
+
+            if (!nm) {
+                spin_unlock_irqrestore(&cache->depot_lock, f);
+                return false;
+            }
+            nm->count = 0;
+            // Initialize the node so list_del_init is safe later.
+            list_init(&nm->node);
         }
 
+        // nm is now an empty, unlinked magazine shell.  Fill it.
+        // cache_refill_magazine may drop and re-acquire depot_lock around
+        // pmm_alloc_page; @f is passed by value for that inner unlock and
+        // is not re-used by this frame after the call.
+        bool ok = cache_refill_magazine(cache, nm, gfp, f);
+        // depot_lock is held again here after cache_refill_magazine returns.
+
+        if (!ok) {
+            // Refill failed (OOM).  Return the empty shell to the depot.
+            list_add_tail(&nm->node, &cache->empty_mags);
+            spin_unlock_irqrestore(&cache->depot_lock, f);
+            return false;
+        }
+
+        // Move the now-full magazine into the full-mag list, then immediately
+        // promote it to the CPU slot via the normal fast path.
+        list_add_tail(&nm->node, &cache->full_mags);
+
         list_node_t *n = cache->full_mags.next;
-        list_del(n);
+        list_del_init(n);
         if (cache->cpu_mags[cpu])
             list_add_tail(&cache->cpu_mags[cpu]->node, &cache->empty_mags);
         cache->cpu_mags[cpu] = list_entry(n, kmem_magazine_t, node);
+
+        spin_unlock_irqrestore(&cache->depot_lock, f);
+        return true;
+    }
+
+    // --- Drain path: push the full CPU magazine to the depot. ---
+    list_add_tail(&cache->cpu_mags[cpu]->node, &cache->full_mags);
+    if (list_empty(&cache->empty_mags)) {
+        cache->cpu_mags[cpu] = nullptr;
     } else {
-        list_add_tail(&cache->cpu_mags[cpu]->node, &cache->full_mags);
-        if (list_empty(&cache->empty_mags)) {
-            cache->cpu_mags[cpu] = nullptr;
-        } else {
-            list_node_t *n = cache->empty_mags.next;
-            list_del(n);
-            cache->cpu_mags[cpu] = list_entry(n, kmem_magazine_t, node);
-        }
+        list_node_t *n = cache->empty_mags.next;
+        list_del_init(n);
+        cache->cpu_mags[cpu] = list_entry(n, kmem_magazine_t, node);
     }
 
     spin_unlock_irqrestore(&cache->depot_lock, f);
@@ -195,6 +344,8 @@ void *kmem_cache_alloc(kmem_cache_t *cache, gfp_t gfp) {
         return obj;
     }
 
+    // magazine_swap re-enables IRQs internally during lock operations;
+    // on return IRQs are disabled again (depot_lock is released before return).
     if (magazine_swap(cache, cpu, true, gfp)) {
         mag = cache->cpu_mags[cpu];
         void *obj = mag->objects[--mag->count];
@@ -283,14 +434,14 @@ void kmem_cache_destroy(kmem_cache_t *cache) {
     list_for_each_safe(n, tmp, &cache->partial_slabs) {
         kmem_slab_t *s = list_entry(n, kmem_slab_t, node);
         list_del(n);
-        s->page->flags &= ~PF_SLAB;
+        s->page->flags     &= ~PF_SLAB;
         s->page->slab_cache = nullptr;
         pmm_free_page(s->page);
     }
     list_for_each_safe(n, tmp, &cache->full_slabs) {
         kmem_slab_t *s = list_entry(n, kmem_slab_t, node);
         list_del(n);
-        s->page->flags &= ~PF_SLAB;
+        s->page->flags     &= ~PF_SLAB;
         s->page->slab_cache = nullptr;
         pmm_free_page(s->page);
     }
@@ -321,6 +472,7 @@ void slab_init(void) {
     for (size_t off = 0; off + mag_sz <= PAGE_SIZE; off += mag_sz) {
         kmem_magazine_t *m = (kmem_magazine_t *)(raw + off);
         m->count = 0;
+        list_init(&m->node);
         list_add_tail(&m->node, &mag_cache.empty_mags);
     }
 

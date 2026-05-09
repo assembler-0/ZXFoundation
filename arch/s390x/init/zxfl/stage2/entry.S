@@ -3,7 +3,6 @@
 
 #include <arch/s390x/cpu/psw.h>
 
-    .machinemode zarch
     .section .text, "ax"
     .globl stage2_entry
 stage2_entry:

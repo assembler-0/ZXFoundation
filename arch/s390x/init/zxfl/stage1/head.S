@@ -3,7 +3,6 @@
 
 #include <arch/s390x/cpu/psw.h>
 
-    .machinemode zarch
     .section .text.ipl, "ax"
     .globl __zx_ipl_entry
     .org 0x0

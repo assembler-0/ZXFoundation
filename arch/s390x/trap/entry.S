@@ -7,8 +7,6 @@
 #include <arch/s390x/cpu/irq_frame.h>
 #include <arch/s390x/cpu/psw.h>
 
-    .machinemode zarch
-
 .macro SAVE_FRAME reg, old_psw_lc, stack_lc
     lg      \reg, \stack_lc(0)
 

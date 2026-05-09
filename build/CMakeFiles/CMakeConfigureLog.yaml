@@ -1,0 +1,1935 @@
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_UNAME"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "uname"
+    candidate_directories:
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/usr/local/opt/rustup/bin/uname"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/uname"
+      - "/Users/assembler-0/.cargo/bin/uname"
+      - "/Users/assembler-0/bin/uname"
+      - "/Users/assembler-0/.local/bin/uname"
+      - "/usr/local/bin/uname"
+      - "/opt/darwin-sparc64-unknown-elf/bin/uname"
+      - "/opt/darwin-s390x-cross/bin/uname"
+      - "/usr/local/sbin/uname"
+      - "/System/Cryptexes/App/usr/bin/uname"
+    found: "/usr/bin/uname"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:12 (project)"
+    message: |
+      The system is: Darwin - 25.4.0 - x86_64
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeNinjaFindMake.cmake:5 (find_program)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_MAKE_PROGRAM"
+    description: "Program used to build from build.ninja files."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ninja-build"
+      - "ninja"
+      - "samu"
+    candidate_directories:
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/usr/local/opt/rustup/bin/ninja-build"
+      - "/usr/local/opt/rustup/bin/ninja"
+      - "/usr/local/opt/rustup/bin/samu"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/ninja-build"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/ninja"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/samu"
+      - "/Users/assembler-0/.cargo/bin/ninja-build"
+      - "/Users/assembler-0/.cargo/bin/ninja"
+      - "/Users/assembler-0/.cargo/bin/samu"
+      - "/Users/assembler-0/bin/ninja-build"
+      - "/Users/assembler-0/bin/ninja"
+      - "/Users/assembler-0/bin/samu"
+      - "/Users/assembler-0/.local/bin/ninja-build"
+      - "/Users/assembler-0/.local/bin/ninja"
+      - "/Users/assembler-0/.local/bin/samu"
+      - "/usr/local/bin/ninja-build"
+    found: "/usr/local/bin/ninja"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "/usr/local/share/cmake/Modules/"
+    found: "/usr/local/share/cmake/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:12 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      1
+      /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld: cannot find crt0.o: Invalid argument
+      collect2: error: ld returned 1 exit status
+      
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "/usr/local/share/cmake/Modules/"
+    found: "/usr/local/share/cmake/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:12 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc 
+      Build flags: 
+      Id flags: -c 
+      
+      The output was:
+      0
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CMakeCCompilerId.o"
+      
+      The C compiler identification is GNU, found in:
+        /Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/4.3.2/CompilerIdC/CMakeCCompilerId.o
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_AR"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-ar"
+      - "ar"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ar"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_RANLIB"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-ranlib"
+      - "ranlib"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_STRIP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-strip"
+      - "strip"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-strip"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_LINKER"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-ld"
+      - "ld"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_NM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-nm"
+      - "nm"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-nm"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJDUMP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-objdump"
+      - "objdump"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-objdump"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJCOPY"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-objcopy"
+      - "objcopy"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-objcopy"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_READELF"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-readelf"
+      - "readelf"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-readelf"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_DLLTOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-dlltool"
+      - "dlltool"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-dlltool"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-dlltool"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-dlltool"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-dlltool"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-dlltool"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-dlltool"
+      - "/usr/local/bin/sparc64-unknown-elf-dlltool"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-dlltool"
+      - "/usr/local/sbin/sparc64-unknown-elf-dlltool"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-dlltool"
+      - "/usr/bin/sparc64-unknown-elf-dlltool"
+      - "/bin/sparc64-unknown-elf-dlltool"
+      - "/usr/sbin/sparc64-unknown-elf-dlltool"
+      - "/sbin/sparc64-unknown-elf-dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-dlltool"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-dlltool"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-dlltool"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-dlltool"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-dlltool"
+      - "/opt/darwin-sparc64-unknown-elf/bin/dlltool"
+      - "/usr/local/opt/rustup/bin/dlltool"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/dlltool"
+      - "/Users/assembler-0/.cargo/bin/dlltool"
+      - "/Users/assembler-0/bin/dlltool"
+      - "/Users/assembler-0/.local/bin/dlltool"
+      - "/usr/local/bin/dlltool"
+      - "/opt/darwin-s390x-cross/bin/dlltool"
+      - "/usr/local/sbin/dlltool"
+      - "/System/Cryptexes/App/usr/bin/dlltool"
+      - "/usr/bin/dlltool"
+      - "/bin/dlltool"
+      - "/usr/sbin/dlltool"
+      - "/sbin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/dlltool"
+      - "/opt/pkg/env/active/bin/dlltool"
+      - "/opt/pmk/env/global/bin/dlltool"
+      - "/Library/Apple/usr/bin/dlltool"
+      - "/Applications/VMware Fusion.app/Contents/Public/dlltool"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_ADDR2LINE"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-addr2line"
+      - "addr2line"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-addr2line"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_TAPI"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-tapi"
+      - "tapi"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-tapi"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-tapi"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-tapi"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-tapi"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-tapi"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-tapi"
+      - "/usr/local/bin/sparc64-unknown-elf-tapi"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-tapi"
+      - "/usr/local/sbin/sparc64-unknown-elf-tapi"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-tapi"
+      - "/usr/bin/sparc64-unknown-elf-tapi"
+      - "/bin/sparc64-unknown-elf-tapi"
+      - "/usr/sbin/sparc64-unknown-elf-tapi"
+      - "/sbin/sparc64-unknown-elf-tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-tapi"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-tapi"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-tapi"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-tapi"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-tapi"
+      - "/opt/darwin-sparc64-unknown-elf/bin/tapi"
+      - "/usr/local/opt/rustup/bin/tapi"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/tapi"
+      - "/Users/assembler-0/.cargo/bin/tapi"
+      - "/Users/assembler-0/bin/tapi"
+      - "/Users/assembler-0/.local/bin/tapi"
+      - "/usr/local/bin/tapi"
+      - "/opt/darwin-s390x-cross/bin/tapi"
+      - "/usr/local/sbin/tapi"
+      - "/System/Cryptexes/App/usr/bin/tapi"
+      - "/usr/bin/tapi"
+      - "/bin/tapi"
+      - "/usr/sbin/tapi"
+      - "/sbin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/tapi"
+      - "/opt/pkg/env/active/bin/tapi"
+      - "/opt/pmk/env/global/bin/tapi"
+      - "/Library/Apple/usr/bin/tapi"
+      - "/Applications/VMware Fusion.app/Contents/Public/tapi"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:18 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:201 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_AR"
+    description: "A wrapper around 'ar' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-gcc-ar-15.2"
+      - "sparc64-unknown-elf-gcc-ar-15"
+      - "sparc64-unknown-elf-gcc-ar15"
+      - "sparc64-unknown-elf-gcc-ar"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/sbin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ar-15.2"
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ar-15"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ar-15"
+      - "/sbin/sparc64-unknown-elf-gcc-ar-15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ar-15"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ar-15"
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ar15"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ar15"
+      - "/sbin/sparc64-unknown-elf-gcc-ar15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ar15"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ar15"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ar"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:30 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:201 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_RANLIB"
+    description: "A wrapper around 'ranlib' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "sparc64-unknown-elf-gcc-ranlib-15"
+      - "sparc64-unknown-elf-gcc-ranlib15"
+      - "sparc64-unknown-elf-gcc-ranlib"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/sbin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ranlib-15.2"
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/sbin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ranlib-15"
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/sbin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ranlib15"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ranlib15"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompiler.cmake:54 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:61 (_cmake_find_compiler)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_ASM_COMPILER"
+    description: "ASM compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:1296 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:170 (CMAKE_DETERMINE_COMPILER_ID_VENDOR)"
+      - "CMakeLists.txt:12 (project)"
+    message: |
+      Checking whether the ASM compiler is GNU using "--version" matched "(GNU assembler)|(GCC)|(Free Software Foundation)":
+      sparc64-unknown-elf-gcc (GCC) 15.2.0
+      Copyright (C) 2025 Free Software Foundation, Inc.
+      This is free software; see the source for copying conditions.  There is NO
+      warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:18 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:268 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_ASM_COMPILER_AR"
+    description: "A wrapper around 'ar' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-gcc-ar-"
+      - "sparc64-unknown-elf-gcc-ar-"
+      - "sparc64-unknown-elf-gcc-ar"
+      - "sparc64-unknown-elf-gcc-ar"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ar-"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ar-"
+      - "/sbin/sparc64-unknown-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ar-"
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ar-"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ar-"
+      - "/sbin/sparc64-unknown-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ar-"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ar-"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ar"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:30 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:268 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_ASM_COMPILER_RANLIB"
+    description: "A wrapper around 'ranlib' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sparc64-unknown-elf-gcc-ranlib-"
+      - "sparc64-unknown-elf-gcc-ranlib-"
+      - "sparc64-unknown-elf-gcc-ranlib"
+      - "sparc64-unknown-elf-gcc-ranlib"
+    candidate_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/sbin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ranlib-"
+      - "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/local/opt/rustup/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/.cargo/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Users/assembler-0/.local/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/opt/darwin-s390x-cross/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/local/sbin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/System/Cryptexes/App/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/usr/sbin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/sbin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/opt/pkg/env/active/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/opt/pmk/env/global/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Library/Apple/usr/bin/sparc64-unknown-elf-gcc-ranlib-"
+      - "/Applications/VMware Fusion.app/Contents/Public/sparc64-unknown-elf-gcc-ranlib-"
+    found: "/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc-ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Platform/Darwin.cmake:66 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeSystemSpecificInformation.cmake:32 (include)"
+      - "CMakeLists.txt:12 (project)"
+    mode: "program"
+    variable: "CMAKE_INSTALL_NAME_TOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "install_name_tool"
+    candidate_directories:
+      - "/usr/local/opt/rustup/bin/"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/"
+      - "/Users/assembler-0/.cargo/bin/"
+      - "/Users/assembler-0/bin/"
+      - "/Users/assembler-0/.local/bin/"
+      - "/usr/local/bin/"
+      - "/opt/darwin-sparc64-unknown-elf/bin/"
+      - "/opt/darwin-s390x-cross/bin/"
+      - "/usr/local/sbin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/pkg/env/active/bin/"
+      - "/opt/pmk/env/global/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+    searched_directories:
+      - "/usr/local/opt/rustup/bin/install_name_tool"
+      - "/Users/assembler-0/.antigravity/antigravity/bin/install_name_tool"
+      - "/Users/assembler-0/.cargo/bin/install_name_tool"
+      - "/Users/assembler-0/bin/install_name_tool"
+      - "/Users/assembler-0/.local/bin/install_name_tool"
+      - "/usr/local/bin/install_name_tool"
+      - "/opt/darwin-sparc64-unknown-elf/bin/install_name_tool"
+      - "/opt/darwin-s390x-cross/bin/install_name_tool"
+      - "/usr/local/sbin/install_name_tool"
+      - "/System/Cryptexes/App/usr/bin/install_name_tool"
+    found: "/usr/bin/install_name_tool"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/opt/rustup/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.antigravity/antigravity/bin"
+        - "/Users/assembler-0/.cargo/bin"
+        - "/Users/assembler-0/bin"
+        - "/Users/assembler-0/.local/bin"
+        - "/usr/local/bin"
+        - "/opt/darwin-sparc64-unknown-elf/bin"
+        - "/opt/darwin-s390x-cross/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/pkg/env/active/bin"
+        - "/opt/pmk/env/global/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/Users/assembler-0/.local/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:12 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "/Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/CMakeScratch/TryCompile-zi5cmG"
+      binary: "/Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/CMakeScratch/TryCompile-zi5cmG"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/CMakeScratch/TryCompile-zi5cmG'
+        
+        Run Build Command(s): /usr/local/bin/ninja -v cmTC_09a8a
+        [1/2] /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc   -v -Wl,-v -o CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o -c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c
+        Using built-in specs.
+        COLLECT_GCC=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc
+        Target: sparc64-unknown-elf
+        Configured with: ../configure --with-mpc=/usr/local --with-gmp=/usr/local --with-mpfr=/usr/local --target=sparc64-unknown-elf --prefix=/opt/darwin-sparc64-unknown-elf --with-newlib --with-headers=/opt/darwin-sparc64-unknown-elf/sparc64-unknown-elf/include --enable-languages=c,c++ --disable-shared --disable-threads --disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic --disable-libvtv --disable-decimal-float --disable-nls --disable-werror --with-gnu-as --with-gnu-ld --with-as=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as --with-ld=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld --enable-multilib --with-multilib-list=m64 --enable-64-bit-bfd --enable-frame-pointer --enable-libstdcxx CC=gcc-15 CXX=g++-15 CC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc GCC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc AS_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as LD_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld AR_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ar RANLIB_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ranlib : (reconfigured) ../configure --with-mpc=/usr/local --with-gmp=/usr/local --with-mpfr=/usr/local --target=sparc64-unknown-elf --prefix=/opt/darwin-sparc64-unknown-elf --with-newlib --with-headers=/opt/darwin-sparc64-unknown-elf/sparc64-unknown-elf/include --enable-languages=c,c++ --disable-shared --disable-threads --disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic --disable-libvtv --disable-decimal-float --disable-nls --disable-werror --with-gnu-as --with-gnu-ld --with-as=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as --with-ld=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld --enable-multilib --with-multilib-list=m64 --enable-64-bit-bfd --enable-frame-pointer --enable-libstdcxx --disable-gcov --disable-coverage --disable-libgcc-checking CC=gcc-15 CXX=g++-15 CC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc GCC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc AS_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as LD_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld AR_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ar RANLIB_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ranlib
+        Thread model: single
+        Supported LTO compression algorithms: zlib
+        gcc version 15.2.0 (GCC) 
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o' '-c' '-mcpu=v9' '-dumpdir' 'CMakeFiles/cmTC_09a8a.dir/'
+         /opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/cc1 -quiet -v -D__sparc_v9__ -D__arch64__ /usr/local/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_09a8a.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mcpu=v9 -version -o /var/folders/2p/3xc4nlb57hz418p6rfzd19t00000gn/T//ccsaQ2W0.s
+        GNU C23 (GCC) version 15.2.0 (sparc64-unknown-elf)
+        	compiled by GNU C version 15.2.0, GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.1, isl version isl-0.27-GMP
+        
+        GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+        ignoring nonexistent directory "/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/sys-include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/include
+         /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/include-fixed
+         /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/include
+        End of search list.
+        Compiler executable checksum: db01ef458b6f4f420112110eaf1ce88d
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o' '-c' '-mcpu=v9' '-dumpdir' 'CMakeFiles/cmTC_09a8a.dir/'
+         /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as -v -s -Av9 -64 -no-undeclared-regs -o CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o /var/folders/2p/3xc4nlb57hz418p6rfzd19t00000gn/T//ccsaQ2W0.s
+        GNU assembler version 2.46.0 (sparc64-unknown-elf) using BFD version (GNU Binutils) 2.46.0.20260210
+        COMPILER_PATH=/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/bin/
+        LIBRARY_PATH=/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/lib/
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o' '-c' '-mcpu=v9' '-dumpdir' 'CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.'
+        [2/2] : && /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc  -v -Wl,-v CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o -o cmTC_09a8a   && :
+        FAILED: [code=1] cmTC_09a8a 
+        : && /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc  -v -Wl,-v CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o -o cmTC_09a8a   && :
+        Using built-in specs.
+        COLLECT_GCC=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc
+        COLLECT_LTO_WRAPPER=/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/lto-wrapper
+        Target: sparc64-unknown-elf
+        Configured with: ../configure --with-mpc=/usr/local --with-gmp=/usr/local --with-mpfr=/usr/local --target=sparc64-unknown-elf --prefix=/opt/darwin-sparc64-unknown-elf --with-newlib --with-headers=/opt/darwin-sparc64-unknown-elf/sparc64-unknown-elf/include --enable-languages=c,c++ --disable-shared --disable-threads --disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic --disable-libvtv --disable-decimal-float --disable-nls --disable-werror --with-gnu-as --with-gnu-ld --with-as=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as --with-ld=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld --enable-multilib --with-multilib-list=m64 --enable-64-bit-bfd --enable-frame-pointer --enable-libstdcxx CC=gcc-15 CXX=g++-15 CC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc GCC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc AS_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as LD_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld AR_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ar RANLIB_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ranlib : (reconfigured) ../configure --with-mpc=/usr/local --with-gmp=/usr/local --with-mpfr=/usr/local --target=sparc64-unknown-elf --prefix=/opt/darwin-sparc64-unknown-elf --with-newlib --with-headers=/opt/darwin-sparc64-unknown-elf/sparc64-unknown-elf/include --enable-languages=c,c++ --disable-shared --disable-threads --disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic --disable-libvtv --disable-decimal-float --disable-nls --disable-werror --with-gnu-as --with-gnu-ld --with-as=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as --with-ld=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld --enable-multilib --with-multilib-list=m64 --enable-64-bit-bfd --enable-frame-pointer --enable-libstdcxx --disable-gcov --disable-coverage --disable-libgcc-checking CC=gcc-15 CXX=g++-15 CC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc GCC_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc AS_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-as LD_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld AR_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ar RANLIB_FOR_TARGET=/opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ranlib
+        Thread model: single
+        Supported LTO compression algorithms: zlib
+        gcc version 15.2.0 (GCC) 
+        COMPILER_PATH=/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/bin/
+        LIBRARY_PATH=/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/:/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/lib/
+        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_09a8a' '-mcpu=v9' '-dumpdir' 'cmTC_09a8a.'
+         /opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/collect2 -plugin /opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/liblto_plugin.so -plugin-opt=/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/2p/3xc4nlb57hz418p6rfzd19t00000gn/T//ccXQVLV7.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -V -o cmTC_09a8a crt0.o /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crti.o /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crtbegin.o -L/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0 -L/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/lib -v CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o -lgcc -lc -lgcc -lc /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crtend.o /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crtn.o
+        collect2 version 15.2.0
+        /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld -plugin /opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/liblto_plugin.so -plugin-opt=/opt/darwin-sparc64-unknown-elf/libexec/gcc/sparc64-unknown-elf/15.2.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/2p/3xc4nlb57hz418p6rfzd19t00000gn/T//ccXQVLV7.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -V -o cmTC_09a8a crt0.o /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crti.o /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crtbegin.o -L/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0 -L/opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/../../../../sparc64-unknown-elf/lib -v CMakeFiles/cmTC_09a8a.dir/CMakeCCompilerABI.c.o -lgcc -lc -lgcc -lc /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crtend.o /opt/darwin-sparc64-unknown-elf/lib/gcc/sparc64-unknown-elf/15.2.0/crtn.o
+        GNU ld (GNU Binutils) 2.46.0.20260210
+          Supported emulations:
+           elf64_sparc
+        GNU ld (GNU Binutils) 2.46.0.20260210
+        /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld: cannot find crt0.o: Invalid argument
+        collect2: error: ld returned 1 exit status
+        ninja: build stopped: subcommand failed.
+        
+      exitCode: 1
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:56 (try_compile)"
+      - "CMakeLists.txt:12 (project)"
+    checks:
+      - "Check for working C compiler: /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc"
+    directories:
+      source: "/Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/CMakeScratch/TryCompile-H42nYR"
+      binary: "/Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/CMakeScratch/TryCompile-H42nYR"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "CMAKE_C_COMPILER_WORKS"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/CMakeScratch/TryCompile-H42nYR'
+        
+        Run Build Command(s): /usr/local/bin/ninja -v cmTC_cec9d
+        [1/2] /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc    -o CMakeFiles/cmTC_cec9d.dir/testCCompiler.c.o -c /Users/assembler-0/CLionProjects/UltraSpark/build/CMakeFiles/CMakeScratch/TryCompile-H42nYR/testCCompiler.c
+        [2/2] : && /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc   CMakeFiles/cmTC_cec9d.dir/testCCompiler.c.o -o cmTC_cec9d   && :
+        FAILED: [code=1] cmTC_cec9d 
+        : && /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-gcc   CMakeFiles/cmTC_cec9d.dir/testCCompiler.c.o -o cmTC_cec9d   && :
+        /opt/darwin-sparc64-unknown-elf/bin/sparc64-unknown-elf-ld: cannot find crt0.o: Invalid argument
+        collect2: error: ld returned 1 exit status
+        ninja: build stopped: subcommand failed.
+        
+      exitCode: 1
+...

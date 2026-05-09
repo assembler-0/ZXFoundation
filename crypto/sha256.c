@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/sha256.c
+// crypto/sha256.c
 //
 /// @brief Freestanding SHA-256 (FIPS 180-4).
 
@@ -25,9 +25,10 @@ static const uint32_t K[64] = {
 };
 
 static inline uint32_t rotr32(uint32_t x, uint32_t n) {
-    return (x >> n) | (x << (32U - n));
+    return __builtin_rotateright32(x, n);
 }
 
+/// @brief SHA-256 block compression (FIPS 180-4 §6.2.2).
 static void sha256_block(zxfl_sha256_ctx_t *ctx, const uint8_t block[64]) {
     uint32_t w[64];
     for (uint32_t i = 0; i < 16U; i++) {
@@ -37,7 +38,7 @@ static void sha256_block(zxfl_sha256_ctx_t *ctx, const uint8_t block[64]) {
                ((uint32_t)block[i * 4U + 3U]);
     }
     for (uint32_t i = 16U; i < 64U; i++) {
-        uint32_t s0 = rotr32(w[i-15U], 7U) ^ rotr32(w[i-15U], 18U) ^ (w[i-15U] >> 3U);
+        uint32_t s0 = rotr32(w[i-15U],  7U) ^ rotr32(w[i-15U], 18U) ^ (w[i-15U] >>  3U);
         uint32_t s1 = rotr32(w[i- 2U], 17U) ^ rotr32(w[i- 2U], 19U) ^ (w[i- 2U] >> 10U);
         w[i] = w[i-16U] + s0 + w[i-7U] + s1;
     }
@@ -46,10 +47,10 @@ static void sha256_block(zxfl_sha256_ctx_t *ctx, const uint8_t block[64]) {
     uint32_t e = ctx->state[4], f = ctx->state[5], g = ctx->state[6], h = ctx->state[7];
 
     for (uint32_t i = 0; i < 64U; i++) {
-        uint32_t S1  = rotr32(e, 6U) ^ rotr32(e, 11U) ^ rotr32(e, 25U);
+        uint32_t S1  = rotr32(e,  6U) ^ rotr32(e, 11U) ^ rotr32(e, 25U);
         uint32_t ch  = (e & f) ^ (~e & g);
         uint32_t t1  = h + S1 + ch + K[i] + w[i];
-        uint32_t S0  = rotr32(a, 2U) ^ rotr32(a, 13U) ^ rotr32(a, 22U);
+        uint32_t S0  = rotr32(a,  2U) ^ rotr32(a, 13U) ^ rotr32(a, 22U);
         uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
         uint32_t t2  = S0 + maj;
         h = g; g = f; f = e; e = d + t1;

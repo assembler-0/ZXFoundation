@@ -2,7 +2,6 @@
 
 #define CONFIG_KERNEL_VIRT_OFFSET           0xFFFF800000000000ULL
 
-    .machinemode zarch
     .section .text.handshake, "ax"
     .globl __zxfl_handshake_stub
 .equ ZXFL_SEED_HI, 0xA5F0C3E1

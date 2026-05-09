@@ -35,7 +35,7 @@ set(ZXFL_COMMON_FLAGS
     -fwrapv
     -ftrivial-auto-var-init=pattern
     -fno-stack-protector
-    -m64 -mzarch
+    -m64
     -msoft-float
     -mno-vx
     -march=${MARCH_MODE}
@@ -51,7 +51,7 @@ set(ZXFL_COMMON_LINK_FLAGS
     -zmax-page-size=0x1000
     -m ${TARGET_EMULATION_MODE}
     --no-pie
-    --no-warn-rwx-segment
+    --no-dynamic-linker
 )
 
 # ---------------------------------------------------------------------------
@@ -68,6 +68,22 @@ target_include_directories(zxfl_stage1.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(zxfl_stage1.elf PRIVATE ${ZXFL_COMMON_FLAGS})
 target_compile_definitions(zxfl_stage1.elf PUBLIC __zxfoundation__)
 
+if(COMPILER_ID STREQUAL "clang")
+    target_compile_options(zxfl_stage1.elf PRIVATE
+        --target=${COMMON_TARGET_TRIPLE}
+        -Wno-gnu-statement-expression-from-macro-expansion
+    )
+endif()
+
+if(COMPILER_ID STREQUAL "gcc")
+    target_compile_options(zxfl_stage1.elf PRIVATE
+        -static-libgcc
+        -Wno-array-bounds
+        -fno-delete-null-pointer-checks
+        -mzarch
+    )
+endif()
+
 set(STAGE1_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/stage1.ld")
 set_target_properties(zxfl_stage1.elf PROPERTIES LINK_DEPENDS "${STAGE1_LINKER_SCRIPT}")
 target_link_options(zxfl_stage1.elf PRIVATE
@@ -75,8 +91,14 @@ target_link_options(zxfl_stage1.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
+if(COMPILER_ID STREQUAL "gcc")
+    target_link_options(zxfl_stage1.elf PRIVATE
+        --no-warn-rwx-segments
+    )
+endif()
+
 # ---------------------------------------------------------------------------
-# Stage 2: 64-bit Production Loader (core.zxfoundationloader01.sys)
+# Stage 2: 64-bit Loader (core.zxfoundationloader01.sys)
 # ---------------------------------------------------------------------------
 set(ZXFL_STAGE2_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.S
@@ -90,6 +112,22 @@ target_include_directories(zxfl_stage2.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(zxfl_stage2.elf PRIVATE ${ZXFL_COMMON_FLAGS})
 target_compile_definitions(zxfl_stage2.elf PUBLIC __zxfoundation__)
 
+if(COMPILER_ID STREQUAL "clang")
+    target_compile_options(zxfl_stage2.elf PRIVATE
+        --target=${COMMON_TARGET_TRIPLE}
+        -Wno-gnu-statement-expression-from-macro-expansion
+    )
+endif()
+
+if(COMPILER_ID STREQUAL "gcc")
+    target_compile_options(zxfl_stage2.elf PRIVATE
+        -static-libgcc
+        -Wno-array-bounds
+        -fno-delete-null-pointer-checks
+        -mzarch
+    )
+endif()
+
 set(STAGE2_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/stage2.ld")
 set_target_properties(zxfl_stage2.elf PROPERTIES LINK_DEPENDS "${STAGE2_LINKER_SCRIPT}")
 target_link_options(zxfl_stage2.elf PRIVATE
@@ -97,9 +135,12 @@ target_link_options(zxfl_stage2.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
-# ---------------------------------------------------------------------------
-# Post-build
-# ---------------------------------------------------------------------------
+if(COMPILER_ID STREQUAL "gcc")
+    target_link_options(zxfl_stage2.elf PRIVATE
+        --no-warn-rwx-segments
+    )
+endif()
+
 if(CMAKE_OBJCOPY AND BIN2REC)
     add_dependencies(zxfl_stage1.elf tools)
     add_custom_command(
@@ -110,7 +151,6 @@ if(CMAKE_OBJCOPY AND BIN2REC)
         COMMENT "zxfoundation::build: generating Stage 1 IPL record (00)"
     )
 
-    add_dependencies(zxfl_stage2.elf tools)
     add_custom_command(
         TARGET zxfl_stage2.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary zxfl_stage2.elf core.zxfoundationloader01.sys

@@ -7,3 +7,11 @@ endif()
 if(NOT DEFINED DSYM_LEVEL)
     set(DSYM_LEVEL "0" CACHE STRING "Debug symbol level (0, 1, 2, 3)")
 endif()
+
+# ---------------------------------------------------------------------------
+# Sanitizer options
+# ---------------------------------------------------------------------------
+
+option(CONFIG_UBSAN
+    "Enable Undefined Behavior Sanitizer instrumentation for the kernel"
+    ON)

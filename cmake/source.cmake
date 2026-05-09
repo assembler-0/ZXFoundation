@@ -29,6 +29,15 @@ file(GLOB ARCH_TIME_SOURCES "arch/s390x/time/*.c")
 
 file(GLOB CRYPTO_SOURCES   "crypto/*.c")
 
+# ---------------------------------------------------------------------------
+# libubsanrt — only compiled when CONFIG_UBSAN is enabled
+# ---------------------------------------------------------------------------
+if(CONFIG_UBSAN)
+    file(GLOB UBSAN_SOURCES "lib/libubsanrt/*.c")
+else()
+    set(UBSAN_SOURCES "")
+endif()
+
 set(ZX_SOURCES_64
     ${INIT_SOURCES}
     ${ARCH_INIT_SOURCES_C}
@@ -52,4 +61,5 @@ set(ZX_SOURCES_64
     ${TIME_SOURCES}
     ${ARCH_TIME_SOURCES}
     ${CRYPTO_SOURCES}
+    ${UBSAN_SOURCES}
 )

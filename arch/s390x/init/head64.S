@@ -6,7 +6,6 @@
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/psw.h>
 
-    .machinemode zarch
     .section .text.handshake, "ax"
     .globl __zxfl_handshake_stub
 
