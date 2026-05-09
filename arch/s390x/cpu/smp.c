@@ -9,6 +9,7 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
+#include <zxfoundation/time/ktime.h>
 
 extern void ap_entry(void);
 extern void ap_dat_on(void);
@@ -17,6 +18,7 @@ static volatile uint32_t ap_online_count;
 
 [[noreturn]] void ap_startup(void) {
     __atomic_add_fetch(&ap_online_count, 1u, __ATOMIC_SEQ_CST);
+    time_init_ap();
     while (true)
         arch_cpu_relax();
 }

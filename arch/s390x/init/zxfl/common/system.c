@@ -70,10 +70,7 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
     
     proto->bsp_cpu_addr = bsp;
     proto->cpu_count = 0;
-    
-    // Probe up to 64 potential CPU addresses.
-    // In z/Architecture, CPU addresses can be sparse, but for simplicity
-    // in this environment, scanning 0..ZXFL_CPU_MAP_MAX-1 is sufficient.
+
     for (uint16_t addr = 0; addr < ZXFL_CPU_MAP_MAX; addr++) {
         if (addr == bsp) {
             proto->cpu_map[proto->cpu_count].cpu_addr = addr;
@@ -100,8 +97,14 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
     }
 }
 
+uint64_t tod_read(void) {
+    uint64_t clk;
+    __asm__ volatile("stckf %0" : "=Q"(clk) :: "cc");
+    return clk;
+}
+
 static void detect_tod(zxfl_boot_protocol_t *proto) {
-    proto->tod_boot = arch_get_tod_clock();
+    proto->tod_boot = tod_read();
     proto->flags |= ZXFL_FLAG_TOD;
 }
 

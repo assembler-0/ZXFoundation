@@ -13,6 +13,7 @@
 #include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/object/koms.h>
 #include <zxfoundation/sys/irq/irqdesc.h>
+#include <zxfoundation/time/ktime.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/cpu/lowcore.h>
@@ -115,7 +116,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     }
 
     if (boot->flags & ZXFL_FLAG_TOD) {
-        printk("tod: 0x%016llx (boot timestamp)\n", (unsigned long long)boot->tod_boot);
+        printk("tod: 0x%016llx (zxfl)\n", (unsigned long long)boot->tod_boot);
     }
 
     if (boot->module_count > 0) {
@@ -162,6 +163,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     koms_init();
     irq_subsystem_init();
+    time_init((boot->flags & ZXFL_FLAG_TOD) ? boot->tod_boot : 0);
 
     smp_init(boot);
 

@@ -48,22 +48,6 @@ static inline int arch_smp_processor_id(void) {
     return cpu_addr & 0x3F;
 }
 
-/// @brief Get the Time-of-Day clock.
-static unsigned long long arch_get_tod_clock(void) {
-    unsigned long long clk;
-    __asm__ volatile("stck %0" : "=Q" (clk) :: "cc");
-    return clk;
-}
-
-/// @brief Set the clock comparator.
-static inline void arch_set_clock_comparator(uint64_t time) {
-    __asm__ volatile("sckc %0" :: "Q" (time));
-}
-
-static void arch_set_cpu_timer(uint64_t timer) {
-    __asm__ volatile("spt %0" :: "Q" (timer));
-}
-
 #define arch_ctl_store(array, low, high) ({		        \
 	typedef struct { char _[sizeof(array)]; } addrtype; \
 	__asm__ volatile(					                \

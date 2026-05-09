@@ -10,6 +10,7 @@
 #include <zxfoundation/sync/rcu.h>
 #include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/memory/slab.h>
+#include <zxfoundation/time/ktime.h>
 #include <lib/list.h>
 
 typedef struct kobj_type kobj_type_t;
@@ -179,6 +180,7 @@ struct kobject {
     spinlock_t lock;
     kobj_ns_t *ns;
     list_node_t ns_node;
+    ktime_t created_at;     ///< ktime_get() at koms_init_obj() time.
 };
 
 /// @brief Recover the containing struct from an embedded kobject pointer.

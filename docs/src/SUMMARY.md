@@ -42,6 +42,7 @@
 - [RCU & SRCU](kernel/rcu.md)
 - [Kernel Object Management](kernel/koms.md)
 - [Red-Black Tree](kernel/rbtree.md)
+- [Time Subsystem](kernel/time.md)
 - [Scheduler](kernel/sched.md)
 - [Subsystem Stubs](kernel/subsystems.md)
 
