@@ -14,6 +14,7 @@
 #include <zxfoundation/object/koms.h>
 #include <zxfoundation/sys/irq/irqdesc.h>
 #include <zxfoundation/time/ktime.h>
+#include <zxfoundation/sys/simplelog.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/cpu/lowcore.h>
@@ -24,7 +25,6 @@
 #include <drivers/console/diag.h>
 #include <crypto/sha256.h>
 #include <lib/string.h>
-#include <zxfoundation/sys/simplelog.h>
 
 /// @brief Validate the opaque stack frame written by the loader.
 ///        The frame sits at boot->kernel_stack_top (the loader set
@@ -46,8 +46,7 @@ bad:
 /// @brief Re-verify kernel segment checksums from the HHDM-mapped image.
 static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
     if (!boot->cksum_table_phys) {
-        printk("sys: WARNING — no kernel checksum table, integrity unverified\n");
-        return;
+        zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: no kernel checksum table, integrity unverified — unauthorized loader");
     }
     const zxvl_checksum_table_t *tbl =
         (const zxvl_checksum_table_t *)(uintptr_t)
@@ -69,7 +68,7 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
         if (memcmp(actual, e->digest, ZXFL_SHA256_DIGEST_SIZE) != 0)
             zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: kernel segment checksum mismatch — image tampered");
     }
-    printk("sys: kernel checksums verified (%u segments)\n", tbl->count);
+    printk(ZX_INFO "sys: kernel checksums verified (%u segments)\n", tbl->count);
 }
 
 static void verify_protocol_integrity(zxfl_boot_protocol_t *boot) {
@@ -83,16 +82,16 @@ static void verify_protocol_integrity(zxfl_boot_protocol_t *boot) {
 
 static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     if (boot->flags & ZXFL_FLAG_SYSINFO) {
-        printk("machine: %s %s model %s (s/n %s) plant %s\n",
+        printk(ZX_DEBUG "machine: %s %s model %s (s/n %s) plant %s\n",
                boot->sysinfo.manufacturer,
                boot->sysinfo.type,
                boot->sysinfo.model,
                boot->sysinfo.sequence,
                boot->sysinfo.plant);
-        printk("lpar: %s (id %u)\n",
+        printk(ZX_DEBUG "lpar: %s (id %u)\n",
                boot->sysinfo.lpar_name[0] ? boot->sysinfo.lpar_name : "<bare-metal>",
                boot->sysinfo.lpar_number);
-        printk("cpus: %u total, %u configured, %u standby (rating %u)\n",
+        printk(ZX_DEBUG "cpus: %u total, %u configured, %u standby (rating %u)\n",
                boot->sysinfo.cpus_total,
                boot->sysinfo.cpus_configured,
                boot->sysinfo.cpus_standby,
@@ -101,13 +100,13 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     struct s390x_cpuid id;
     arch_get_cpu_id(&id);
-    printk("cpuid: machine %d version %d\n",
+    printk(ZX_DEBUG "cpuid: machine %d version %d\n",
            id.machine, id.version);
 
     if (boot->flags & ZXFL_FLAG_SMP) {
-        printk("smp: %u processors detected\n", boot->cpu_count);
+        printk(ZX_DEBUG "smp: %u processors detected\n", boot->cpu_count);
         for (uint32_t i = 0; i < boot->cpu_count; i++) {
-            printk("     cpu[%u] addr=0x%04x state=%u bsp=%s\n",
+            printk(ZX_DEBUG "     cpu[%u] addr=0x%04x state=%u bsp=%s\n",
                    i,
                    boot->cpu_map[i].cpu_addr,
                    boot->cpu_map[i].state,
@@ -116,13 +115,13 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     }
 
     if (boot->flags & ZXFL_FLAG_TOD) {
-        printk("tod: 0x%016llx (zxfl)\n", (unsigned long long)boot->tod_boot);
+        printk(ZX_DEBUG "tod: 0x%016llx (zxfl)\n", (unsigned long long)boot->tod_boot);
     }
 
     if (boot->module_count > 0) {
-        printk("modules: %u loaded\n", boot->module_count);
+        printk(ZX_DEBUG "modules: %u loaded\n", boot->module_count);
         for (uint32_t i = 0; i < boot->module_count; i++) {
-            printk("     mod[%u] %s (phys=0x%llx, size=%llu bytes)\n",
+            printk(ZX_DEBUG "     mod[%u] %s (phys=0x%llx, size=%llu bytes)\n",
                    i,
                    boot->modules[i].name,
                    (unsigned long long)boot->modules[i].phys_start,
@@ -143,7 +142,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     simplelog_initialize(diag_putc);
     time_init((boot->flags & ZXFL_FLAG_TOD) ? boot->tod_boot : 0);
 
-    printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
+    printk(ZX_INFO "sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
            CONFIG_ZX_RELEASE);
 
     verify_protocol_integrity(boot);
@@ -171,7 +170,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     smp_init(boot);
 
-    printk("sys: core.zxfoundation.nucleus initialization complete\n");
+    printk(ZX_INFO "sys: core.zxfoundation.nucleus initialization complete\n");
 
     while (true) arch_cpu_relax();
 }

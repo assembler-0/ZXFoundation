@@ -19,7 +19,7 @@ void koms_type_register(kobj_type_t *type) {
     list_for_each_entry(t, &type_registry, registry_node) {
         if (t->type_id == type->type_id) {
             spin_unlock_irqrestore(&type_registry_lock, flags);
-            printk("koms: duplicate type_id %u (%s)\n",
+            printk(ZX_ERROR "koms: duplicate type_id %u (%s)\n",
                    type->type_id, type->name);
             return;
         }
@@ -48,7 +48,7 @@ void koms_init(void) {
     list_init(&type_registry);
     spin_lock_init(&type_registry_lock);
     koms_ns_init(&koms_root_ns, "root", nullptr, nullptr);
-    printk("koms: initialized\n");
+    printk(ZX_INFO "koms: initialized\n");
 }
 
 void koms_init_obj(kobject_t *obj, const kobj_type_t *type,
@@ -447,7 +447,7 @@ void koms_dump_obj(const kobject_t *obj) {
         printk("koms: (null)\n");
         return;
     }
-    printk("koms: [%s] type=%u state=%s flags=0x%x refs=%d ns=%s\n",
+    printk(ZX_INFO "koms: [%s] type=%u state=%s flags=0x%x refs=%d ns=%s\n",
            obj->name ? obj->name : "(unnamed)",
            obj->type_id,
            state_str(obj->state),
@@ -468,11 +468,11 @@ void koms_dump_tree(const kobject_t *obj, uint32_t depth) {
 
 void koms_dump_ns(const kobj_ns_t *ns) {
     if (!ns) return;
-    printk("koms: namespace '%s' (%u objects)\n", ns->name, ns->count);
+    printk(ZX_INFO "koms: namespace '%s' (%u objects)\n", ns->name, ns->count);
     for (uint32_t i = 0; i < KOBJ_NS_BUCKETS; i++) {
         kobject_t *obj;
         list_for_each_entry(obj, (list_node_t *)&ns->buckets[i].chain, ns_node) {
-            printk("  [%u] ", i);
+            printk(ZX_INFO "  [%u] ", i);
             koms_dump_obj(obj);
         }
     }

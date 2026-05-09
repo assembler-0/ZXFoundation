@@ -68,20 +68,12 @@ const rb_aug_callbacks_t vmm_aug_callbacks = {
     .copy      = vma_aug_copy,
 };
 
-// ---------------------------------------------------------------------------
-// Gap-search accessors for rcu_rb_aug_find_gap()
-// ---------------------------------------------------------------------------
-
 static uint64_t vma_node_start(const rb_node_t *n) {
     return rb_entry(n, vm_area_t, rb_node.node)->vm_start;
 }
 static uint64_t vma_node_end(const rb_node_t *n) {
     return rb_entry(n, vm_area_t, rb_node.node)->vm_end;
 }
-
-// ---------------------------------------------------------------------------
-// vmm_rb_root_t — Layer 4 operations
-// ---------------------------------------------------------------------------
 
 static int vma_addr_cmp(const rb_node_t *n, const void *arg) {
     const vm_area_t *vma  = rb_entry(n, vm_area_t, rb_node.node);
@@ -268,7 +260,7 @@ void vmm_init(void) {
     kernel_vm_space.vma_count  = 0;
     kernel_vm_space.pgtbl_root = mmu_kernel_pgtbl()->r1_phys;
 
-    printk("vmm: vmalloc %016llx – %016llx\n",
+    printk(ZX_INFO "vmm: kernel_vm_space initialized, vmalloc [%016llx, %016llx]\n",
            (unsigned long long)VMALLOC_START,
            (unsigned long long)VMALLOC_END);
 }
@@ -287,7 +279,7 @@ vm_area_t *vmm_find_vma(vm_space_t *space, uint64_t virt) {
 int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
     if (!vma || vma->vm_start >= vma->vm_end ||
         (vma->vm_start & (PAGE_SIZE - 1))) {
-        printk("vmm_insert_vma: invalid VMA [%llx, %llx)\n",
+        printk(ZX_ERROR "vmm_insert_vma: invalid VMA [%llx, %llx)\n",
                (unsigned long long)(vma ? vma->vm_start : 0),
                (unsigned long long)(vma ? vma->vm_end   : 0));
         return -1;
@@ -302,7 +294,7 @@ int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
 
     if (va < first_large &&
         map_small_pages(pgtbl, va, first_large, vma->vm_prot, gfp) != 0) {
-        printk("vmm_insert_vma: small-page phase 1 failed\n");
+        printk(ZX_ERROR "vmm_insert_vma: small-page phase 1 failed\n");
         return -1;
     }
 
@@ -333,7 +325,7 @@ int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
     spin_unlock_irqrestore(&space->vma_tree.aug_root.lock, f);
 
     if (!ok) {
-        printk("vmm_insert_vma: overlap [%llx, %llx)\n",
+        printk(ZX_ERROR "vmm_insert_vma: overlap [%llx, %llx)\n",
                (unsigned long long)vma->vm_start,
                (unsigned long long)vma->vm_end);
         unmap_and_free_range(pgtbl, vma->vm_start, vma->vm_end);
@@ -341,7 +333,7 @@ int vmm_insert_vma(vm_space_t *space, vm_area_t *vma, gfp_t gfp) {
     }
 
     if (thp_count)
-        printk("vmm: THP promoted %u × 1 MB large pages in [%016llx, %016llx)\n",
+        printk(ZX_DEBUG "vmm: THP promoted %u × 1 MB large pages in [%016llx, %016llx)\n",
                thp_count,
                (unsigned long long)vma->vm_start,
                (unsigned long long)vma->vm_end);
@@ -365,7 +357,10 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
     size = (size + PAGE_SIZE - 1) & PAGE_MASK;
 
     vm_area_t *vma = vma_alloc();
-    if (!vma) { printk("vmm_alloc: vma_alloc failed\n"); return 0; }
+    if (!vma) {
+        printk(ZX_ERROR "vmm_alloc: vma_alloc failed\n");
+        return 0;
+    }
 
     uint64_t align = (size >= LARGE_PAGE_SIZE) ? LARGE_PAGE_SIZE : PAGE_SIZE;
 
@@ -376,7 +371,7 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
     spin_unlock_irqrestore(&kernel_vm_space.vma_tree.aug_root.lock, f);
 
     if (!va_start) {
-        printk("vmm_alloc: no vmalloc gap for size=0x%llx\n",
+        printk(ZX_ERROR "vmm_alloc: no vmalloc gap for size=0x%llx\n",
                (unsigned long long)size);
         if (slab_available) kfree(vma);
         return 0;
@@ -387,7 +382,7 @@ uint64_t vmm_alloc(uint64_t size, vm_prot_t prot, gfp_t gfp) {
     vma->vm_prot  = prot | VM_KERNEL;
 
     if (vmm_insert_vma(&kernel_vm_space, vma, gfp) != 0) {
-        printk("vmm_alloc: vmm_insert_vma failed\n");
+        printk(ZX_ERROR "vmm_alloc: vmm_insert_vma failed\n");
         if (slab_available) kfree(vma);
         return 0;
     }
@@ -398,7 +393,7 @@ void vmm_free(uint64_t virt) {
     if (!virt) return;
     vm_area_t *vma = vmm_find_vma(&kernel_vm_space, virt);
     if (!vma) {
-        printk("vmm_free: %016llx not in any VMA\n", (unsigned long long)virt);
+        printk(ZX_WARN "vmm_free: %016llx not in any VMA\n", (unsigned long long)virt);
         return;
     }
     vmm_remove_vma(&kernel_vm_space, vma);
@@ -451,13 +446,13 @@ uint64_t vmm_map_phys(uint64_t phys, uint64_t size, vm_prot_t prot) {
 }
 
 void vmm_dump_space(const vm_space_t *space) {
-    printk("vmm: address space dump (%llu VMAs)\n",
+    printk(ZX_INFO "vmm: address space dump (%llu VMAs)\n",
            (unsigned long long)space->vma_count);
     rcu_read_lock();
     rb_node_t *n;
     rb_for_each(n, &((vm_space_t *)space)->vma_tree.aug_root.aug.base) {
         vm_area_t *v = rb_entry(n, vm_area_t, rb_node.node);
-        printk("  [%016llx – %016llx] prot=%08x max_end=%llx\n",
+        printk(ZX_INFO "  [%016llx – %016llx] prot=%08x max_end=%llx\n",
                (unsigned long long)v->vm_start,
                (unsigned long long)v->vm_end,
                v->vm_prot,

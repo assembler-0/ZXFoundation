@@ -28,18 +28,11 @@
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
 #include <lib/string.h>
+#include <lib/vsprintf.h>
 #include <zxfoundation/common.h>
-
-// ---------------------------------------------------------------------------
-// Static descriptor table and namespace
-// ---------------------------------------------------------------------------
 
 static irq_desc_t irq_table[ZX_IRQ_NR_MAX];
 static kobj_ns_t  irq_ns;
-
-// ---------------------------------------------------------------------------
-// IRQ type descriptor
-// ---------------------------------------------------------------------------
 
 /// @brief release() is a no-op: irq_table[] is statically allocated.
 ///        It must exist because kobject_ops_t::release is mandatory.
@@ -58,41 +51,22 @@ static kobj_type_t irq_desc_type = {
     .type_ops = nullptr,
 };
 
-// ---------------------------------------------------------------------------
-// Name formatting
-// ---------------------------------------------------------------------------
-
 /// @brief Format an IRQ number into a static per-descriptor name buffer.
-///        The buffer is embedded in irq_desc_t via a small char array so
-///        that obj->name always points to valid storage.
-///
 ///        Format: "pgm-XXXX", "ext-XXXX", "io-XXXX", "mck-XXXX"
 ///        where XXXX is the lower 8 bits in hex.
-static char irq_name_bufs[ZX_IRQ_NR_MAX][12];
+#define ZX_IRQ_NAMEBUF_SZ 12
+static char irq_name_bufs[ZX_IRQ_NR_MAX][ZX_IRQ_NAMEBUF_SZ];
 
 static void irq_format_name(uint16_t irq, char *buf) {
     const char *prefix;
-    uint16_t    sub = irq & 0x00FFU;
 
     if      (irq < ZX_IRQ_BASE_EXT)  prefix = "pgm";
     else if (irq < ZX_IRQ_BASE_IO)   prefix = "ext";
     else if (irq < ZX_IRQ_BASE_MCCK) prefix = "io";
     else                              prefix = "mck";
 
-    // Manual snprintf — no libc in freestanding.
-    // "pfx-00XX\0" fits in 12 bytes.
-    size_t i = 0;
-    while (prefix[i]) { buf[i] = prefix[i]; i++; }
-    buf[i++] = '-';
-    static const char hex[] = "0123456789abcdef";
-    buf[i++] = hex[(sub >> 4) & 0xF];
-    buf[i++] = hex[ sub       & 0xF];
-    buf[i]   = '\0';
+    snprintf(buf, ZX_IRQ_NAMEBUF_SZ, "%s-%04x", prefix, irq & 0x00FFU);
 }
-
-// ---------------------------------------------------------------------------
-// Default handler
-// ---------------------------------------------------------------------------
 
 static void irq_default_handler(uint16_t irq, zx_irq_frame_t *frame, void *data) {
     (void)data;
@@ -107,13 +81,9 @@ static void irq_default_handler(uint16_t irq, zx_irq_frame_t *frame, void *data)
                         "irq: unhandled machine check sub-code 0x%04x",
                         (unsigned)(irq - ZX_IRQ_BASE_MCCK));
 
-    printk("irq: unhandled irq 0x%04x (psw=0x%016llx) — dropped\n",
+    printk(ZX_WARN "irq: unhandled irq 0x%04x (psw=0x%016llx) — dropped\n",
            (unsigned)irq, (unsigned long long)frame->psw_addr);
 }
-
-// ---------------------------------------------------------------------------
-// Subsystem init
-// ---------------------------------------------------------------------------
 
 void irq_subsystem_init(void) {
     koms_type_register(&irq_desc_type);
@@ -129,20 +99,13 @@ void irq_subsystem_init(void) {
 
         irq_format_name(i, irq_name_bufs[i]);
 
-        // koms_init_obj sets refcount=1, wires ops, fires KOBJ_EVENT_CREATED.
         koms_init_obj(&desc->obj, &irq_desc_type, irq_name_bufs[i], nullptr);
 
-        // Register in the "irq" namespace so callers can do
-        // koms_ns_find_get(&irq_ns, "ext-0040") etc.
         koms_ns_add(&irq_ns, &desc->obj);
     }
 
-    printk("irq: %u descriptors registered with KOMS\n", ZX_IRQ_NR_MAX);
+    printk(ZX_INFO "irq: namespaces and objects initialized for %u descriptors\n", ZX_IRQ_NR_MAX);
 }
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
 
 int irq_register(uint16_t irq, irq_handler_t handler, void *data, uint32_t flags) {
     if (irq >= ZX_IRQ_NR_MAX)
@@ -164,7 +127,6 @@ int irq_register(uint16_t irq, irq_handler_t handler, void *data, uint32_t flags
 
     spin_unlock_irqrestore(&desc->obj.lock, f);
 
-    // Notify listeners (e.g. a future driver model watching for handler install).
     koms_event_fire(&desc->obj, KOBJ_EVENT_STATE_CHANGE);
     return 0;
 }
@@ -185,10 +147,6 @@ void irq_unregister(uint16_t irq) {
     koms_event_fire(&desc->obj, KOBJ_EVENT_STATE_CHANGE);
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch — hot path, zero KOMS overhead
-// ---------------------------------------------------------------------------
-
 void irq_dispatch(uint16_t irq, zx_irq_frame_t *frame) {
     if (unlikely(irq >= ZX_IRQ_NR_MAX))
         zx_system_check(ZX_SYSCHK_ARCH_UNHANDLED_TRAP,
@@ -196,9 +154,6 @@ void irq_dispatch(uint16_t irq, zx_irq_frame_t *frame) {
 
     irq_desc_t *desc = &irq_table[irq];
 
-    // Read handler and data atomically under irqsave.  count is incremented
-    // outside the lock — it is a diagnostic counter, not a correctness value,
-    // and the slight imprecision under concurrent dispatch is acceptable.
     irqflags_t f;
     spin_lock_irqsave(&desc->obj.lock, &f);
     irq_handler_t h  = desc->handler;
@@ -213,17 +168,10 @@ void irq_dispatch(uint16_t irq, zx_irq_frame_t *frame) {
     h(irq, frame, d);
 }
 
-// ---------------------------------------------------------------------------
-// Lookup via KOMS namespace
-// ---------------------------------------------------------------------------
-
 irq_desc_t *irq_get_desc(uint16_t irq) {
     if (irq >= ZX_IRQ_NR_MAX)
         return nullptr;
 
-    // Fast path: direct array index — no namespace lookup needed.
-    // koms_get() bumps the refcount so the caller's contract is consistent
-    // with koms_ns_find_get() (caller must koms_put() when done).
     irq_desc_t *desc = &irq_table[irq];
     if (!koms_get_unless_dead(&desc->obj))
         return nullptr;

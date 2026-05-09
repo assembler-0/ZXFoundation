@@ -324,5 +324,5 @@ void slab_init(void) {
         list_add_tail(&m->node, &mag_cache.empty_mags);
     }
 
-    printk("slab: magazine-depot pools ready\n");
+    printk(ZX_INFO "slab: magazine-depot pools ready\n");
 }

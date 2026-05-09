@@ -17,11 +17,12 @@ static uint32_t     nr_regions = 0;
 
 cma_region_t *cma_register(uint64_t base, uint64_t size, const char *name) {
     if (nr_regions >= CMA_MAX_REGIONS) {
-        printk("cma: too many regions (max %u)\n", CMA_MAX_REGIONS);
+        printk(ZX_ERROR "cma: too many regions (max %u)\n", CMA_MAX_REGIONS);
         return nullptr;
     }
+
     if (!size || (size & (PAGE_SIZE - 1))) {
-        printk("cma: size not page-aligned\n");
+        printk(ZX_ERROR "cma: size not page-aligned\n");
         return nullptr;
     }
 
@@ -33,7 +34,7 @@ cma_region_t *cma_register(uint64_t base, uint64_t size, const char *name) {
     uint64_t bitmap_pages = (bitmap_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
 
     if (bitmap_pages >= nr_pages) {
-        printk("cma: region too small to hold its own bitmap\n");
+        printk(ZX_INFO "cma: region too small to hold its own bitmap\n");
         return nullptr;
     }
 
@@ -51,7 +52,7 @@ cma_region_t *cma_register(uint64_t base, uint64_t size, const char *name) {
     // Mark the bitmap pages themselves as allocated so they are never handed out.
     bitmap_set_range(r->bitmap, 0, bitmap_pages);
 
-    printk("cma: registered '%s' base=0x%llx pages=%llu (bitmap=%llu pages)\n",
+    printk(ZX_INFO "cma: registered '%s' base=0x%llx pages=%llu (bitmap=%llu pages)\n",
            name,
            (unsigned long long)base,
            (unsigned long long)nr_pages,
@@ -163,7 +164,7 @@ void cma_dump(void) {
         }
         uint64_t free_pages = r->nr_pages - used;
         spin_unlock_irqrestore(&r->lock, f);
-        printk("cma: [%u] '%s' base_pfn=%llu pages=%llu free=%llu\n",
+        printk(ZX_DEBUG "cma: [%u] '%s' base_pfn=%llu pages=%llu free=%llu\n",
                i, r->name,
                (unsigned long long)r->base_pfn,
                (unsigned long long)r->nr_pages,

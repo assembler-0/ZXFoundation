@@ -94,7 +94,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     uint64_t bss_phys = hhdm_virt_to_phys((uintptr_t)__bss_end);
     uint64_t kernel_end = (boot->kernel_phys_end > bss_phys) ? boot->kernel_phys_end : bss_phys;
 
-    printk("pmm: boot->kernel_phys_end = 0x%llx, bss_phys = 0x%llx, pgtbl_pool_end = 0x%llx\n",
+    printk(ZX_DEBUG "pmm: boot->kernel_phys_end = 0x%llx, bss_phys = 0x%llx, pgtbl_pool_end = 0x%llx\n",
            (unsigned long long)boot->kernel_phys_end,
            (unsigned long long)bss_phys,
            (unsigned long long)boot->pgtbl_pool_end);
@@ -140,7 +140,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     if (boot->pgtbl_pool_end > reserve_phys_end)
         reserve_phys_end = boot->pgtbl_pool_end;
 
-    printk("pmm: reserve_phys_end = 0x%llx (pool_end = 0x%llx)\n",
+    printk(ZX_DEBUG "pmm: reserve_phys_end = 0x%llx (pool_end = 0x%llx)\n",
            (unsigned long long)reserve_phys_end,
            (unsigned long long)boot->pgtbl_pool_end);
 
@@ -189,7 +189,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
 
     pmm_stats_t st;
     pmm_get_stats(&st);
-    printk("pmm: %llu MB total, %llu MB free (%llu MB DMA, %llu MB normal)\n",
+    printk(ZX_DEBUG "pmm: %llu MB total, %llu MB free (%llu MB DMA, %llu MB normal)\n",
            (unsigned long long)(st.total_pages   * PAGE_SIZE / (1024*1024)),
            (unsigned long long)(st.free_pages    * PAGE_SIZE / (1024*1024)),
            (unsigned long long)(st.dma_free_pages    * PAGE_SIZE / (1024*1024)),
@@ -199,7 +199,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
 zx_page_t *pmm_alloc_pages(uint32_t order, gfp_t gfp) {
     if (!pmm_ready) zx_system_check(ZX_SYSCHK_CORE_UNINITIALIZED, "pmm_alloc_pages: pmm not initialized");
     if (order > MAX_ORDER) {
-        printk("pmm: pmm_alloc_pages: order %u > MAX_ORDER", order);
+        printk(ZX_ERROR "pmm: pmm_alloc_pages: order %u > MAX_ORDER", order);
         return nullptr;
     }
 
@@ -333,7 +333,7 @@ zx_page_t *pmm_alloc_page(gfp_t gfp) {
 void pmm_free_pages(zx_page_t *page, uint32_t order) {
     if (!pmm_ready) zx_system_check(ZX_SYSCHK_CORE_UNINITIALIZED, "pmm_free_pages: null not initialized");
     if (!page) {
-        printk("pmm: pmm_free_pages: null page");
+        printk(ZX_ERROR "pmm: pmm_free_pages: null page");
         return;
     }
 

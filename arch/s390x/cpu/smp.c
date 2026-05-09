@@ -41,7 +41,7 @@ void smp_init(const zxfl_boot_protocol_t *boot) {
 
         uint64_t lc_phys = percpu_init_ap((uint16_t)i, ci->cpu_addr);
         if (!lc_phys) {
-            printk("smp: OOM allocating lowcore for cpu %u\n", i);
+            printk(ZX_ERROR "smp: OOM allocating lowcore for cpu %u\n", i);
             continue;
         }
 
@@ -49,7 +49,7 @@ void smp_init(const zxfl_boot_protocol_t *boot) {
         zx_page_t *async_page = pmm_alloc_page(ZX_GFP_ZERO);
         zx_page_t *mcck_page  = pmm_alloc_page(ZX_GFP_ZERO);
         if (!stack_page || !async_page || !mcck_page) {
-            printk("smp: OOM allocating stacks for cpu %u\n", i);
+            printk(ZX_ERROR "smp: OOM allocating stacks for cpu %u\n", i);
             if (stack_page) pmm_free_page(stack_page);
             if (async_page) pmm_free_page(async_page);
             if (mcck_page)  pmm_free_page(mcck_page);
@@ -75,7 +75,7 @@ void smp_init(const zxfl_boot_protocol_t *boot) {
         sigp_busy(ci->cpu_addr, SIGP_SET_PREFIX, (uint32_t)lc_phys, nullptr);
         sigp_busy(ci->cpu_addr, SIGP_RESTART,    0,                  nullptr);
 
-        printk("smp: cpu %u (addr=0x%04x) started (lc=0x%llx entry=0x%llx)\n",
+        printk(ZX_DEBUG "smp: cpu %u (addr=0x%04x) started (lc=0x%llx entry=0x%llx)\n",
                i, ci->cpu_addr,
                (unsigned long long)lc_phys,
                (unsigned long long)ap_entry_phys);
@@ -85,7 +85,7 @@ void smp_init(const zxfl_boot_protocol_t *boot) {
     while (__atomic_load_n(&ap_online_count, __ATOMIC_SEQ_CST) < ap_count)
         arch_cpu_relax();
 
-    printk("smp: all %u APs online\n", ap_count);
+    printk(ZX_INFO "smp: all %u APs online\n", ap_count);
 }
 
 /// @brief Issue SIGP STOP to all CPUs except the caller.

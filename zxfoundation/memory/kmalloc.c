@@ -43,7 +43,7 @@ static inline int get_cache_index(size_t size) {
 void *kmalloc(size_t size, gfp_t gfp) {
     int idx = get_cache_index(size);
     if (idx < 0) {
-        printk("kmalloc: size %zu out of range [32, 131072]\n", size);
+        printk(ZX_ERROR "kmalloc: size %zu out of range [32, 131072]\n", size);
         return nullptr;
     }
     void *ptr = kmem_cache_alloc(kmalloc_caches[idx], gfp);
@@ -56,7 +56,7 @@ void kfree(void *ptr) {
     if (!ptr) return;
     zx_page_t *page = virt_to_page(ptr);
     if (!(page->flags & PF_SLAB) || !page->slab_cache) {
-        printk("kfree: ptr %p is not a slab object\n", ptr);
+        printk(ZX_WARN "kfree: ptr %p is not a slab object\n", ptr);
         return;
     }
     kmem_cache_free(page->slab_cache, ptr);
