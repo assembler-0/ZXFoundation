@@ -1,21 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/common/zxvl_verify.c
 //
-/// @brief ZXVerifiedLoad — enhanced integrity verification.
+/// @brief ZXVerifiedLoad — kernel checksum verification.
 ///
-///        Two verification layers:
-///
-///        1. Stage-2 self-verification (called from stage-1):
-///           SHA-256 of the loaded stage-2 binary is compared against an
-///           expected digest embedded in stage-1's .rodata.  The expected
-///           digest is patched into the stage-1 image by the build system
-///           after stage-2 is compiled.
-///
-///        2. Kernel checksum verification (called from stage-2):
-///           After all ELF segments are loaded, the loader reads the
-///           zxvl_checksum_table_t from load_min + ZXVL_CKSUM_TABLE_OFFSET
-///           and verifies each entry's SHA-256 or SHA-512 digest against
-///           the corresponding physical memory range.
+///        The checksum table physical address is discovered dynamically by
+///        elfload.c scanning PT_LOAD p_flags for ZXVL_PFLAGS_CKSUM.
+///        No hardcoded offsets are used here.
 
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/init/zxfl/panic.h>
@@ -23,13 +13,12 @@
 #include <arch/s390x/init/zxfl/string.h>
 #include <crypto/sha256.h>
 
-void zxvl_verify_nucleus_checksums(uint64_t load_min) {
+void zxvl_verify_nucleus_checksums(uint64_t cksum_table_phys) {
     const zxvl_checksum_table_t *tbl =
-        (const zxvl_checksum_table_t *)(uintptr_t)(load_min + ZXVL_CKSUM_TABLE_OFFSET);
+        (const zxvl_checksum_table_t *)(uintptr_t)cksum_table_phys;
 
-    // Validate magic and version.
     if (tbl->magic != ZXVL_CKSUM_MAGIC)
-        panic("zxvl: nucleus checkum table absent");
+        panic("zxvl: nucleus checksum table absent");
 
     if (tbl->version != ZXVL_CKSUM_VERSION)
         panic("zxvl: checksum table version mismatch");
@@ -37,8 +26,7 @@ void zxvl_verify_nucleus_checksums(uint64_t load_min) {
     if (tbl->count == 0 || tbl->count > ZXVL_CKSUM_MAX_ENTRIES)
         panic("zxvl: checksum table corruption");
 
-    const uint32_t algo = tbl->algo;
-    if (algo != ZXVL_CKSUM_ALGO_SHA256)
+    if (tbl->algo != ZXVL_CKSUM_ALGO_SHA256)
         panic("zxvl: nucleus checksum algorithm unsupported");
 
     for (uint32_t i = 0; i < tbl->count; i++) {

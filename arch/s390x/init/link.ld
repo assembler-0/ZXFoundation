@@ -1,10 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* arch/s390x/init/link.ld — ZXFoundation Kernel Linker Script */
+
 ENTRY(__zx_start_kernel64)
 
 PHDRS {
-    nucleus      PT_LOAD FLAGS(7);
-    checksums_seg PT_LOAD FLAGS(4);
+    hs_seg        PT_LOAD FLAGS(0x00400005);  /* ZXVL_PFLAGS_HS:    PF_X|PF_R + bit22 */
+    entry_seg     PT_LOAD FLAGS(0x00800005);  /* ZXVL_PFLAGS_ENTRY: PF_X|PF_R + bit23 */
+    nucleus_text  PT_LOAD FLAGS(0x00000005);  /* PF_X|PF_R  — kernel .text             */
+    nucleus_ro    PT_LOAD FLAGS(0x00000004);  /* PF_R       — kernel .rodata            */
+    nucleus_data  PT_LOAD FLAGS(0x00000006);  /* PF_R|PF_W  — kernel .data             */
+    nucleus_bss   PT_LOAD FLAGS(0x00000006);  /* PF_R|PF_W  — kernel .bss              */
+    lock_seg      PT_LOAD FLAGS(0x00100006);  /* ZXVL_PFLAGS_LOCK:  PF_R|PF_W + bit20 */
+    checksums_seg PT_LOAD FLAGS(0x00200004);  /* ZXVL_PFLAGS_CKSUM: PF_R + bit21      */
 }
 
 nucleus_vma_base = 0xFFFF800000100000;
@@ -12,44 +19,46 @@ nucleus_vma_base = 0xFFFF800000100000;
 SECTIONS {
     . = nucleus_vma_base;
     __zx_vma_start = .;
-    
-    .text.handshake : {
+
+    .text.handshake : ALIGN(8) {
         KEEP(*(.text.handshake))
-    } :nucleus
+    } :hs_seg
 
-    .text nucleus_vma_base + 0x400 : {
+    .text.entry : ALIGN(8) {
         KEEP(*(.text.__zx_start_kernel64))
-        *(.text .text.*)
-    } :nucleus
+    } :entry_seg
 
-    .rodata : ALIGN(8) {
+    .text : ALIGN(8) {
+        *(.text .text.*)
+    } :nucleus_text
+
+    .rodata : ALIGN(4096) {
         __rodata_start = .;
         *(.rodata .rodata.*)
         __rodata_end = .;
-    } :nucleus
+    } :nucleus_ro
 
-    .data : ALIGN(8) {
+    .data : ALIGN(4096) {
         __data_start = .;
         *(.data .data.*)
         __data_end = .;
-    } :nucleus
-
-    .zxfl_lock nucleus_vma_base + 0x70000 : {
-        KEEP(*(.zxfl_lock))
-        LONG(0xCCBBCC35)
-        LONG(0x5A58464C)
-        . = . + 0x1000 - 8;
-        LONG(0xE5664311)
-    } :nucleus
+    } :nucleus_data
 
     .bss : ALIGN(4096) {
         __bss_start = .;
         *(COMMON)
         *(.bss .bss.*)
         __bss_end = .;
-    } :nucleus
+    } :nucleus_bss
 
-    .zxvl_checksums nucleus_vma_base + 0x80000 : {
+    .zxfl_lock : ALIGN(4096) {
+        LONG(0xCCBBCC35)
+        LONG(0x5A58464C)
+        . += 0x1000 - 8;
+        LONG(0xE5664311)
+    } :lock_seg
+
+    .zxvl_checksums : ALIGN(4096) {
         KEEP(*(.zxvl_checksums))
     } :checksums_seg
 

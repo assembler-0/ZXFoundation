@@ -238,11 +238,11 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
     uint64_t load_base = 0;
     uint64_t load_size = 0;
     print("zxfl01: preparing core.zxfoundation.nucleus\n");
-    if (zxfl_load_elf64(schid, &kernel_ds, &entry_point, &load_base, &load_size,
+    if (zxfl_load_elf64(schid, &kernel_ds, &s_proto, &entry_point, &load_base, &load_size,
                         ZXVL_COMPUTE_TOKEN(s_proto.stfle_fac[0], schid)) < 0)
         panic("zxfl01: load error");
 
-    zxvl_verify_nucleus_checksums(load_base);
+    zxvl_verify_nucleus_checksums(s_proto.cksum_table_phys);
     print("zxfl01: nucleus verified\n");
 
     s_proto.kernel_phys_start = load_base;

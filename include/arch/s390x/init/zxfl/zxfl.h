@@ -179,6 +179,10 @@ typedef struct {
         uint64_t size_bytes;    ///< Size of the module in bytes
     } modules[16];
 
+    // ---- DYNAMIC SEGMENT ADDRESSES (discovered by p_flags scan) ----
+    uint64_t cksum_table_phys;  ///< Physical address of zxvl_checksum_table_t
+    uint64_t lock_phys;         ///< Physical address of .zxfl_lock segment
+
 } zxfl_boot_protocol_t;
 
 #endif /* ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H */

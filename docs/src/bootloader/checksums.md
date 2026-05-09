@@ -1,6 +1,6 @@
 # Checksum Protocol
 
-**Document Revision:** 26h1.0
+**Document Revision:** 26h1.1
 
 ---
 
@@ -20,13 +20,9 @@ The double verification (loader + kernel) ensures that neither a compromised loa
 
 ## 2. Table Location
 
-The checksum table is embedded in the kernel ELF at a fixed offset:
+The checksum table is placed in the `.zxvl_checksums` ELF section, which is emitted as a dedicated `PT_LOAD` segment with `p_flags = ZXVL_PFLAGS_CKSUM` (`0x00200004`).
 
-`table_phys = load_min + ZXVL_CKSUM_TABLE_OFFSET`
-
-where `ZXVL_CKSUM_TABLE_OFFSET = 0x80000`.
-
-The table is placed in the `.zxvl_checksums` ELF section. The linker script must anchor this section at the correct virtual address.
+The loader discovers the table's physical address by scanning the ELF program header table for a segment with that exact `p_flags` value. The physical address is stored in `zxfl_boot_protocol_t::cksum_table_phys` and passed to the kernel. No hardcoded offsets are used.
 
 ---
 

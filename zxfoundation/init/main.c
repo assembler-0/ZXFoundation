@@ -12,6 +12,7 @@
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/object/koms.h>
+#include <zxfoundation/sys/irq/irqdesc.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/cpu/lowcore.h>
@@ -43,14 +44,13 @@ bad:
 
 /// @brief Re-verify kernel segment checksums from the HHDM-mapped image.
 static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
-    const uint64_t virt_base = boot->kernel_phys_start + CONFIG_KERNEL_VIRT_OFFSET;
-    const zxvl_checksum_table_t *tbl =
-        (const zxvl_checksum_table_t *)(uintptr_t)(virt_base + ZXVL_CKSUM_TABLE_OFFSET);
-
-    if (tbl->magic != ZXVL_CKSUM_MAGIC) {
+    if (!boot->cksum_table_phys) {
         printk("sys: WARNING — no kernel checksum table, integrity unverified\n");
         return;
     }
+    const zxvl_checksum_table_t *tbl =
+        (const zxvl_checksum_table_t *)(uintptr_t)
+        hhdm_phys_to_virt(boot->cksum_table_phys);
     if (tbl->version != ZXVL_CKSUM_VERSION || tbl->count == 0 ||
         tbl->count > ZXVL_CKSUM_MAX_ENTRIES)
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: kernel checksum table corrupt");
@@ -161,6 +161,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     kmalloc_init();
 
     koms_init();
+    irq_subsystem_init();
 
     smp_init(boot);
 

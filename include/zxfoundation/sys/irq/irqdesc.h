@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // include/zxfoundation/sys/irq/irqdesc.h
 //
-/// @brief Generic IRQ descriptor table.
+/// @brief Generic IRQ descriptor — KOMS-managed.
 
 #pragma once
 
 #include <zxfoundation/types.h>
+#include <zxfoundation/object/koms.h>
 #include <arch/s390x/cpu/irq_frame.h>
 
 /// Total number of IRQ descriptor slots.
@@ -22,39 +23,43 @@
 #define ZX_IRQF_DISABLED    (1U << 1)   ///< Descriptor registered but masked.
 
 /// @brief IRQ handler function signature.
-/// @param irq    IRQ number (ZX_IRQ_BASE_* + hardware code).
-/// @param frame  Pointer to the interrupt frame saved by entry.S.
-/// @param data   Opaque pointer registered with the descriptor.
 typedef void (*irq_handler_t)(uint16_t irq, zx_irq_frame_t *frame, void *data);
 
-/// @brief IRQ descriptor — one entry in the global descriptor table.
-typedef struct {
-    irq_handler_t   handler;    ///< Registered handler, or NULL for default.
-    void           *data;       ///< Opaque argument passed to handler.
-    uint32_t        flags;      ///< ZX_IRQF_* flags.
-    uint32_t        count;      ///< Number of times this IRQ has fired.
+/// @brief IRQ descriptor — KOMS-managed, statically allocated.
+///
+///        kobject_t is the first member so kobject_container() works and
+///        koms_ns_find_get("irq", name) returns a directly castable pointer.
+///
+///        obj->lock (embedded in kobject_t) serializes handler registration
+///        and unregistration, replacing the previous unsynchronized access.
+///
+///        The dispatch hot path bypasses KOMS entirely — it indexes irq_table[]
+///        directly and reads handler/data under irqsave, paying zero kobject
+///        overhead per interrupt.
+typedef struct irq_desc {
+    kobject_t       obj;        ///< KOMS base — must be first.
+    irq_handler_t   handler;
+    void           *data;
+    uint32_t        irq_flags;  ///< ZX_IRQF_* (distinct from obj.flags).
+    uint32_t        count;      ///< Dispatch count (incremented in hot path).
+    uint16_t        irq_nr;     ///< Hardware IRQ number.
 } irq_desc_t;
 
-/// @brief Register a handler for a specific IRQ number.
-///
-/// @param irq      IRQ number (ZX_IRQ_BASE_* + hardware code).
-/// @param handler  Handler function.
-/// @param data     Opaque argument forwarded to handler on each invocation.
-/// @param flags    ZX_IRQF_* flags.
-/// @return 0 on success, -1 if irq >= ZX_IRQ_NR_MAX or slot already taken
-///         without ZX_IRQF_SHARED.
+/// @brief Initialize the IRQ subsystem and register all descriptors with KOMS.
+///        Must be called after koms_init().
+void irq_subsystem_init(void);
+
+/// @brief Register a handler.
+/// @return 0 on success, -1 on range error or conflict.
 int irq_register(uint16_t irq, irq_handler_t handler, void *data, uint32_t flags);
 
-/// @brief Unregister the handler for a specific IRQ number.
-/// @param irq  IRQ number.
+/// @brief Unregister the handler for an IRQ.
 void irq_unregister(uint16_t irq);
 
-/// @brief Dispatch an interrupt to its registered handler.
-/// @param irq    IRQ number.
-/// @param frame  Interrupt frame pointer.
+/// @brief Dispatch an interrupt.  Hot path — no KOMS overhead.
 void irq_dispatch(uint16_t irq, zx_irq_frame_t *frame);
 
-/// @brief Return a read-only pointer to a descriptor (for diagnostics).
-/// @param irq  IRQ number.
-/// @return Pointer to the descriptor, or NULL if irq >= ZX_IRQ_NR_MAX.
-const irq_desc_t *irq_get_desc(uint16_t irq);
+/// @brief Look up a descriptor by IRQ number via KOMS namespace.
+///        Acquires a reference; caller must koms_put() when done.
+/// @return Referenced irq_desc_t *, or nullptr.
+irq_desc_t *irq_get_desc(uint16_t irq);

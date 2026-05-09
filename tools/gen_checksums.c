@@ -8,8 +8,9 @@
 #include <errno.h>
 #include <crypto/sha256.h>
 
-#define PT_LOAD  1
-#define ELFMAG   "\x7f""ELF"
+#define PT_LOAD          1
+#define ELFMAG           "\x7f""ELF"
+#define ZXVL_PFLAGS_CKSUM 0x00200004U   /* must match link.ld checksums_seg FLAGS */
 
 static uint16_t be16(const uint8_t *p) { return ((uint16_t)p[0] << 8) | p[1]; }
 static uint32_t be32(const uint8_t *p) {
@@ -73,7 +74,8 @@ int main(int argc, char **argv) {
     }
 
     /* ------------------------------------------------------------------ */
-    /* 2. Load section headers and locate .zxvl_checksums.                 */
+    /* 2. Load section headers and locate .zxvl_checksums file offset.    */
+    /*    Used only to find where to write the table.                     */
     /* ------------------------------------------------------------------ */
     uint8_t *shdrs = malloc((size_t)shnum * shentsz);
     if (!shdrs) { perror("malloc"); fclose(f); return 1; }
@@ -123,12 +125,14 @@ int main(int argc, char **argv) {
         const uint8_t *ph = phdrs + (size_t)i * phentsz;
         if (be32(ph) != PT_LOAD) continue;
 
+        const uint64_t p_flags  = be32(ph + 4);
         const uint64_t p_offset = be64(ph + 8);
         const uint64_t p_filesz = be64(ph + 32);
         if (p_filesz == 0) continue;
 
-        if ((uint64_t)cksum_file_off >= p_offset &&
-            (uint64_t)cksum_file_off <  p_offset + p_filesz) {
+        // Skip the checksums segment itself — identified by its unique p_flags
+        // fingerprint.  Hashing the table while building it would be circular.
+        if (p_flags == ZXVL_PFLAGS_CKSUM) {
             printf("gen_checksums: skipping checksums segment (file_off=0x%llx..0x%llx)\n",
                    (unsigned long long)p_offset,
                    (unsigned long long)(p_offset + p_filesz - 1));

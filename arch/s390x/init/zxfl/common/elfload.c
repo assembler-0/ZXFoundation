@@ -111,6 +111,7 @@ static int load_segment(uint32_t schid,
 
 int zxfl_load_elf64(uint32_t schid,
                     const dasd_dataset_t *ds,
+                    zxfl_boot_protocol_t *proto,
                     uint64_t *out_entry,
                     uint64_t *out_load_base,
                     uint64_t *out_load_size,
@@ -172,14 +173,38 @@ int zxfl_load_elf64(uint32_t schid,
         if (seg_end > load_max) load_max = seg_end;
     }
 
-    if (load_min == 0xFFFFFFFFFFFFFFFFULL) return -1;
+    // Scan phdrs for special segments by p_flags fingerprint.
+    // This replaces all hardcoded load_min + OFFSET arithmetic.
+    uint64_t hs_phys    = 0;
+    uint64_t entry_phys = 0;
+    uint64_t lock_phys  = 0;
+    uint64_t cksum_phys = 0;
+
+    for (uint16_t i = 0; i < phnum; i++) {
+        if (phdrs[i].p_type != PT_LOAD) continue;
+        const uint32_t fl = phdrs[i].p_flags;
+        const uint64_t pa = phdrs[i].p_paddr - CONFIG_KERNEL_VIRT_OFFSET;
+        if (fl == ZXVL_PFLAGS_HS)    hs_phys    = pa;
+        if (fl == ZXVL_PFLAGS_ENTRY) entry_phys = pa;
+        if (fl == ZXVL_PFLAGS_LOCK)  lock_phys  = pa;
+        if (fl == ZXVL_PFLAGS_CKSUM) cksum_phys = pa;
+    }
+
+    if (!hs_phys || !entry_phys || !lock_phys || !cksum_phys) {
+        print("zxvl: missing special segment(s)\n");
+        return -1;
+    }
+
+    *out_entry = entry_phys + CONFIG_KERNEL_VIRT_OFFSET;
+
+    proto->lock_phys        = lock_phys;
+    proto->cksum_table_phys = cksum_phys;
 
     print("zxvl: inspecting nucleus\n");
     {
-        const uint64_t lock_base = load_min + ZXVL_LOCK_OFFSET;
-        const volatile uint32_t *p_hi       = (volatile uint32_t *)(uintptr_t)lock_base;
-        const volatile uint32_t *p_sentinel = (volatile uint32_t *)(uintptr_t)(lock_base + 4);
-        const volatile uint32_t *p_lo       = (volatile uint32_t *)(uintptr_t)(lock_base + ZXVL_LOCK_GAP);
+        const volatile uint32_t *p_hi       = (volatile uint32_t *)(uintptr_t)lock_phys;
+        const volatile uint32_t *p_sentinel = (volatile uint32_t *)(uintptr_t)(lock_phys + 4);
+        const volatile uint32_t *p_lo       = (volatile uint32_t *)(uintptr_t)(lock_phys + 0x1000);
 
         if (*p_sentinel != ZXVL_LOCK_SENTINEL) {
             print("zxvl: nucleus lock sentinel missing\n");
@@ -193,7 +218,7 @@ int zxfl_load_elf64(uint32_t schid,
 
     {
         typedef uint64_t (*hs_fn_t)(uint64_t);
-        auto stub = (hs_fn_t)(uintptr_t)(load_min + ZXVL_HS_OFFSET);
+        auto stub = (hs_fn_t)(uintptr_t)hs_phys;
         if (stub(ZXVL_SEED ^ hs_nonce) != (((hs_nonce << 17) | (hs_nonce >> 47)) + ZXVL_HS_RESPONSE)) {
             print("zxvl: nucleus handshake failed\n");
             return -1;
