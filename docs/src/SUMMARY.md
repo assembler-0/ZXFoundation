@@ -26,6 +26,7 @@
 
 # Kernel
 
+- [Kernel Design](kernel/kernel_design.md)
 - [Overview](kernel/overview.md)
 - [Early Init](kernel/init.md)
 - [System Check](kernel/syschk.md)
