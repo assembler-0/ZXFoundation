@@ -73,7 +73,7 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
 }
 
 static void verify_protocol_integrity(zxfl_boot_protocol_t *boot) {
-    if (!boot || boot->magic != ZXFL_MAGIC)
+    if (boot->magic != ZXFL_MAGIC)
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: protocol missing or corrupt");
 
     const uint64_t expected = ZXVL_COMPUTE_TOKEN(boot->stfle_fac[0], boot->ipl_schid);
@@ -132,12 +132,17 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 }
 
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
+    if (!boot)
+        arch_sys_halt();
+
     zx_lowcore_setup_late();
     zx_syschk_initialize(boot);
 
     diag_setup();
     printk_initialize(diag_putc);
     simplelog_initialize(diag_putc);
+    time_init((boot->flags & ZXFL_FLAG_TOD) ? boot->tod_boot : 0);
+
     printk("sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
            CONFIG_ZX_RELEASE);
 
@@ -163,7 +168,6 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     koms_init();
     irq_subsystem_init();
-    time_init((boot->flags & ZXFL_FLAG_TOD) ? boot->tod_boot : 0);
 
     smp_init(boot);
 

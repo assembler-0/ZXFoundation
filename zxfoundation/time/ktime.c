@@ -30,7 +30,6 @@
 #include <zxfoundation/time/timer.h>
 #include <arch/s390x/time/tod.h>
 #include <arch/s390x/cpu/processor.h>
-#include <zxfoundation/sys/printk.h>
 
 ktime_t ktime_get(void) {
     uint64_t tod = tod_read();
@@ -78,11 +77,7 @@ static void time_init_cpu(void) {
 
 void time_init(uint64_t boot_tod) {
     tod_set_boot_offset(boot_tod ? boot_tod : tod_read());
-
     time_init_cpu();
-
-    printk("time: tod boot offset 0x%016llx\n",
-           (unsigned long long)tod_boot_offset());
 }
 
 void time_init_ap(void) {

@@ -22,7 +22,6 @@ ktime_t ktime_get(void);
 /// @param ns  Duration in nanoseconds.
 /// @return Duration in TOD units.
 static inline uint64_t ktime_ns_to_tod(uint64_t ns) {
-    // 1 ns = 4096/1000 TOD units = 512/125 TOD units.
     return ns * 512 / 125;
 }
 
@@ -30,7 +29,6 @@ static inline uint64_t ktime_ns_to_tod(uint64_t ns) {
 /// @param tod  Duration in TOD units.
 /// @return Duration in nanoseconds.
 static inline uint64_t ktime_tod_to_ns(uint64_t tod) {
-    // 1 TOD unit = 1000/4096 ns = 125/512 ns.
     return tod * 125 / 512;
 }
 
