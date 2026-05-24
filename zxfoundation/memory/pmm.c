@@ -15,6 +15,7 @@
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/mmu/mmu.h>
 #include <arch/s390x/cpu/ipi.h>
+#include <arch/s390x/linksym.h>
 #include <lib/string.h>
 
 /// Two physical memory zones: DMA (< 16 MB) and NORMAL (>= 16 MB).
@@ -145,9 +146,6 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
         reserve_phys_end = boot->pgtbl_pool_end;
 
     // --- Hard-protect ZONE_DMA from over-reservation ---
-    // If the bootloader or early page tables overlap significantly with
-    // ZONE_DMA, we must still leave some pages for dma_pool and I/O.
-    // 1 MB is enough for early drivers (SCLP/DIAG) and the dma_pool.
     const uint64_t dma_min_free = 1024 * 1024;
     if (reserve_phys_end > ZONE_DMA_LIMIT - dma_min_free) {
         printk(ZX_WARN "pmm: early reservation (0x%llx) encroaches on ZONE_DMA; capping visibility\n",
@@ -162,16 +160,14 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
         const zxfl_mem_region_t *r = &map[i];
         if (r->type != ZXFL_MEM_USABLE) continue;
 
-        uint64_t pfn_start = pmm_phys_to_pfn(r->base);
-        uint64_t pfn_end   = pmm_phys_to_pfn(r->base + r->length);
+        uint64_t start_phys = r->base;
+        uint64_t end_phys   = r->base + r->length;
 
-        for (uint64_t pfn = pfn_start; pfn < pfn_end; pfn++) {
-            zx_page_t *p = pfn_to_page(pfn);
-            p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
-            p->numa_node = 0;
-            p->order     = 0;
+        for (uint64_t curr = start_phys; curr < end_phys; ) {
+            uint64_t next = (curr + PAGE_SIZE) & PAGE_MASK;
+            if (next > end_phys) next = end_phys;
 
-            uint64_t phys = pmm_pfn_to_phys(pfn);
+            uint64_t phys = curr;
             bool critical = false;
 
             if (phys < 1024 * 1024) critical = true;
@@ -188,34 +184,72 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
             }
 
             if (critical) {
-                p->flags = PF_RESERVED;
+                uint64_t pfn = pmm_phys_to_pfn(phys);
+                zx_page_t *p = pfn_to_page(pfn);
+                p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
+                p->numa_node = 0;
+                p->order     = 0;
+                p->flags     = PF_RESERVED;
                 atomic_set(&p->refcount, 1);
+                curr = next;
                 continue;
             }
 
-            p->flags = PF_BUDDY;
+            // Not critical: try to add as the largest possible buddy block.
+            uint64_t pfn = pmm_phys_to_pfn(phys);
+            zx_page_t *p = pfn_to_page(pfn);
+            p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
+            p->numa_node = 0;
+            p->order     = 0;
+            p->flags     = PF_BUDDY;
             atomic_set(&p->refcount, 0);
 
-            uint32_t ord = 0;
-            uint64_t cur = pfn;
-            while (ord < MAX_ORDER) {
-                uint64_t buddy = cur ^ (1ULL << ord);
-                if (buddy >= max_pfn_global) break;
-                zx_page_t *buddy_page = pfn_to_page(buddy);
-                if (!(buddy_page->flags & PF_BUDDY)) break;
-                if (buddy_page->order != ord) break;
-                if (buddy_page->zone_id != p->zone_id) break;
+            curr = next;
+        }
+    }
 
-                zone_id_t zid = (zone_id_t)p->zone_id;
-                free_area_remove(&zones[zid], ord, buddy);
-                cur = (cur < buddy) ? cur : buddy;
-                pfn_to_page(cur)->order = (uint8_t)(ord + 1);
-                ord++;
+    // Pass 2: Coalescing.
+    for (uint32_t i = 0; i < boot->mem_map_count; i++) {
+        const zxfl_mem_region_t *r = &map[i];
+        if (r->type != ZXFL_MEM_USABLE) continue;
+
+        uint64_t pfn_start = pmm_phys_to_pfn(r->base);
+        uint64_t pfn_end   = pmm_phys_to_pfn(r->base + r->length);
+
+        for (uint64_t pfn = pfn_start; pfn < pfn_end; ) {
+            zx_page_t *p = pfn_to_page(pfn);
+            if (!(p->flags & PF_BUDDY) || atomic_read(&p->refcount) != 0) {
+                pfn++;
+                continue;
             }
-            pfn_to_page(cur)->order = (uint8_t)ord;
-            zone_id_t zid = (zone_id_t)pfn_to_page(cur)->zone_id;
-            free_area_push(&zones[zid], ord, cur);
-            zones[zid].free_pages += 1;
+
+            // Try to form the largest possible block starting at pfn.
+            uint32_t order = 0;
+            while (order < MAX_ORDER) {
+                uint32_t next_order = order + 1;
+                uint64_t block_size = 1ULL << next_order;
+                if ((pfn & (block_size - 1)) != 0) break;
+                if (pfn + block_size > pfn_end) break;
+
+                // Check if all pages in the potential buddy block are also PF_BUDDY and free.
+                bool buddy_ready = true;
+                uint64_t buddy_pfn = pfn + (1ULL << order);
+                zx_page_t *bp = pfn_to_page(buddy_pfn);
+                if (!(bp->flags & PF_BUDDY) || atomic_read(&bp->refcount) != 0 || bp->order != order) {
+                    buddy_ready = false;
+                }
+
+                if (!buddy_ready) break;
+
+                // Merge.
+                order = next_order;
+            }
+
+            p->order = (uint8_t)order;
+            zone_id_t zid = (zone_id_t)p->zone_id;
+            free_area_push(&zones[zid], order, pfn);
+            zones[zid].free_pages += (1ULL << order);
+            pfn += (1ULL << order);
         }
     }
 
@@ -245,7 +279,7 @@ void pmm_verify_hhdm(const zxfl_boot_protocol_t *boot) {
         uint64_t end   = start + e->length;
 
         // Check a few points in each range.
-        for (uint64_t p = start; p < end; p += (1ULL << 20)) { // every 1MB
+        for (uint64_t p = start; p < end; p += (16ULL << 20)) { // every 16MB
             uint64_t virt = hhdm_phys_to_virt(p);
             uint64_t phys_back = mmu_virt_to_phys(mmu_kernel_pgtbl(), virt);
 

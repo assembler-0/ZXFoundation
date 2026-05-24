@@ -26,49 +26,32 @@ bool is_word_boundary(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\0';
 }
 
-bool find(const char *buff, const char *pattern) {
-    if (buff == nullptr || pattern == nullptr || *pattern == '\0') {
-        return false;
+char *strnstr(const char *s1, const char *s2, size_t len) {
+    size_t l2;
+
+    l2 = strlen(s2);
+    if (!l2)
+        return (char *)s1;
+    while (len >= l2) {
+        len--;
+        if (!memcmp(s1, s2, l2))
+            return (char *)s1;
+        s1++;
     }
-
-    const size_t pattern_len = strlen(pattern);
-    const char *ptr = buff;
-
-    while ((ptr = strstr(ptr, pattern)) != nullptr) {
-        bool at_start = (ptr == buff) || is_word_boundary(*(ptr - 1));
-        bool at_end = is_word_boundary(*(ptr + pattern_len));
-
-        if (at_start && at_end) {
-            return true;
-        }
-
-        ptr++;
-    }
-
-    return false;
+    return nullptr;
 }
 
-char *strstr(const char *haystack, const char *needle) {
-    if (*needle == '\0') {
-        return (char *) haystack;
+char *strstr(const char *s1, const char *s2) {
+    const size_t l2 = strlen(s2);
+    if (!l2)
+        return (char *)s1;
+    size_t l1 = strlen(s1);
+    while (l1 >= l2) {
+        l1--;
+        if (!memcmp(s1, s2, l2))
+            return (char *)s1;
+        s1++;
     }
-
-    for (const char *h_ptr = haystack; *h_ptr != '\0'; h_ptr++) {
-        if (*h_ptr == *needle) {
-            const char *n_ptr = needle;
-            const char *current_h = h_ptr;
-
-            while (*n_ptr != '\0' && *current_h != '\0' && *current_h == *n_ptr) {
-                current_h++;
-                n_ptr++;
-            }
-
-            if (*n_ptr == '\0') {
-                return (char *) h_ptr;
-            }
-        }
-    }
-
     return nullptr;
 }
 
@@ -287,133 +270,135 @@ void *memset(void *s, int c, size_t n) {
     unsigned char *mem = (unsigned char *) s;
     unsigned char x = (unsigned char) c;
 
-    // Small blocks: keep it simple to avoid overhead.
-    if (n < 16) {
-        while (n--) *mem++ = x;
+    // MVCL is good for very large blocks (e.g. > 1KB).
+    // For smaller blocks, EX + XC or EX + MVC is faster.
+    if (n > 1024) {
+        register void *r0 __asm__("r0") = mem;
+        register size_t r1 __asm__("r1") = n;
+        register void *r2 __asm__("r2") = NULL;
+        register size_t r3 __asm__("r3") = (size_t)x << 56;
+
+        __asm__ volatile(
+            "0: mvcl %%r0,%%r2\n"
+            "   jo   0b"
+            : "+d" (r0), "+d" (r1), "+d" (r2), "+d" (r3)
+            :
+            : "memory", "cc"
+        );
         return s;
     }
 
-    // Align to 8-byte boundary.
-    while ((uintptr_t) mem & 7) {
-        *mem++ = x;
-        if (--n == 0) return s;
+    if (x == 0) {
+        while (n > 256) {
+            __asm__ volatile("xc 0(256,%[dst]),0(%[dst])" : : [dst] "a" (mem) : "memory", "cc");
+            mem += 256;
+            n -= 256;
+        }
+        size_t l = n - 1;
+        __asm__ volatile(
+            "   larl    1, 1f\n"
+            "   ex      %[l], 0(1)\n"
+            "   j       2f\n"
+            "1: xc      0(1,%[dst]), 0(%[dst])\n"
+            "2:\n"
+            : [l] "+r" (l)
+            : [dst] "a" (mem)
+            : "r1", "memory", "cc"
+        );
+    } else {
+        *mem = x;
+        if (n > 1) {
+            unsigned char *dst = mem + 1;
+            size_t len = n - 1;
+            while (len > 256) {
+                __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (dst - 1) : "memory", "cc");
+                dst += 256;
+                len -= 256;
+            }
+            size_t l = len - 1;
+            __asm__ volatile(
+                "   larl    1, 1f\n"
+                "   ex      %[l], 0(1)\n"
+                "   j       2f\n"
+                "1: mvc     0(1,%[dst]), 0(%[src])\n"
+                "2:\n"
+                : [l] "+r" (l)
+                : [dst] "a" (dst), [src] "a" (dst - 1)
+                : "r1", "memory", "cc"
+            );
+        }
     }
-
-    uint64_t pattern = x;
-    pattern |= pattern << 8;
-    pattern |= pattern << 16;
-    pattern |= pattern << 32;
-
-    size_t num_words = n / 8;
-    uint64_t *p64 = (uint64_t *) mem;
-
-    // Manual unrolling for performance.
-    while (num_words >= 4) {
-        p64[0] = pattern;
-        p64[1] = pattern;
-        p64[2] = pattern;
-        p64[3] = pattern;
-        p64 += 4;
-        num_words -= 4;
-    }
-    while (num_words--) {
-        *p64++ = pattern;
-    }
-
-    mem = (unsigned char *) p64;
-    n &= 7;
-    while (n--) {
-        *mem++ = x;
-    }
-
     return s;
 }
 
 void *memcpy(void *d, const void *s, size_t n) {
     if (n == 0 || d == s) return d;
 
-    auto dst = (unsigned char *) d;
-    auto src = (const unsigned char *) s;
+    if (n > 1024) {
+        register void *r0 __asm__("r0") = d;
+        register size_t r1 __asm__("r1") = n;
+        register const void *r2 __asm__("r2") = s;
+        register size_t r3 __asm__("r3") = n;
 
-    if (n >= 16 && (((uintptr_t)dst & 7) == ((uintptr_t)src & 7))) {
-        while ((uintptr_t) dst & 7) {
-            *dst++ = *src++;
-            if (--n == 0) return d;
-        }
-
-        size_t num_words = n / 8;
-        uint64_t *d64 = (uint64_t *) dst;
-        const uint64_t *s64 = (const uint64_t *) src;
-
-        while (num_words >= 4) {
-            d64[0] = s64[0];
-            d64[1] = s64[1];
-            d64[2] = s64[2];
-            d64[3] = s64[3];
-            d64 += 4;
-            s64 += 4;
-            num_words -= 4;
-        }
-        while (num_words--) {
-            *d64++ = *s64++;
-        }
-
-        dst = (unsigned char *) d64;
-        src = (const unsigned char *) s64;
-        n &= 7;
+        __asm__ volatile(
+            "0: mvcl %%r0,%%r2\n"
+            "   jo   0b"
+            : "+d" (r0), "+d" (r1), "+d" (r2), "+d" (r3)
+            :
+            : "memory", "cc"
+        );
+        return d;
     }
 
-    while (n--) {
-        *dst++ = *src++;
+    unsigned char *dst = (unsigned char *) d;
+    const unsigned char *src = (const unsigned char *) s;
+    while (n > 256) {
+        __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (src) : "memory", "cc");
+        dst += 256;
+        src += 256;
+        n -= 256;
     }
-
+    size_t l = n - 1;
+    __asm__ volatile(
+        "   larl    1, 1f\n"
+        "   ex      %[l], 0(1)\n"
+        "   j       2f\n"
+        "1: mvc     0(1,%[dst]), 0(%[src])\n"
+        "2:\n"
+        : [l] "+r" (l)
+        : [dst] "a" (dst), [src] "a" (src)
+        : "r1", "memory", "cc"
+    );
     return d;
 }
 
 void *memmove(void *dest, const void *src, size_t n) {
     if (n == 0 || dest == src) return dest;
 
-    unsigned char *d = (unsigned char *) dest;
-    const unsigned char *s = (const unsigned char *) src;
-
-    if (d < s) {
+    if (dest < src || (uintptr_t)dest >= (uintptr_t)src + n) {
         return memcpy(dest, src, n);
     }
 
-    // Moving backwards to handle overlap correctly.
-    d += n;
-    s += n;
+    unsigned char *d = (unsigned char *) dest + n;
+    const unsigned char *s = (const unsigned char *) src + n;
 
-    if (n >= 16 && (((uintptr_t)d & 7) == ((uintptr_t)s & 7))) {
-        while ((uintptr_t) d & 7) {
-            *--d = *--s;
-            if (--n == 0) return dest;
-        }
+    while (n > 0) {
+        size_t chunk = (n > 256) ? 256 : n;
+        d -= chunk;
+        s -= chunk;
+        n -= chunk;
 
-        size_t num_words = n / 8;
-        uint64_t *d64 = (uint64_t *) d;
-        const uint64_t *s64 = (const uint64_t *) s;
-
-        while (num_words >= 4) {
-            d64 -= 4;
-            s64 -= 4;
-            d64[3] = s64[3];
-            d64[2] = s64[2];
-            d64[1] = s64[1];
-            d64[0] = s64[0];
-            num_words -= 4;
-        }
-        while (num_words--) {
-            *--d64 = *--s64;
-        }
-
-        d = (unsigned char *) d64;
-        s = (unsigned char *) s64;
-        n &= 7;
-    }
-
-    while (n--) {
-        *--d = *--s;
+        size_t l = chunk - 1;
+        __asm__ volatile(
+            "   larl    1, 1f\n"
+            "   ex      %[l], 0(1)\n"
+            "   j       2f\n"
+            "1: mvc     0(1,%[dst]), 0(%[src])\n"
+            "2:\n"
+            : [l] "+r" (l)
+            : [dst] "a" (d), [src] "a" (s)
+            : "r1", "memory", "cc"
+        );
     }
 
     return dest;
@@ -544,32 +529,46 @@ int memcmp(const void *s1, const void *s2, size_t n) {
     const unsigned char *p1 = (const unsigned char *) s1;
     const unsigned char *p2 = (const unsigned char *) s2;
 
-    if (n >= 8) {
-        while ((uintptr_t) p1 & 7) {
-            if (*p1 != *p2) return (int) *p1 - (int) *p2;
-            p1++;
-            p2++;
-            n--;
+    while (n > 256) {
+        int cc;
+        __asm__ volatile(
+            "   clc     0(256,%[p1]), 0(%[p2])\n"
+            "   ipm     %[cc]\n"
+            "   srl     %[cc], 28\n"
+            : [cc] "=d" (cc)
+            : [p1] "a" (p1), [p2] "a" (p2)
+            : "cc"
+        );
+        if (cc != 0) {
+            for (int i = 0; i < 256; i++) {
+                if (p1[i] != p2[i]) return (int) p1[i] - (int) p2[i];
+            }
         }
-
-        const uint64_t *q1 = (const uint64_t *) p1;
-        const uint64_t *q2 = (const uint64_t *) p2;
-
-        while (n >= 8) {
-            if (*q1 != *q2) break;
-            q1++;
-            q2++;
-            n -= 8;
-        }
-
-        p1 = (const unsigned char *) q1;
-        p2 = (const unsigned char *) q2;
+        p1 += 256;
+        p2 += 256;
+        n -= 256;
     }
 
-    while (n--) {
-        if (*p1 != *p2) return (int) *p1 - (int) *p2;
-        p1++;
-        p2++;
+    if (n > 0) {
+        size_t l = n - 1;
+        int cc;
+        __asm__ volatile(
+            "   larl    1, 1f\n"
+            "   ex      %[l], 0(1)\n"
+            "   ipm     %[cc]\n"
+            "   srl     %[cc], 28\n"
+            "   j       2f\n"
+            "1: clc     0(1,%[p1]), 0(%[p2])\n"
+            "2:\n"
+            : [cc] "=d" (cc), [l] "+r" (l)
+            : [p1] "a" (p1), [p2] "a" (p2)
+            : "r1", "cc"
+        );
+        if (cc != 0) {
+            for (size_t i = 0; i < n; i++) {
+                if (p1[i] != p2[i]) return (int) p1[i] - (int) p2[i];
+            }
+        }
     }
 
     return 0;

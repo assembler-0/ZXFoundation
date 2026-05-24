@@ -14,6 +14,7 @@
 #include <zxfoundation/sys/irq/irqdesc.h>
 #include <zxfoundation/time/ktime.h>
 #include <zxfoundation/sys/simplelog.h>
+#include <zxfoundation/cmdlineopts.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/cpu/lowcore.h>
@@ -24,6 +25,7 @@
 #include <drivers/console/diag.h>
 #include <crypto/sha256.h>
 #include <lib/string.h>
+#include <lib/cmdline.h>
 
 /// @brief Validate the opaque stack frame written by the loader.
 ///        The frame sits at boot->kernel_stack_top (the loader set
@@ -44,6 +46,11 @@ bad:
 
 /// @brief Re-verify kernel segment checksums from the HHDM-mapped image.
 static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
+    if (boot->cmdline_addr) {
+        printk(ZX_INFO "sys: kernel checksums verification skipped by cmdline\n");
+        return;
+    }
+
     if (!boot->cksum_table_phys) {
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: no kernel checksum table, integrity unverified — unauthorized loader");
     }
@@ -128,6 +135,14 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     }
 }
 
+#define if_cmdline_has(boot, option)                                    \
+    if (cmdline_find_option_bool((const char *)boot->cmdline_addr,      \
+                                 (signed)boot->cmdline_len, option))
+
+#define elif_cmdline_has(boot, option)                                  \
+    else if (cmdline_find_option_bool((const char *)boot->cmdline_addr, \
+                                 (signed)boot->cmdline_len, option))
+
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
     if (!boot)
         arch_sys_halt();
@@ -143,9 +158,15 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     printk(ZX_INFO "sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
            CONFIG_ZX_RELEASE);
 
-    verify_protocol_integrity(boot);
-    validate_stack_frame(boot);
-    verify_kernel_checksums(boot);
+    printk(ZX_INFO "cmdline: %s\n", (const char *)boot->cmdline_addr);
+
+    if_cmdline_has(boot, CMDLINE_SKIP_ZXVL_CHECK) {
+        verify_protocol_integrity(boot);
+        validate_stack_frame(boot);
+        verify_kernel_checksums(boot);
+    } else {
+        printk(ZX_WARN "sys: skipping ZXVL integrity check (due to '%s')", CMDLINE_SKIP_ZXVL_CHECK);
+    }
 
     dump_machine_info(boot);
 
