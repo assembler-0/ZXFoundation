@@ -17,10 +17,11 @@ set(ZXFL_STAGE2_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_tape.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/zxvl_verify.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/parmfile.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/mmu.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/system.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/psw.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stfle.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/sclp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stsi.c
     ${CMAKE_CURRENT_SOURCE_DIR}/crypto/sha256.c
 )
@@ -68,14 +69,14 @@ target_include_directories(zxfl_stage1.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(zxfl_stage1.elf PRIVATE ${ZXFL_COMMON_FLAGS})
 target_compile_definitions(zxfl_stage1.elf PUBLIC __zxfoundation__)
 
-if(COMPILER_ID STREQUAL "clang")
+if (COMPILER_ID STREQUAL "clang")
     target_compile_options(zxfl_stage1.elf PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
         -Wno-gnu-statement-expression-from-macro-expansion
     )
 endif()
 
-if(COMPILER_ID STREQUAL "gcc")
+if (COMPILER_ID STREQUAL "gcc")
     target_compile_options(zxfl_stage1.elf PRIVATE
         -static-libgcc
         -Wno-array-bounds
@@ -91,7 +92,7 @@ target_link_options(zxfl_stage1.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
-if(COMPILER_ID STREQUAL "gcc")
+if (COMPILER_ID STREQUAL "gcc")
     target_link_options(zxfl_stage1.elf PRIVATE
         --no-warn-rwx-segments
     )
@@ -112,14 +113,14 @@ target_include_directories(zxfl_stage2.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(zxfl_stage2.elf PRIVATE ${ZXFL_COMMON_FLAGS})
 target_compile_definitions(zxfl_stage2.elf PUBLIC __zxfoundation__)
 
-if(COMPILER_ID STREQUAL "clang")
+if (COMPILER_ID STREQUAL "clang")
     target_compile_options(zxfl_stage2.elf PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
         -Wno-gnu-statement-expression-from-macro-expansion
     )
 endif()
 
-if(COMPILER_ID STREQUAL "gcc")
+if (COMPILER_ID STREQUAL "gcc")
     target_compile_options(zxfl_stage2.elf PRIVATE
         -static-libgcc
         -Wno-array-bounds
@@ -135,13 +136,13 @@ target_link_options(zxfl_stage2.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
-if(COMPILER_ID STREQUAL "gcc")
+if (COMPILER_ID STREQUAL "gcc")
     target_link_options(zxfl_stage2.elf PRIVATE
         --no-warn-rwx-segments
     )
 endif()
 
-if(CMAKE_OBJCOPY AND BIN2REC)
+if (CMAKE_OBJCOPY AND BIN2REC)
     add_dependencies(zxfl_stage1.elf tools)
     add_custom_command(
         TARGET zxfl_stage1.elf POST_BUILD

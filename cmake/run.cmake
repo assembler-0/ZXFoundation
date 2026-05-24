@@ -1,6 +1,6 @@
 # ZXFoundation run targets
 
-if(DASDLOAD)
+if (DASDLOAD)
     add_custom_command(
         OUTPUT sysres.3390
         COMMAND ${CMAKE_COMMAND} -E rm -f sysres.3390

@@ -34,7 +34,7 @@ file(GLOB CRYPTO_SOURCES   "crypto/*.c")
 # ---------------------------------------------------------------------------
 # libubsanrt — only compiled when CONFIG_UBSAN is enabled
 # ---------------------------------------------------------------------------
-if(CONFIG_UBSAN)
+if (CONFIG_UBSAN)
     file(GLOB UBSAN_SOURCES "lib/libubsanrt/*.c")
 else()
     set(UBSAN_SOURCES "")

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/common/stfle.c
 
-#include <arch/s390x/init/zxfl/stfle.h>
+#include <arch/s390x/cpu/stfle.h>
 
 uint32_t stfle_detect(uint64_t *fac_list, uint32_t max_dwords) {
     if (!fac_list || max_dwords == 0)

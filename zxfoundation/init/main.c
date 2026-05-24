@@ -46,11 +46,6 @@ bad:
 
 /// @brief Re-verify kernel segment checksums from the HHDM-mapped image.
 static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
-    if (boot->cmdline_addr) {
-        printk(ZX_INFO "sys: kernel checksums verification skipped by cmdline\n");
-        return;
-    }
-
     if (!boot->cksum_table_phys) {
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: no kernel checksum table, integrity unverified — unauthorized loader");
     }
@@ -139,9 +134,10 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     if (cmdline_find_option_bool((const char *)boot->cmdline_addr,      \
                                  (signed)boot->cmdline_len, option))
 
-#define elif_cmdline_has(boot, option)                                  \
-    else if (cmdline_find_option_bool((const char *)boot->cmdline_addr, \
+#define if_cmdline_not_has(boot, option)                                \
+    if (!cmdline_find_option_bool((const char *)boot->cmdline_addr,     \
                                  (signed)boot->cmdline_len, option))
+
 
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
     if (!boot)
@@ -160,7 +156,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     printk(ZX_INFO "cmdline: %s\n", (const char *)boot->cmdline_addr);
 
-    if_cmdline_has(boot, CMDLINE_SKIP_ZXVL_CHECK) {
+    if_cmdline_not_has(boot, CMDLINE_SKIP_ZXVL_CHECK) {
         verify_protocol_integrity(boot);
         validate_stack_frame(boot);
         verify_kernel_checksums(boot);
@@ -171,7 +167,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     dump_machine_info(boot);
 
     percpu_init_bsp();
-    arch_cpu_features_init(boot);
+    arch_cpu_features_init(boot->stfle_fac, boot->stfle_count);
     rcu_init();
 
     pmm_init(boot);

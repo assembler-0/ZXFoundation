@@ -33,7 +33,7 @@ int bin2rec(
         line_len += w_len;
 
         w_len = 3; /* COLUMN 1,3 */
-        if(addr >= end_addr || feof(in)) {
+        if (addr >= end_addr || feof(in)) {
             fwrite(EBCDIC_END, 1, w_len, out);
             w_len = 80 - line_len; /* COLUMN 4,80 */
             fwrite(&zero, 1, w_len, out);
@@ -74,7 +74,7 @@ int bin2rec(
         line_len += w_len;
 
         addr += 56;
-        if(line_len > 80) {
+        if (line_len > 80) {
             printf("Line is bigger than 80 (%zu)\n", line_len);
             return -1;
         }
@@ -87,17 +87,17 @@ int main(
     char **argv)
 {
     FILE *inp, *out;
-    if(argc <= 2) {
+    if (argc <= 2) {
         perror("Usage: bin2txt [in] [out]\n");
         exit(EXIT_FAILURE);
     }
     inp = fopen(argv[1], "rb");
-    if(!inp) {
+    if (!inp) {
         perror("Cannot open file\n");
         exit(EXIT_FAILURE);
     }
     out = fopen(argv[2], "wb");
-    if(!out) {
+    if (!out) {
         perror("Cannot create file\n");
         exit(EXIT_FAILURE);
     }

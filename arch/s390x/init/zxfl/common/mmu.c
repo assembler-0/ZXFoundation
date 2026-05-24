@@ -36,7 +36,7 @@
 
 #include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
-#include <arch/s390x/init/zxfl/stfle.h>
+#include <arch/s390x/cpu/stfle.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <zxfoundation/zconfig.h>
 

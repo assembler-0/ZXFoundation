@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/stfle.h
+// include/arch/s390x/cpu/stfle.h
 //
 /// @brief Expanded STFLE (Store Facility List Extended) API.
 #ifndef ZXFOUNDATION_ZXFL_STFLE_H

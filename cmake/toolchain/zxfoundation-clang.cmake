@@ -2,7 +2,7 @@
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR s390x)
 
-if(NOT DEFINED ENV{CLANG_VERSION})
+if (NOT DEFINED ENV{CLANG_VERSION})
     set(CMAKE_C_COMPILER clang)
     set(CMAKE_CXX_COMPILER clang++)
     set(CMAKE_ASM_COMPILER clang)
@@ -24,15 +24,15 @@ set(ZX_HOST_CC clang)
 
 set(COMPILER_ID "clang")
 
-if(NOT DEFINED TARGET_EMULATION_MODE)
+if (NOT DEFINED TARGET_EMULATION_MODE)
     set(TARGET_EMULATION_MODE "elf64_s390" CACHE STRING "Target emulation mode when linking")
 endif()
 
-if(NOT DEFINED COMMON_TARGET_TRIPLE)
+if (NOT DEFINED COMMON_TARGET_TRIPLE)
     set(COMMON_TARGET_TRIPLE "s390x-unknown-none-elf" CACHE STRING "Target triple for z/Architecture (S390X)")
 endif()
 
-if(NOT DEFINED MARCH_MODE)
+if (NOT DEFINED MARCH_MODE)
     set(MARCH_MODE "z10" CACHE STRING "Argument for -march= and -mtune=")
 endif()
 

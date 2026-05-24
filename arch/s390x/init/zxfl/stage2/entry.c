@@ -4,7 +4,8 @@
 #include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
-#include <arch/s390x/init/zxfl/stfle.h>
+#include <arch/s390x/cpu/stfle.h>
+#include <arch/s390x/cpu/sclp.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/dasd_eckd.h>
@@ -219,6 +220,71 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
     return current_phys;
 }
 
+static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
+                              uint64_t kernel_start, uint64_t kernel_end,
+                              uint64_t mem_limit) {
+    uint64_t sclp_size = 0;
+    uint32_t count = 0;
+
+    if (arch_sclp_early_get_memsize(&sclp_size) == 0) {
+        print("zxfl01: memory detected via sclp: ");
+        diag_print_hex8((uint32_t)(sclp_size >> 32));
+        diag_print_hex8((uint32_t)sclp_size);
+        print(" bytes\n");
+
+        if (sclp_size > mem_limit) sclp_size = mem_limit;
+
+        if (count < max) {
+            map[count].base = 0x0;
+            map[count].length = MEM_PROBE_FRAME;
+            map[count].type = ZXFL_MEM_RESERVED;
+            count++;
+        }
+        if (count < max) {
+            map[count].base = MEM_PROBE_FRAME;
+            map[count].length = MEM_PROBE_FRAME;
+            map[count].type = ZXFL_MEM_LOADER;
+            count++;
+        }
+        
+        uint64_t usable_start = 2UL * MEM_PROBE_FRAME;
+        if (usable_start < sclp_size) {
+            // Basic split for kernel if it falls within the range
+            if (kernel_start >= usable_start && kernel_end <= sclp_size) {
+                 if (count < max) {
+                     map[count].base = usable_start;
+                     map[count].length = kernel_start - usable_start;
+                     map[count].type = ZXFL_MEM_USABLE;
+                     count++;
+                 }
+                 if (count < max) {
+                     map[count].base = kernel_start;
+                     map[count].length = kernel_end - kernel_start;
+                     map[count].type = ZXFL_MEM_KERNEL;
+                     count++;
+                 }
+                 if (count < max && kernel_end < sclp_size) {
+                     map[count].base = kernel_end;
+                     map[count].length = sclp_size - kernel_end;
+                     map[count].type = ZXFL_MEM_USABLE;
+                     count++;
+                 }
+            } else {
+                if (count < max) {
+                    map[count].base = usable_start;
+                    map[count].length = sclp_size - usable_start;
+                    map[count].type = ZXFL_MEM_USABLE;
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    print("zxfl01: sclp detection failed, falling back to manual probe\n");
+    return probe_memory(map, max, kernel_start, kernel_end, mem_limit);
+}
+
 [[noreturn]] void zxfl01_entry(const uint32_t schid) {
     print("zxfl01: ZXFoundationLoader - core.zxfoundationloader01.sys\n");
     s_proto.stfle_count = stfle_detect(s_proto.stfle_fac, STFLE_MAX_DWORDS);
@@ -255,8 +321,8 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
         uint64_t phys_end = s_proto.kernel_phys_end;
         if (phys_start >= virt_off) phys_start -= virt_off;
         if (phys_end >= virt_off) phys_end -= virt_off;
-        s_proto.mem_map_count = probe_memory(s_mem_map, ZXFL_MEM_MAP_MAX,
-                                             phys_start, phys_end, mem_limit);
+        s_proto.mem_map_count = detect_memory(s_mem_map, ZXFL_MEM_MAP_MAX,
+                                              phys_start, phys_end, mem_limit);
     }
     s_proto.mem_map_addr = (uint64_t) (uintptr_t) s_mem_map;
     s_proto.mem_total_bytes = sum_usable_ram(s_mem_map, s_proto.mem_map_count);

@@ -1,6 +1,6 @@
 # ZXFoundation host tools
 
-if(ZX_HOST_CC)
+if (ZX_HOST_CC)
     add_custom_command(
         OUTPUT "${CMAKE_BINARY_DIR}/bin2rec"
         COMMAND ${ZX_HOST_CC} ${CMAKE_SOURCE_DIR}/tools/bin2rec.c

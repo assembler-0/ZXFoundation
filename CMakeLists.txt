@@ -8,7 +8,7 @@
 # @copyright (C) 2025-2026 assembler-0
 # ============================================================================
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.0...3.10)
 project(ZXFoundation
     LANGUAGES C ASM
 )
@@ -28,4 +28,4 @@ include(standard)   	      # C/C++ Standards
 include(hosttools)			  # Host tools
 include(source)        		  # Core kernel sources
 include(zxfoundation-compile) # Full kernel compilation
-include(run)       		      # Run targets (qemu, etc.)
+include(run)       		      # Run targets (mostly post-build targets)

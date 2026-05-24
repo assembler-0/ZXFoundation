@@ -8,7 +8,7 @@
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/zconfig.h>
-#include <arch/s390x/init/zxfl/stfle.h>
+#include <arch/s390x/cpu/stfle.h>
 
 // ---------------------------------------------------------------------------
 // Protocol version and magic

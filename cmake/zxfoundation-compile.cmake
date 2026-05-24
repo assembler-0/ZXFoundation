@@ -25,7 +25,7 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -m64
 )
 
-if(COMPILER_ID STREQUAL "clang")
+if (COMPILER_ID STREQUAL "clang")
     target_compile_options(core.zxfoundation.nucleus PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
         -Wno-gnu-statement-expression-from-macro-expansion
@@ -35,7 +35,7 @@ if(COMPILER_ID STREQUAL "clang")
     )
 endif()
 
-if(COMPILER_ID STREQUAL "gcc")
+if (COMPILER_ID STREQUAL "gcc")
     target_compile_options(core.zxfoundation.nucleus PRIVATE
         -static-libgcc
         -Wno-array-bounds
@@ -57,7 +57,7 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -g${DSYM_LEVEL}
 )
 
-if(CONFIG_UBSAN)
+if (CONFIG_UBSAN)
     message(STATUS "zxfoundation::build: CONFIG_UBSAN=ON — UBSAN instrumentation enabled")
     target_compile_options(core.zxfoundation.nucleus PRIVATE
         -fsanitize=undefined,bounds,shift,alignment,null,vla-bound,object-size,return
@@ -85,13 +85,13 @@ target_link_options(core.zxfoundation.nucleus PRIVATE
     -m${TARGET_EMULATION_MODE}
 )
 
-if(COMPILER_ID STREQUAL "gcc")
+if (COMPILER_ID STREQUAL "gcc")
     target_link_options(core.zxfoundation.nucleus PRIVATE
         --no-warn-rwx-segments
     )
 endif()
 
-if(GEN_CHECKSUMS)
+if (GEN_CHECKSUMS)
     add_dependencies(core.zxfoundation.nucleus tools)
 
     add_custom_command(
