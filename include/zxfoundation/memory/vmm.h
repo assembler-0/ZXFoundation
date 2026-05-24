@@ -129,7 +129,7 @@ extern vm_space_t kernel_vm_space;
 // ---------------------------------------------------------------------------
 
 /// @brief Initialise the VMM subsystem.
-void vmm_init(void);
+void vmm_init();
 
 /// @brief Signal that kmalloc is available; switch VMA alloc from early pool.
 void vmm_notify_slab_ready(void);

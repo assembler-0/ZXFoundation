@@ -255,11 +255,10 @@ static void unmap_and_free_range(mmu_pgtbl_t *pgtbl,
     }
 }
 
-void vmm_init(void) {
+void vmm_init() {
     kernel_vm_space.vma_tree   = (vmm_rb_root_t)VMM_RB_ROOT_INIT;
     kernel_vm_space.vma_count  = 0;
     kernel_vm_space.pgtbl_root = mmu_kernel_pgtbl()->r1_phys;
-
     printk(ZX_INFO "vmm: kernel_vm_space initialized, vmalloc [%016llx, %016llx]\n",
            (unsigned long long)VMALLOC_START,
            (unsigned long long)VMALLOC_END);

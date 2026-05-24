@@ -281,32 +281,184 @@ char *strrchr(const char *s, int c) {
     return (char *) last_occurrence;
 }
 
-void *memset(void *dst, int c, size_t n) {
-    uint8_t *p = (uint8_t *) dst;
-    uint8_t v = (uint8_t) c;
-    for (size_t i = 0; i < n; i++)
-        p[i] = v;
-    return dst;
+void *memset(void *s, int c, size_t n) {
+    if (n == 0) return s;
+
+    unsigned char *mem = (unsigned char *) s;
+    unsigned char x = (unsigned char) c;
+
+    // Small blocks: keep it simple to avoid overhead.
+    if (n < 16) {
+        while (n--) *mem++ = x;
+        return s;
+    }
+
+    // Align to 8-byte boundary.
+    while ((uintptr_t) mem & 7) {
+        *mem++ = x;
+        if (--n == 0) return s;
+    }
+
+    uint64_t pattern = x;
+    pattern |= pattern << 8;
+    pattern |= pattern << 16;
+    pattern |= pattern << 32;
+
+    size_t num_words = n / 8;
+    uint64_t *p64 = (uint64_t *) mem;
+
+    // Manual unrolling for performance.
+    while (num_words >= 4) {
+        p64[0] = pattern;
+        p64[1] = pattern;
+        p64[2] = pattern;
+        p64[3] = pattern;
+        p64 += 4;
+        num_words -= 4;
+    }
+    while (num_words--) {
+        *p64++ = pattern;
+    }
+
+    mem = (unsigned char *) p64;
+    n &= 7;
+    while (n--) {
+        *mem++ = x;
+    }
+
+    return s;
 }
 
-void *memcpy(void *dst, const void *src, size_t n) {
-    uint8_t *d = (uint8_t *) dst;
-    const uint8_t *s = (const uint8_t *) src;
-    for (size_t i = 0; i < n; i++)
-        d[i] = s[i];
-    return dst;
+void *memcpy(void *d, const void *s, size_t n) {
+    if (n == 0 || d == s) return d;
+
+    auto dst = (unsigned char *) d;
+    auto src = (const unsigned char *) s;
+
+    if (n >= 16 && (((uintptr_t)dst & 7) == ((uintptr_t)src & 7))) {
+        while ((uintptr_t) dst & 7) {
+            *dst++ = *src++;
+            if (--n == 0) return d;
+        }
+
+        size_t num_words = n / 8;
+        uint64_t *d64 = (uint64_t *) dst;
+        const uint64_t *s64 = (const uint64_t *) src;
+
+        while (num_words >= 4) {
+            d64[0] = s64[0];
+            d64[1] = s64[1];
+            d64[2] = s64[2];
+            d64[3] = s64[3];
+            d64 += 4;
+            s64 += 4;
+            num_words -= 4;
+        }
+        while (num_words--) {
+            *d64++ = *s64++;
+        }
+
+        dst = (unsigned char *) d64;
+        src = (const unsigned char *) s64;
+        n &= 7;
+    }
+
+    while (n--) {
+        *dst++ = *src++;
+    }
+
+    return d;
 }
 
-void * memchr(void const *s, int c_in, size_t n) {
+void *memmove(void *dest, const void *src, size_t n) {
+    if (n == 0 || dest == src) return dest;
+
+    unsigned char *d = (unsigned char *) dest;
+    const unsigned char *s = (const unsigned char *) src;
+
+    if (d < s) {
+        return memcpy(dest, src, n);
+    }
+
+    // Moving backwards to handle overlap correctly.
+    d += n;
+    s += n;
+
+    if (n >= 16 && (((uintptr_t)d & 7) == ((uintptr_t)s & 7))) {
+        while ((uintptr_t) d & 7) {
+            *--d = *--s;
+            if (--n == 0) return dest;
+        }
+
+        size_t num_words = n / 8;
+        uint64_t *d64 = (uint64_t *) d;
+        const uint64_t *s64 = (const uint64_t *) s;
+
+        while (num_words >= 4) {
+            d64 -= 4;
+            s64 -= 4;
+            d64[3] = s64[3];
+            d64[2] = s64[2];
+            d64[1] = s64[1];
+            d64[0] = s64[0];
+            num_words -= 4;
+        }
+        while (num_words--) {
+            *--d64 = *--s64;
+        }
+
+        d = (unsigned char *) d64;
+        s = (unsigned char *) s64;
+        n &= 7;
+    }
+
+    while (n--) {
+        *--d = *--s;
+    }
+
+    return dest;
+}
+
+
+void *memset32(void *s, uint32_t val, size_t n) {
+    if (n == 0) return s;
+
+    uint32_t *p32 = (uint32_t *) s;
+
+    while (n > 0 && ((uintptr_t) p32 & 7)) {
+        *p32++ = val;
+        n--;
+    }
+
+    uint64_t val64 = ((uint64_t) val << 32) | val;
+    uint64_t *p64 = (uint64_t *) p32;
+    size_t n64 = n / 2;
+
+    while (n64 >= 4) {
+        p64[0] = val64;
+        p64[1] = val64;
+        p64[2] = val64;
+        p64[3] = val64;
+        p64 += 4;
+        n64 -= 4;
+    }
+    while (n64--) {
+        *p64++ = val64;
+    }
+
+    if (n & 1) {
+        *(uint32_t *) p64 = val;
+    }
+
+    return s;
+}
+
+void *memchr(void const *s, int c_in, size_t n) {
     typedef unsigned long int longword;
 
     const unsigned char *char_ptr;
-    const longword *longword_ptr;
-    longword repeated_one;
-    longword repeated_c;
-    unsigned char c;
 
-    c = (unsigned char) c_in;
+    const unsigned char c = (unsigned char) c_in;
 
     for (char_ptr = (const unsigned char *) s;
          n > 0 && (size_t) char_ptr % sizeof(longword) != 0;
@@ -314,10 +466,10 @@ void * memchr(void const *s, int c_in, size_t n) {
         if (*char_ptr == c)
             return (void *) char_ptr;
 
-    longword_ptr = (const longword *) char_ptr;
+    auto longword_ptr = (const longword *) char_ptr;
 
-    repeated_one = 0x01010101;
-    repeated_c = c | (c << 8);
+    longword repeated_one = 0x01010101;
+    longword repeated_c = c | (c << 8);
     repeated_c |= repeated_c << 16;
     if (0xffffffffU < (longword) -1) {
         repeated_one |= repeated_one << 31 << 1;
@@ -352,14 +504,72 @@ void * memchr(void const *s, int c_in, size_t n) {
     return nullptr;
 }
 
+void *memmem(const void *haystack, size_t hlen, const void *needle, size_t nlen) {
+    if (nlen == 0) return (void *) haystack;
+    if (hlen < nlen) return nullptr;
+
+    const unsigned char *h = (const unsigned char *) haystack;
+    const unsigned char *n = (const unsigned char *) needle;
+
+    for (size_t i = 0; i <= hlen - nlen; i++) {
+        if (memcmp(h + i, n, nlen) == 0)
+            return (void *) (h + i);
+    }
+    return nullptr;
+}
+
+void memswap(void *a, void *b, size_t n) {
+    unsigned char *pa = (unsigned char *) a;
+    unsigned char *pb = (unsigned char *) b;
+
+    while (n >= 8) {
+        uint64_t tmp = *(uint64_t *) pa;
+        *(uint64_t *) pa = *(uint64_t *) pb;
+        *(uint64_t *) pb = tmp;
+        pa += 8;
+        pb += 8;
+        n -= 8;
+    }
+
+    while (n--) {
+        unsigned char tmp = *pa;
+        *pa++ = *pb;
+        *pb++ = tmp;
+    }
+}
+
 int memcmp(const void *s1, const void *s2, size_t n) {
+    if (n == 0) return 0;
+
     const unsigned char *p1 = (const unsigned char *) s1;
     const unsigned char *p2 = (const unsigned char *) s2;
 
-    for (size_t i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) {
-            return p1[i] - p2[i];
+    if (n >= 8) {
+        while ((uintptr_t) p1 & 7) {
+            if (*p1 != *p2) return (int) *p1 - (int) *p2;
+            p1++;
+            p2++;
+            n--;
         }
+
+        const uint64_t *q1 = (const uint64_t *) p1;
+        const uint64_t *q2 = (const uint64_t *) p2;
+
+        while (n >= 8) {
+            if (*q1 != *q2) break;
+            q1++;
+            q2++;
+            n -= 8;
+        }
+
+        p1 = (const unsigned char *) q1;
+        p2 = (const unsigned char *) q2;
+    }
+
+    while (n--) {
+        if (*p1 != *p2) return (int) *p1 - (int) *p2;
+        p1++;
+        p2++;
     }
 
     return 0;

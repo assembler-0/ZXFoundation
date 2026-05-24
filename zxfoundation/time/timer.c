@@ -107,7 +107,7 @@ void timer_cancel(timer_t *t) {
 ///        Called when the slot pointer of level l wraps around (full revolution).
 static void cascade(timer_wheel_t *w, unsigned int l) {
     unsigned int slot = (unsigned int)(w->slot_idx[l]);
-    list_node_t *head = &w->slots[l][slot];
+    list_head_t *head = &w->slots[l][slot];
 
     while (!list_empty(head)) {
         timer_t *t = list_entry(head->next, timer_t, node);
@@ -126,7 +126,7 @@ void timer_wheel_advance(uint64_t now) {
         w->current_tod += s_slot_width[0];
 
         unsigned int s0 = (unsigned int)(w->slot_idx[0]);
-        list_node_t *head = &w->slots[0][s0];
+        list_head_t *head = &w->slots[0][s0];
 
         while (!list_empty(head)) {
             timer_t *t = list_entry(head->next, timer_t, node);

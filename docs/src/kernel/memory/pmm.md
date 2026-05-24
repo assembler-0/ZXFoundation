@@ -52,16 +52,34 @@ Each physical frame has a 32-byte descriptor. The descriptor array is mapped con
 
 ---
 
-## 5. SMP Safety
+## 5. SMP Safety & Per-CPU Lists (PCP)
 
-Each zone has a dedicated ticket spinlock. All PMM operations acquire the zone lock with IRQs saved (`irqsave`/`irqrestore`) to prevent deadlock if an interrupt handler attempts an allocation while the lock is held.
+Each zone has a dedicated ticket spinlock. To reduce contention, order-0 pages are cached in **Per-CPU Lists (PCP)**.
+* **Allocation**: CPUs pull from local PCP first without locking (IRQs disabled).
+* **Drain**: Global operations (like `pmm_reserve_range`) trigger a **global PCP drainage** via SIGP Emergency Signals (IPI) to all other CPUs. This ensures no CPU holds a 'stale' cached page that should be reserved.
 
 ---
 
-## 6. Initialization
+## 6. HHDM Side Reinforcement
+
+The Direct Physical Mapping (HHDM) is validated during initialization:
+1. **Validation**: `pmm_verify_hhdm()` checks translation consistency against the loader's memory map. It verifies that every usable physical page is correctly mapped to its HHDM virtual counterpart.
+2. **EDAT Compliance**: Verifies Enhanced-DAT (EDAT-1/2) 1 MB and 2 GB page usage to optimize memory performance and reduce TLB pressure.
+3. **Consistency**: The loader must ensure that the mapping covers the entire physical memory range described in the boot protocol, rounding up to the nearest Region-3 or Segment boundary as required by the z/Architecture DAT structure.
+
+---
+
+## 7. Initialization
 
 `pmm_init(boot)` is called once during early init:
 
 1. Walk `boot->mem_map[]` and register all `ZXFL_MEM_USABLE` regions.
-2. Mark reserved ranges: `[0, 1 MB)`, kernel image, page table pool, modules.
-3. Insert all free frames into the buddy free lists.
+2. Mark reserved ranges via **Surgical Reservation**:
+   * **Lowcore/Artifacts**: `[0, 1 MB)` is always reserved to protect lowcore and loader leftovers.
+   * **Kernel Image**: `[kernel_phys_start, kernel_phys_end)` is marked as critical.
+   * **Page Table Pool**: `[kernel_phys_end, pgtbl_pool_end)` is reserved to protect active DAT tables.
+   * **PMM Metadata**: The `zx_mem_map` descriptor array itself.
+3. Insert all non-reserved `USABLE` frames into the buddy free lists.
+
+> [!IMPORTANT]
+> **Surgical Reservation** prevents "Zone Exhaustion" bugs where a large bootloader page pool could otherwise wipe out all available frames in `ZONE_DMA` (under 16 MB).

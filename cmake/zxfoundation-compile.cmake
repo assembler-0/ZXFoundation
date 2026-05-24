@@ -30,6 +30,8 @@ if(COMPILER_ID STREQUAL "clang")
         --target=${COMMON_TARGET_TRIPLE}
         -Wno-gnu-statement-expression-from-macro-expansion
         -Wno-gnu-pointer-arith
+        -Wno-gnu-zero-variadic-macro-arguments
+        -Wno-c2y-extensions
     )
 endif()
 

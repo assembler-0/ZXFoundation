@@ -42,5 +42,9 @@ static inline void *kvzalloc(size_t size, gfp_t gfp) {
 ///        Correctly dispatches to kfree() or vfree() based on origin.
 void kvfree(void *ptr);
 
-/// @brief Maximum size serviced by kmalloc (slab path).
-#define KMALLOC_MAX_SIZE    (1UL << 17)   ///< 128 KB
+/// @brief Maximum size serviced by the slab magazine path.
+#define KMALLOC_SLAB_MAX    (PAGE_SIZE * 2UL)   ///< 8 KB
+
+/// @brief Maximum size serviced by kmalloc (slab + direct PMM).
+///        Larger sizes must use vmalloc() or kvmalloc().
+#define KMALLOC_MAX_SIZE    (PAGE_SIZE * 512UL) ///< 2 MB — buddy MAX_ORDER limit

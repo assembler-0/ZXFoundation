@@ -32,6 +32,7 @@
 ///        stored in the per-CPU area (percpu_lock_depth).
 
 #include <zxfoundation/sync/spinlock.h>
+#include <arch/s390x/cpu/lowcore.h>
 #include <zxfoundation/percpu.h>
 #include <arch/s390x/cpu/processor.h>
 

@@ -18,6 +18,7 @@
 #define PF_PINNED       (1U << 6)   ///< Pinned for DMA or external reference.
 #define PF_VMALLOC      (1U << 7)   ///< Backing a vmalloc region.
 #define PF_DIRTY        (1U << 8)   ///< Page has been written since last flush.
+#define PF_KMALLOC      (1U << 9)   ///< Large kmalloc — freed via pmm_free_pages.
 
 typedef enum {
     ZONE_DMA    = 0,   ///< [0, 16 MB) — legacy DASD / channel DMA.
@@ -47,7 +48,7 @@ typedef struct zx_page {
     // 4 bytes implicit padding (union ends at +24; list_node_t requires 8-byte alignment → lru at +32).
 
     /// @brief LRU list linkage (active/inactive reclaimer lists).
-    list_node_t lru;       ///< offset 32, size 16.
+    list_head_t lru;       ///< offset 32, size 16.
 
     /// @brief Address-space mapping pointer (page cache / anonymous).
     void       *mapping;   ///< offset 48, size 8.

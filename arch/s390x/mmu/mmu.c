@@ -406,11 +406,7 @@ uint64_t mmu_virt_to_phys(const mmu_pgtbl_t *pgtbl, uint64_t va) {
 
     uint64_t e2 = r2[va_rsx(va)];
     if (e2 & Z_I_BIT) return ~0ULL;
-    /* EDAT-2 2 GB large page stored in R2 slot. */
-    if (e2 & Z_R3E_FC) {
-        uint64_t frame = e2 & Z_R3E_LARGE_ORIGIN_MASK;
-        return frame | (va & ~Z_EDAT2_PAGE_MASK);
-    }
+
     const uint64_t *r3 = (const uint64_t *) (uintptr_t) hhdm_phys_to_virt(ENTRY_ORIGIN(e2));
 
     uint64_t e3 = r3[va_rtx(va)];
@@ -442,7 +438,7 @@ bool mmu_is_large_page(const mmu_pgtbl_t *pgtbl, uint64_t va) {
     if (e1 & Z_I_BIT) return false;
     const uint64_t *r2 = (const uint64_t *) (uintptr_t) hhdm_phys_to_virt(ENTRY_ORIGIN(e1));
     uint64_t e2 = r2[va_rsx(va)];
-    if ((e2 & Z_I_BIT) || (e2 & Z_R3E_FC)) return false;
+    if (e2 & Z_I_BIT) return false;
     const uint64_t *r3 = (const uint64_t *) (uintptr_t) hhdm_phys_to_virt(ENTRY_ORIGIN(e2));
     uint64_t e3 = r3[va_rtx(va)];
     if ((e3 & Z_I_BIT) || (e3 & Z_R3E_FC)) return false;
@@ -458,7 +454,6 @@ bool mmu_is_huge_page(const mmu_pgtbl_t *pgtbl, uint64_t va) {
     const uint64_t *r2 = (const uint64_t *) (uintptr_t) hhdm_phys_to_virt(ENTRY_ORIGIN(e1));
     uint64_t e2 = r2[va_rsx(va)];
     if (e2 & Z_I_BIT) return false;
-    if (e2 & Z_R3E_FC) return true;
     const uint64_t *r3 = (const uint64_t *) (uintptr_t) hhdm_phys_to_virt(ENTRY_ORIGIN(e2));
     uint64_t e3 = r3[va_rtx(va)];
     return (!(e3 & Z_I_BIT)) && ((e3 & Z_R3E_FC) != 0);
@@ -471,6 +466,9 @@ void mmu_load_pgtbl(const mmu_pgtbl_t *pgtbl) {
 }
 
 void mmu_init(void) {
+    // CR1 holds the primary-space ASCE — the one DAT uses for kernel accesses.
+    // CR13 (home space) is also set to the same value by the bootloader, but
+    // the authoritative source for the kernel page table is always CR1.
     uint64_t cr1;
     arch_ctl_store(cr1, 1, 1);
 
@@ -484,16 +482,23 @@ void mmu_init(void) {
     uint64_t *r1 = (uint64_t *) (uintptr_t) hhdm_phys_to_virt(kernel_pgtbl.r1_phys);
     uint32_t scrubbed = 0;
     for (int i = 0; i < (int) Z_TABLE_ENTRIES; i++) {
+        // RFX 0 is Identity map, RFX 2047 is HHDM.
+        // We must preserve BOTH.
+        uint32_t rfx_hhdm = va_rfx(CONFIG_KERNEL_VIRT_OFFSET);
+        if (i == 0 || (uint32_t)i == rfx_hhdm) continue;
         uint64_t e = r1[i];
         if (e & Z_I_BIT) continue;
-        uint64_t r2_phys = ENTRY_ORIGIN(e);
-        if (r2_phys == 0 || r2_phys >= (4ULL * 1024 * 1024 * 1024)) {
-            r1[i] = Z_I_BIT | Z_TL_2048 | Z_TT_R1;
-            scrubbed++;
-        }
+        r1[i] = Z_I_BIT | Z_TL_2048 | Z_TT_R1;
+        scrubbed++;
     }
     if (scrubbed)
         mmu_flush_tlb_local();
+
+    // Map the HHDM into the kernel page table explicitly if it's not already.
+    // This ensures the kernel owns the mapping and doesn't rely on loader tables
+    // that might be in a pool we want to reuse.
+    // However, currently mmu_init is called AFTER pmm_init and BEFORE pmm_verify_hhdm.
+    // We already scrubbed everything EXCEPT HHDM and Identity.
 
     // Store the kernel ASCE in the BSP lowcore so APs can read it via a
     // prefix-relative load (no DAT needed) during their bringup sequence.

@@ -15,9 +15,12 @@
 #include <zxfoundation/sys/irq/irqdesc.h>
 #include <zxfoundation/time/ktime.h>
 
+#include <arch/s390x/cpu/ipi.h>
+
 /// EXT subclass codes for the two time-critical interrupts.
 #define EXT_CPU_TIMER           0x1004U
 #define EXT_CLOCK_COMPARATOR    0x1005U
+#define EXT_EMERGENCY_SIGNAL    0x1201U
 
 /// @brief External interrupt C handler — called from trap_ext_entry.
 /// @param frame  Interrupt frame built by entry.S on the async stack.
@@ -33,6 +36,10 @@ void do_ext_interrupt(zx_irq_frame_t *frame) {
     }
     if (ext_code == EXT_CLOCK_COMPARATOR) {
         time_clock_comparator_handler();
+        return;
+    }
+    if (ext_code == EXT_EMERGENCY_SIGNAL) {
+        arch_ipi_handle_emergency();
         return;
     }
 

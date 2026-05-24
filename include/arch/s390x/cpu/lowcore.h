@@ -18,16 +18,48 @@
 ///        These MUST stay in sync with the C struct layout below.
 ///        Verified by the _Static_assert at the bottom of this file.
 #define LC_RESTART_STACK    0x0360UL    ///< zx_lowcore_t::restart_stack
+#define LC_MCCK_STACK       0x0368UL    ///< zx_lowcore_t::mcck_stack
 #define LC_KERNEL_ASCE      0x0388UL    ///< zx_lowcore_t::kernel_asce
 #define LC_RETURN_PSW       0x0290UL    ///< zx_lowcore_t::return_psw
 #define LC_KERNEL_STACK     0x0348UL    ///< zx_lowcore_t::kernel_stack
+#define LC_ASYNC_STACK      0x0350UL    ///< zx_lowcore_t::async_stack
+#define LC_AP_CR0           0x0330UL    ///< zx_lowcore_t::ap_cr0
+#define LC_AP_CR13          0x0338UL    ///< zx_lowcore_t::ap_cr13
+
+/* Old PSW offsets — PoP §4.3.2 */
+#define LC_EXT_OLD_PSW      0x0130UL
+#define LC_SVC_OLD_PSW      0x0140UL
+#define LC_PGM_OLD_PSW      0x0150UL
+#define LC_MCCK_OLD_PSW     0x0160UL
+#define LC_IO_OLD_PSW       0x0170UL
+
+#define LC_PERCPU_OFFSET    0x0400UL    ///< zx_lowcore_t::percpu (zx_percpu_t)
 
 #ifndef __ASSEMBLER__
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/zconfig.h>
+#include <zxfoundation/sync/spinlock.h>
+#include <zxfoundation/memory/pmm.h>
 
-typedef struct __attribute__((packed, aligned(8192))) {
+/// @brief Software per-CPU data block.  Embedded in the 8 KB prefix area
+///        starting at LC_PERCPU_OFFSET (0x400).
+typedef struct {
+    uint64_t    prefix_base;        ///< Physical address of this CPU's lowcore.
+    uint16_t    cpu_id;             ///< Logical CPU ID (0 = BSP).
+    uint16_t    cpu_addr;           ///< z/Arch CPU address (STAP result).
+    uint32_t    lock_depth;         ///< Current qspinlock nesting depth.
+    mcs_node_t  lock_nodes[MAX_LOCK_DEPTH]; ///< MCS nodes for qspinlock.
+    uint64_t    rcu_gp_seq;         ///< RCU grace-period sequence number.
+    uint64_t    rcu_qs_seq;         ///< RCU quiescent-state sequence number.
+    uint8_t     in_rcu_read_side;   ///< 1 if inside rcu_read_lock().
+    uint8_t     _pad0[3];
+    uint32_t    ipi_pending_count;  ///< Atomic counter for pending IPI completion.
+    uint64_t    ap_stack_top;       ///< AP initial stack pointer (physical, set before SIGP Restart).
+    pmm_pcplist_t pcp[ZONE_MAX];    ///< Per-CPU PMM page cache, one per zone.
+} zx_percpu_t;
+
+typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     uint8_t     pad_0x0000[0x0014 - 0x0000];   /* 0x0000 */
     uint32_t    ipl_parmblock_ptr;              /* 0x0014 */
     uint8_t     pad_0x0018[0x0080 - 0x0018];   /* 0x0018 */
@@ -105,7 +137,8 @@ typedef struct __attribute__((packed, aligned(8192))) {
     uint64_t    int_clock;                      /* 0x02f0 */
     uint8_t     pad_0x02f8[0x0328 - 0x02f8];   /* 0x02f8 */
     uint64_t    clock_comparator;               /* 0x0328 */
-    uint8_t     pad_0x0330[0x0340 - 0x0330];   /* 0x0330 */
+    uint64_t    ap_cr0;                         /* 0x0330  LC_AP_CR0 */
+    uint64_t    ap_cr13;                        /* 0x0338  LC_AP_CR13 */
 
     /* Current process */
     uint64_t    current_task;                   /* 0x0340 */
@@ -135,21 +168,12 @@ typedef struct __attribute__((packed, aligned(8192))) {
     int32_t     preempt_count;                  /* 0x03a8 */
     uint32_t    spinlock_lockval;               /* 0x03ac */
     uint32_t    spinlock_index;                 /* 0x03b0 */
-    uint8_t     pad_0x03b4[0x03b8 - 0x03b4];   /* 0x03b4 */
-    uint64_t    percpu_offset;                  /* 0x03b8 */
-    uint8_t     pad_0x03c0[0x0e00 - 0x03c0];   /* 0x03c0 */
+    uint8_t     pad_0x03b4[0x0400 - 0x03b4];   /* 0x03b4 */
 
-    /* IPL/dump info */
-    uint64_t    ipib;                           /* 0x0e00 */
-    uint32_t    ipib_checksum;                  /* 0x0e08 */
-    uint64_t    vmcore_info;                    /* 0x0e0c */
-    uint8_t     pad_0x0e14[0x0e18 - 0x0e14];   /* 0x0e14 */
-    uint64_t    os_info;                        /* 0x0e18 */
-    uint8_t     pad_0x0e20[0x11b0 - 0x0e20];   /* 0x0e20 */
+    /* Per-CPU software data block (0x0400) */
+    zx_percpu_t percpu;                         /* 0x0400  LC_PERCPU_OFFSET */
 
-    uint64_t    mcesad;                         /* 0x11b0 */
-    uint64_t    ext_params2;                    /* 0x11b8 */
-    uint8_t     pad_0x11c0[0x1200 - 0x11c0];   /* 0x11c0 */
+    uint8_t     pad_0x0400_end[0x1200 - (0x0400 + sizeof(zx_percpu_t))];
 
     /* CPU register save area */
     uint64_t    floating_pt_save_area[16];      /* 0x1200 */
@@ -183,6 +207,12 @@ _Static_assert(__builtin_offsetof(zx_lowcore_t, return_psw)    == LC_RETURN_PSW,
                "LC_RETURN_PSW mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, kernel_stack)  == LC_KERNEL_STACK,
                "LC_KERNEL_STACK mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, percpu)        == LC_PERCPU_OFFSET,
+               "LC_PERCPU_OFFSET mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, ap_cr0)         == LC_AP_CR0,
+               "LC_AP_CR0 mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, ap_cr13)        == LC_AP_CR13,
+               "LC_AP_CR13 mismatch");
 
 /// @brief Access the BSP lowcore via absolute addressing (DAT off).
 static inline zx_lowcore_t *zx_lowcore_raw(void) {
@@ -229,15 +259,15 @@ static inline void lc_set_kernel_asce(zx_lowcore_t *lc, uint64_t asce) {
 /// @param lc  HHDM-mapped pointer to the target lowcore.
 void lc_install_handler_psws(zx_lowcore_t *lc);
 
-/// @brief Install disabled-wait PSWs into all six new PSW slots at physical
-///        lowcore offsets.  Called pre-DAT (DAT off) during early boot.
-///        This is the only safe lowcore write path before the HHDM is live.
-void zx_lowcore_setup_pre_dat(void);
+
 
 /// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
 ///        Called as the very first action in zxfoundation_global_initialize(),
 ///        after the HHDM is active.  Replaces the disabled-wait PSWs installed
 ///        by zx_lowcore_setup_pre_dat() with real handler entry points.
 void zx_lowcore_setup_late(void);
+
+/// @brief Initialize BSP-specific stacks (async, mcck) after PMM is ready.
+void zx_lowcore_init_late_bsp(void);
 
 #endif /* __ASSEMBLER__ */

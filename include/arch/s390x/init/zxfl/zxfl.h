@@ -150,7 +150,7 @@ typedef struct {
     // ---- CONTROL REGISTER SNAPSHOT (24 bytes) ----
     uint64_t cr0_snapshot;      ///< CR0 at time of kernel jump
     uint64_t cr1_snapshot;      ///< CR1 (ASCE) at time of kernel jump
-    uint64_t cr14_snapshot;     ///< CR14 at time of kernel jump
+    uint64_t cr13_snapshot;     ///< CR13 at time of kernel jump
 
     // ---- PAGE TABLE POOL (8 bytes) ----
     uint64_t pgtbl_pool_end;    ///< Physical end (exclusive) of the bootloader's

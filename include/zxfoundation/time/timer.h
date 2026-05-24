@@ -20,7 +20,7 @@ typedef void (*timer_fn_t)(void *data);
 /// @brief Timer descriptor.  Embed in the owning structure or allocate
 ///        from a slab cache.  Do not copy after timer_add().
 typedef struct timer {
-    list_node_t     node;       ///< Linkage in a wheel slot list.
+    list_head_t     node;       ///< Linkage in a wheel slot list.
     uint64_t        expires;    ///< Absolute expiry in TOD units.
     timer_fn_t      fn;         ///< Callback — called in hard-IRQ context.
     void           *data;       ///< Opaque argument to fn.
@@ -30,7 +30,7 @@ typedef struct timer {
 
 /// @brief Per-CPU timer wheel state.
 typedef struct timer_wheel {
-    list_node_t     slots[TIMER_WHEEL_LEVELS][TIMER_WHEEL_SLOTS];
+    list_head_t     slots[TIMER_WHEEL_LEVELS][TIMER_WHEEL_SLOTS];
     uint64_t        current_tod;    ///< TOD value of the last advance.
     uint64_t        slot_idx[TIMER_WHEEL_LEVELS]; ///< Current slot per level.
 } timer_wheel_t;

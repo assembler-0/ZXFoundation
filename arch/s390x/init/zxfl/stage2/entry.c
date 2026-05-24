@@ -46,7 +46,7 @@ static void setup_control_regs(void) {
 }
 
 static void snapshot_control_regs(zxfl_boot_protocol_t *proto) {
-    arch_ctl_store(proto->cr14_snapshot, 14, 14);
+    arch_ctl_store(proto->cr13_snapshot, 13, 13);
 }
 
 /// @brief Probe the IPL device as ECKD or FBA and populate ipl_dev_type/model.

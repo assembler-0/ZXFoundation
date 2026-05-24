@@ -57,9 +57,13 @@
 /// Used for early boot and AP restart PSW before DAT is enabled.
 #define PSW_MASK_KERNEL         (PSW_ARCH_BITS)
 
+/// Home Space Mode bit mask (ASC bits 16-17 = 11).
+#define PSW_BIT_HOME_SPACE      0x0000C00000000000ULL
+
 /// Supervisor mode, DAT on, all interrupts disabled, 64-bit.
 /// Used for the DAT-on transition PSW (return_psw in ap_entry).
-#define PSW_MASK_KERNEL_DAT     (PSW_BIT_DAT | PSW_ARCH_BITS)
+/// The kernel must run in Home Space when DAT is on.
+#define PSW_MASK_KERNEL_DAT     (PSW_BIT_DAT | PSW_BIT_HOME_SPACE | PSW_ARCH_BITS)
 
 /// Disabled wait: wait state set, DAT off, all interrupts disabled, 64-bit.
 /// The wait bit (bit 14) is the only correct way to enter a wait state.
@@ -121,7 +125,6 @@ static inline zx_psw_t arch_extract_psw(void) {
     __builtin_unreachable();
 }
 
-/// @brief Install disabled-wait PSWs into all six new PSW slots.
-void psw_install_new_psws(void);
+
 
 #endif /* __ASSEMBLER__ */

@@ -60,14 +60,14 @@ __zx_start_kernel64:
 
     .align 8
 .Ldisabled_wait_psw:
-    .quad   0x0000800180000000, 0x0000000000000000
+    .quad   0x0002000180000000, 0x0000000000000000
 
     .align 8
 .Lpgm_psw_mask:
-    .quad   0x0000800180000000
+    .quad   0x0002000180000000
 .Lpgm_psw_addr:
     .quad   (CONFIG_KERNEL_VIRT_OFFSET + 0xDEAD30)
 .Lpgm_psw_slot:
-    .quad   (CONFIG_KERNEL_VIRT_OFFSET + 0x0A0)
+    .quad   (CONFIG_KERNEL_VIRT_OFFSET + 0x1D0)
 
     .section .note.GNU-stack, "", @progbits

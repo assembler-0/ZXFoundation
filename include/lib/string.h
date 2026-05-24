@@ -25,6 +25,9 @@ void *memmove(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
 int memcmp(const void *s1, const void *s2, size_t n);
 void *memchr(const void *s, int c, size_t n);
+void *memset32(void *s, uint32_t val, size_t n);
+void *memmem(const void *haystack, size_t hlen, const void *needle, size_t nlen);
+void memswap(void *a, void *b, size_t n);
 
 int strcasecmp(const char *s1, const char *s2);
 int strncasecmp(const char *s1, const char *s2, size_t n);

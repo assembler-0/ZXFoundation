@@ -25,6 +25,16 @@ static inline void arch_local_irq_disable(void) {
     );
 }
 
+static inline void arch_local_irq_enable(void) {
+    uint8_t dummy;
+    __asm__ volatile (
+        "stosm  %0, 0x03\n"
+        : "=Q" (dummy)
+        :
+        : "memory"
+    );
+}
+
 static inline void arch_local_irq_restore(irqflags_t flags) {
     const uint8_t mask = (uint8_t)(flags >> 56);
     const uint8_t irq_mask = mask & 0x03U;

@@ -99,7 +99,7 @@ The kernel should switch to its own stack as early as possible and treat this re
 |-------|------|-------------|
 | `cr0_snapshot` | `u64` | CR0 at time of kernel jump |
 | `cr1_snapshot` | `u64` | CR1 (ASCE) at time of jump |
-| `cr14_snapshot` | `u64` | CR14 at time of jump |
+| `cr13_snapshot` | `u64` | CR13 at time of jump |
 
 ---
 

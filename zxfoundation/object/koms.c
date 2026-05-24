@@ -8,7 +8,7 @@
 #include <zxfoundation/common.h>
 #include <lib/string.h>
 
-static list_node_t type_registry;
+static list_head_t type_registry;
 static spinlock_t type_registry_lock;
 
 void koms_type_register(kobj_type_t *type) {
@@ -461,7 +461,7 @@ void koms_dump_tree(const kobject_t *obj, uint32_t depth) {
     for (uint32_t i = 0; i < depth; i++) printk("  ");
     koms_dump_obj(obj);
     kobject_t *child;
-    list_for_each_entry(child, (list_node_t *)&obj->children, sibling) {
+    list_for_each_entry(child, (list_head_t *)&obj->children, sibling) {
         koms_dump_tree(child, depth + 1);
     }
 }
@@ -471,7 +471,7 @@ void koms_dump_ns(const kobj_ns_t *ns) {
     printk(ZX_INFO "koms: namespace '%s' (%u objects)\n", ns->name, ns->count);
     for (uint32_t i = 0; i < KOBJ_NS_BUCKETS; i++) {
         kobject_t *obj;
-        list_for_each_entry(obj, (list_node_t *)&ns->buckets[i].chain, ns_node) {
+        list_for_each_entry(obj, (list_head_t *)&ns->buckets[i].chain, ns_node) {
             printk(ZX_INFO "  [%u] ", i);
             koms_dump_obj(obj);
         }

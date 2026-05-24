@@ -8,7 +8,6 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/slab.h>
-#include <zxfoundation/memory/cma.h>
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/kmalloc.h>
 #include <zxfoundation/object/koms.h>
@@ -49,8 +48,7 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: no kernel checksum table, integrity unverified — unauthorized loader");
     }
     const zxvl_checksum_table_t *tbl =
-        (const zxvl_checksum_table_t *)(uintptr_t)
-        hhdm_phys_to_virt(boot->cksum_table_phys);
+        (const zxvl_checksum_table_t *)(uintptr_t)boot->cksum_table_phys;
     if (tbl->version != ZXVL_CKSUM_VERSION || tbl->count == 0 ||
         tbl->count > ZXVL_CKSUM_MAX_ENTRIES)
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: kernel checksum table corrupt");
@@ -156,10 +154,11 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     rcu_init();
 
     pmm_init(boot);
-    cma_init(boot);
+    zx_lowcore_init_late_bsp();
     pmm_pcplist_init(0);
 
     mmu_init();
+    pmm_verify_hhdm(boot);
     vmm_init();
 
     slab_init();

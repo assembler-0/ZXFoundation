@@ -83,9 +83,12 @@
 /// Entries per page table.
 #define PAGE_TABLE_ENTRIES   256U
 
+/// Maximum physical memory to map (8 GB for now, plenty for our setup).
+#define MAX_PHYS_MAP         (8ULL * 1024 * 1024 * 1024)
+
 static uint64_t r1_table[2048] __attribute__((aligned(16384)));
-static uint64_t r2_table[2048] __attribute__((aligned(16384)));
-static uint64_t r3_table[2048] __attribute__((aligned(16384)));
+static uint64_t r2_table_ident[2048] __attribute__((aligned(16384)));
+static uint64_t r2_table_hhdm[2048] __attribute__((aligned(16384)));
 
 /// @brief Linear bump allocator for page-table memory.
 static uint64_t pool_next = 0;
@@ -96,6 +99,16 @@ static uint64_t pool_alloc(uint64_t size, uint64_t align) {
     uint64_t addr = pool_next;
     pool_next += size;
     return addr;
+}
+
+/// @brief Allocate and initialize a Region-3 table (16 KB, 16KB-aligned).
+static uint64_t *alloc_r3_table(void) {
+    uint64_t addr = pool_alloc(2048 * 8, 16384);
+    uint64_t *tbl = (uint64_t *)(uintptr_t)addr;
+    for (uint32_t i = 0; i < 2048; i++) {
+        tbl[i] = Z_I | Z_TL_2048 | Z_TT_R3;
+    }
+    return tbl;
 }
 
 /// @brief Allocate and initialize a segment table (16 KB, 16KB-aligned).
@@ -118,6 +131,10 @@ static uint64_t *alloc_page_table(void) {
     return tbl;
 }
 
+static inline uint64_t zxfl_hhdm_phys_to_virt(uint64_t phys) {
+    return CONFIG_KERNEL_VIRT_OFFSET + phys;
+}
+
 /// @brief Build 5-level page tables, enable DAT, and LPSWE into the kernel.
 /// @param entry      Kernel entry point (HHDM virtual address from ELF e_entry).
 /// @param boot_proto Physical address of the zxfl_boot_protocol_t struct.
@@ -127,50 +144,61 @@ static uint64_t *alloc_page_table(void) {
 
     const bool has_edat1 = stfle_has_facility(proto->stfle_fac, STFLE_BIT_EDAT1);
 
+    // We map ALL usable physical memory up to the highest probed byte.
     uint64_t map_bytes = proto->mem_total_bytes;
+    // Find the actual highest physical address in the map
+    const zxfl_mem_region_t *mmap = (const zxfl_mem_region_t *)(uintptr_t)proto->mem_map_addr;
+    for (uint32_t i = 0; i < proto->mem_map_count; i++) {
+        uint64_t end = mmap[i].base + mmap[i].length;
+        if (end > map_bytes) map_bytes = end;
+    }
+
     if (map_bytes < 0x200000ULL) map_bytes = 0x200000ULL;
-    map_bytes = (map_bytes + SEG_SIZE - 1) & ~(SEG_SIZE - 1);
+    map_bytes = (map_bytes + SEG_TABLE_COVERAGE - 1) & ~(SEG_TABLE_COVERAGE - 1);
 
-    const uint64_t max_map = 2048ULL * SEG_TABLE_COVERAGE;
-    if (map_bytes > max_map) map_bytes = max_map;
-
-    const uint64_t total_segments = map_bytes / SEG_SIZE;
-    const uint32_t num_seg_tables = (uint32_t)((total_segments + SEG_TABLE_ENTRIES - 1)
-                                                / SEG_TABLE_ENTRIES);
+    // Hard limit at 8 GB for the loader's simple mapping.
+    if (map_bytes > MAX_PHYS_MAP) map_bytes = MAX_PHYS_MAP;
 
     for (uint32_t i = 0; i < 2048; i++) {
         r1_table[i] = Z_I | Z_TL_2048 | Z_TT_R1;
-        r2_table[i] = Z_I | Z_TL_2048 | Z_TT_R2;
-        r3_table[i] = Z_I | Z_TL_2048 | Z_TT_R3;
+        r2_table_ident[i] = Z_I | Z_TL_2048 | Z_TT_R2;
+        r2_table_hhdm[i] = Z_I | Z_TL_2048 | Z_TT_R2;
     }
 
     uint64_t pool_base = (proto->kernel_phys_end + 0xFFFFFULL) & ~0xFFFFFULL;
     if (pool_base < 0x2000000ULL) pool_base = 0x2000000ULL;
     pool_next = pool_base;
 
-    if (!has_edat1) {
-        print("zxfl: EDAT-1 not available\n");
-    }
+    // Build the Region-3 and Segment tables.
+    // Each R3 table covers 4 TB (2048 * 2 GB).
+    // For 8 GB, we only need 4 entries in ONE R3 table.
+    uint64_t *r3_tab = alloc_r3_table();
 
-    for (uint32_t st = 0; st < num_seg_tables; st++) {
+    const uint32_t num_r3_entries = (uint32_t)((map_bytes + SEG_TABLE_COVERAGE - 1) / SEG_TABLE_COVERAGE);
+
+    for (uint32_t r3e = 0; r3e < num_r3_entries; r3e++) {
         uint64_t *seg_table = alloc_seg_table();
 
-        uint64_t seg_start = (uint64_t)st * SEG_TABLE_ENTRIES;
-        uint64_t seg_end   = seg_start + SEG_TABLE_ENTRIES;
-        if (seg_end > total_segments) seg_end = total_segments;
-
-        for (uint64_t s = seg_start; s < seg_end; s++) {
-            uint64_t phys = s * SEG_SIZE;
-            uint32_t sx   = (uint32_t)(s % SEG_TABLE_ENTRIES);
-
-            uint64_t *pt = alloc_page_table();
-            for (uint32_t p = 0; p < PAGE_TABLE_ENTRIES; p++) {
-                pt[p] = phys + ((uint64_t)p * 4096ULL);
+        for (uint32_t sx = 0; sx < SEG_TABLE_ENTRIES; sx++) {
+            uint64_t phys = (uint64_t)r3e * SEG_TABLE_COVERAGE + (uint64_t)sx * SEG_SIZE;
+            if (phys >= map_bytes) {
+                seg_table[sx] = Z_I | Z_TT_SEG;
+                continue;
             }
-            seg_table[sx] = (uint64_t)(uintptr_t)pt | Z_TT_SEG;
-        }
 
-        r3_table[st] = (uint64_t)(uintptr_t)seg_table | Z_TL_2048 | Z_TT_R3;
+            if (has_edat1) {
+                // EDAT-1: Directly map 1 MB large page in the segment table.
+                seg_table[sx] = phys | Z_STE_FC | Z_TT_SEG;
+            } else {
+                // Legacy: Map 256 x 4 KB pages via a page table.
+                uint64_t *pt = alloc_page_table();
+                for (uint32_t p = 0; p < PAGE_TABLE_ENTRIES; p++) {
+                    pt[p] = phys + ((uint64_t)p * 4096ULL);
+                }
+                seg_table[sx] = (uint64_t)(uintptr_t)pt | Z_TT_SEG;
+            }
+        }
+        r3_tab[r3e] = (uint64_t)(uintptr_t)seg_table | Z_TL_2048 | Z_TT_R3;
     }
 
     uint32_t rfx_identity = 0;
@@ -178,17 +206,21 @@ static uint64_t *alloc_page_table(void) {
     uint32_t rsx_identity = 0;
     uint32_t rsx_hhdm     = (uint32_t)((virt_base >> 42) & 0x7FFULL);
 
-    r1_table[rfx_identity] = (uint64_t)(uintptr_t)r2_table | Z_TL_2048 | Z_TT_R1;
-    r1_table[rfx_hhdm]     = (uint64_t)(uintptr_t)r2_table | Z_TL_2048 | Z_TT_R1;
+    r1_table[rfx_identity] = (uint64_t)(uintptr_t)r2_table_ident | Z_TL_2048 | Z_TT_R1;
+    r1_table[rfx_hhdm]     = (uint64_t)(uintptr_t)r2_table_hhdm | Z_TL_2048 | Z_TT_R1;
 
-    r2_table[rsx_identity] = (uint64_t)(uintptr_t)r3_table | Z_TL_2048 | Z_TT_R2;
-    r2_table[rsx_hhdm]     = (uint64_t)(uintptr_t)r3_table | Z_TL_2048 | Z_TT_R2;
+    r2_table_ident[rsx_identity] = (uint64_t)(uintptr_t)r3_tab | Z_TL_2048 | Z_TT_R2;
+    r2_table_hhdm[rsx_hhdm]     = (uint64_t)(uintptr_t)r3_tab | Z_TL_2048 | Z_TT_R2;
 
-    uint64_t v_proto = hhdm_phys_to_virt(boot_proto);
-    uint64_t v_stack = hhdm_phys_to_virt(proto->kernel_stack_top);
-    proto->kernel_stack_top = v_stack;
-    proto->mem_map_addr     = hhdm_phys_to_virt(proto->mem_map_addr);
-    proto->cmdline_addr     = hhdm_phys_to_virt(proto->cmdline_addr);
+    // Update protocol addresses to be HHDM-virtual.
+    proto->kernel_stack_top = zxfl_hhdm_phys_to_virt(proto->kernel_stack_top);
+    proto->mem_map_addr     = zxfl_hhdm_phys_to_virt(proto->mem_map_addr);
+    proto->cmdline_addr     = zxfl_hhdm_phys_to_virt(proto->cmdline_addr);
+    if (proto->cksum_table_phys)
+        proto->cksum_table_phys = zxfl_hhdm_phys_to_virt(proto->cksum_table_phys);
+
+    uint64_t v_proto = zxfl_hhdm_phys_to_virt(boot_proto);
+    uint64_t v_stack = proto->kernel_stack_top;
 
     uint64_t cr0;
     arch_ctl_store(cr0, 0, 0);
@@ -203,9 +235,11 @@ static uint64_t *alloc_page_table(void) {
 
     uint64_t asce = (uint64_t)(uintptr_t)r1_table | Z_ASCE_DT_R1 | Z_ASCE_TL_2048;
     arch_ctl_load(asce, 1, 1);
+    arch_ctl_load(asce, 13, 13); // Home Space
 
     proto->pgtbl_pool_end = (pool_next + 4095ULL) & ~4095ULL;
     proto->cr1_snapshot = asce;
+    proto->cr13_snapshot = asce;
     proto->cr0_snapshot = cr0;
 
     __asm__ volatile("ptlb" ::: "memory");

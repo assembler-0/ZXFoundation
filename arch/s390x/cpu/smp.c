@@ -4,12 +4,13 @@
 #include <arch/s390x/cpu/smp.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/processor.h>
-#include <arch/s390x/mmu/mmu.h>
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
 #include <zxfoundation/time/ktime.h>
+#include <arch/s390x/cpu/ipi.h>
+#include <arch/s390x/cpu/irq.h>
 
 extern void ap_entry(void);
 extern void ap_dat_on(void);
@@ -17,13 +18,17 @@ extern void ap_dat_on(void);
 static volatile uint32_t ap_online_count;
 
 [[noreturn]] void ap_startup(void) {
+    arch_ipi_init();
     __atomic_add_fetch(&ap_online_count, 1u, __ATOMIC_SEQ_CST);
     time_init_ap();
+    arch_local_irq_enable();
     while (true)
         arch_cpu_relax();
 }
 
 void smp_init(const zxfl_boot_protocol_t *boot) {
+    arch_ipi_init();
+
     if (!(boot->flags & ZXFL_FLAG_SMP) || boot->cpu_count <= 1)
         return;
 
@@ -31,6 +36,8 @@ void smp_init(const zxfl_boot_protocol_t *boot) {
         hhdm_virt_to_phys((uint64_t)(uintptr_t)ap_entry);
 
     const uint64_t kernel_asce = zx_lowcore()->kernel_asce;
+    uint64_t cr0;
+    arch_ctl_store(cr0, 0, 0);
 
     uint32_t ap_count = 0;
 
@@ -63,9 +70,14 @@ void smp_init(const zxfl_boot_protocol_t *boot) {
         lc->async_stack   = hhdm_phys_to_virt(pmm_page_to_phys(async_page) + PAGE_SIZE);
         lc->mcck_stack    = hhdm_phys_to_virt(pmm_page_to_phys(mcck_page)  + PAGE_SIZE);
 
+        lc->percpu.ap_stack_top = lc->restart_stack;
+
         lc_set_kernel_asce(lc, kernel_asce);
         lc_set_restart_psw(lc, ap_entry_phys);
         lc_install_handler_psws(lc);
+
+        lc->ap_cr0  = cr0;
+        lc->ap_cr13 = kernel_asce;
 
         lc->return_psw.mask = PSW_MASK_KERNEL_DAT;
         lc->return_psw.addr = (uint64_t)(uintptr_t)ap_dat_on;
@@ -95,12 +107,12 @@ void smp_teardown(void) {
     const uint16_t my_addr = arch_cpu_addr();
 
     for (unsigned int i = 0; i < MAX_CPUS; i++) {
-        const percpu_t *cpu = percpu_areas[i];
+        const zx_lowcore_t *cpu = percpu_areas[i];
         if (!cpu)
             continue;
-        if (cpu->cpu_addr == my_addr)
+        if (cpu->percpu.cpu_addr == my_addr)
             continue;
-        sigp_busy(cpu->cpu_addr, SIGP_STOP, 0, nullptr);
+        sigp_busy(cpu->percpu.cpu_addr, SIGP_STOP, 0, nullptr);
     }
 }
 

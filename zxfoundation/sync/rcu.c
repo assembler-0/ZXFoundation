@@ -31,6 +31,7 @@
 ///        grace period completes.
 
 #include <zxfoundation/sync/rcu.h>
+#include <arch/s390x/cpu/lowcore.h>
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <arch/s390x/cpu/atomic.h>

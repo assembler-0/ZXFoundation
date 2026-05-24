@@ -49,12 +49,12 @@ typedef uint32_t gfp_t;
 #define PCP_BATCH           8U    ///< Pages moved per refill / drain.
 
 /// @brief Per-CPU page cache for order-0 (4 KB) allocations.
-///        One instance per CPU per zone, embedded in percpu_t (added below).
+///        One instance per CPU per zone, embedded in zx_percpu_t.
 ///        Access is IRQ-disabled; no spinlock needed.
 typedef struct pmm_pcplist {
-    uint32_t count;                 ///< Pages currently cached.
+    volatile uint32_t count;        ///< Pages currently cached.
     uint32_t zone_id;               ///< Owning zone.
-    uint64_t pages[PCP_HIGH + PCP_BATCH]; ///< PFN stack.
+    volatile uint64_t pages[PCP_HIGH + PCP_BATCH]; ///< PFN stack.
 } pmm_pcplist_t;
 
 /// @brief One entry in a zone's per-order free list.
@@ -90,6 +90,7 @@ typedef struct {
 ///        Must be called exactly once, before any alloc/free.
 /// @param boot  Validated pointer to the ZXFL boot protocol.
 void pmm_init(const zxfl_boot_protocol_t *boot);
+void pmm_verify_hhdm(const zxfl_boot_protocol_t *boot);
 
 /// @brief Initialize per-CPU page caches for a given CPU.
 ///        Called once per CPU during percpu_init_bsp / percpu_init_ap.
@@ -116,12 +117,23 @@ void pmm_free_page(zx_page_t *page);
 /// @param order Must match the order used at allocation time.
 void pmm_free_pages(zx_page_t *page, uint32_t order);
 
+/// @brief Allocate contiguous frames from ZONE_DMA.
+zx_page_t *pmm_dma_alloc(uint32_t order, gfp_t gfp);
+
+/// @brief Free frames back to ZONE_DMA.
+void pmm_dma_free(zx_page_t *page, uint32_t order);
+
 /// @brief Mark a physical address range as reserved.
 ///        Any frames in this range that are free will be removed from the
 ///        buddy allocator permanently.  Idempotent.
 /// @param phys_start  Inclusive start (byte address).
 /// @param phys_end    Exclusive end (byte address).
 void pmm_reserve_range(uint64_t phys_start, uint64_t phys_end);
+
+/// @brief Force all CPUs to flush their per-CPU page caches back to the buddy allocator.
+///        Required before pmm_reserve_range() or during critical memory pressure.
+void pmm_drain_local_pcps(void);
+void pmm_drain_all_pcps(void);
 
 /// @brief Fill a pmm_stats_t snapshot.  Acquires zone locks internally.
 void pmm_get_stats(pmm_stats_t *out);

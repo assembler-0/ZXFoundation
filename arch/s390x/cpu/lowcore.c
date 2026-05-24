@@ -33,14 +33,16 @@ void lc_install_handler_psws(zx_lowcore_t *lc) {
     lc->svc_new_psw.addr      = 0x000000000DEAD1C0ULL;
 }
 
-/// @brief Install disabled-wait PSWs into all six new PSW slots at physical
-void zx_lowcore_setup_pre_dat(void) {
-    psw_install_new_psws();
-}
+static uint8_t tmp_async_stack[4096] __attribute__((aligned(16)));
+static uint8_t tmp_mcck_stack[4096] __attribute__((aligned(16)));
 
 /// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
 void zx_lowcore_setup_late(void) {
     zx_lowcore_t *lc = zx_lowcore();
+
+    // Initialize temporary stacks for early exception handlers
+    lc->async_stack = (uint64_t)(uintptr_t)&tmp_async_stack[4096];
+    lc->mcck_stack  = (uint64_t)(uintptr_t)&tmp_mcck_stack[4096];
 
     lc_install_handler_psws(lc);
 

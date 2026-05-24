@@ -9,9 +9,13 @@
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zconfig.h>
+#include <zxfoundation/percpu.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/processor.h>
-#include <zxfoundation/percpu.h>
+#include <arch/s390x/cpu/lowcore.h>
+#include <arch/s390x/mmu/mmu.h>
+#include <arch/s390x/cpu/ipi.h>
+#include <lib/string.h>
 
 /// Two physical memory zones: DMA (< 16 MB) and NORMAL (>= 16 MB).
 static pmm_zone_t zones[ZONE_MAX];
@@ -24,6 +28,7 @@ static uint64_t max_pfn_global = 0;
 
 /// True once pmm_init() completes.
 static bool pmm_ready = false;
+
 /// @brief Push a block onto the zone's per-order free list (LIFO).
 ///        Caller holds zone->lock.
 static void free_area_push(pmm_zone_t *zone, uint32_t order, uint64_t pfn) {
@@ -131,14 +136,23 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     uint64_t map_phys   = (kernel_end + PAGE_SIZE - 1) & PAGE_MASK;
 
     uint8_t *mem_map_raw = (uint8_t *)(uintptr_t)hhdm_phys_to_virt(map_phys);
-    for (uint64_t b = 0; b < map_pages * PAGE_SIZE; b++)
-        mem_map_raw[b] = 0;
+    memset(mem_map_raw, 0, map_pages * PAGE_SIZE);
 
     zx_mem_map = (zx_page_t *)(uintptr_t)hhdm_phys_to_virt(map_phys);
 
     uint64_t reserve_phys_end = map_phys + map_pages * PAGE_SIZE;
     if (boot->pgtbl_pool_end > reserve_phys_end)
         reserve_phys_end = boot->pgtbl_pool_end;
+
+    // --- Hard-protect ZONE_DMA from over-reservation ---
+    // If the bootloader or early page tables overlap significantly with
+    // ZONE_DMA, we must still leave some pages for dma_pool and I/O.
+    // 1 MB is enough for early drivers (SCLP/DIAG) and the dma_pool.
+    const uint64_t dma_min_free = 1024 * 1024;
+    if (reserve_phys_end > ZONE_DMA_LIMIT - dma_min_free) {
+        printk(ZX_WARN "pmm: early reservation (0x%llx) encroaches on ZONE_DMA; capping visibility\n",
+               (unsigned long long)reserve_phys_end);
+    }
 
     printk(ZX_DEBUG "pmm: reserve_phys_end = 0x%llx (pool_end = 0x%llx)\n",
            (unsigned long long)reserve_phys_end,
@@ -151,16 +165,36 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
         uint64_t pfn_start = pmm_phys_to_pfn(r->base);
         uint64_t pfn_end   = pmm_phys_to_pfn(r->base + r->length);
 
-        uint64_t reserve_pfn_end = pmm_phys_to_pfn(reserve_phys_end + PAGE_SIZE - 1);
-        if (pfn_end <= reserve_pfn_end) continue;
-        if (pfn_start < reserve_pfn_end) pfn_start = reserve_pfn_end;
-
         for (uint64_t pfn = pfn_start; pfn < pfn_end; pfn++) {
             zx_page_t *p = pfn_to_page(pfn);
             p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
             p->numa_node = 0;
             p->order     = 0;
-            p->flags     = 0;
+
+            uint64_t phys = pmm_pfn_to_phys(pfn);
+            bool critical = false;
+
+            if (phys < 1024 * 1024) critical = true;
+            if (phys >= boot->kernel_phys_start && phys < boot->kernel_phys_end) critical = true;
+            if (phys >= ZONE_DMA_LIMIT && phys < boot->pgtbl_pool_end) critical = true;
+            if (phys >= map_phys && phys < map_phys + map_pages * PAGE_SIZE) critical = true;
+
+            for (uint32_t m = 0; m < boot->module_count; m++) {
+                if (phys >= boot->modules[m].phys_start &&
+                    phys < boot->modules[m].phys_start + boot->modules[m].size_bytes) {
+                    critical = true;
+                    break;
+                }
+            }
+
+            if (critical) {
+                p->flags = PF_RESERVED;
+                atomic_set(&p->refcount, 1);
+                continue;
+            }
+
+            p->flags = PF_BUDDY;
+            atomic_set(&p->refcount, 0);
 
             uint32_t ord = 0;
             uint64_t cur = pfn;
@@ -194,6 +228,40 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
            (unsigned long long)(st.free_pages    * PAGE_SIZE / (1024*1024)),
            (unsigned long long)(st.dma_free_pages    * PAGE_SIZE / (1024*1024)),
            (unsigned long long)(st.normal_free_pages * PAGE_SIZE / (1024*1024)));
+}
+
+void pmm_verify_hhdm(const zxfl_boot_protocol_t *boot) {
+    if (!boot) return;
+    printk(ZX_DEBUG "pmm: verifying HHDM consistency...\n");
+
+    const bool has_edat1 = arch_cpu_has_sys_feature(ZX_SYS_FEATURE_EDAT1);
+    const zxfl_mem_region_t *mem_map = (const zxfl_mem_region_t *)(uintptr_t)boot->mem_map_addr;
+
+    for (uint32_t i = 0; i < boot->mem_map_count; i++) {
+        const zxfl_mem_region_t *e = &mem_map[i];
+        if (e->type != ZXFL_MEM_USABLE && e->type != ZXFL_MEM_KERNEL) continue;
+
+        uint64_t start = e->base;
+        uint64_t end   = start + e->length;
+
+        // Check a few points in each range.
+        for (uint64_t p = start; p < end; p += (1ULL << 20)) { // every 1MB
+            uint64_t virt = hhdm_phys_to_virt(p);
+            uint64_t phys_back = mmu_virt_to_phys(mmu_kernel_pgtbl(), virt);
+
+            if (phys_back != p) {
+                zx_system_check(ZX_SYSCHK_ARCH_CORRUPT,
+                    "pmm: HHDM verification failed at phys 0x%llx (got 0x%llx)",
+                    (unsigned long long)p, (unsigned long long)phys_back);
+            }
+
+            // Verify page size usage.
+            if (has_edat1 && !mmu_is_large_page(mmu_kernel_pgtbl(), virt)) {
+                 printk(ZX_DEBUG "pmm: HHDM at 0x%llx not using 1MB pages despite EDAT1\n", (unsigned long long)virt);
+            }
+        }
+    }
+    printk(ZX_INFO "pmm: HHDM consistency verified\n");
 }
 
 zx_page_t *pmm_alloc_pages(uint32_t order, gfp_t gfp) {
@@ -271,8 +339,7 @@ zx_page_t *pmm_alloc_pages(uint32_t order, gfp_t gfp) {
 
         if (gfp & ZX_GFP_ZERO) {
             uint8_t *virt = (uint8_t *)(uintptr_t)hhdm_phys_to_virt(pmm_pfn_to_phys(pfn));
-            uint64_t sz   = (uint64_t)PAGE_SIZE << order;
-            for (uint64_t b = 0; b < sz; b++) virt[b] = 0;
+            memset(virt, 0, (size_t)PAGE_SIZE << order);
         }
         return page;
     }
@@ -308,7 +375,7 @@ zx_page_t *pmm_alloc_page(gfp_t gfp) {
 
         int cpu = arch_smp_processor_id();
         if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
-            pmm_pcplist_t *pcp = &percpu_areas[cpu]->pcp[zid];
+            pmm_pcplist_t *pcp = &percpu_areas[cpu]->percpu.pcp[zid];
             if (pcp->count == 0)
                 pcp_refill(pcp, zid);
             if (pcp->count > 0) {
@@ -320,7 +387,7 @@ zx_page_t *pmm_alloc_page(gfp_t gfp) {
                 if (gfp & ZX_GFP_ZERO) {
                     uint8_t *va = (uint8_t *)(uintptr_t)
                         hhdm_phys_to_virt(pmm_pfn_to_phys(pfn));
-                    for (uint64_t b = 0; b < PAGE_SIZE; b++) va[b] = 0;
+                    memset(va, 0, PAGE_SIZE);
                 }
                 return pg;
             }
@@ -386,7 +453,7 @@ void pmm_free_page(zx_page_t *page) {
         int cpu = arch_smp_processor_id();
         if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
             zone_id_t zid    = (zone_id_t)page->zone_id;
-            pmm_pcplist_t *pcp = &percpu_areas[cpu]->pcp[zid];
+            pmm_pcplist_t *pcp = &percpu_areas[cpu]->percpu.pcp[zid];
             if (pcp->count < PCP_HIGH) {
                 pcp->pages[pcp->count++] = page_to_pfn(page);
                 arch_local_irq_restore(f);
@@ -405,15 +472,42 @@ void pmm_free_page(zx_page_t *page) {
 void pmm_pcplist_init(uint16_t cpu_id) {
     if (cpu_id >= MAX_CPUS || !percpu_areas[cpu_id]) return;
     for (uint32_t z = 0; z < ZONE_MAX; z++) {
-        pmm_pcplist_t *pcp = &percpu_areas[cpu_id]->pcp[z];
+        pmm_pcplist_t *pcp = &percpu_areas[cpu_id]->percpu.pcp[z];
         pcp->count   = 0;
         pcp->zone_id = z;
     }
 }
 
+void pmm_drain_local_pcps(void) {
+    for (uint32_t z = 0; z < ZONE_MAX; z++) {
+        int cpu = arch_smp_processor_id();
+        if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
+            pmm_pcplist_t *pcp = &percpu_areas[cpu]->percpu.pcp[z];
+            while (pcp->count > 0) {
+                uint64_t pfn = pcp->pages[--pcp->count];
+                pmm_free_pages(pfn_to_page(pfn), 0);
+            }
+        }
+    }
+}
+
+void pmm_drain_all_pcps(void) {
+    // 1. Drain local caches first.
+    irqflags_t f = arch_local_save_flags();
+    arch_local_irq_disable();
+    pmm_drain_local_pcps();
+    arch_local_irq_restore(f);
+
+    // 2. Broadcast IPI to all other CPUs to drain theirs.
+    arch_ipi_broadcast_wait(IPI_DRAIN_PCP);
+}
 
 void pmm_reserve_range(uint64_t phys_start, uint64_t phys_end) {
     if (!pmm_ready) return; // Called before init? ignore.
+
+    // Critical: Drain all per-CPU lists before we start marking pages PF_RESERVED.
+    // This prevents other CPUs from allocating pages we're about to reserve.
+    pmm_drain_all_pcps();
 
     uint64_t pfn_start = pmm_phys_to_pfn(phys_start);
     uint64_t pfn_end   = pmm_phys_to_pfn(phys_end + PAGE_SIZE - 1);
@@ -490,4 +584,12 @@ uint64_t pmm_get_max_pfn(void) { return max_pfn_global; }
 pmm_zone_t *pmm_get_zone(zone_id_t id) {
     if ((unsigned)id >= ZONE_MAX) return nullptr;
     return &zones[id];
+}
+
+zx_page_t *pmm_dma_alloc(uint32_t order, gfp_t gfp) {
+    return pmm_alloc_pages(order, gfp | ZX_GFP_DMA);
+}
+
+void pmm_dma_free(zx_page_t *page, uint32_t order) {
+    pmm_free_pages(page, order);
 }

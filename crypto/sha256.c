@@ -25,7 +25,7 @@ static const uint32_t K[64] = {
 };
 
 static inline uint32_t rotr32(uint32_t x, uint32_t n) {
-    return __builtin_rotateright32(x, n);
+    return (x >> n) | (x << (32U - n));
 }
 
 /// @brief SHA-256 block compression (FIPS 180-4 §6.2.2).

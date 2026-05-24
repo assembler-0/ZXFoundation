@@ -43,8 +43,6 @@ __zx_start_kernel64:
     lg      %r15, 392(%r2)                 // kernel_stack_top from boot protocol
     aghi    %r15, -160                     // 160-byte register save area
 
-    brasl   %r14, zx_lowcore_setup_pre_dat
-
     lgr     %r2, %r11
     brasl   %r14, zxfoundation_global_initialize
 
@@ -63,7 +61,11 @@ ap_entry:
     lg      %r15, LC_RESTART_STACK(0)
     aghi    %r15, -160
 
+    lctlg   %c0, %c0, LC_AP_CR0(0)
+    // CR1 must be loaded before DAT is enabled in the LPSWE below.
+    // Without this the AP faults immediately on the first HHDM access.
     lctlg   %c1, %c1, LC_KERNEL_ASCE(0)
+    lctlg   %c13, %c13, LC_AP_CR13(0)
 
     lpswe   LC_RETURN_PSW(0)
 

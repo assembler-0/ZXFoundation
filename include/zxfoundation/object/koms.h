@@ -89,7 +89,7 @@ struct kobj_event {
 typedef void (*kobj_event_fn_t)(const kobj_event_t *event, void *data);
 
 struct kobj_listener {
-    list_node_t node;
+    list_head_t node;
     kobj_event_fn_t fn;
     void *data;
     /// Bitmask of kobj_event_type_t values to receive; 0 = all events.
@@ -109,7 +109,7 @@ typedef int (*kobj_attr_set_fn_t)(kobject_t *obj, const kobj_attr_t *attr,
                                   const char *buf, size_t size);
 
 struct kobj_attr {
-    list_node_t node;
+    list_head_t node;
     const char *name;
     kobj_attr_get_fn_t get; ///< May be nullptr (write-only attribute).
     kobj_attr_set_fn_t set; ///< May be nullptr (read-only attribute).
@@ -142,20 +142,20 @@ struct kobj_type {
     kmem_cache_t *cache; ///< nullptr → kmalloc fallback.
     const kobject_ops_t *kobj_ops; ///< Mandatory: must provide release().
     const kobj_type_ops_t *type_ops; ///< May be nullptr.
-    list_node_t registry_node;
+    list_head_t registry_node;
 };
 
 #define KOBJ_NS_BUCKETS 64U
 
 typedef struct {
-    list_node_t chain;
+    list_head_t chain;
 } kobj_ns_bucket_t;
 
 struct kobj_ns {
     kobject_t *owner;
     kobj_ns_t *parent;
-    list_node_t children;
-    list_node_t sibling;
+    list_head_t children;
+    list_head_t sibling;
     spinlock_t write_lock;
     kobj_ns_bucket_t buckets[KOBJ_NS_BUCKETS];
     uint32_t count;
@@ -172,14 +172,14 @@ struct kobject {
     uint32_t type_id;
     uint32_t flags;
     kobject_t *parent;
-    list_node_t sibling;
-    list_node_t children;
-    list_node_t attrs;
-    list_node_t listeners;
+    list_head_t sibling;
+    list_head_t children;
+    list_head_t attrs;
+    list_head_t listeners;
     rcu_head_t rcu;
     spinlock_t lock;
     kobj_ns_t *ns;
-    list_node_t ns_node;
+    list_head_t ns_node;
     ktime_t created_at;     ///< ktime_get() at koms_init_obj() time.
 };
 

@@ -24,15 +24,16 @@ The z/Architecture PSW is 16 bytes.  The first 8 bytes are the mask word;
 the second 8 bytes are the instruction address.
 
 ```
-Bit  0   PER mask
-Bit  5   DAT (address translation enable)
-Bit  6   I/O interrupt mask
-Bit  7   External interrupt mask
-Bit 12   Machine-check mask
-Bit 14   Wait state
-Bit 15   Problem state (user mode)
-Bit 31   EA — required for 64-bit addressing
-Bit 32   BA — required for 64-bit addressing
+Bit  0     PER mask
+Bit  5     DAT (address translation enable)
+Bit  6     I/O interrupt mask
+Bit  7     External interrupt mask
+Bit 12     Machine-check mask
+Bit 14     Wait state
+Bit 15     Problem state (user mode)
+Bits 16-17 Address space control (ASC)
+Bit 31     EA — required for 64-bit addressing
+Bit 32     BA — required for 64-bit addressing
 ```
 
 Bits not listed above are reserved and must be zero.  Setting a reserved
@@ -52,6 +53,7 @@ bit causes a Specification Exception when the PSW is loaded via LPSWE.
 | `PSW_BIT_MCCK`        | `0x0008000000000000`   | Machine-check mask                 |
 | `PSW_BIT_WAIT`        | `0x0002000000000000`   | Wait state                         |
 | `PSW_BIT_PSTATE`      | `0x0001000000000000`   | Problem state (user mode)          |
+| `PSW_BIT_HOME_SPACE`  | `0x0000C00000000000`   | Home space addressing mode         |
 | `PSW_BIT_EA`          | `0x0000000100000000`   | Extended addressing (64-bit)       |
 | `PSW_BIT_BA`          | `0x0000000080000000`   | Basic addressing (64-bit)          |
 
@@ -61,7 +63,7 @@ bit causes a Specification Exception when the PSW is loaded via LPSWE.
 |--------------------------|----------------------|----------------------------------------------|
 | `PSW_ARCH_BITS`          | `0x0000000180000000` | EA\|BA — 64-bit mode, no other bits set      |
 | `PSW_MASK_KERNEL`        | `0x0000000180000000` | Supervisor, DAT off, all interrupts disabled |
-| `PSW_MASK_KERNEL_DAT`    | `0x0400000180000000` | Supervisor, DAT on, all interrupts disabled  |
+| `PSW_MASK_KERNEL_DAT`    | `0x0400C00180000000` | Supervisor, DAT on (Home Space), all interrupts disabled  |
 | `PSW_MASK_DISABLED_WAIT` | `0x0002000180000000` | Wait state, DAT off, all interrupts disabled |
 
 ### 3.3 New PSW Lowcore Offsets
@@ -83,27 +85,10 @@ hardware loads the PSW on each interrupt class (PoP SA22-7832 §4.3.3).
 
 ---
 
-## 4. Early Boot Initialization
+## 4. Boot Initialization
 
-`psw_install_new_psws()` is called once during early boot (before DAT is
-enabled) to install disabled-wait PSWs into all six new PSW slots.  Each
-slot receives a unique sentinel address encoding the interrupt class, so
-that an unexpected interrupt produces an operator-visible halt code.
+The ZXFL loader prepares the memory tables, registers the Home Space ASCE in `CR13` and the Primary Space ASCE in `CR1`, and directly transitions to DAT-on mode using a `PSW_MASK_KERNEL_DAT` PSW target before passing control to the kernel.
 
-```
-psw_install_new_psws()
-  │
-  ├─ PSW_LC_RESTART  ← PSW_MASK_DISABLED_WAIT, addr=0x...DEAD1A0
-  ├─ PSW_LC_EXTERNAL ← PSW_MASK_DISABLED_WAIT, addr=0x...DEAD1B0
-  ├─ PSW_LC_SVC      ← PSW_MASK_DISABLED_WAIT, addr=0x...DEAD1C0
-  ├─ PSW_LC_PROGRAM  ← PSW_MASK_DISABLED_WAIT, addr=0x...DEAD1D0
-  ├─ PSW_LC_MCCK     ← PSW_MASK_DISABLED_WAIT, addr=0x...DEAD1E0
-  └─ PSW_LC_IO       ← PSW_MASK_DISABLED_WAIT, addr=0x...DEAD1F0
-```
+Thus, the kernel boots with DAT active and executes completely in Home-Space. The legacy `psw_install_new_psws()` and `zx_lowcore_setup_pre_dat()` methods have been removed because the pre-DAT boot window is bypassed by the loader.
 
-`zx_lowcore_setup_early()` (called from stage2 before DAT) delegates
-directly to `psw_install_new_psws()`.
-
-`zx_lowcore_setup_late()` (called from the kernel after DAT is on)
-overwrites the sentinels with real handler PSWs via the `zx_lowcore_t`
-struct pointer.
+During early kernel initialization, `zx_lowcore_setup_late()` is called to install the live interrupt handler entry points directly into the HHDM-mapped lowcore.

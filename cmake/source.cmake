@@ -13,6 +13,9 @@ file(GLOB TRAP_S_SOURCES  "arch/s390x/trap/*.S")
 file(GLOB IRQ_SOURCES     "zxfoundation/sys/irq/*.c")
 file(GLOB CONSOLE_SOURCES "drivers/console/*.c")
 file(GLOB LIB_SOURCES     "lib/*.c")
+file(GLOB LIB_SOURCES_S   "lib/*.S")
+file(GLOB ARCH_LIB_SOURCES "arch/s390x/lib/*.c")
+file(GLOB ARCH_LIB_SOURCES_S "arch/s390x/lib/*.S")
 
 include_directories(SYSTEM
     ${CMAKE_SOURCE_DIR}/include
@@ -26,7 +29,6 @@ file(GLOB MEMORY_SOURCES   "zxfoundation/memory/*.c")
 file(GLOB SCHED_SOURCES    "zxfoundation/sched/*.c")
 file(GLOB TIME_SOURCES     "zxfoundation/time/*.c")
 file(GLOB ARCH_TIME_SOURCES "arch/s390x/time/*.c")
-
 file(GLOB CRYPTO_SOURCES   "crypto/*.c")
 
 # ---------------------------------------------------------------------------
@@ -47,11 +49,14 @@ set(ZX_SOURCES_64
     ${ARCH_S390X_SOURCES}
     ${ARCH_MM_SOURCES}
     ${ARCH_MM_SOURCES_S}
+    ${ARCH_LIB_SOURCES}
+    ${ARCH_LIB_SOURCES_S}
     ${ARCH_INIT_SOURCES_64}
     ${SYS_SOURCES}
     ${IRQ_SOURCES}
     ${CONSOLE_SOURCES}
     ${LIB_SOURCES}
+    ${LIB_SOURCES_S}
     ${CPU_SOURCES}
     ${CPU_SOURCES_S}
     ${SYNC_SOURCES}
@@ -62,4 +67,5 @@ set(ZX_SOURCES_64
     ${ARCH_TIME_SOURCES}
     ${CRYPTO_SOURCES}
     ${UBSAN_SOURCES}
+    "arch/s390x/cpu/ipi.c"
 )
