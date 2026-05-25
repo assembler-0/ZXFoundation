@@ -187,7 +187,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
                 uint64_t pfn = pmm_phys_to_pfn(phys);
                 zx_page_t *p = pfn_to_page(pfn);
                 p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
-                p->numa_node = 0;
+                p->numa_node = r->numa_node;
                 p->order     = 0;
                 p->flags     = PF_RESERVED;
                 atomic_set(&p->refcount, 1);
@@ -199,7 +199,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
             uint64_t pfn = pmm_phys_to_pfn(phys);
             zx_page_t *p = pfn_to_page(pfn);
             p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
-            p->numa_node = 0;
+            p->numa_node = r->numa_node;
             p->order     = 0;
             p->flags     = PF_BUDDY;
             atomic_set(&p->refcount, 0);

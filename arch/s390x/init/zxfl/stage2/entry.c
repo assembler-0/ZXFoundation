@@ -84,14 +84,33 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
         map[count].base = 0x0;
         map[count].length = MEM_PROBE_FRAME;
         map[count].type = ZXFL_MEM_RESERVED;
+        map[count].numa_node = 0;
         count++;
     }
     if (count < max) {
         map[count].base = MEM_PROBE_FRAME;
         map[count].length = MEM_PROBE_FRAME;
         map[count].type = ZXFL_MEM_LOADER;
+        map[count].numa_node = 0;
         count++;
     }
+
+    uint32_t num_nodes = 1;
+    if (s_proto.flags & ZXFL_FLAG_SMP) {
+        for (uint32_t i = 0; i < s_proto.cpu_count; i++) {
+            if (s_proto.cpu_map[i].numa_node + 1 > num_nodes) {
+                num_nodes = s_proto.cpu_map[i].numa_node + 1;
+            }
+        }
+    }
+    uint64_t node_chunk = mem_limit / num_nodes;
+    uint64_t temp = node_chunk;
+    uint64_t chunk_align = 256ULL * 1024 * 1024;
+    while (temp >= chunk_align * 2) {
+        chunk_align *= 2;
+    }
+    node_chunk = chunk_align;
+
     for (uint64_t frame = 2UL * MEM_PROBE_FRAME;
          frame < mem_limit && count < max;
          frame += MEM_PROBE_FRAME) {
@@ -103,14 +122,18 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
         const bool b_ok = (*probe == MEM_PROBE_PATTERN_B);
         *probe = saved;
         if (!a_ok || !b_ok) break;
+        
         uint32_t type = ZXFL_MEM_USABLE;
         if (frame >= kernel_start && frame < kernel_end) type = ZXFL_MEM_KERNEL;
-        if (count > 0 && map[count - 1].type == type && map[count - 1].base + map[count - 1].length == frame) {
+        
+        uint8_t node = (frame / node_chunk) % 4;
+        if (count > 0 && map[count - 1].type == type && map[count - 1].numa_node == node && map[count - 1].base + map[count - 1].length == frame) {
             map[count - 1].length += MEM_PROBE_FRAME;
         } else {
             map[count].base = frame;
             map[count].length = MEM_PROBE_FRAME;
             map[count].type = type;
+            map[count].numa_node = node;
             count++;
         }
     }
@@ -220,6 +243,23 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
     return current_phys;
 }
 
+static void add_usable_region(zxfl_mem_region_t *map, uint32_t *count, uint32_t max,
+                              uint64_t start, uint64_t end, uint32_t type, uint64_t node_chunk) {
+    uint64_t curr = start;
+    while (curr < end && *count < max) {
+        uint64_t next_boundary = (curr + node_chunk) & ~(node_chunk - 1);
+        uint64_t chunk_end = (next_boundary < end) ? next_boundary : end;
+        
+        map[*count].base = curr;
+        map[*count].length = chunk_end - curr;
+        map[*count].type = type;
+        map[*count].numa_node = (curr / node_chunk) % 4;
+        (*count)++;
+        
+        curr = chunk_end;
+    }
+}
+
 static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
                               uint64_t kernel_start, uint64_t kernel_end,
                               uint64_t mem_limit) {
@@ -238,44 +278,43 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
             map[count].base = 0x0;
             map[count].length = MEM_PROBE_FRAME;
             map[count].type = ZXFL_MEM_RESERVED;
+            map[count].numa_node = 0;
             count++;
         }
         if (count < max) {
             map[count].base = MEM_PROBE_FRAME;
             map[count].length = MEM_PROBE_FRAME;
             map[count].type = ZXFL_MEM_LOADER;
+            map[count].numa_node = 0;
             count++;
         }
         
         uint64_t usable_start = 2UL * MEM_PROBE_FRAME;
         if (usable_start < sclp_size) {
+            uint32_t num_nodes = 1;
+            if (s_proto.flags & ZXFL_FLAG_SMP) {
+                for (uint32_t i = 0; i < s_proto.cpu_count; i++) {
+                    if (s_proto.cpu_map[i].numa_node + 1 > num_nodes) {
+                        num_nodes = s_proto.cpu_map[i].numa_node + 1;
+                    }
+                }
+            }
+
+            uint64_t node_chunk = sclp_size / num_nodes;
+            uint64_t temp = node_chunk;
+            uint64_t chunk_align = 256ULL * 1024 * 1024;
+            while (temp >= chunk_align * 2) {
+                chunk_align *= 2;
+            }
+            node_chunk = chunk_align;
+
             // Basic split for kernel if it falls within the range
             if (kernel_start >= usable_start && kernel_end <= sclp_size) {
-                 if (count < max) {
-                     map[count].base = usable_start;
-                     map[count].length = kernel_start - usable_start;
-                     map[count].type = ZXFL_MEM_USABLE;
-                     count++;
-                 }
-                 if (count < max) {
-                     map[count].base = kernel_start;
-                     map[count].length = kernel_end - kernel_start;
-                     map[count].type = ZXFL_MEM_KERNEL;
-                     count++;
-                 }
-                 if (count < max && kernel_end < sclp_size) {
-                     map[count].base = kernel_end;
-                     map[count].length = sclp_size - kernel_end;
-                     map[count].type = ZXFL_MEM_USABLE;
-                     count++;
-                 }
+                 add_usable_region(map, &count, max, usable_start, kernel_start, ZXFL_MEM_USABLE, node_chunk);
+                 add_usable_region(map, &count, max, kernel_start, kernel_end, ZXFL_MEM_KERNEL, node_chunk);
+                 add_usable_region(map, &count, max, kernel_end, sclp_size, ZXFL_MEM_USABLE, node_chunk);
             } else {
-                if (count < max) {
-                    map[count].base = usable_start;
-                    map[count].length = sclp_size - usable_start;
-                    map[count].type = ZXFL_MEM_USABLE;
-                    count++;
-                }
+                 add_usable_region(map, &count, max, usable_start, sclp_size, ZXFL_MEM_USABLE, node_chunk);
             }
         }
         return count;
@@ -315,6 +354,9 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     s_proto.kernel_phys_end = load_modules(schid, s_cmdline, load_base + load_size);
     s_proto.kernel_entry = entry_point;
 
+    print("zxfl01: detecting system (stsi/smp/tod)\n");
+    zxfl_system_detect(&s_proto);
+
     {
         const uint64_t virt_off = CONFIG_KERNEL_VIRT_OFFSET;
         uint64_t phys_start = s_proto.kernel_phys_start;
@@ -329,9 +371,6 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     s_proto.flags |= ZXFL_FLAG_MEM_MAP;
     s_proto.lowcore_phys = 0;
     s_proto.flags |= ZXFL_FLAG_LOWCORE;
-
-    print("zxfl01: detecting system (stsi/smp/tod)\n");
-    zxfl_system_detect(&s_proto);
 
     s_proto.magic = ZXFL_MAGIC;
     s_proto.version = ZXFL_VERSION_4;

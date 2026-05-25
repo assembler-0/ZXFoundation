@@ -134,6 +134,41 @@ struct sysinfo_3_2_2 {
 	char ext_names[8][256];
 };
 
+#define TOPOLOGY_NR_MAG		6
+
+struct topology_core {
+	unsigned char nl;
+	unsigned char reserved0[3];
+	unsigned char :5;
+	unsigned char d:1;
+	unsigned char pp:2;
+	unsigned char reserved1;
+	unsigned short origin;
+	unsigned long mask;
+};
+
+struct topology_container {
+	unsigned char nl;
+	unsigned char reserved[6];
+	unsigned char id;
+};
+
+union topology_entry {
+	unsigned char nl;
+	struct topology_core cpu;
+	struct topology_container container;
+};
+
+struct sysinfo_15_1_x {
+	unsigned char reserved0[2];
+	unsigned short length;
+	unsigned char mag[TOPOLOGY_NR_MAG];
+	unsigned char reserved1;
+	unsigned char mnest;
+	unsigned char reserved2[4];
+	union topology_entry tle[];
+};
+
 /// @brief Issue STSI. Returns 0 on success, -1 if not supported.
 /// @param sysinfo  4KB-aligned output block.
 /// @param fc       Function code (e.g. 1).

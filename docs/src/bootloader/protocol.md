@@ -62,14 +62,14 @@ The kernel **must** validate `proto->magic == ZXFL_MAGIC` (`0x5A58464C`, "ZXFL")
 | `mem_map_addr` | `u64` | HHDM virtual address of `zxfl_mem_region_t[]` |
 | `mem_map_count` | `u32` | Number of valid entries |
 
-Memory region types:
+Each `zxfl_mem_region_t` entry is defined as:
 
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `ZXFL_MEM_USABLE` | 1 | Free for kernel use |
-| `ZXFL_MEM_RESERVED` | 2 | Hardware-reserved |
-| `ZXFL_MEM_LOADER` | 3 | Loader code/data (reclaimable after init) |
-| `ZXFL_MEM_KERNEL` | 4 | Kernel image and modules |
+| Field | Type | Description |
+|-------|------|-------------|
+| `base` | `u64` | Physical base address of the region |
+| `length` | `u64` | Length of the region in bytes |
+| `type` | `u32` | ZXFL_MEM_* constant |
+| `numa_node` | `u8` | Logical NUMA node ID this memory region belongs to |
 
 ---
 
@@ -107,17 +107,23 @@ The kernel should switch to its own stack as early as possible and treat this re
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `cpu_map[]` | `zxfl_cpu_info_t[64]` | Up to 64 CPU entries |
+| `cpu_map[]` | `zxfl_cpu_info_t[128]` | Up to 128 CPU entries |
 | `cpu_count` | `u32` | Valid entries in `cpu_map` |
 | `bsp_cpu_addr` | `u16` | CPU address of the boot processor |
 
 Each `zxfl_cpu_info_t`:
 
-| Field | Description |
-|-------|-------------|
-| `cpu_addr` | CPU address (0–65535) |
-| `type` | `ZXFL_CPU_TYPE_*` |
-| `state` | `ZXFL_CPU_ONLINE` or `ZXFL_CPU_STOPPED` |
+| Field | Type | Description |
+|-------|------|-------------|
+| `cpu_addr` | `u16` | CPU address (0–65535) |
+| `type` | `u8` | `ZXFL_CPU_TYPE_*` constant |
+| `state` | `u8` | `ZXFL_CPU_ONLINE` or `ZXFL_CPU_STOPPED` |
+| `numa_node` | `u8` | Logical NUMA node ID derived from physical book/socket |
+| `drawer_id` | `u8` | Drawer physical identifier from STSI 15.1.x |
+| `book_id` | `u8` | Book physical identifier from STSI 15.1.x |
+| `socket_id` | `u8` | Socket physical identifier from STSI 15.1.x |
+| `chip_id` | `u8` | Chip physical identifier from STSI 15.1.x |
+| `thread_id` | `u8` | Thread physical identifier from STSI 15.1.x |
 
 Valid when `ZXFL_FLAG_SMP` is set.
 

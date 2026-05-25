@@ -68,7 +68,8 @@ typedef struct {
     uint64_t base;      ///< Physical base address
     uint64_t length;    ///< Length in bytes
     uint32_t type;      ///< ZXFL_MEM_* constant
-    uint32_t _pad;
+    uint8_t  numa_node; ///< NUMA node ID
+    uint8_t  _pad[3];
 } zxfl_mem_region_t;
 
 /// @brief One entry in the CPU map.
@@ -76,7 +77,13 @@ typedef struct {
     uint16_t cpu_addr;  ///< z/Arch CPU address (used with SIGP)
     uint8_t  type;      ///< ZXFL_CPU_TYPE_* constant
     uint8_t  state;     ///< ZXFL_CPU_* constant
-    uint32_t _pad;
+    uint8_t  numa_node; ///< NUMA node ID (derived from book/socket)
+    uint8_t  drawer_id; ///< Drawer ID from STSI 15.1.x
+    uint8_t  book_id;   ///< Book ID from STSI 15.1.x
+    uint8_t  socket_id; ///< Socket ID from STSI 15.1.x
+    uint8_t  chip_id;   ///< Chip ID from STSI 15.1.x
+    uint8_t  thread_id; ///< Thread ID from STSI 15.1.x
+    uint8_t  _pad[2];   ///< Alignment padding to 12 bytes
 } zxfl_cpu_info_t;
 
 /// @brief System identification — populated from STSI.
