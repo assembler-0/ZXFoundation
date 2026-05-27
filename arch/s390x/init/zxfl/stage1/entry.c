@@ -57,6 +57,6 @@
             *(volatile uint64_t *)STAGE2_LOAD_ADDR == 0x0000800180000000ULL)
             panic("zxfl00: core.zxfoundationloader01.sys load corrupt\n");
 
-    print("zxfl00: launching core.zxfoundationloader00.sys\n");
+    print("zxfl00: launching core.zxfoundationloader01.sys\n");
     jump_to_stage2((uint64_t)schid);
 }

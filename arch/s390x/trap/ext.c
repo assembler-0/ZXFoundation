@@ -24,7 +24,7 @@
 
 /// @brief External interrupt C handler — called from trap_ext_entry.
 /// @param frame  Interrupt frame built by entry.S on the async stack.
-void do_ext_interrupt(zx_irq_frame_t *frame) {
+void do_ext_interrupt(arch_s390x_irq_frame_t *frame) {
     zx_lowcore_t *lc = zx_lowcore();
 
     const uint16_t ext_code = lc->ext_int_code;

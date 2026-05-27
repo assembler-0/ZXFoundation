@@ -12,7 +12,7 @@
 
 /// @brief Machine-check C handler — called from trap_mcck_entry.
 /// @param frame  Interrupt frame built by entry.S on the mcck stack.
-void do_mcck_interrupt(zx_irq_frame_t *frame) {
+void do_mcck_interrupt(arch_s390x_irq_frame_t *frame) {
     zx_lowcore_t *lc = zx_lowcore();
 
     const uint64_t mcic = lc->mcck_interruption_code;

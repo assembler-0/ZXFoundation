@@ -9,7 +9,7 @@
 
 /// @brief I/O interrupt C handler — called from trap_io_entry.
 /// @param frame  Interrupt frame built by entry.S on the async stack.
-void do_io_interrupt(zx_irq_frame_t *frame) {
+void do_io_interrupt(arch_s390x_irq_frame_t *frame) {
     zx_lowcore_t *lc = zx_lowcore();
 
     const uint16_t sch_nr = lc->subchannel_nr;

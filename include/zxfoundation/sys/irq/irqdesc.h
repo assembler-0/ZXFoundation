@@ -23,7 +23,7 @@
 #define ZX_IRQF_DISABLED    (1U << 1)   ///< Descriptor registered but masked.
 
 /// @brief IRQ handler function signature.
-typedef void (*irq_handler_t)(uint16_t irq, zx_irq_frame_t *frame, void *data);
+typedef void (*irq_handler_t)(uint16_t irq, arch_s390x_irq_frame_t *frame, void *data);
 
 /// @brief IRQ descriptor — KOMS-managed, statically allocated.
 ///
@@ -57,7 +57,7 @@ int irq_register(uint16_t irq, irq_handler_t handler, void *data, uint32_t flags
 void irq_unregister(uint16_t irq);
 
 /// @brief Dispatch an interrupt.  Hot path — no KOMS overhead.
-void irq_dispatch(uint16_t irq, zx_irq_frame_t *frame);
+void irq_dispatch(uint16_t irq, arch_s390x_irq_frame_t *frame);
 
 /// @brief Look up a descriptor by IRQ number via KOMS namespace.
 ///        Acquires a reference; caller must koms_put() when done.

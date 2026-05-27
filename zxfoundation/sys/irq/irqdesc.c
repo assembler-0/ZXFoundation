@@ -47,7 +47,7 @@ static void irq_format_name(uint16_t irq, char *buf) {
     snprintf(buf, ZX_IRQ_NAMEBUF_SZ, "%s-%04x", prefix, irq & 0x00FFU);
 }
 
-static void irq_default_handler(uint16_t irq, zx_irq_frame_t *frame, void *data) {
+static void irq_default_handler(uint16_t irq, arch_s390x_irq_frame_t *frame, void *data) {
     (void)data;
 
     if (irq < ZX_IRQ_BASE_EXT)
@@ -126,7 +126,7 @@ void irq_unregister(uint16_t irq) {
     koms_event_fire(&desc->obj, KOBJ_EVENT_STATE_CHANGE);
 }
 
-void irq_dispatch(uint16_t irq, zx_irq_frame_t *frame) {
+void irq_dispatch(uint16_t irq, arch_s390x_irq_frame_t *frame) {
     if (unlikely(irq >= ZX_IRQ_NR_MAX))
         zx_system_check(ZX_SYSCHK_ARCH_UNHANDLED_TRAP,
                         "irq: dispatch out of range irq=0x%04x", (unsigned)irq);
