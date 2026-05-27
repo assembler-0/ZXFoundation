@@ -5,10 +5,10 @@
 
 #pragma once
 
-#include <arch/s390x/cpu/atomic.h>
 #include <zxfoundation/zconfig.h>
 #include <arch/s390x/cpu/features.h>
 #include <arch/s390x/cpu/psw.h>
+#include <arch/s390x/cpu/atomic.h>
 
 /// @brief Generic spin-loop hint.  Use inside every busy-wait loop.
 static inline void arch_cpu_relax(void) {
@@ -35,17 +35,31 @@ static inline void arch_set_storage_key(uint64_t paddr, uint8_t key) {
     );
 }
 
-/// @brief stap
-static unsigned short arch_cpu_addr(void) {
+/// @brief stap — returns the hardware CPU address (used for SIGP, not as a logical ID).
+static inline unsigned short arch_cpu_addr(void) {
     unsigned short cpu_address;
     __asm__ volatile("stap %0" : "=m" (cpu_address));
     return cpu_address;
 }
 
-/// @brief Get the logical processor ID for the executing CPU.
+static inline uint32_t arch_get_prefix(void) {
+    uint32_t prefix;
+    __asm__ volatile("stpx %0" : "=m" (prefix));
+    return prefix;
+}
+
+static inline void arch_set_prefix(uint32_t prefix) {
+    __asm__ volatile("spx %0" : : "m" (prefix) : "memory");
+}
+
+/// @brief Return the logical CPU ID (0-based, dense) for the executing CPU.
 static inline int arch_smp_processor_id(void) {
-    uint16_t cpu_addr = arch_cpu_addr();
-    return cpu_addr & 0x3F;
+    const uint16_t *cpu_id_ptr = (const uint16_t *)(uintptr_t)
+        ((uint64_t)arch_get_prefix() + CONFIG_KERNEL_VIRT_OFFSET + 0x408UL);
+    uint16_t id = *cpu_id_ptr;
+    if (id >= (uint16_t)CONFIG_ZX_MAX_CPUS)
+        return 0;
+    return (int)id;
 }
 
 #define arch_ctl_store(array, low, high) ({		        \

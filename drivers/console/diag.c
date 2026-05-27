@@ -6,12 +6,8 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/zconfig.h>
 
-// ---------------------------------------------------------------------------
-// DIAG 8 raw write (64-bit kernel mode)
-// ---------------------------------------------------------------------------
-
 /// @brief Issue the DIAG 8 instruction with a 64-bit buffer address.
-static inline void diag8_write(const char *addr, uint64_t len) {
+void diag8_write(const char *addr, uint64_t len) {
     register uint64_t r2 __asm__("2") = (uint64_t)(uintptr_t)addr;
     register uint64_t r3 __asm__("3") = len;
     __asm__ __volatile__ (

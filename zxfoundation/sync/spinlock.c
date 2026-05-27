@@ -55,11 +55,11 @@ static inline uint32_t tail_depth(uint32_t val) {
 // ---------------------------------------------------------------------------
 
 static inline mcs_node_t *get_mcs_node(int cpu, uint32_t depth) {
-    return &percpu_get_on(cpu, lock_nodes)[depth];
+    return percpu_ptr_on(cpu, lock_nodes[depth]);
 }
 
 static inline mcs_node_t *my_mcs_node(uint32_t depth) {
-    return &percpu_get(lock_nodes)[depth];
+    return percpu_ptr_to(lock_nodes[depth]);
 }
 
 bool spin_trylock(spinlock_t *lock) {

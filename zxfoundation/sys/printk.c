@@ -94,7 +94,8 @@ uint32_t log_ring_read(uint16_t start_seq, zx_log_record_t *out, uint32_t count)
 // ---------------------------------------------------------------------------
 
 static printk_putc_sink s_sink;
-static spinlock_t       s_sink_lock = SPINLOCK_INIT;
+static spinlock_t       s_sink_lock   = SPINLOCK_INIT;
+static spinlock_t       s_printk_lock = SPINLOCK_INIT;
 
 void printk_initialize(printk_putc_sink sink) {
     s_sink = sink;
@@ -159,6 +160,9 @@ void printk_flush(const char *buf, size_t size) {
 }
 
 int vprintk(const char *fmt, va_list ap) {
+    irqflags_t f;
+    spin_lock_irqsave(&s_printk_lock, &f);
+
     zx_log_level_t level = parse_level(&fmt);
 
     // Format the message body.
@@ -192,6 +196,8 @@ int vprintk(const char *fmt, va_list ap) {
     line[total++] = '\n';
 
     sink_emit(line, (size_t)total);
+
+    spin_unlock_irqrestore(&s_printk_lock, f);
     return total;
 }
 

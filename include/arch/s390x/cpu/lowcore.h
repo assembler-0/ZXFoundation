@@ -2,11 +2,6 @@
 // include/arch/s390x/cpu/lowcore.h
 //
 /// @brief z/Architecture lowcore layout (0x0000–0x1FFF).
-///        Derived from s390-tools struct _lowcore and Linux struct lowcore.
-///        Adapted for freestanding C23 — no Linux headers required.
-///
-///        The lowcore is 8 KB (0x2000).  Each CPU's lowcore is addressed
-///        via the prefix register (SPX).  Physical address 0 = BSP lowcore.
 
 #pragma once
 
@@ -34,6 +29,13 @@
 #define LC_IO_OLD_PSW       0x0170UL
 
 #define LC_PERCPU_OFFSET    0x0400UL    ///< zx_lowcore_t::percpu (zx_percpu_t)
+
+/// @brief Byte offset of zx_percpu_t::cpu_id within the lowcore block.
+///        = LC_PERCPU_OFFSET + offsetof(zx_percpu_t, cpu_id)
+///        = 0x0400 + sizeof(uint64_t) [prefix_base] = 0x0408.
+///        Used by arch_smp_processor_id() to read the logical CPU ID
+///        directly from the prefix area without going through percpu_areas[].
+#define LC_CPU_ID_OFFSET    0x0408UL
 
 #ifndef __ASSEMBLER__
 
@@ -213,20 +215,29 @@ _Static_assert(__builtin_offsetof(zx_lowcore_t, ap_cr0)         == LC_AP_CR0,
                "LC_AP_CR0 mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, ap_cr13)        == LC_AP_CR13,
                "LC_AP_CR13 mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, ext_params)   == 0x0080,
+               "ext_params offset mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, ext_cpu_addr) == 0x0084,
+               "ext_cpu_addr offset mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, ext_int_code) == 0x0086,
+               "ext_int_code offset mismatch");
 
-/// @brief Access the BSP lowcore via absolute addressing (DAT off).
+/// @brief Verify that LC_CPU_ID_OFFSET matches the actual field in the struct.
+///        If zx_percpu_t layout changes, this will catch the silent breakage
+///        in arch_smp_processor_id() which inlines the constant 0x408.
+_Static_assert(
+    LC_PERCPU_OFFSET + __builtin_offsetof(zx_percpu_t, cpu_id) == LC_CPU_ID_OFFSET,
+    "LC_CPU_ID_OFFSET does not match actual zx_percpu_t::cpu_id offset; "
+    "update processor.h inline constant 0x408UL to match");
+
+/// @brief Access lowcore via absolute addressing (DAT off).
+#define ZX_LOWCORE_RAW_INPLACE  ((zx_lowcore_t *)0x0)
+
 static inline zx_lowcore_t *zx_lowcore_raw(void) {
     return (zx_lowcore_t *)(uintptr_t)0x0;
 }
-
-/// @brief Access the BSP lowcore via HHDM (DAT on).
 static inline zx_lowcore_t *zx_lowcore(void) {
     return (zx_lowcore_t *)(uintptr_t)hhdm_phys_to_virt(0x0);
-}
-
-/// @brief Access an AP's lowcore by its physical prefix address via HHDM.
-static inline zx_lowcore_t *zx_lowcore_of(uint64_t prefix_phys) {
-    return (zx_lowcore_t *)(uintptr_t)hhdm_phys_to_virt(prefix_phys);
 }
 
 /// @brief Write the restart new PSW into a lowcore for AP bringup.
@@ -259,15 +270,10 @@ static inline void lc_set_kernel_asce(zx_lowcore_t *lc, uint64_t asce) {
 /// @param lc  HHDM-mapped pointer to the target lowcore.
 void lc_install_handler_psws(zx_lowcore_t *lc);
 
-
-
 /// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
 ///        Called as the very first action in zxfoundation_global_initialize(),
 ///        after the HHDM is active.  Replaces the disabled-wait PSWs installed
 ///        by zx_lowcore_setup_pre_dat() with real handler entry points.
-void zx_lowcore_setup_late(void);
-
-/// @brief Initialize BSP-specific stacks (async, mcck) after PMM is ready.
-void zx_lowcore_init_late_bsp(void);
+void zx_lowcore_setup_bsp(void);
 
 #endif /* __ASSEMBLER__ */

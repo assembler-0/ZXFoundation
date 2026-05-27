@@ -134,6 +134,22 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
                    (unsigned long long)boot->modules[i].size_bytes);
         }
     }
+
+    // Print NUMA memory region summary from the loader memory map.
+    if (boot->flags & ZXFL_FLAG_MEM_MAP) {
+        const zxfl_mem_region_t *map =
+            (const zxfl_mem_region_t *)(uintptr_t)boot->mem_map_addr;
+        printk(ZX_DEBUG "mem: %u regions in boot memory map\n", boot->mem_map_count);
+        for (uint32_t i = 0; i < boot->mem_map_count; i++) {
+            const zxfl_mem_region_t *r = &map[i];
+            if (r->type != ZXFL_MEM_USABLE) continue;
+            printk(ZX_DEBUG "     region[%u] base=0x%llx len=%llu MB numa=%u\n",
+                   i,
+                   (unsigned long long)r->base,
+                   (unsigned long long)(r->length / (1024 * 1024)),
+                   r->numa_node);
+        }
+    }
 }
 
 #define if_cmdline_has(boot, option)                                    \
@@ -149,12 +165,14 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     if (!boot)
         arch_sys_halt();
 
-    zx_lowcore_setup_late();
+    percpu_init_bsp();
+    zx_lowcore_setup_bsp();
     zx_syschk_initialize(boot);
 
     diag_setup();
     printk_initialize(diag_putc);
     simplelog_initialize(diag_putc);
+
     time_init((boot->flags & ZXFL_FLAG_TOD) ? boot->tod_boot : 0);
 
     printk(ZX_INFO "sys: ZXFoundation (R) %s CONFIDENTIAL - copyright (C) 2026 assembler-0 all rights reserved.\n",
@@ -172,12 +190,12 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     dump_machine_info(boot);
 
-    percpu_init_bsp();
     arch_cpu_features_init(boot->stfle_fac, boot->stfle_count);
     rcu_init();
 
     pmm_init(boot);
-    zx_lowcore_init_late_bsp();
+    smp_prepare_aps(boot);
+
     pmm_pcplist_init(0);
 
     mmu_init();
@@ -190,7 +208,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     koms_init();
     irq_subsystem_init();
 
-    smp_init(boot);
+    smp_start_aps();
 
     printk(ZX_INFO "sys: core.zxfoundation.nucleus initialization complete\n");
 

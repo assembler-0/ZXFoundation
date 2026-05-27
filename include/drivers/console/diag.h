@@ -5,6 +5,8 @@
 
 #include <zxfoundation/types.h>
 
+void diag8_write(const char *addr, uint64_t len);
+
 /// @brief Initialize DIAG 8 console (no-op, always available)
 /// @return 0 on success
 int diag_setup(void);

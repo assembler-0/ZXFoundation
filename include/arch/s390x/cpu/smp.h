@@ -4,12 +4,22 @@
 
 #include <arch/s390x/init/zxfl/zxfl.h>
 
-/// @brief Bring up all stopped APs listed in the boot protocol.
-///        Writes restart PSW, allocates lowcore + stack, issues SIGP.
+/// @brief Phase 1 of AP bringup: allocate a lowcore and stacks for every
+///        stopped AP in the boot protocol, populate percpu_areas[], and
+///        install all PSWs and control registers into each AP lowcore.
+///        Does NOT issue SIGP RESTART — APs remain stopped.
 /// @param boot  Validated ZXFL boot protocol.
-void smp_init(const zxfl_boot_protocol_t *boot);
+void smp_prepare_aps(const zxfl_boot_protocol_t *boot);
 
-/// @brief Shut down all APs that were started by smp_init().
+/// @brief Phase 2 of AP bringup: issue SIGP SET_PREFIX + SIGP RESTART to
+///        every AP prepared by smp_prepare_aps(), then spin until all APs
+///        have incremented ap_online_count from ap_startup().
+///
+///        Must be called after smp_prepare_aps() and after all kernel
+///        subsystems (IRQ, slab, VMM) are fully initialized.
+void smp_start_aps(void);
+
+/// @brief Shut down all APs that were started by smp_start_aps().
 void smp_teardown(void);
 
 /// @brief Issue SIGP STOP to every CPU in the boot map except the caller.

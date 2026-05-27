@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // lib/libubsanrt/ubsan.c — Undefined Behavior Sanitizer runtime for ZXFoundation
 
-#include <lib/ubsanrt/ubsan.h>
+#include <lib/libubsanrt/ubsan.h>
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
 #include <lib/vsprintf.h>

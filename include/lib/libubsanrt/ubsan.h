@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/lib/ubsanrt/ubsan.h — UBSAN runtime ABI types and handler declarations
+// include/lib/libubsanrt/ubsan.h — UBSAN runtime ABI types and handler declarations
 
 #pragma once
 

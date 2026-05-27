@@ -1,35 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // zxfoundation/sys/irq/irqdesc.c
 //
-/// @brief IRQ descriptor table — KOMS-integrated implementation.
-///
-///        DESIGN
-///        ======
-///        irq_table[] is a flat static array of irq_desc_t.  Each entry
-///        embeds a kobject_t and is registered in the "irq" KOMS namespace
-///        at irq_subsystem_init() time.  The kobjects are never freed —
-///        they live for the kernel lifetime — so ops->release is a no-op.
-///
-///        LOCKING
-///        =======
-///        irq_register() and irq_unregister() acquire desc->obj.lock
-///        (irqsave) to serialize handler installation.  This replaces the
-///        previous unsynchronized access.
-///
-///        DISPATCH HOT PATH
-///        =================
-///        irq_dispatch() indexes irq_table[] directly by IRQ number and
-///        reads handler/data under a brief irqsave critical section.  It
-///        does not touch the kobject machinery — zero KOMS overhead per
-///        interrupt.
+/// @brief IRQ descriptor table
 
 #include <zxfoundation/sys/irq/irqdesc.h>
 #include <zxfoundation/object/koms.h>
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
-#include <lib/string.h>
-#include <lib/vsprintf.h>
 #include <zxfoundation/common.h>
+#include <lib/vsprintf.h>
 
 static irq_desc_t irq_table[ZX_IRQ_NR_MAX];
 static kobj_ns_t  irq_ns;

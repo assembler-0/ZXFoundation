@@ -37,7 +37,7 @@ static uint8_t tmp_async_stack[4096] __attribute__((aligned(16)));
 static uint8_t tmp_mcck_stack[4096] __attribute__((aligned(16)));
 
 /// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
-void zx_lowcore_setup_late(void) {
+void zx_lowcore_setup_bsp(void) {
     zx_lowcore_t *lc = zx_lowcore();
 
     // Initialize temporary stacks for early exception handlers

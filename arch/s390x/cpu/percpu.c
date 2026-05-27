@@ -36,13 +36,11 @@ void percpu_init_bsp(void) {
 /// @param cpu_id   Logical CPU ID (1..MAX_CPUS-1).
 /// @param cpu_addr z/Arch CPU address (from boot protocol).
 /// @return Physical address of the new lowcore (8 KB, 8 KB-aligned), or 0 on failure.
-uint64_t percpu_init_ap(uint16_t cpu_id, uint16_t cpu_addr) {
+uint64_t percpu_init_ap(uint16_t cpu_id, uint16_t cpu_addr, uint8_t node) {
     if (cpu_id >= MAX_CPUS)
         zx_system_check(ZX_SYSCHK_CORE_ASSERT, "percpu: cpu_id %u exceeds MAX_CPUS", cpu_id);
 
-    // Allocate 2 contiguous pages (2^1 = 2 pages = 8 KB).
-    // The lowcore MUST be 8 KB and 8 KB-aligned.
-    zx_page_t *page = pmm_alloc_pages(1, ZX_GFP_ZERO);
+    zx_page_t *page = pmm_alloc_pages_node(node, 1, ZX_GFP_ZERO | ZX_GFP_DMA);
     if (!page)
         zx_system_check(ZX_SYSCHK_MEM_OOM, "percpu: OOM allocating lowcore for cpu %u", cpu_id);
 

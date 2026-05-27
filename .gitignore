@@ -1,5 +1,7 @@
 cmake-build-*
-*.cache
+.cache/
+__pycache__/
+.vscode
 .venv/
 .p/
 .idea/

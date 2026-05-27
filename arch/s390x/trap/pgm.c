@@ -5,10 +5,8 @@
 
 #include <arch/s390x/cpu/irq_frame.h>
 #include <arch/s390x/cpu/lowcore.h>
-#include <arch/s390x/mmu/mmu.h>
 #include <zxfoundation/sys/irq/irqdesc.h>
 #include <zxfoundation/sys/syschk.h>
-#include <zxfoundation/sys/printk.h>
 
 static void do_unhandled_trap(const char *msg, uint16_t code, zx_irq_frame_t *frame) {
     zx_lowcore_t *lc = zx_lowcore();
