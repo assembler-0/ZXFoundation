@@ -4,7 +4,6 @@
 #include <drivers/console/diag.h>
 #include <lib/ebcdic.h>
 #include <zxfoundation/types.h>
-#include <zxfoundation/zconfig.h>
 
 /// @brief Issue the DIAG 8 instruction with a 64-bit buffer address.
 void diag8_write(const char *addr, uint64_t len) {

@@ -6,7 +6,7 @@
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <arch/s390x/mmu/mmu.h>
 #include <arch/s390x/cpu/features.h>

@@ -59,4 +59,4 @@
 # Host Tools
 
 - [bin2rec](tools/bin2rec.md)
-- [gen_checksums](tools/gen_checksums.md)
+- [zxsign](tools/zxsign.md)

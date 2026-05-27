@@ -58,7 +58,7 @@ After the handshake, `zxvl_verify_nucleus_checksums` reads the `zxvl_checksum_ta
 
 $$\text{SHA-256}(\texttt{phys\_start}, \texttt{size}) = \texttt{entry.digest}$$
 
-Any mismatch causes an immediate panic. The table is patched into the kernel ELF by `gen_checksums` at build time. Any modification to a `PT_LOAD` segment after the build — including by a malicious bootloader or storage attack — is detected here.
+Any mismatch causes an immediate panic. The table is patched into the kernel ELF by `zxsign` at build time. Any modification to a `PT_LOAD` segment after the build — including by a malicious bootloader or storage attack — is detected here.
 
 ---
 

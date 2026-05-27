@@ -5,7 +5,7 @@
 #include <arch/s390x/cpu/lowcore.h>
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/pmm.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <zxfoundation/sys/syschk.h>
 #include <lib/string.h>
 

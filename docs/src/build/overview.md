@@ -25,7 +25,7 @@
 | `core.zxfoundation.nucleus`     | Kernel ELF64 (SHA-256 checksums patched in) | N/A                                   |
 | `sysres.3390`                   | Hercules 3390 DASD image                    | N/A                                   |
 | `bin2rec`                       | Host tool                                   | N/A                                   |
-| `gen_checksums`                 | Host tool                                   | N/A                                   |
+| `zxsign`                 | Host tool                                   | N/A                                   |
 
 ---
 
@@ -37,7 +37,7 @@
 | `cmake/configuration.cmake`        | `OPT_LEVEL`, `DSYM_LEVEL` cache variables              |
 | `cmake/platform.cmake`             | Platform detection                                     |
 | `cmake/standard.cmake`             | C standard enforcement                                 |
-| `cmake/hosttools.cmake`            | Build `bin2rec` and `gen_checksums` with host compiler |
+| `cmake/hosttools.cmake`            | Build `bin2rec` and `zxsign` with host compiler |
 | `cmake/source.cmake`               | Kernel source file lists (`ZX_SOURCES_64`)             |
 | `cmake/zxfl-compile.cmake`         | ZXFL Stage 0 and Stage 1 targets                       |
 | `cmake/zxfoundation-compile.cmake` | Kernel nucleus target                                  |
@@ -50,7 +50,7 @@
 CMake enforces the following dependency chain:
 
 ```
-tools  (bin2rec, gen_checksums — host compiler)
+tools  (bin2rec, zxsign — host compiler)
   │
   ├─► zxfl_stage1.elf
   │     └─► zxfl_stage1.bin  (objcopy)
@@ -60,7 +60,7 @@ tools  (bin2rec, gen_checksums — host compiler)
   │     └─► core.zxfoundationloader01.sys  (objcopy)
   │
   └─► core.zxfoundation.nucleus
-        └─► gen_checksums patches .zxvl_checksums in-place
+        └─► zxsign patches .zxvl_checksums in-place
               └─► sysres.3390  (dasdload)
 ```
 

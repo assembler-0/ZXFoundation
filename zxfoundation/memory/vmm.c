@@ -11,7 +11,7 @@
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/sync/rcu.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <lib/rbtree.h>
 
 vm_space_t kernel_vm_space;

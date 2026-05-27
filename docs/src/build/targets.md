@@ -6,7 +6,7 @@
 
 ## `tools`
 
-Builds host-native `bin2rec` and `gen_checksums` using `ZX_HOST_CC`. This target is an implicit dependency of all other targets — it always runs first.
+Builds host-native `bin2rec` and `zxsign` using `ZX_HOST_CC`. This target is an implicit dependency of all other targets — it always runs first.
 
 ---
 
@@ -33,7 +33,7 @@ Compiles Stage 1. Post-build step:
 
 Compiles the kernel. Post-build step:
 
-1. `gen_checksums core.zxfoundation.nucleus` — computes SHA-256 for each `PT_LOAD` segment and patches the digests into the `.zxvl_checksums` ELF section in-place.
+1. `zxsign core.zxfoundation.nucleus` — computes SHA-256 for each `PT_LOAD` segment and patches the digests into the `.zxvl_checksums` ELF section in-place.
 
 The kernel linker script is `arch/s390x/init/link.ld`.
 

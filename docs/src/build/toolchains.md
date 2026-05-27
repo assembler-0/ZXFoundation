@@ -89,7 +89,7 @@ To use a non-standard toolchain, copy one of the provided toolchain files and ad
 | `CMAKE_C_COMPILER`      | Path to the C compiler                                     |
 | `CMAKE_LINKER`          | Path to the linker                                         |
 | `CMAKE_OBJCOPY`         | Path to objcopy                                            |
-| `ZX_HOST_CC`            | Host C compiler for building `bin2rec` and `gen_checksums` |
+| `ZX_HOST_CC`            | Host C compiler for building `bin2rec` and `zxsign` |
 | `COMPILER_ID`           | `"clang"` or `"gcc"` (selects compiler-specific flag sets) |
 | `TARGET_EMULATION_MODE` | `elf64_s390`                                               |
 | `MARCH_MODE`            | Target microarchitecture (e.g. `z10`, `z14`, `z16`)        |

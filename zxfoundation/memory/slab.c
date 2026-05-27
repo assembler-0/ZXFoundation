@@ -10,7 +10,7 @@
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/percpu.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <arch/s390x/cpu/processor.h>
 #include <lib/list.h>
 #include <lib/string.h>

@@ -98,7 +98,7 @@ if (GEN_CHECKSUMS)
         TARGET core.zxfoundation.nucleus POST_BUILD
         COMMAND "${GEN_CHECKSUMS}" "${CMAKE_BINARY_DIR}/core.zxfoundation.nucleus"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        COMMENT "zxfoundation::build: signing kernel segments (gen_checksums)"
+        COMMENT "zxfoundation::build: signing kernel segments (zxsign)"
         VERBATIM
     )
 endif()

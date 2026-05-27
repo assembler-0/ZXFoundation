@@ -6,7 +6,7 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 
 /// Forward declaration of the monolithic lowcore structure.
 /// The full definition is in <arch/s390x/cpu/lowcore.h>.

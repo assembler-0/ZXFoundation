@@ -16,7 +16,7 @@
 #include <arch/s390x/init/zxfl/parmfile.h>
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/mmu.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 
 #define ZX_NUCLEUS_NAME         "CORE.ZXFOUNDATION.NUCLEUS"
 #define ZX_PARMFILE_NAME        "ETC.ZXFOUNDATION.PARM"

@@ -2,7 +2,7 @@
 // zxfoundation/init/main.c — ZXFoundation kernel entry point
 
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sync/rcu.h>
 #include <zxfoundation/memory/pmm.h>

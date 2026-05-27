@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/head64.S
 
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <arch/s390x/init/zxfl/zxvl_private.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/psw.h>

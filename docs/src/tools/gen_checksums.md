@@ -1,16 +1,16 @@
-# gen_checksums
+# zxsign
 
 **Document Revision:** 26h1.0  
-**Source:** `tools/gen_checksums.c`
+**Source:** `tools/zxsign.c`
 
 ---
 
 ## 1. Purpose
 
-`gen_checksums` is a post-build host tool that computes SHA-256 digests for each `PT_LOAD` segment of the kernel ELF and patches them into the `.zxvl_checksums` section in-place.
+`zxsign` is a post-build host tool that computes SHA-256 digests for each `PT_LOAD` segment of the kernel ELF and patches them into the `.zxvl_checksums` section in-place.
 
 ```sh
-gen_checksums <core.zxfoundation.nucleus>
+zxsign <core.zxfoundation.nucleus>
 ```
 
 The file is modified in place. It must be a valid ELF64 file with a `.zxvl_checksums` section.

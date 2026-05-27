@@ -5,4 +5,4 @@
 - s390x-ibm-linux-gnu gcc
 - ZXFoundationLoader binaries (`core.zxfoundationloader00.sys` and `core.zxfoundationloader01.sys`)
 - hercules tools (dasdload)
-- ZXFoundation kernel tools (gen_checksums)
+- ZXFoundation kernel tools (zxsign)

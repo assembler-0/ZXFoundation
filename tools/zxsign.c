@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// tools/gen_checksums.c
+// tools/zxsign.c
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,6 +7,7 @@
 #include <string.h>
 #include <errno.h>
 #include <crypto/sha256.h>
+#include "../include/zxfoundation/zxconfig.h"
 
 #define PT_LOAD          1
 #define ELFMAG           "\x7f""ELF"
@@ -26,7 +27,7 @@ static void wbe64(uint8_t *p, uint64_t v) { wbe32(p,(uint32_t)(v>>32)); wbe32(p+
 #define ZXVL_CKSUM_ALGO_SHA256  0x00000001U
 #define ZXVL_CKSUM_MAX_ENTRIES  16U
 #define SHA256_SIZE             32
-#define HHDM_BASE               UINT64_C(0xFFFF800000000000)
+#define HHDM_BASE               CONFIG_KERNEL_VIRT_OFFSET
 
 typedef struct __attribute__((packed)) {
     uint64_t phys_start, size;
@@ -40,7 +41,7 @@ typedef struct __attribute__((packed)) {
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        fprintf(stderr, "usage: gen_checksums <core.zxfoundation.nucleus>\n");
+        fprintf(stderr, "usage: zxsign <core.zxfoundation.nucleus>\n");
         return 1;
     }
 
@@ -52,11 +53,11 @@ int main(int argc, char **argv) {
     /* ------------------------------------------------------------------ */
     uint8_t ehdr[64];
     if (fread(ehdr, 1, 64, f) != 64 || memcmp(ehdr, ELFMAG, 4) != 0) {
-        fprintf(stderr, "gen_checksums: not a valid ELF file\n");
+        fprintf(stderr, "zxsign: not a valid ELF file\n");
         fclose(f); return 1;
     }
     if (ehdr[4] != 2) { /* EI_CLASS must be ELFCLASS64 */
-        fprintf(stderr, "gen_checksums: not an ELF64 file\n");
+        fprintf(stderr, "zxsign: not an ELF64 file\n");
         fclose(f); return 1;
     }
 
@@ -69,7 +70,7 @@ int main(int argc, char **argv) {
     const uint16_t shstrndx  = be16(ehdr + 62);
 
     if (phentsz == 0 || shentsz == 0 || phnum == 0 || shnum == 0) {
-        fprintf(stderr, "gen_checksums: degenerate ELF (no phdrs or shdrs)\n");
+        fprintf(stderr, "zxsign: degenerate ELF (no phdrs or shdrs)\n");
         fclose(f); return 1;
     }
 
@@ -105,7 +106,7 @@ int main(int argc, char **argv) {
     free(shdrs);
 
     if (cksum_file_off < 0) {
-        fprintf(stderr, "gen_checksums: .zxvl_checksums section not found\n");
+        fprintf(stderr, "zxsign: .zxvl_checksums section not found\n");
         fclose(f); return 1;
     }
 
@@ -133,7 +134,7 @@ int main(int argc, char **argv) {
         // Skip the checksums segment itself — identified by its unique p_flags
         // fingerprint.  Hashing the table while building it would be circular.
         if (p_flags == ZXVL_PFLAGS_CKSUM) {
-            printf("gen_checksums: skipping checksums segment (file_off=0x%llx..0x%llx)\n",
+            printf("zxsign: skipping checksums segment (file_off=0x%llx..0x%llx)\n",
                    (unsigned long long)p_offset,
                    (unsigned long long)(p_offset + p_filesz - 1));
             continue;
@@ -147,7 +148,7 @@ int main(int argc, char **argv) {
     free(phdrs);
 
     if (nseg == 0) {
-        fprintf(stderr, "gen_checksums: no hashable PT_LOAD segments found\n");
+        fprintf(stderr, "zxsign: no hashable PT_LOAD segments found\n");
         fclose(f); return 1;
     }
 
@@ -172,7 +173,7 @@ int main(int argc, char **argv) {
 
         fseek(f, (long)segs[i].file_off, SEEK_SET);
         if (fread(seg_data, 1, segs[i].filesz, f) != segs[i].filesz) {
-            fprintf(stderr, "gen_checksums: short read on segment %u\n", i);
+            fprintf(stderr, "zxsign: short read on segment %u\n", i);
             free(seg_data); fclose(f); return 1;
         }
 
@@ -182,7 +183,7 @@ int main(int argc, char **argv) {
         zxfl_sha256_final(&ctx, tbl.entries[i].digest);
         free(seg_data);
 
-        printf("gen_checksums: seg %u  phys=0x%016llx  size=%llu  sha256=",
+        printf("zxsign: seg %u  phys=0x%016llx  size=%llu  sha256=",
                i, (unsigned long long)phys, (unsigned long long)segs[i].filesz);
         for (int j = 0; j < SHA256_SIZE; j++)
             printf("%02x", tbl.entries[i].digest[j]);
@@ -195,12 +196,12 @@ int main(int argc, char **argv) {
     /* ------------------------------------------------------------------ */
     fseek(f, cksum_file_off, SEEK_SET);
     if (fwrite(&tbl, 1, sizeof(tbl), f) != sizeof(tbl)) {
-        fprintf(stderr, "gen_checksums: write failed: %s\n", strerror(errno));
+        fprintf(stderr, "zxsign: write failed: %s\n", strerror(errno));
         fclose(f); return 1;
     }
     fflush(f);
     fclose(f);
 
-    printf("gen_checksums: patched %u segment(s) into .zxvl_checksums\n", nseg);
+    printf("zxsign: patched %u segment(s) into .zxvl_checksums\n", nseg);
     return 0;
 }

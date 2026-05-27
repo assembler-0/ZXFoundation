@@ -9,7 +9,7 @@
 #include <zxfoundation/percpu.h>
 #include <zxfoundation/memory/pmm.h>
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <zxfoundation/time/ktime.h>
 #include <arch/s390x/cpu/ipi.h>
 #include <arch/s390x/cpu/irq.h>

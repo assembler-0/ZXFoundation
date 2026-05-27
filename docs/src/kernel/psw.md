@@ -10,7 +10,7 @@
 The PSW (Program Status Word) manager provides a single, authoritative
 definition of all z/Architecture PSW mask constants and new-PSW lowcore
 offsets.  Prior to this subsystem, constants were duplicated across
-`zconfig.h` and `lowcore.h` under different names, and assembly files
+`zxconfig.h` and `lowcore.h` under different names, and assembly files
 hardcoded incorrect bit patterns.
 
 All consumers — C translation units, assembly files, the ZXFL loader, and

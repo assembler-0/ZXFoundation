@@ -28,7 +28,7 @@ The project comprises three independently versioned components:
 |----------------|------------------------------------------------------------------|----------------------|
 | **ZXFL**       | `core.zxfoundationloader00.sys`, `core.zxfoundationloader01.sys` | Two-stage bootloader |
 | **Nucleus**    | `core.zxfoundation.nucleus`                                      | Kernel ELF64 image   |
-| **Host tools** | `bin2rec`, `gen_checksums`                                       | Build-time utilities |
+| **Host tools** | `bin2rec`, `zxsign`                                       | Build-time utilities |
 
 All three are built from a single CMake project using a cross-compiler toolchain targeting s390x.
 
@@ -50,7 +50,7 @@ The boot protocol carries its own version field (`ZXFL_VERSION_*`). A kernel mus
 | [Bootloader](bootloader/overview.md) | ZXFL design, stage descriptions, boot protocol |
 | [Kernel](kernel/overview.md) | Subsystem table, initialization sequence, memory management |
 | [Build System](build/overview.md) | CMake modules, toolchains, configuration variables |
-| [Host Tools](tools/bin2rec.md) | `bin2rec` and `gen_checksums` reference |
+| [Host Tools](tools/bin2rec.md) | `bin2rec` and `zxsign` reference |
 
 ---
 

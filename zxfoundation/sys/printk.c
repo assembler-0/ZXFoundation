@@ -31,7 +31,7 @@
 #include <zxfoundation/time/ktime.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/percpu.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <lib/vsprintf.h>
 #include <lib/string.h>
 

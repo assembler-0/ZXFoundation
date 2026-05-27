@@ -2,7 +2,7 @@
 #define ZXFOUNDATION_ZCONFIG_H
 
 // SPDX-License-Identifier: Apache-2.0
-// include/zxfoundation/zconfig.h
+// include/zxfoundation/zxconfig.h
 
 // ---------------------------------------------------------------------------
 // Release

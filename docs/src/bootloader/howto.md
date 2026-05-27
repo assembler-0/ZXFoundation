@@ -13,7 +13,7 @@ ZXFL imposes five requirements on the kernel image before it will execute it:
 1. Valid ELF64 for s390x, `ET_EXEC`, all `PT_LOAD` segments in the HHDM range.
 2. Structural lock section at fixed offsets.
 3. Handshake stub at the physical load base.
-4. SHA-256 checksum table at `load_min + 0x80000`, patched by `gen_checksums`.
+4. SHA-256 checksum table at `load_min + 0x80000`, patched by `zxsign`.
 5. Boot protocol validation on entry.
 
 ---
@@ -124,7 +124,7 @@ The stub must not clobber `%r14` (return address) or `%r15` (stack pointer). It 
 
 ## Step 4 — Reserve the Checksum Table
 
-Declare the checksum table section. It is zero at link time; `gen_checksums` patches it after linking:
+Declare the checksum table section. It is zero at link time; `zxsign` patches it after linking:
 
 ```c
 __attribute__((section(".zxvl_checksums"), used))
@@ -133,12 +133,12 @@ static volatile zxvl_checksum_table_t zxvl_cksum_table = { 0 };
 
 ---
 
-## Step 5 — Run `gen_checksums`
+## Step 5 — Run `zxsign`
 
 After linking, run the host tool on the ELF:
 
 ```sh
-gen_checksums my_kernel.elf
+zxsign my_kernel.elf
 ```
 
 This computes SHA-256 for each `PT_LOAD` segment (excluding `.zxvl_checksums` itself) and patches the table in-place. The ELF is now ready for DASD.
@@ -190,6 +190,6 @@ All pointer fields in the protocol are HHDM virtual addresses. Do not treat them
 | 3 | `e_entry >= 0xFFFF800000040000` | Loader entry check |
 | 4 | Structural lock at `load_min + 0x70000` | `zxvl_verify` |
 | 5 | Handshake stub at `load_min + 0x0` | `zxvl_verify` |
-| 6 | Checksum table at `load_min + 0x80000`, patched by `gen_checksums` | `zxvl_verify` |
+| 6 | Checksum table at `load_min + 0x80000`, patched by `zxsign` | `zxvl_verify` |
 | 7 | `boot->magic` validated on entry | Kernel |
 | 8 | `boot->binding_token` validated on entry | Kernel |

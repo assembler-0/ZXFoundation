@@ -4,7 +4,7 @@
 #pragma once
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <arch/s390x/cpu/atomic.h>
 #include <lib/list.h>
 

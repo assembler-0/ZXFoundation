@@ -7,7 +7,7 @@
 #include <zxfoundation/memory/vmm.h>
 #include <zxfoundation/memory/page.h>
 #include <zxfoundation/sys/syschk.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 
 /// Guard canary embedded before the user pointer to detect underflows.
 #define VMALLOC_MAGIC  0x564D414C4C4F4355ULL   /* "VMALLOCU" */

@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <arch/s390x/cpu/features.h>
 #include <arch/s390x/cpu/psw.h>
 #include <arch/s390x/cpu/atomic.h>

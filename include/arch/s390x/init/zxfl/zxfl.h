@@ -7,7 +7,7 @@
 #define ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <arch/s390x/cpu/stfle.h>
 
 // ---------------------------------------------------------------------------

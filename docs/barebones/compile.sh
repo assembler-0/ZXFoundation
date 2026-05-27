@@ -9,5 +9,5 @@ s390x-ibm-linux-gnu-gcc $CFLAGS -c head64.S -o head64.o
 s390x-ibm-linux-gnu-gcc $CFLAGS -c main.c -o main.o
 s390x-ibm-linux-gnu-gcc $CFLAGS -c zxvl_cksum.c -o zxvl_cksum.o
 s390x-ibm-linux-gnu-ld -T link.ld $LDFLAGS head64.o main.o zxvl_cksum.o -o core.zxfoundation.nucleus
-./gen_checksums core.zxfoundation.nucleus
+./zxsign core.zxfoundation.nucleus
 dasdload -z sysres.conf sysres.3390

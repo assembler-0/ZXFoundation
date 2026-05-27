@@ -8,7 +8,7 @@
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/sys/syschk.h>
 #include <zxfoundation/sys/printk.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <zxfoundation/percpu.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/processor.h>

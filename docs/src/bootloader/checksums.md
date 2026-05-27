@@ -10,7 +10,7 @@ The checksum protocol ensures that the kernel image loaded into memory matches t
 
 | Point | Actor | Action |
 |-------|-------|--------|
-| Build time | `gen_checksums` | Compute SHA-256 per `PT_LOAD` segment; patch into `.zxvl_checksums` |
+| Build time | `zxsign` | Compute SHA-256 per `PT_LOAD` segment; patch into `.zxvl_checksums` |
 | Boot time (loader) | `zxvl_verify_nucleus_checksums` | Recompute and compare before DAT is enabled |
 | Boot time (kernel) | `verify_kernel_checksums` | Recompute and compare from HHDM after DAT is enabled |
 
@@ -28,7 +28,7 @@ The loader discovers the table's physical address by scanning the ELF program he
 
 ## 3. Table Format
 
-See [gen_checksums §3](../tools/gen_checksums.md#3-checksum-table-layout) for the full `zxvl_checksum_table_t` layout.
+See [zxsign §3](../tools/zxsign.md#3-checksum-table-layout) for the full `zxvl_checksum_table_t` layout.
 
 Key fields:
 
@@ -43,7 +43,7 @@ Key fields:
 
 ## 4. Excluded Segments
 
-The segment containing `.zxvl_checksums` itself is excluded from the checksum computation. Hashing the table while building it would be circular. `gen_checksums` identifies and skips this segment automatically.
+The segment containing `.zxvl_checksums` itself is excluded from the checksum computation. Hashing the table while building it would be circular. `zxsign` identifies and skips this segment automatically.
 
 ---
 

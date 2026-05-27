@@ -40,7 +40,7 @@
 #ifndef __ASSEMBLER__
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/zconfig.h>
+#include <zxfoundation/zxconfig.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/memory/pmm.h>
 
