@@ -7,7 +7,7 @@
 #include <arch/s390x/init/zxfl/elf64.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
-#include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <arch/s390x/init/zxfl/zxvl.h>
 #include <zxfoundation/zxconfig.h>
 
 /// @brief Zero memory using MVCL pad-fill mode (srclen=0, pad=0x00).

@@ -3,7 +3,7 @@
 
 #include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
-#include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <arch/s390x/init/zxfl/zxvl.h>
 #include <arch/s390x/cpu/stfle.h>
 #include <arch/s390x/cpu/sclp.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>

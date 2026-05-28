@@ -12,10 +12,6 @@
 // Protocol version and magic
 // ---------------------------------------------------------------------------
 
-#define STFLE_MAX_DWORDS    32U
-#define ZXFL_SHA256_DIGEST_SIZE    32U
-
-
 #define ZXFL_MAGIC              0x5A58464CU   // "ZXFL"
 #define ZXFL_VERSION_4          0x00000004U
 
@@ -44,7 +40,7 @@
 #define ZXFL_MEM_MAP_MAX        16U
 
 /// @brief Maximum CPUs in the static cpu_map.
-#define ZXFL_CPU_MAP_MAX        64U
+#define ZXFL_CPU_MAP_MAX        CONFIG_ZX_MAX_CPUS
 
 /// @brief Memory region types.
 #define ZXFL_MEM_USABLE         0x01U   ///< Conventional RAM
@@ -187,6 +183,10 @@ typedef struct {
         uint64_t phys_start;    ///< Physical start address
         uint64_t size_bytes;    ///< Size of the module in bytes
     } modules[16];
+
+    // ---- DYNAMIC SEGMENT ADDRESSES (discovered by p_flags scan) ----
+    uint64_t cksum_table_phys;  ///< Physical address of zxvl_checksum_table_t
+    uint64_t lock_phys;         ///< Physical address of .zxfl_lock segment
 
 } zxfl_boot_protocol_t;
 

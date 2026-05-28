@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/zxvl_private.h
+// include/arch/s390x/init/zxfl/zxvl.h
 
 #ifndef ZXFOUNDATION_ZXVL_PRIVATE_H
 #define ZXFOUNDATION_ZXVL_PRIVATE_H

@@ -16,7 +16,7 @@
 #include <zxfoundation/sys/simplelog.h>
 #include <zxfoundation/cmdlineopts.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
-#include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <arch/s390x/init/zxfl/zxvl.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/features.h>
 #include <arch/s390x/cpu/processor.h>
@@ -185,7 +185,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
         validate_stack_frame(boot);
         verify_kernel_checksums(boot);
     } else {
-        printk(ZX_WARN "sys: skipping ZXVL integrity check (due to '%s')", CMDLINE_SKIP_ZXVL_CHECK);
+        printk(ZX_WARN "sys: skipping ZXVerifiedLoad integrity checks (due to '%s')", CMDLINE_SKIP_ZXVL_CHECK);
     }
 
     dump_machine_info(boot);

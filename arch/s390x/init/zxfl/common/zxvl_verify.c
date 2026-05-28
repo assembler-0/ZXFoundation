@@ -7,7 +7,7 @@
 ///        elfload.c scanning PT_LOAD p_flags for ZXVL_PFLAGS_CKSUM.
 ///        No hardcoded offsets are used here.
 
-#include <arch/s390x/init/zxfl/zxvl_private.h>
+#include <arch/s390x/init/zxfl/zxvl.h>
 #include <arch/s390x/init/zxfl/panic.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
