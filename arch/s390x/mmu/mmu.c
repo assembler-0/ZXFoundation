@@ -479,13 +479,14 @@ void mmu_init(void) {
     edat1_enabled = arch_cpu_has_sys_feature(ZX_SYS_FEATURE_EDAT1);
     edat2_enabled = arch_cpu_has_sys_feature(ZX_SYS_FEATURE_EDAT2);
 
+    mmu_map_page(&kernel_pgtbl, 0x0000, 0x0000, VM_READ | VM_WRITE);
+    mmu_map_page(&kernel_pgtbl, 0x1000, 0x1000, VM_READ | VM_WRITE);
+
     uint64_t *r1 = (uint64_t *) (uintptr_t) hhdm_phys_to_virt(kernel_pgtbl.r1_phys);
     uint32_t scrubbed = 0;
-    for (int i = 0; i < (int) Z_TABLE_ENTRIES; i++) {
-        // RFX 0 is Identity map, RFX 2047 is HHDM.
-        // We must preserve BOTH.
+    for (int i = 1; i < (int) Z_TABLE_ENTRIES; i++) {
         uint32_t rfx_hhdm = va_rfx(CONFIG_KERNEL_VIRT_OFFSET);
-        if (i == 0 || (uint32_t)i == rfx_hhdm) continue;
+        if ((uint32_t)i == rfx_hhdm) continue;
         uint64_t e = r1[i];
         if (e & Z_I_BIT) continue;
         r1[i] = Z_I_BIT | Z_TL_2048 | Z_TT_R1;
@@ -493,12 +494,6 @@ void mmu_init(void) {
     }
     if (scrubbed)
         mmu_flush_tlb_local();
-
-    // Map the HHDM into the kernel page table explicitly if it's not already.
-    // This ensures the kernel owns the mapping and doesn't rely on loader tables
-    // that might be in a pool we want to reuse.
-    // However, currently mmu_init is called AFTER pmm_init and BEFORE pmm_verify_hhdm.
-    // We already scrubbed everything EXCEPT HHDM and Identity.
 
     // Store the kernel ASCE in the BSP lowcore so APs can read it via a
     // prefix-relative load (no DAT needed) during their bringup sequence.

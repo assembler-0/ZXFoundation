@@ -539,8 +539,8 @@ zx_page_t *pmm_alloc_page(gfp_t gfp) {
         arch_local_irq_disable();
 
         int cpu = arch_smp_processor_id();
-        if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
-            pmm_pcplist_t *pcp = &percpu_areas[cpu]->percpu.pcp[zid];
+        if ((uint32_t)cpu < MAX_CPUS && zx_lowcore_cpu(cpu)) {
+            pmm_pcplist_t *pcp = &zx_lowcore_cpu(cpu)->percpu.pcp[zid];
             if (pcp->count == 0)
                 pcp_refill(pcp, zid);
             if (pcp->count > 0) {
@@ -628,9 +628,9 @@ void pmm_free_page(zx_page_t *page) {
         arch_local_irq_disable();
 
         int cpu = arch_smp_processor_id();
-        if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
+        if ((uint32_t)cpu < MAX_CPUS && zx_lowcore_cpu(cpu)) {
             zone_id_t      zid = (zone_id_t)page->zone_id;
-            pmm_pcplist_t *pcp = &percpu_areas[cpu]->percpu.pcp[zid];
+            pmm_pcplist_t *pcp = &zx_lowcore_cpu(cpu)->percpu.pcp[zid];
             if (pcp->count < PCP_HIGH) {
                 pcp->pages[pcp->count++] = page_to_pfn(page);
                 arch_local_irq_restore(f);
@@ -651,9 +651,9 @@ void pmm_free_page(zx_page_t *page) {
 // ---------------------------------------------------------------------------
 
 void pmm_pcplist_init(uint16_t cpu_id) {
-    if (cpu_id >= MAX_CPUS || !percpu_areas[cpu_id]) return;
-    for (uint32_t z = 0; z < ZONE_MAX; z++) {
-        pmm_pcplist_t *pcp = &percpu_areas[cpu_id]->percpu.pcp[z];
+    if (cpu_id >= MAX_CPUS || !zx_lowcore_cpu(cpu_id)) return;
+    for (int z = 0; z < ZONE_MAX; z++) {
+        pmm_pcplist_t *pcp = &zx_lowcore_cpu(cpu_id)->percpu.pcp[z];
         pcp->count   = 0;
         pcp->zone_id = z;
     }
@@ -662,8 +662,8 @@ void pmm_pcplist_init(uint16_t cpu_id) {
 void pmm_drain_local_pcps(void) {
     for (uint32_t z = 0; z < ZONE_MAX; z++) {
         int cpu = arch_smp_processor_id();
-        if ((uint32_t)cpu < MAX_CPUS && percpu_areas[cpu]) {
-            pmm_pcplist_t *pcp = &percpu_areas[cpu]->percpu.pcp[z];
+        if ((uint32_t)cpu < MAX_CPUS && zx_lowcore_cpu(cpu)) {
+            pmm_pcplist_t *pcp = &zx_lowcore_cpu(cpu)->percpu.pcp[z];
             while (pcp->count > 0) {
                 uint64_t pfn = pcp->pages[--pcp->count];
                 pmm_free_pages(pfn_to_page(pfn), 0);

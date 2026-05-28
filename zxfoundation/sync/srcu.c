@@ -39,7 +39,7 @@ void srcu_read_unlock(srcu_struct_t *s, int idx) {
 static int32_t srcu_readers(const srcu_struct_t *s, int idx) {
     int32_t sum = 0;
     for (uint16_t i = 0; i < MAX_CPUS; i++) {
-        if (percpu_areas[i])
+        if (zx_lowcore_cpu(i))
             sum += atomic_read((atomic_t *)&s->pcpu[i].c[idx]);
     }
     return sum;

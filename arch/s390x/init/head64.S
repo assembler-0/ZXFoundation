@@ -3,6 +3,7 @@
 
 #include <zxfoundation/zxconfig.h>
 #include <arch/s390x/init/zxfl/zxvl.h>
+#include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/psw.h>
 
@@ -40,7 +41,7 @@ __zx_start_kernel64:
 .Lbss_done:
 
     lgr     %r2, %r11
-    lg      %r15, 392(%r2)                 // kernel_stack_top from boot protocol
+    lg      %r15, ZXFL_OFFSET_KERNEL_STACK_TOP(%r2) // kernel_stack_top from boot protocol
     aghi    %r15, -160                     // 160-byte register save area
 
     lgr     %r2, %r11

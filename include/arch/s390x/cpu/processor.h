@@ -177,3 +177,14 @@ static inline int sigp_busy(uint16_t cpu_addr, uint8_t order, uint32_t parm,
     } while (cc == SIGP_CC_BUSY);
     return cc;
 }
+
+/// @brief Convert CPU type to string.
+static inline const char *arch_cpu_type_to_string(uint8_t type) {
+    switch (type) {
+        case ZXFL_CPU_TYPE_CP: return "CP";
+        case ZXFL_CPU_TYPE_IFL: return "IFL";
+        case ZXFL_CPU_TYPE_ICF: return "ICF";
+        case ZXFL_CPU_TYPE_ZIIP: return "zIIP";
+        default: return "Unknown";
+    }
+}

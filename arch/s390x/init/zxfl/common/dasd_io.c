@@ -111,19 +111,17 @@ int dasd_read_record(uint32_t schid,
     return dasd_sync_io(schid, chain);
 }
 
-#define ZXFL_RECS_PER_TRACK     12U
-
 int dasd_read_next(uint32_t schid,
                    uint16_t *cyl, uint16_t *head, uint8_t *rec,
-                   uint8_t rd_cmd, void *buf, uint32_t len) {
+                   uint8_t rd_cmd, void *buf, uint32_t len, uint32_t recs_per_trk, uint16_t heads_per_cyl) {
     int rc = dasd_read_record(schid, *cyl, *head, *rec, rd_cmd, buf, len);
     if (rc < 0) return rc;
 
     (*rec)++;
-    if (*rec > ZXFL_RECS_PER_TRACK) {
+    if (*rec > recs_per_trk) {
         *rec = 1;
         (*head)++;
-        if (*head >= DASD_3390_HEADS_PER_CYL) {
+        if (*head >= heads_per_cyl) {
             *head = 0;
             (*cyl)++;
         }

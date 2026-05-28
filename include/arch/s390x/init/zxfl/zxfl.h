@@ -6,10 +6,6 @@
 #ifndef ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
 #define ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
 
-#include <zxfoundation/types.h>
-#include <zxfoundation/zxconfig.h>
-#include <arch/s390x/cpu/stfle.h>
-
 // ---------------------------------------------------------------------------
 // Protocol version and magic
 // ---------------------------------------------------------------------------
@@ -24,6 +20,11 @@
 // Loader identity seed (used to derive the binding token).
 // ---------------------------------------------------------------------------
 #define ZXFL_SEED               0xA5F0C3E1B2D49687UL
+
+// ---------------------------------------------------------------------------
+// Offsets for assembly use
+// ---------------------------------------------------------------------------
+#define ZXFL_OFFSET_KERNEL_STACK_TOP 400
 
 // ---------------------------------------------------------------------------
 // Protocol flags — each flag indicates that a corresponding data section
@@ -55,13 +56,21 @@
 #define ZXFL_CPU_STOPPED        0x02U   ///< CPU is stopped (AP, ready for SIGP)
 #define ZXFL_CPU_UNKNOWN        0x00U   ///< State could not be determined
 
-/// @brief CPU type values in zxfl_cpu_info_t::type.
-#define ZXFL_CPU_TYPE_CP        0x00U   ///< General-purpose CP
-#define ZXFL_CPU_TYPE_IFL       0x01U   ///< Integrated Facility for Linux
+/// @brief CPU type values in zxfl_cpu_info_t::type (matches STSI 15 sel1).
+#define ZXFL_CPU_TYPE_CP        1U   ///< General-purpose CP
+#define ZXFL_CPU_TYPE_IFL       2U   ///< Integrated Facility for Linux
+#define ZXFL_CPU_TYPE_ICF       3U   ///< Internal Coupling Facility
+#define ZXFL_CPU_TYPE_ZIIP      4U   ///< zIIP
 #define ZXFL_CPU_TYPE_UNKNOWN   0xFFU   ///< Unknown type
 
 /// @brief Physical lowcore address (always 0 on z/Architecture).
 #define ZXFL_LOWCORE_PHYS       0x0ULL
+
+#ifndef __ASSEMBLER__
+
+#include <zxfoundation/types.h>
+#include <zxfoundation/zxconfig.h>
+#include <arch/s390x/cpu/stfle.h>
 
 /// @brief One entry in the physical memory map.
 typedef struct {
@@ -132,11 +141,12 @@ typedef struct {
     uint64_t kernel_phys_end;   ///< Physical end (exclusive)
     uint64_t kernel_entry;      ///< Entry point (HHDM virtual address)
 
-    // ---- MEMORY MAP (24 bytes) ----
+    // ---- MEMORY MAP (32 bytes) ----
     uint64_t mem_total_bytes;   ///< Total detected RAM (bytes)
     uint64_t mem_map_addr;      ///< HHDM virtual address of zxfl_mem_region_t[]
     uint32_t mem_map_count;     ///< Number of valid entries in mem_map
     uint32_t _pad3;
+    uint64_t xpndsize_mb;       ///< Expanded storage size in MB (0 if disabled)
 
     // ---- FACILITIES (264 bytes) ----
     uint64_t stfle_fac[STFLE_MAX_DWORDS]; ///< Full STFLE output (32 dwords)
@@ -191,5 +201,7 @@ typedef struct {
     uint64_t lock_phys;         ///< Physical address of .zxfl_lock segment
 
 } zxfl_boot_protocol_t;
+
+#endif /* !__ASSEMBLER__ */
 
 #endif /* ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H */

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include <zxfl.h>
+
 #define CONFIG_KERNEL_VIRT_OFFSET           0xFFFF800000000000ULL
 
     .section .text.handshake, "ax"
@@ -41,7 +43,7 @@ __zx_start_kernel64:
 
     // Restore boot protocol pointer and set up save area.
     lgr     %r2, %r11
-    lg      %r15, 392(%r2)                 // kernel_stack_top from boot protocol
+    lg      %r15, ZXFL_OFFSET_KERNEL_STACK_TOP(%r2)               // kernel_stack_top from boot protocol
     aghi    %r15, -160                     // 160-byte register save area
 
     lgrl    %r0, .Lpgm_psw_mask            // R0 = PSW mask (disabled-wait, 64-bit)

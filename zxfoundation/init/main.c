@@ -106,8 +106,9 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     if (boot->flags & ZXFL_FLAG_SMP) {
         printk(ZX_DEBUG "smp: %u processors detected\n", boot->cpu_count);
         for (uint32_t i = 0; i < boot->cpu_count; i++) {
-            printk(ZX_DEBUG "     cpu[%u] addr=0x%04x state=%u bsp=%s numa=%u topology=[drawer=%u, book=%u, socket=%u, chip=%u, thread=%u]\n",
+            printk(ZX_DEBUG "     cpu[%u] type=%s addr=0x%04x state=%u bsp=%s numa=%u topology=[drawer=%u, book=%u, socket=%u, chip=%u, thread=%u]\n",
                    i,
+                   arch_cpu_type_to_string(boot->cpu_map[i].type),
                    boot->cpu_map[i].cpu_addr,
                    boot->cpu_map[i].state,
                    boot->cpu_map[i].cpu_addr == boot->bsp_cpu_addr ? "yes" : "no",

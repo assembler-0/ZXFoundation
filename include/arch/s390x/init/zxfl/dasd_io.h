@@ -109,8 +109,6 @@ int dasd_read_record(uint32_t schid,
 /// @param buf      Destination buffer
 /// @param len      Buffer length in bytes
 /// @return 0 on success, -1 on error
-int dasd_read_next(uint32_t schid,
-                   uint16_t *cyl, uint16_t *head, uint8_t *rec,
-                   uint8_t rd_cmd, void *buf, uint32_t len);
+int dasd_read_next(uint32_t schid, uint16_t *cyl, uint16_t *head, uint8_t *rec, uint8_t rd_cmd, void *buf, uint32_t len, uint32_t recs_per_trk, uint16_t heads_per_cyl);
 
 #endif /* ZXFOUNDATION_ZXFL_DASD_IO_H */

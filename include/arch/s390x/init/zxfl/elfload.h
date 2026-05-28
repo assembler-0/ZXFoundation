@@ -34,6 +34,7 @@ int zxfl_load_elf64(uint32_t schid,
                     uint64_t *out_entry,
                     uint64_t *out_load_base,
                     uint64_t *out_load_size,
-                    uint64_t hs_nonce);
+                    uint64_t hs_nonce,
+                    uint32_t recs_per_trk, uint16_t heads_per_cyl);
 
 #endif /* ZXFOUNDATION_ZXFL_ELFLOAD_H */

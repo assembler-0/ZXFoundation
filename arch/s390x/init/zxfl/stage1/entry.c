@@ -45,7 +45,7 @@
     while (cyl < ext.end_cyl ||
            (cyl == ext.end_cyl && head <= ext.end_head)) {
         int rc = dasd_read_next(schid, &cyl, &head, &rec,
-                                CCW_CMD_READ_DATA, dst, DASD_BLOCK_SIZE);
+                                CCW_CMD_READ_DATA, dst, DASD_BLOCK_SIZE, 12, 15);
         if (rc < 0)
             break;
         dst += DASD_BLOCK_SIZE;

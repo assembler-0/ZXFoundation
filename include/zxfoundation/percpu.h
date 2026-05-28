@@ -7,15 +7,32 @@
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/zxconfig.h>
-
-/// Forward declaration of the monolithic lowcore structure.
-/// The full definition is in <arch/s390x/cpu/lowcore.h>.
-typedef struct zx_lowcore zx_lowcore_t;
+#include <arch/s390x/cpu/lowcore.h>
 
 #define MAX_CPUS        CONFIG_ZX_MAX_CPUS
 
-/// @brief Global array of lowcore pointers, indexed by logical CPU ID.
-extern zx_lowcore_t *percpu_areas[MAX_CPUS];
+/// @brief Global raw array of lowcore pointers. DO NOT ACCESS DIRECTLY.
+///        Use zx_lowcore_cpu(cpu) to safely bypass hardware prefix aliasing.
+extern zx_lowcore_t *__percpu_areas_raw[MAX_CPUS];
+
+/// @brief Safely retrieve another CPU's lowcore, applying inverse hardware
+///        prefix-register swapping if necessary.
+#define zx_lowcore_cpu(cpu)                                                  \
+    ({                                                                       \
+        zx_lowcore_t *__lc = __percpu_areas_raw[(cpu)];                      \
+        zx_lowcore_t *__res = __lc;                                          \
+        if (__lc) {                                                          \
+            uint64_t __target_real = hhdm_virt_to_phys((uint64_t)__lc);      \
+            uint64_t __my_prefix = zx_lowcore()->percpu.prefix_base;         \
+            if (__target_real == __my_prefix) {                              \
+                __res = (zx_lowcore_t *)CONFIG_KERNEL_VIRT_OFFSET;           \
+            } else if (__target_real == 0) {                                 \
+                __res = (zx_lowcore_t *)hhdm_phys_to_virt(__my_prefix);      \
+            }                                                                \
+        }                                                                    \
+        __res;                                                               \
+    })
+
 
 /// @brief Initialize the BSP's per-CPU area.  Called once from main.c.
 void percpu_init_bsp(void);
@@ -47,11 +64,11 @@ uint64_t percpu_init_ap(uint16_t cpu_id, uint16_t cpu_addr, uint8_t node);
 #define percpu_ptr_to(field)    (&(percpu_ptr()->percpu.field))
 
 /// @brief Read a field from another CPU's per-CPU area.
-#define percpu_get_on(cpu, field) read_once((percpu_areas[cpu]->percpu.field))
+#define percpu_get_on(cpu, field) read_once((zx_lowcore_cpu(cpu)->percpu.field))
 
 /// @brief Write a field in another CPU's per-CPU area.
-#define percpu_set_on(cpu, field, val) do { write_once(percpu_areas[cpu]->percpu.field, (val)); } while (0)
+#define percpu_set_on(cpu, field, val) do { write_once(zx_lowcore_cpu(cpu)->percpu.field, (val)); } while (0)
 
 /// @brief Obtain a pointer to a field in another CPU's per-CPU area.
-#define percpu_ptr_on(cpu, field) (&(percpu_areas[cpu]->percpu.field))
+#define percpu_ptr_on(cpu, field) (&(zx_lowcore_cpu(cpu)->percpu.field))
 

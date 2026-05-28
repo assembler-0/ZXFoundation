@@ -74,59 +74,71 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
     static uint8_t stsi_buf[4096] __attribute__((aligned(4096)));
     int has_topology = 0;
 
-    // Query CPU topology (FC=15, Sel1=1, Sel2=6)
-    if (stsi(stsi_buf, 15, 1, 6) == 0) {
-        struct sysinfo_15_1_x *info = (struct sysinfo_15_1_x *)stsi_buf;
-        if (info->length >= sizeof(struct sysinfo_15_1_x)) {
-            has_topology = 1;
+    // Query CPU topology for each CPU type (sel1 = 1..4)
+    for (uint8_t sel1 = 1; sel1 <= 4; sel1++) {
+        if (stsi(stsi_buf, 15, sel1, 6) == 0) {
+            struct sysinfo_15_1_x *info = (struct sysinfo_15_1_x *)stsi_buf;
+            if (info->length >= sizeof(struct sysinfo_15_1_x)) {
+                has_topology = 1;
 
-            uint8_t drawer_id = 0;
-            uint8_t book_id = 0;
-            uint8_t socket_id = 0;
-            uint8_t chip_id = 0;
+                uint8_t drawer_id = 0;
+                uint8_t book_id = 0;
+                uint8_t socket_id = 0;
+                uint8_t chip_id = 0;
 
-            uint8_t *ptr = (uint8_t *)info->tle;
-            uint8_t *end = (uint8_t *)info + info->length;
+                uint8_t *ptr = (uint8_t *)info->tle;
+                uint8_t *end = (uint8_t *)info + info->length;
 
-            while (ptr + 8 <= end && proto->cpu_count < ZXFL_CPU_MAP_MAX) {
-                union topology_entry *tle = (union topology_entry *)ptr;
-                if (tle->nl == 0) {
-                    // Core leaf node (16 bytes)
-                    if (ptr + 16 > end) break;
+                while (ptr + 8 <= end && proto->cpu_count < ZXFL_CPU_MAP_MAX) {
+                    union topology_entry *tle = (union topology_entry *)ptr;
+                    if (tle->nl == 0) {
+                        // Core leaf node (16 bytes)
+                        if (ptr + 16 > end) break;
 
-                    uint64_t mask = tle->cpu.mask;
-                    uint16_t origin = tle->cpu.origin;
+                        uint64_t mask = tle->cpu.mask;
+                        uint16_t origin = tle->cpu.origin;
 
-                    for (int k = 0; k < 64 && proto->cpu_count < ZXFL_CPU_MAP_MAX; k++) {
-                        if ((mask >> (63 - k)) & 1ULL) {
-                            uint16_t addr = origin + k;
-                            
-                            int cc = sigp_sense(addr);
-                            if (cc == 3) continue;
+                        for (int k = 0; k < 64 && proto->cpu_count < ZXFL_CPU_MAP_MAX; k++) {
+                            if ((mask >> (63 - k)) & 1ULL) {
+                                uint16_t addr = origin + k;
+                                
+                                // Check if CPU is already in map (from a previous sel1)
+                                int already_mapped = 0;
+                                for (uint32_t i = 0; i < proto->cpu_count; i++) {
+                                    if (proto->cpu_map[i].cpu_addr == addr) {
+                                        already_mapped = 1;
+                                        break;
+                                    }
+                                }
+                                if (already_mapped) continue;
 
-                            zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
-                            ci->cpu_addr = addr;
-                            ci->type = ZXFL_CPU_TYPE_UNKNOWN;
-                            ci->state = (addr == bsp) ? ZXFL_CPU_ONLINE : ZXFL_CPU_STOPPED;
-                            ci->drawer_id = drawer_id;
-                            ci->book_id = book_id;
-                            ci->socket_id = socket_id;
-                            ci->chip_id = chip_id;
-                            ci->thread_id = 0;
-                            ci->numa_node = book_id; 
+                                int cc = sigp_sense(addr);
+                                if (cc == 3) continue;
 
-                            proto->cpu_count++;
+                                zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
+                                ci->cpu_addr = addr;
+                                ci->type = sel1; // sel1 maps to ZXFL_CPU_TYPE_*
+                                ci->state = (addr == bsp) ? ZXFL_CPU_ONLINE : ZXFL_CPU_STOPPED;
+                                ci->drawer_id = drawer_id;
+                                ci->book_id = book_id;
+                                ci->socket_id = socket_id;
+                                ci->chip_id = chip_id;
+                                ci->thread_id = 0;
+                                ci->numa_node = book_id; 
+
+                                proto->cpu_count++;
+                            }
                         }
-                    }
-                    ptr += 16;
-                } else {
-                    // Container node (8 bytes)
-                    if (tle->nl == 4)      drawer_id = tle->container.id;
-                    else if (tle->nl == 3) book_id = tle->container.id;
-                    else if (tle->nl == 2) socket_id = tle->container.id;
-                    else if (tle->nl == 1) chip_id = tle->container.id;
+                        ptr += 16;
+                    } else {
+                        // Container node (8 bytes)
+                        if (tle->nl == 4)      drawer_id = tle->container.id;
+                        else if (tle->nl == 3) book_id = tle->container.id;
+                        else if (tle->nl == 2) socket_id = tle->container.id;
+                        else if (tle->nl == 1) chip_id = tle->container.id;
 
-                    ptr += 8;
+                        ptr += 8;
+                    }
                 }
             }
         }

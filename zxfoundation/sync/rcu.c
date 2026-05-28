@@ -90,16 +90,12 @@ void synchronize_rcu(void) {
 
     // Broadcast the new GP sequence to all online CPUs.
     for (uint16_t i = 0; i < MAX_CPUS; i++) {
-        if (percpu_areas[i])
+        if (zx_lowcore_cpu(i))
             percpu_set_on(i, rcu_gp_seq, target);
     }
 
-    // Wait until every online CPU has passed through a QS.
-    // A CPU reports QS by writing rcu_qs_seq == rcu_gp_seq.
-    // On a non-preemptive kernel, any code path that calls rcu_report_qs()
-    // (e.g. the idle loop, scheduler tick) satisfies this.
     for (uint16_t i = 0; i < MAX_CPUS; i++) {
-        if (!percpu_areas[i])
+        if (!zx_lowcore_cpu(i))
             continue;
         while (percpu_get_on(i, rcu_qs_seq) != target)
             arch_cpu_relax();

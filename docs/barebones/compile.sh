@@ -2,7 +2,7 @@
 
 set -e
 
-export CFLAGS="-ffreestanding -nostdlib -msoft-float -mno-vx -m64 -march=z196 -mtune=z196 -pipe -fno-stack-protector -std=c23 -mzarch -static-libgcc -O2 -g0"
+export CFLAGS="-ffreestanding -nostdlib -msoft-float -mno-vx -m64 -march=z196 -mtune=z196 -pipe -fno-stack-protector -std=c23 -mzarch -static-libgcc -O2 -g0 -I."
 export LDFLAGS="-nostdlib -static --no-dynamic-linker -ztext -zmax-page-size=0x1000 --no-pie -g -melf64_s390"
 
 s390x-ibm-linux-gnu-gcc $CFLAGS -c head64.S -o head64.o

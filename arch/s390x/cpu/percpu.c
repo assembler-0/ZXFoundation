@@ -9,7 +9,7 @@
 #include <zxfoundation/sys/syschk.h>
 #include <lib/string.h>
 
-zx_lowcore_t *percpu_areas[MAX_CPUS];
+zx_lowcore_t *__percpu_areas_raw[MAX_CPUS];
 
 /// @brief BSP lowcore is always at physical 0x0.
 ///        The monolithic structure is 8 KB, but only the first page (4 KB)
@@ -29,7 +29,7 @@ void percpu_init_bsp(void) {
     lc->percpu.cpu_addr    = cpu_addr;
     lc->percpu.lock_depth  = 0;
 
-    percpu_areas[0] = lc;
+    __percpu_areas_raw[0] = lc;
 }
 
 /// @brief Allocate and initialize a monolithic lowcore for an AP.
@@ -52,7 +52,7 @@ uint64_t percpu_init_ap(uint16_t cpu_id, uint16_t cpu_addr, uint8_t node) {
     lc->percpu.cpu_addr    = cpu_addr;
     lc->percpu.lock_depth  = 0;
 
-    percpu_areas[cpu_id] = lc;
+    __percpu_areas_raw[cpu_id] = lc;
     return phys;
 }
 

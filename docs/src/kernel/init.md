@@ -22,7 +22,7 @@
 | 9    | `arch_cpu_features_init(boot)`         | Detect STFLE facilities, populate feature flags            |
 | 10   | `rcu_init()`                           | Initialize RCU subsystem                                   |
 | 11   | `pmm_init(boot)`                       | Register usable memory regions; reserve loader/kernel/pool |
-| 12   | `mmu_init()`                           | Inherit loader ASCE; detect EDAT-1/2                       |
+| 12   | `mmu_init()`                           | Install 8 KB VA-0 lowcore window; scrub identity map; inherit EDAT-1/2 state. **Order is mandatory — see §4.** |
 | 13   | `vmm_init()`                           | Set up vmalloc region                                      |
 | 14   | `slab_init()`                          | Initialize slab caches                                     |
 | 15   | `kmalloc_init()`                       | Initialize kmalloc size classes                            |
@@ -54,3 +54,49 @@ These checks run before any subsystem is initialized. A failure at any point cal
 | `[kernel_phys_start, kernel_phys_end)`          | Kernel image               |
 | `[pool_base, pgtbl_pool_end)`                   | Bootloader page table pool |
 | Each module's `[phys_start, phys_start + size)` | Loaded modules             |
+
+---
+
+## 4. MMU Initialization Ordering Invariant (Step 12)
+
+`mmu_init()` takes ownership of the bootloader ASCE and replaces the bootloader's
+8 GB identity map with a precise 8 KB window at VA 0. This operation has a **strict,
+unbreakable ordering requirement** rooted in z/Architecture hardware behavior.
+
+### Why VA 0 Must Always Be Mapped
+
+Every interrupt handler entry stub (`trap_pgm_entry`, `trap_ext_entry`, etc.) begins
+with:
+
+```asm
+lg  %r1, LC_ASYNC_STACK(0)   // effective VA = 0x0350
+```
+
+The zero base register is not an error — it is the only way to load a value before
+registers have been saved. Because DAT is active when this runs, `VA 0x350` must be
+translated successfully. If the mapping is absent even for one instruction cycle while
+interrupts are unmasked, a program-check fires, `SAVE_FRAME` tries to load from
+`VA 0x350` again, and the CPU enters an **infinite Region-first-translation exception
+(`0x0039`) death loop**.
+
+### Required Sequence in `mmu_init()`
+
+```
+ Step 1: mmu_map_page(VA 0x0000 → PA 0x0000)   // build mapping first
+ Step 2: mmu_map_page(VA 0x1000 → PA 0x1000)   // both pages of the lowcore
+ Step 3: scrub r1[1..2046]                      // revoke identity map
+ Step 4: mmu_flush_tlb_local()                  // make scrub visible to CPU
+```
+
+Steps 1–2 **must precede** steps 3–4. The new 8 KB mapping is committed into the
+live R1 table before any identity entry is removed, so `VA 0x350` is always valid.
+
+### Can This Be Avoided by Enabling DAT Earlier?
+
+No. The requirement is not a consequence of *when* DAT is enabled; it comes from
+*how `SAVE_FRAME` accesses the lowcore*. Even if ZXFL enabled DAT internally and
+passed the kernel a fully virtual address space, the kernel's `entry.S` would still
+execute `lg %r1, 0x350(0)` and still require `VA 0x350` to be mapped. This is
+standard z/Architecture operating system design — Linux s390x, z/VM, and z/OS all
+maintain an equivalent lowcore window at virtual address 0 for the same reason.
+See `docs/src/kernel/trap.md` for the full architectural rationale.

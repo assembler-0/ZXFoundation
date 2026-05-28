@@ -21,7 +21,7 @@ static volatile uint32_t ap_online_count;
 
 /// @brief Record of a successfully prepared AP, consumed by smp_start_aps().
 typedef struct {
-    uint16_t cpu_id;   ///< Logical CPU ID (index into percpu_areas[]).
+    uint16_t cpu_id;   ///< Logical CPU ID (index into percpu system).
     uint16_t cpu_addr; ///< Hardware CPU address (for SIGP).
     uint32_t lc_phys;  ///< Physical address of the allocated lowcore.
 } ap_record_t;
@@ -77,7 +77,7 @@ void smp_prepare_aps(const zxfl_boot_protocol_t *boot) {
             if (stack_page) pmm_free_page(stack_page);
             if (async_page) pmm_free_page(async_page);
             if (mcck_page)  pmm_free_page(mcck_page);
-            percpu_areas[i] = nullptr;
+            __percpu_areas_raw[i] = nullptr;
             continue;
         }
 
@@ -154,7 +154,7 @@ void smp_teardown(void) {
     const uint16_t my_addr = arch_cpu_addr();
 
     for (unsigned int i = 0; i < MAX_CPUS; i++) {
-        const zx_lowcore_t *cpu = percpu_areas[i];
+        const zx_lowcore_t *cpu = zx_lowcore_cpu(i);
         if (!cpu)
             continue;
         if (cpu->percpu.cpu_addr == my_addr)
@@ -164,7 +164,7 @@ void smp_teardown(void) {
 }
 
 /// @brief Lock-free SIGP STOP over the boot protocol CPU map.
-///        Does not touch percpu_areas[]; safe from the halt path.
+///        Does not touch percpu state; safe from the halt path.
 void smp_stop_all_raw(const zxfl_cpu_info_t *cpu_map, uint32_t cpu_count) {
     const uint16_t my_addr = arch_cpu_addr();
     for (uint32_t i = 0; i < cpu_count; i++) {

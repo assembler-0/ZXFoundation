@@ -23,7 +23,7 @@ void arch_ipi_broadcast_wait(ipi_msg_t msg) {
 
     // 1. Mark all targets as pending.
     for (unsigned int i = 0; i < MAX_CPUS; i++) {
-        zx_lowcore_t *lc = percpu_areas[i];
+        zx_lowcore_t *lc = zx_lowcore_cpu(i);
         if (!lc || lc->percpu.cpu_addr == my_addr)
             continue;
 
@@ -36,7 +36,7 @@ void arch_ipi_broadcast_wait(ipi_msg_t msg) {
 
     // 2. Send SIGP Emergency Signal to all targets.
     for (unsigned int i = 0; i < MAX_CPUS; i++) {
-        zx_lowcore_t *lc = percpu_areas[i];
+        zx_lowcore_t *lc = zx_lowcore_cpu(i);
         if (!lc || lc->percpu.cpu_addr == my_addr)
             continue;
         
@@ -44,7 +44,7 @@ void arch_ipi_broadcast_wait(ipi_msg_t msg) {
     }
 
     for (unsigned int i = 0; i < MAX_CPUS; i++) {
-        zx_lowcore_t *lc = percpu_areas[i];
+        zx_lowcore_t *lc = zx_lowcore_cpu(i);
         if (!lc || lc->percpu.cpu_addr == my_addr)
             continue;
         

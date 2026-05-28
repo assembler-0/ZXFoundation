@@ -50,6 +50,9 @@ static void snapshot_control_regs(zxfl_boot_protocol_t *proto) {
     arch_ctl_store(proto->cr13_snapshot, 13, 13);
 }
 
+static uint32_t s_recs_per_trk = 12;
+static uint16_t s_heads_per_cyl = DASD_3390_HEADS_PER_CYL;
+
 /// @brief Probe the IPL device as ECKD or FBA and populate ipl_dev_type/model.
 ///
 ///        ECKD is tried first because 3390 is the dominant IPL device type.
@@ -61,6 +64,8 @@ static void probe_ipl_device(uint32_t schid, zxfl_boot_protocol_t *proto) {
     if (dasd_eckd_probe(schid, &eckd_geo) == 0) {
         proto->ipl_dev_type = eckd_geo.dev_type;
         proto->ipl_dev_model = eckd_geo.dev_model;
+        s_recs_per_trk = eckd_geo.recs_per_trk;
+        s_heads_per_cyl = eckd_geo.heads;
         print("zxfl01: ipl device: eckd\n");
         return;
     }
@@ -199,17 +204,17 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
                     print(modname);
                     print("\n");
 
-                    uint32_t tracks = (ext.end_cyl - ext.begin_cyl) * DASD_3390_HEADS_PER_CYL + (
+                    uint32_t tracks = (ext.end_cyl - ext.begin_cyl) * s_heads_per_cyl + (
                                           ext.end_head - ext.begin_head) + 1;
-                    uint32_t max_blocks = tracks * 12; // ZXVL_RECS_PER_TRACK
+                    uint32_t max_blocks = tracks * s_recs_per_trk;
 
                     static uint8_t mod_block[DASD_BLOCK_SIZE] __attribute__((aligned(DASD_BLOCK_SIZE)));
                     uint64_t loaded = 0;
 
                     for (uint32_t b = 0; b < max_blocks; b++) {
-                        uint32_t c = ext.begin_cyl + (ext.begin_head + b / 12) / DASD_3390_HEADS_PER_CYL;
-                        uint32_t h = (ext.begin_head + b / 12) % DASD_3390_HEADS_PER_CYL;
-                        uint32_t r = (b % 12) + 1;
+                        uint32_t c = ext.begin_cyl + (ext.begin_head + b / s_recs_per_trk) / s_heads_per_cyl;
+                        uint32_t h = (ext.begin_head + b / s_recs_per_trk) % s_heads_per_cyl;
+                        uint32_t r = (b % s_recs_per_trk) + 1;
                         if (dasd_read_record(schid, c, h, r, CCW_CMD_READ_DATA, mod_block, DASD_BLOCK_SIZE) < 0) {
                             break;
                         }
@@ -344,7 +349,7 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     uint64_t load_size = 0;
     print("zxfl01: preparing core.zxfoundation.nucleus\n");
     if (zxfl_load_elf64(schid, &kernel_ds, &s_proto, &entry_point, &load_base, &load_size,
-                        ZXVL_COMPUTE_TOKEN(s_proto.stfle_fac[0], schid)) < 0)
+                        ZXVL_COMPUTE_TOKEN(s_proto.stfle_fac[0], schid), s_recs_per_trk, s_heads_per_cyl) < 0)
         panic("zxfl01: load error");
 
     zxvl_verify_nucleus_checksums(s_proto.cksum_table_phys);
