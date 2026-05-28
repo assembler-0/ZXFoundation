@@ -1,6 +1,7 @@
 # ZXFoundation linking & compilation
 
 include(cmake/zxfl-compile.cmake)
+include(cmake/zxallsyms.cmake)
 
 add_executable(core.zxfoundation.nucleus
     ${ZX_SOURCES_64}
@@ -102,3 +103,14 @@ if (GEN_CHECKSUMS)
         VERBATIM
     )
 endif()
+
+# Wire the two-pass dependency: the final binary must wait for the generated
+# symbol table data before it can be compiled and linked.
+add_dependencies(core.zxfoundation.nucleus zxallsyms_data)
+
+# Tell CMake that zxallsyms_data.c is a generated file so it does not
+# complain about it not existing at configure time.
+set_source_files_properties(
+    "${CMAKE_BINARY_DIR}/zxallsyms_data.c"
+    PROPERTIES GENERATED TRUE
+)

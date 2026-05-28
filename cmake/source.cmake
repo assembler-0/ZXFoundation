@@ -8,6 +8,9 @@ file(GLOB ARCH_MM_SOURCES "arch/s390x/mmu/*.c")
 file(GLOB ARCH_TIME_SOURCES "arch/s390x/time/*.c")
 file(GLOB ARCH_MM_SOURCES_S "arch/s390x/mmu/*.S")
 file(GLOB SYS_SOURCES     "zxfoundation/sys/*.c")
+list(REMOVE_ITEM SYS_SOURCES
+    "${CMAKE_SOURCE_DIR}/zxfoundation/sys/zxallsyms_stub.c"
+)
 file(GLOB TRAP_C_SOURCES  "arch/s390x/trap/*.c")
 file(GLOB TRAP_S_SOURCES  "arch/s390x/trap/*.S")
 file(GLOB IRQ_SOURCES     "zxfoundation/sys/irq/*.c")
@@ -71,3 +74,6 @@ set(ZX_SOURCES_64
     ${UBSAN_SOURCES}
     "arch/s390x/cpu/ipi.c"
 )
+
+set(ZX_SOURCES_64_NO_STUB ${ZX_SOURCES_64})
+list(APPEND ZX_SOURCES_64 "${CMAKE_BINARY_DIR}/zxallsyms_data.c")
