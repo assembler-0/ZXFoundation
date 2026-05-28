@@ -16,6 +16,7 @@ file(GLOB LIB_SOURCES     "lib/*.c")
 file(GLOB LIB_SOURCES_S   "lib/*.S")
 file(GLOB ARCH_LIB_SOURCES "arch/s390x/lib/*.c")
 file(GLOB ARCH_LIB_SOURCES_S "arch/s390x/lib/*.S")
+file(GLOB LIBSSP_SOURCES  "lib/libssp/*.c")
 
 include_directories(SYSTEM
     ${CMAKE_SOURCE_DIR}/include
@@ -51,6 +52,7 @@ set(ZX_SOURCES_64
     ${ARCH_MM_SOURCES_S}
     ${ARCH_LIB_SOURCES}
     ${ARCH_LIB_SOURCES_S}
+    ${LIBSSP_SOURCES}
     ${ARCH_INIT_SOURCES_64}
     ${SYS_SOURCES}
     ${IRQ_SOURCES}

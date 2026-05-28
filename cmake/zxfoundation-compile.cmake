@@ -15,7 +15,8 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -fno-common
     -fwrapv
     -ftrivial-auto-var-init=pattern
-    -fno-stack-protector
+    -fno-omit-frame-pointer
+    -fstack-protector-all
     -pipe
     -mno-packed-stack
     -msoft-float
@@ -61,7 +62,6 @@ if (CONFIG_UBSAN)
     message(STATUS "zxfoundation::build: CONFIG_UBSAN=ON — UBSAN instrumentation enabled")
     target_compile_options(core.zxfoundation.nucleus PRIVATE
         -fsanitize=undefined,bounds,shift,alignment,null,vla-bound,object-size,return
-        -fno-sanitize-recover=all
     )
     target_compile_definitions(core.zxfoundation.nucleus PUBLIC
         CONFIG_UBSAN=1
