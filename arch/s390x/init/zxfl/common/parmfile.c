@@ -17,7 +17,7 @@ static inline bool is_space(char c) {
 
 uint64_t parse_syssize(const char *cmdline, uint32_t len) {
     if (!cmdline || len == 0U)
-        return 0;
+        return PARMFILE_SYSSIZE_INFINITE;
 
     // "syssize=" is 8 characters.
     static const char key[] = "syssize=";
@@ -60,7 +60,7 @@ uint64_t parse_syssize(const char *cmdline, uint32_t len) {
         }
 
         // Optional suffix: M (megabytes, default) or G (gigabytes).
-        uint64_t multiplier = 1UL << 20; // default: MB → bytes
+        uint64_t multiplier = 1UL << 20; // default: MB -> bytes
         if (i < len) {
             if (cmdline[i] == 'G' || cmdline[i] == 'g') {
                 multiplier = 1UL << 30;
@@ -70,17 +70,22 @@ uint64_t parse_syssize(const char *cmdline, uint32_t len) {
             } else if (cmdline[i] == 'M' || cmdline[i] == 'm') {
                 // already in MB
             } else if (!is_space(cmdline[i]) && cmdline[i] != '\0') {
-                // Unexpected character after digits — malformed.
+                // Unexpected character after digits - malformed.
                 return 0;
             }
+        }
+
+        // If explicitly set to 0, it means infinite/no cap.
+        if (value == 0) {
+            return PARMFILE_SYSSIZE_INFINITE;
         }
 
         if (value < PARMFILE_SYSSIZE_MIN_MB || value > PARMFILE_SYSSIZE_MAX_MB)
             return 0;
 
-        (void)multiplier; // suppress unused warning — always 1<<20 after G conversion
+        (void)multiplier; // suppress unused warning
         return value << 20; // value (MB) * 2^20 = bytes
     }
 
-    return 0; // not found
+    return PARMFILE_SYSSIZE_INFINITE; // not found, default to infinite
 }

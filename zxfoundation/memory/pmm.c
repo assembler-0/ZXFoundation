@@ -191,10 +191,13 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     }
     zones[ZONE_NORMAL].pfn_end = max_pfn_global;
 
-    // Allocate page descriptor array immediately after kernel image.
+    // Allocate page descriptor array after the bootloader's page table pool to avoid exhausting ZONE_DMA.
     uint64_t map_bytes  = max_pfn_global * sizeof(zx_page_t);
     uint64_t map_pages  = (map_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t map_phys   = (kernel_end + PAGE_SIZE - 1) & PAGE_MASK;
+    if (boot->pgtbl_pool_end > map_phys) {
+        map_phys = (boot->pgtbl_pool_end + PAGE_SIZE - 1) & PAGE_MASK;
+    }
 
     uint8_t *mem_map_raw = (uint8_t *)(uintptr_t)hhdm_phys_to_virt(map_phys);
     memset(mem_map_raw, 0, map_pages * PAGE_SIZE);
@@ -205,8 +208,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
     if (boot->pgtbl_pool_end > reserve_phys_end)
         reserve_phys_end = boot->pgtbl_pool_end;
 
-    const uint64_t dma_min_free = 1024 * 1024;
-    if (reserve_phys_end > ZONE_DMA_LIMIT - dma_min_free) {
+    if (map_phys < ZONE_DMA_LIMIT) {
         printk(ZX_WARN "pmm: early reservation (0x%llx) encroaches on ZONE_DMA; capping visibility\n",
                (unsigned long long)reserve_phys_end);
     }
@@ -215,7 +217,7 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
            (unsigned long long)reserve_phys_end,
            (unsigned long long)boot->pgtbl_pool_end);
 
-    // --- Pass 1: Classify every page in every USABLE region ---
+    // --- Pass 1 & 2: Classify pages and populate buddy lists in a single fast pass ---
     for (uint32_t i = 0; i < boot->mem_map_count; i++) {
         const zxfl_mem_region_t *r = &map[i];
         if (r->type != ZXFL_MEM_USABLE) continue;
@@ -226,100 +228,98 @@ void pmm_init(const zxfl_boot_protocol_t *boot) {
         uint64_t start_phys = r->base;
         uint64_t end_phys   = r->base + r->length;
 
+        // Iterate through the physical memory region, skipping or creating blocks
         for (uint64_t curr = start_phys; curr < end_phys; ) {
-            uint64_t next = (curr + PAGE_SIZE) & PAGE_MASK;
-            if (next > end_phys) next = end_phys;
-
-            uint64_t phys    = curr;
-            bool     critical = false;
-
-            if (phys < 1024 * 1024) critical = true;
-            if (phys >= boot->kernel_phys_start && phys < boot->kernel_phys_end) critical = true;
-            if (phys >= ZONE_DMA_LIMIT && phys < boot->pgtbl_pool_end)           critical = true;
-            if (phys >= map_phys && phys < map_phys + map_pages * PAGE_SIZE)      critical = true;
-
-            for (uint32_t m = 0; m < boot->module_count; m++) {
-                if (phys >= boot->modules[m].phys_start &&
-                    phys <  boot->modules[m].phys_start + boot->modules[m].size_bytes) {
-                    critical = true;
-                    break;
+            // Check if current page is critical
+            bool critical = false;
+            if (curr < 1024 * 1024) critical = true;
+            else if (curr >= boot->kernel_phys_start && curr < boot->kernel_phys_end) critical = true;
+            else if (curr >= ZONE_DMA_LIMIT && curr < boot->pgtbl_pool_end)           critical = true;
+            else if (curr >= map_phys && curr < map_phys + map_pages * PAGE_SIZE)      critical = true;
+            else {
+                for (uint32_t m = 0; m < boot->module_count; m++) {
+                    if (curr >= boot->modules[m].phys_start &&
+                        curr <  boot->modules[m].phys_start + boot->modules[m].size_bytes) {
+                        critical = true;
+                        break;
+                    }
                 }
             }
 
-            uint64_t    pfn = pmm_phys_to_pfn(phys);
-            zx_page_t  *p   = pfn_to_page(pfn);
-            p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
+            uint64_t pfn = pmm_phys_to_pfn(curr);
+            zx_page_t *p = pfn_to_page(pfn);
             p->numa_node = node;
-            p->order     = 0;
+            p->zone_id   = (uint8_t)pfn_to_zone_id(pfn);
 
             if (critical) {
                 p->flags = PF_RESERVED;
                 atomic_set(&p->refcount, 1);
+                p->order = 0;
+                curr += PAGE_SIZE;
             } else {
-                p->flags = PF_BUDDY;
-                atomic_set(&p->refcount, 0);
-            }
-
-            curr = next;
-        }
-    }
-
-    // --- Pass 2: Coalescing into per-node free lists ---
-    for (uint32_t i = 0; i < boot->mem_map_count; i++) {
-        const zxfl_mem_region_t *r = &map[i];
-        if (r->type != ZXFL_MEM_USABLE) continue;
-
-        uint8_t node = r->numa_node;
-        if (node >= NUMA_MAX_NODES) node = 0;
-
-        uint64_t pfn_start = pmm_phys_to_pfn(r->base);
-        uint64_t pfn_end   = pmm_phys_to_pfn(r->base + r->length);
-
-        for (uint64_t pfn = pfn_start; pfn < pfn_end; ) {
-            zx_page_t *p = pfn_to_page(pfn);
-            if (!(p->flags & PF_BUDDY) || atomic_read(&p->refcount) != 0) {
-                pfn++;
-                continue;
-            }
-
-            // Form the largest aligned buddy block starting at pfn.
-            uint32_t order = 0;
-            while (order < MAX_ORDER) {
-                uint32_t next_order = order + 1;
-                uint64_t block_size = 1ULL << next_order;
-                if ((pfn & (block_size - 1)) != 0) break;
-                if (pfn + block_size > pfn_end)    break;
-
-                // Check if all pages in the buddy half are eligible to be merged.
-                bool can_merge = true;
-                uint64_t buddy_start = pfn + (1ULL << order);
-                uint64_t buddy_end   = pfn + block_size;
-                for (uint64_t bpfn = buddy_start; bpfn < buddy_end; bpfn++) {
-                    zx_page_t *bp = pfn_to_page(bpfn);
-                    if (!(bp->flags & PF_BUDDY) ||
-                        atomic_read(&bp->refcount) != 0 ||
-                        bp->numa_node != node ||
-                        bp->zone_id != p->zone_id) {
-                        can_merge = false;
-                        break;
+                // Determine the maximum length of the contiguous free range starting here
+                uint64_t free_len = 0;
+                uint64_t test_phys = curr;
+                while (test_phys < end_phys) {
+                    bool test_critical = false;
+                    if (test_phys < 1024 * 1024) test_critical = true;
+                    else if (test_phys >= boot->kernel_phys_start && test_phys < boot->kernel_phys_end) test_critical = true;
+                    else if (test_phys >= ZONE_DMA_LIMIT && test_phys < boot->pgtbl_pool_end)           test_critical = true;
+                    else if (test_phys >= map_phys && test_phys < map_phys + map_pages * PAGE_SIZE)      test_critical = true;
+                    else {
+                        for (uint32_t m = 0; m < boot->module_count; m++) {
+                            if (test_phys >= boot->modules[m].phys_start &&
+                                test_phys <  boot->modules[m].phys_start + boot->modules[m].size_bytes) {
+                                test_critical = true;
+                                break;
+                            }
+                        }
                     }
-                }
-                if (!can_merge) break;
-
-                // Clear PF_BUDDY flags for the buddy pages since they will be
-                // absorbed into the larger block.
-                for (uint64_t bpfn = buddy_start; bpfn < buddy_end; bpfn++) {
-                    pfn_to_page(bpfn)->flags &= ~PF_BUDDY;
+                    if (test_critical) break;
+                    free_len += PAGE_SIZE;
+                    test_phys += PAGE_SIZE;
                 }
 
-                order = next_order;
+                // Decompose the contiguous free range into power-of-two buddy blocks
+                uint64_t run_pfn = pfn;
+                uint64_t run_end_pfn = pfn + (free_len / PAGE_SIZE);
+                while (run_pfn < run_end_pfn) {
+                    uint32_t order = MAX_ORDER;
+                    while (order > 0) {
+                        uint64_t size = 1ULL << order;
+                        if ((run_pfn & (size - 1)) == 0 && (run_pfn + size <= run_end_pfn)) {
+                            break;
+                        }
+                        order--;
+                    }
+
+                    uint64_t block_pages = 1ULL << order;
+                    zx_page_t *head_page = pfn_to_page(run_pfn);
+                    head_page->order     = (uint8_t)order;
+                    head_page->numa_node = node;
+                    head_page->zone_id   = (uint8_t)pfn_to_zone_id(run_pfn);
+                    head_page->flags     = PF_BUDDY;
+                    atomic_set(&head_page->refcount, 0);
+
+                    // Zero-out metadata for subsequent sub-pages of the block
+                    for (uint64_t bpfn = run_pfn + 1; bpfn < run_pfn + block_pages; bpfn++) {
+                        zx_page_t *sub = pfn_to_page(bpfn);
+                        sub->flags     = 0;
+                        sub->order     = 0;
+                        sub->numa_node = node;
+                        sub->zone_id   = head_page->zone_id;
+                        atomic_set(&sub->refcount, 0);
+                    }
+
+                    zone_id_t zid = (zone_id_t)head_page->zone_id;
+                    node_area_push(&zones[zid].nodes[node], order, run_pfn);
+                    zones[zid].free_pages += block_pages;
+
+                    run_pfn += block_pages;
+                }
+
+                curr += free_len;
             }
-
-            p->order = (uint8_t)order;
-            zone_id_t zid = (zone_id_t)p->zone_id;
-            node_area_push(&zones[zid].nodes[node], order, pfn);
-            zones[zid].free_pages += (1ULL << order);
-            pfn += (1ULL << order);
         }
     }
 

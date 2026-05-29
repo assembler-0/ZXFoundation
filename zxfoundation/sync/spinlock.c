@@ -1,39 +1,9 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/cpu/qspinlock.c
-//
-/// @brief Queue spinlock implementation for z/Architecture.
-///
-///        FAST PATH (uncontended)
-///        =======================
-///        If the lock word is 0, a single CS atomically sets locked=1.
-///        No queue node is touched.  This is the common case.
-///
-///        PENDING PATH (one waiter)
-///        =========================
-///        If locked=1 but tail=0 and pending=0, the second CPU sets
-///        pending=1 and spins on the locked byte only.  When the holder
-///        clears locked, the pending CPU clears pending and sets locked=1
-///        in one CS.  Still no queue node needed.
-///
-///        QUEUE PATH (two or more waiters)
-///        =================================
-///        The third and subsequent CPUs encode their per-CPU MCS node
-///        pointer into the tail field and link into the MCS queue.
-///        Each CPU spins on its own mcs_node_t::locked, which is set by
-///        its predecessor when it releases the lock.  This eliminates
-///        cache-line bouncing: only the head of the queue observes the
-///        lock word changing.
-///
-///        TAIL ENCODING
-///        =============
-///        tail[15:4] = cpu_id + 1  (0 means "no tail")
-///        tail[3:0]  = nesting index into per-CPU mcs_node array
-///        The per-CPU node array is indexed by the nesting depth counter
-///        stored in the per-CPU area (percpu_lock_depth).
+/// SPDX-License-Identifier: Apache-2.0
+/// zxfoundation/sync/qspinlock.c - Queue spinlock implementation
 
 #include <zxfoundation/sync/spinlock.h>
-#include <arch/s390x/cpu/lowcore.h>
 #include <zxfoundation/percpu.h>
+#include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/processor.h>
 
 /// Encode (cpu_id, depth) into the tail field of the lock word.

@@ -119,7 +119,8 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
 
     /* Save areas */
     uint64_t    save_area_sync[8];              /* 0x0200 */
-    uint64_t    save_area_async[8];             /* 0x0240 */
+    uint64_t    stack_canary;                   /* 0x0240 */
+    uint8_t     pad_0x0248[0x0280 - 0x0248];   /* 0x0248 */
     uint64_t    save_area_restart[1];           /* 0x0280 */
     uint64_t    pcpu;                           /* 0x0288 */
 
@@ -127,17 +128,23 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     zx_psw_t    return_psw;                     /* 0x0290  LC_RETURN_PSW   */
     zx_psw_t    return_mcck_psw;                /* 0x02a0 */
 
+    uint64_t    last_break;                     /* 0x02b0 */
+
     /* Timing */
-    uint64_t    sys_enter_timer;                /* 0x02b0 */
-    uint64_t    mcck_enter_timer;               /* 0x02b8 */
-    uint64_t    exit_timer;                     /* 0x02c0 */
-    uint64_t    user_timer;                     /* 0x02c8 */
-    uint64_t    system_timer;                   /* 0x02d0 */
-    uint64_t    steal_timer;                    /* 0x02d8 */
-    uint64_t    last_update_timer;              /* 0x02e0 */
-    uint64_t    last_update_clock;              /* 0x02e8 */
-    uint64_t    int_clock;                      /* 0x02f0 */
-    uint8_t     pad_0x02f8[0x0328 - 0x02f8];   /* 0x02f8 */
+    uint64_t    sys_enter_timer;                /* 0x02b8 */
+    uint64_t    mcck_enter_timer;               /* 0x02c0 */
+    uint64_t    exit_timer;                     /* 0x02c8 */
+    uint64_t    user_timer;                     /* 0x02d0 */
+    uint64_t    guest_timer;                    /* 0x02d8 */
+    uint64_t    system_timer;                   /* 0x02e0 */
+    uint64_t    hardirq_timer;                  /* 0x02e8 */
+    uint64_t    softirq_timer;                  /* 0x02f0 */
+    uint64_t    steal_timer;                    /* 0x02f8 */
+    uint64_t    avg_steal_timer;                /* 0x0300 */
+    uint64_t    last_update_timer;              /* 0x0308 */
+    uint64_t    last_update_clock;              /* 0x0310 */
+    uint64_t    int_clock;                      /* 0x0318 */
+    uint8_t     pad_0x0320[0x0328 - 0x0320];   /* 0x0320 */
     uint64_t    clock_comparator;               /* 0x0328 */
     uint64_t    ap_cr0;                         /* 0x0330  LC_AP_CR0 */
     uint64_t    ap_cr13;                        /* 0x0338  LC_AP_CR13 */

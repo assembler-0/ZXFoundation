@@ -146,7 +146,7 @@ typedef struct {
     uint64_t mem_map_addr;      ///< HHDM virtual address of zxfl_mem_region_t[]
     uint32_t mem_map_count;     ///< Number of valid entries in mem_map
     uint32_t _pad3;
-    uint64_t xpndsize_mb;       ///< Expanded storage size in MB (0 if disabled)
+    uint64_t _pad5;             ///< Reserved/Deprecated (formerly expanded storage size)
 
     // ---- FACILITIES (264 bytes) ----
     uint64_t stfle_fac[STFLE_MAX_DWORDS]; ///< Full STFLE output (32 dwords)

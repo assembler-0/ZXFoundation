@@ -151,7 +151,7 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
             if (addr == bsp) {
                 zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
                 ci->cpu_addr = addr;
-                ci->type = ZXFL_CPU_TYPE_UNKNOWN;
+                ci->type = ZXFL_CPU_TYPE_CP;
                 ci->state = ZXFL_CPU_ONLINE;
                 ci->drawer_id = 0;
                 ci->book_id = 0;
@@ -168,7 +168,7 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
 
             zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
             ci->cpu_addr = addr;
-            ci->type = ZXFL_CPU_TYPE_UNKNOWN;
+            ci->type = ZXFL_CPU_TYPE_CP;
             ci->state = ZXFL_CPU_STOPPED;
             
             uint8_t node = (proto->cpu_count / 2) % 4;

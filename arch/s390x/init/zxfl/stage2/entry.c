@@ -108,7 +108,28 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
             }
         }
     }
-    uint64_t node_chunk = mem_limit / num_nodes;
+
+    uint64_t actual_limit = mem_limit;
+    if (actual_limit == PARMFILE_SYSSIZE_INFINITE) {
+        // Run a fast pre-probe pass to determine actual physical RAM size
+        uint64_t probe_limit = 0;
+        for (uint64_t frame = 2UL * MEM_PROBE_FRAME; ; frame += MEM_PROBE_FRAME) {
+            volatile uint64_t *probe = (volatile uint64_t *) frame;
+            const uint64_t saved = *probe;
+            *probe = MEM_PROBE_PATTERN_A;
+            const bool a_ok = (*probe == MEM_PROBE_PATTERN_A);
+            *probe = MEM_PROBE_PATTERN_B;
+            const bool b_ok = (*probe == MEM_PROBE_PATTERN_B);
+            *probe = saved;
+            if (!a_ok || !b_ok) {
+                probe_limit = frame;
+                break;
+            }
+        }
+        actual_limit = probe_limit;
+    }
+
+    uint64_t node_chunk = actual_limit / num_nodes;
     uint64_t temp = node_chunk;
     uint64_t chunk_align = 256ULL * 1024 * 1024;
     while (temp >= chunk_align * 2) {
@@ -117,7 +138,7 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
     node_chunk = chunk_align;
 
     for (uint64_t frame = 2UL * MEM_PROBE_FRAME;
-         frame < mem_limit && count < max;
+         frame < actual_limit && count < max;
          frame += MEM_PROBE_FRAME) {
         volatile uint64_t *probe = (volatile uint64_t *) frame;
         const uint64_t saved = *probe;
@@ -341,7 +362,7 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     for (uint32_t i = 0; s_cmdline[i] != '\0'; i++) s_proto.cmdline_len++;
     s_proto.flags |= ZXFL_FLAG_CMDLINE;
     uint64_t mem_limit = parse_syssize(s_cmdline, s_proto.cmdline_len);
-    if (mem_limit == 0) mem_limit = MEM_PROBE_DEFAULT_MAX;
+    if (mem_limit == 0) mem_limit = PARMFILE_SYSSIZE_INFINITE;
     dasd_dataset_t kernel_ds;
     if (dasd_find_dataset_extents(schid, ZX_NUCLEUS_NAME, &kernel_ds) < 0) panic("zxfl01: nucleus not found");
     uint64_t entry_point = 0;

@@ -36,9 +36,9 @@ struct sccb_header {
 
 struct read_info_sccb {
     struct sccb_header header;
-    uint16_t rnsize;
-    uint64_t rnmax;
-    uint8_t  _reserved0[16];
+    uint16_t rnmax;
+    uint8_t  rnsize;
+    uint8_t  _reserved0[23];
     uint16_t max_cores;
     uint8_t  _reserved1[94];
     uint64_t facilities;
@@ -62,7 +62,7 @@ struct read_cpu_info_sccb {
     uint16_t configured;
     uint16_t standby;
     uint16_t combined;
-    uint8_t  _reserved[6];
+    uint8_t  _reserved[2];
     struct sclp_core_entry entries[SCLP_MAX_CORES];
 } __attribute__((packed, aligned(4096)));
 
