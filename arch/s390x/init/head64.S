@@ -44,6 +44,11 @@ __zx_start_kernel64:
     lg      %r15, ZXFL_OFFSET_KERNEL_STACK_TOP(%r2) // kernel_stack_top from boot protocol
     aghi    %r15, -160                     // 160-byte register save area
 
+    // Zero out backchain and r14 save area to terminate unwinder gracefully
+    sgr     %r0, %r0
+    stg     %r0, 0(%r15)
+    stg     %r0, 112(%r15)
+
     lgr     %r2, %r11
     brasl   %r14, zxfoundation_global_initialize
 
@@ -74,6 +79,12 @@ ap_entry:
 ap_dat_on:
     lg      %r15, LC_KERNEL_STACK(0)
     aghi    %r15, -160
+
+    // Zero out backchain and r14 save area to terminate unwinder gracefully
+    sgr     %r0, %r0
+    stg     %r0, 0(%r15)
+    stg     %r0, 112(%r15)
+
     brasl   %r14, ap_startup
 
 .Lap_halt:

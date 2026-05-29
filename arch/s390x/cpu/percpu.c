@@ -15,11 +15,8 @@ zx_lowcore_t *__percpu_areas_raw[MAX_CPUS];
 ///        The monolithic structure is 8 KB, but only the first page (4 KB)
 ///        is guaranteed to be cleared by the loader at physical 0x0.
 void percpu_init_bsp(void) {
-    zx_lowcore_t *lc = (zx_lowcore_t *)hhdm_phys_to_virt(0x0);
+    zx_lowcore_t *lc = zx_lowcore();
 
-    // We do NOT memset the whole lc because it contains the boot protocol,
-    // interrupt PSWs, and other fields already initialized.
-    // We only initialize our software per-CPU block.
     memset(&lc->percpu, 0, sizeof(lc->percpu));
 
     const uint16_t cpu_addr = arch_cpu_addr();

@@ -17,8 +17,14 @@ file(GLOB IRQ_SOURCES     "zxfoundation/sys/irq/*.c")
 file(GLOB CONSOLE_SOURCES "drivers/console/*.c")
 file(GLOB LIB_SOURCES     "lib/*.c")
 file(GLOB LIB_SOURCES_S   "lib/*.S")
-file(GLOB ARCH_LIB_SOURCES "arch/s390x/lib/*.c")
-file(GLOB ARCH_LIB_SOURCES_S "arch/s390x/lib/*.S")
+file(GLOB ARCH_LIB_SOURCES 
+    "arch/s390x/lib/*.c"
+    "arch/s390x/lib/libzxunwind/*.c"
+)
+file(GLOB ARCH_LIB_SOURCES_S 
+    "arch/s390x/lib/*.S"
+    "arch/s390x/lib/libzxunwind/*.S"
+)
 file(GLOB LIBSSP_SOURCES  "lib/libssp/*.c")
 
 include_directories(SYSTEM

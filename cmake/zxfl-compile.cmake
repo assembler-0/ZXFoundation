@@ -36,6 +36,7 @@ set(ZXFL_COMMON_FLAGS
     -fwrapv
     -ftrivial-auto-var-init=pattern
     -fno-stack-protector
+    -fno-omit-frame-pointer
     -m64
     -msoft-float
     -mno-vx

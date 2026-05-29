@@ -13,6 +13,7 @@
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/processor.h>
 #include <zxfoundation/memory/vmm.h>
+#include <zxfoundation/sys/syschk.h>
 
 static mmu_pgtbl_t kernel_pgtbl;
 static bool edat1_enabled = false;

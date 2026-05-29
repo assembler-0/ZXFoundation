@@ -149,7 +149,7 @@ void smp_start_aps(void) {
     printk(ZX_INFO "smp: all %u APs online\n", prepared_ap_count);
 }
 
-/// @brief Issue SIGP STOP to all CPUs except the caller.
+/// @brief Issue SIGP STOP AND STORE STATUS to all CPUs except the caller.
 void smp_teardown(void) {
     const uint16_t my_addr = arch_cpu_addr();
 
@@ -159,11 +159,11 @@ void smp_teardown(void) {
             continue;
         if (cpu->percpu.cpu_addr == my_addr)
             continue;
-        sigp_busy(cpu->percpu.cpu_addr, SIGP_STOP, 0, nullptr);
+        sigp_busy(cpu->percpu.cpu_addr, SIGP_STOP_AND_STORE_STATUS, 0, nullptr);
     }
 }
 
-/// @brief Lock-free SIGP STOP over the boot protocol CPU map.
+/// @brief Lock-free SIGP STOP AND STORE STATUS over the boot protocol CPU map.
 ///        Does not touch percpu state; safe from the halt path.
 void smp_stop_all_raw(const zxfl_cpu_info_t *cpu_map, uint32_t cpu_count) {
     const uint16_t my_addr = arch_cpu_addr();
@@ -172,7 +172,7 @@ void smp_stop_all_raw(const zxfl_cpu_info_t *cpu_map, uint32_t cpu_count) {
         if (addr == my_addr)
             continue;
         int cc;
-        do { cc = sigp(addr, SIGP_STOP, 0, nullptr); }
+        do { cc = sigp(addr, SIGP_STOP_AND_STORE_STATUS, 0, nullptr); }
         while (cc == SIGP_CC_BUSY);
     }
 }

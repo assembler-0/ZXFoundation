@@ -168,6 +168,7 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     percpu_init_bsp();
     zx_lowcore_setup_bsp();
+    zx_lowcore()->kernel_stack = boot->kernel_stack_top;
     zx_syschk_initialize(boot);
 
     diag_setup();

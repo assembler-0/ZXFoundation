@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // zxfoundation/sys/syschk.c - system check implementation
 
-#include <zxfoundation/sys/syschk.h>
 #include <arch/s390x/cpu/irq.h>
 #include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/smp.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
+#include <arch/s390x/lib/libzxunwind/zxunwind.h>
 #include <zxfoundation/sys/simplelog.h>
+#include <zxfoundation/sys/syschk.h>
+#include <zxfoundation/percpu.h>
 #include <lib/vsprintf.h>
 
 static volatile bool             g_halting;
@@ -69,8 +71,35 @@ void zx_syschk_initialize(const zxfl_boot_protocol_t *boot) {
     simplelog(rec->msg);
     simplelog("\n");
 
-    if (g_cpu_map)
+    if (g_cpu_map) {
         smp_stop_all_raw(g_cpu_map, g_cpu_count);
+    }
+
+    const int current_cpu = arch_smp_processor_id();
+    char header[64];
+    snprintf(header, sizeof(header), "system backtrace [cp%02d]:\n", current_cpu);
+    simplelog(header);
+    zx_unwind_print(nullptr, simplelog);
+
+    for (uint32_t i = 0; i < g_cpu_count; i++) {
+        if (i == (uint32_t)current_cpu) {
+            continue;
+        }
+
+        const zx_lowcore_t *remote_lc = zx_lowcore_cpu(i);
+        if (remote_lc != nullptr && remote_lc->psw_save_area.addr != 0) {
+            char cpu_hdr[64];
+            snprintf(cpu_hdr, sizeof(cpu_hdr), "system backtrace [cp%02u]:\n", i);
+            simplelog(cpu_hdr);
+
+            arch_s390x_irq_frame_t remote_frame = {0};
+            remote_frame.gprs[15] = remote_lc->gpregs_save_area[15];
+            remote_frame.psw_addr = remote_lc->psw_save_area.addr;
+            remote_frame.psw_mask = remote_lc->psw_save_area.mask;
+
+            zx_unwind_print(&remote_frame, simplelog);
+        }
+    }
 
     arch_sys_halt();
 }
