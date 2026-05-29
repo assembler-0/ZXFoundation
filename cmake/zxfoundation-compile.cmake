@@ -1,5 +1,9 @@
 # ZXFoundation linking & compilation
 
+set(zxfoundation_LINKER_SCRIPT
+        "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/link.ld"
+        CACHE STRING "zxfoundation linker script")
+
 include(cmake/zxfl-compile.cmake)
 include(cmake/zxallsyms.cmake)
 
@@ -70,10 +74,6 @@ if (CONFIG_UBSAN)
     )
 endif()
 
-set(zxfoundation_LINKER_SCRIPT
-    "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/link.ld"
-    CACHE STRING "zxfoundation linker script")
-
 set_target_properties(core.zxfoundation.nucleus PROPERTIES
     LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
 
@@ -105,12 +105,8 @@ if (GEN_CHECKSUMS)
     )
 endif()
 
-# Wire the two-pass dependency: the final binary must wait for the generated
-# symbol table data before it can be compiled and linked.
 add_dependencies(core.zxfoundation.nucleus zxallsyms_data)
 
-# Tell CMake that zxallsyms_data.c is a generated file so it does not
-# complain about it not existing at configure time.
 set_source_files_properties(
     "${CMAKE_BINARY_DIR}/zxallsyms_data.c"
     PROPERTIES GENERATED TRUE
