@@ -6,7 +6,7 @@
 
 ## 1. What Is ZXFL?
 
-ZXFL (ZXFoundation Loader) is the two-stage bootloader for ZXFoundation. It is the only supported mechanism for loading the kernel nucleus. Its responsibilities are:
+ZXFL (ZXFoundation™ Loader) is the two-stage bootloader for ZXFoundation™. It is the only supported mechanism for loading the kernel nucleus. Its responsibilities are:
 
 1. Transition the CPU from ESA/390 to z/Architecture 64-bit mode.
 2. Locate and load the kernel ELF64 image from DASD.

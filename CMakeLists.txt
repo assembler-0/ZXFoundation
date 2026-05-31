@@ -1,7 +1,7 @@
 # ============================================================================
 # SPDX-License-Identifier: Apache-2.0 
 #
-# ZXFoundation (R) 26h1 kernel
+# ZXFoundation (TM) 26h1 kernel
 #
 # @file CMakeLists.txt
 # @brief Kernel build configuration

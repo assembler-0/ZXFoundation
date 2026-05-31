@@ -84,8 +84,9 @@ int dasd_eckd_probe(uint32_t schid, dasd_eckd_geo_t *out_geo) {
         return 0;
     }
 
-    uint16_t cyls  = (uint16_t)((rdc_buf[4] << 8) | rdc_buf[5]);
-    uint8_t  heads = rdc_buf[6];
+    dasd_eckd_characteristics_t *rdc = (dasd_eckd_characteristics_t *)rdc_buf;
+    uint16_t cyls  = rdc->no_cyl;
+    uint16_t heads = rdc->trk_per_cyl;
 
     if (cyls == 0 || heads == 0) {
         cyls  = 3339U;

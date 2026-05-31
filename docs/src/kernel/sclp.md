@@ -9,7 +9,7 @@
 
 The Service Call Control Program (SCLP) is the primary interface between the z/Architecture OS and the Support Element (SE) or Hardware Management Console (HMC). It provides access to hardware configuration, capacity information, and console services.
 
-ZXFoundation implements a **Raw SCLP Interface** that provides standardized protocol access while adhering to freestanding requirements.
+ZXFoundation™ implements a **Raw SCLP Interface** that provides standardized protocol access while adhering to freestanding requirements.
 
 ---
 
@@ -34,14 +34,14 @@ struct sccb_header {
 
 1.  **Preparation**: Initialize the SCCB with the appropriate command data.
 2.  **Instruction**: Execute the `SERVC` (Service Call) instruction.
-3.  **Busy Wait**: If SCLP returns Condition Code 2, the facility is busy. ZXFoundation implements a retry mechanism with configurable delays.
+3.  **Busy Wait**: If SCLP returns Condition Code 2, the facility is busy. ZXFoundation™ implements a retry mechanism with configurable delays.
 4.  **Verification**: Check the `response_code` in the SCCB header (e.g., `0x0010` for normal completion).
 
 ---
 
 ## 3. Memory Detection
 
-ZXFoundation uses SCLP to accurately detect physical memory, replacing or augmenting manual probing.
+ZXFoundation™ uses SCLP to accurately detect physical memory, replacing or augmenting manual probing.
 
 ### 3.1 Read SCP Information
 

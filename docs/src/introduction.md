@@ -1,14 +1,14 @@
-# ZXFoundation Development Guide
+# ZXFoundation™ Development Guide
 
 **Document Revision:** 26h1.0  
-**Applies to:** ZXFoundation release 26h1 and later  
+**Applies to:** ZXFoundation™ release 26h1 and later  
 **Status:** Active development
 
 ---
 
 ## About This Document
 
-This guide is the primary technical reference for the ZXFoundation kernel and its associated toolchain. It is written for:
+This guide is the primary technical reference for the ZXFoundation™ kernel and its associated toolchain. It is written for:
 
 - **OS developers** who wish to understand the z/Architecture boot and execution environment.
 - **Kernel contributors** who need a precise description of subsystem contracts and initialization order.
@@ -18,9 +18,9 @@ Familiarity with C23, ELF64, and general operating-system concepts is assumed. B
 
 ---
 
-## What Is ZXFoundation?
+## What Is ZXFoundation™?
 
-ZXFoundation is a freestanding, SMP-capable kernel for IBM z/Architecture (s390x) mainframes and emulators. It is written in C23 and targets the `s390x-unknown-none-elf` ABI.
+ZXFoundation™ is a freestanding, SMP-capable kernel for IBM z/Architecture (s390x) mainframes and emulators. It is written in C23 and targets the `s390x-unknown-none-elf` ABI.
 
 The project comprises three independently versioned components:
 

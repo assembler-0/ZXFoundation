@@ -7,7 +7,7 @@
 
 ## 1. Overview
 
-ZXFoundation provides a layered intrusive red-black tree library. Each layer is a strict superset of the one below it; callers of lower layers require no modification when higher layers are added.
+ZXFoundation™ provides a layered intrusive red-black tree library. Each layer is a strict superset of the one below it; callers of lower layers require no modification when higher layers are added.
 
 | Layer | Type | Concurrency |
 |-------|------|-------------|

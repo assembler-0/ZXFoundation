@@ -15,6 +15,7 @@
 #define STFLE_BIT_ZARCH         2U      ///< z/Architecture installed
 #define STFLE_BIT_STFLE         7U      ///< STFLE itself
 #define STFLE_BIT_EDAT1         8U      ///< Enhanced-DAT facility 1 (1 MB FC=1 segment entries)
+#define STFLE_BIT_PFMF          14U     ///< Perform-Frame-Management-Function
 #define STFLE_BIT_EDAT2         78U     ///< Enhanced-DAT facility 2 (2 GB FC=1 region-third entries)
 #define STFLE_BIT_EIMM          21U     ///< Extended-immediate facility
 #define STFLE_BIT_GEN_INST      25U     ///< General-instructions-extension
@@ -23,6 +24,8 @@
 #define STFLE_BIT_DFP           42U     ///< Decimal-floating-point
 #define STFLE_BIT_PFPO          44U     ///< PFPO instruction
 #define STFLE_BIT_VECTOR        129U    ///< Vector facility
+#define STFLE_BIT_VX            134U    ///< Vector-enhancements facility 0
+#define STFLE_BIT_VXRS          149U    ///< Vector-enhancements facility 3
 #define STFLE_BIT_VECTOR_ENH    135U    ///< Vector-enhancements facility 1
 #define STFLE_BIT_VECTOR_ENH2   148U    ///< Vector-enhancements facility 2
 #define STFLE_BIT_GUARDED_STOR  133U    ///< Guarded-storage facility

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // include/arch/s390x/init/zxfl/zxfl.h
 //
-/// @brief ZXFoundation Boot Protocol — contract between loader and kernel.
+/// @brief ZXFoundation™ Boot Protocol — contract between loader and kernel.
 
 #ifndef ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H
 #define ZXFOUNDATION_ZXFL_BOOT_PROTOCOL_H

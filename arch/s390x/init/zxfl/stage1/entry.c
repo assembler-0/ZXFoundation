@@ -30,7 +30,7 @@
 /// @param schid Subchannel ID from lowcore 0xB8.
 [[noreturn]] void zxfl00_entry(uint32_t schid) {
     diag_setup();
-    print("zxfl00: ZXFoundationLoader (R) 26h1 CONFIDENTIAL - copyright (c) 2026 assembler-0 all rights reserved.\n");
+    print("zxfl00: ZXFoundationLoader (TM) 26h1 - copyright (c) 2026 assembler-0 all rights reserved.\n");
     print("zxfl00: core.zxfoundationloader00.sys initializing\n");
 
     dscb1_extent_t ext;

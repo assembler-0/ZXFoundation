@@ -35,6 +35,15 @@ static inline void arch_set_storage_key(uint64_t paddr, uint8_t key) {
     );
 }
 
+/// @brief Perform Frame Management Function.
+static inline void arch_pfmf(uint64_t op1, uint64_t phys) {
+    __asm__ volatile (
+        "pfmf %[op1], %[addr]\n"
+        : : [op1] "d" (op1), [addr] "a" (phys) : "memory"
+    );
+}
+
+
 /// @brief stap — returns the hardware CPU address (used for SIGP, not as a logical ID).
 static inline unsigned short arch_cpu_addr(void) {
     unsigned short cpu_address;

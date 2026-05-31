@@ -26,6 +26,24 @@
 
 #define CCW_CMD_RDC             0x64U
 
+/// @brief 64-byte Read Device Characteristics data for ECKD devices.
+typedef struct __attribute__((packed)) {
+    uint16_t cu_type;           ///< 0-1
+    uint8_t  cu_model;          ///< 2
+    uint16_t dev_type;          ///< 3-4
+    uint8_t  dev_model;         ///< 5
+    uint8_t  facilities[4];     ///< 6-9
+    uint8_t  dev_class;         ///< 10
+    uint8_t  dev_type_code;     ///< 11
+    uint16_t no_cyl;            ///< 12-13
+    uint16_t trk_per_cyl;       ///< 14-15
+    uint8_t  sec_trk_per_cyl;   ///< 16
+    uint8_t  byte_per_track[3]; ///< 17-19
+    uint16_t no_sec;            ///< 20-21
+    uint16_t bytes_per_sec;     ///< 22-23
+    uint8_t  _pad[40];
+} dasd_eckd_characteristics_t;
+
 /// @brief ECKD device geometry as probed from the hardware.
 typedef struct {
     uint16_t dev_type;          ///< Device type (e.g. ECKD_DEV_TYPE_3390)

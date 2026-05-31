@@ -2,6 +2,8 @@
 
 **Document Revision:** 26h1.0
 
+> for most up-to-date information, see [ZXFL Barebones](https://wiki.osdev.org/ZXFL_Barebones) 
+
 This guide walks through every step required to produce a kernel image that ZXFL will accept and execute. Read the [Boot Protocol](protocol.md) and [ZXVL Verification](zxvl.md) pages first for background.
 
 ---
@@ -74,7 +76,7 @@ SECTIONS {
 
 ## Step 2 — Embed the Structural Lock
 
-The lock constants can be placed directly in the linker script (as ZXFoundation does), or in a C translation unit:
+The lock constants can be placed directly in the linker script (as ZXFoundation™ does), or in a C translation unit:
 
 ```ld
 /* In the linker script — simplest approach */

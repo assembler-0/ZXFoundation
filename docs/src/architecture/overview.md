@@ -7,7 +7,7 @@
 
 ## 1. z/Architecture
 
-z/Architecture (s390x) is IBM's 64-bit mainframe instruction set, introduced with the z900 in 2000. It supersedes ESA/390 (31-bit) and System/370 (24-bit). ZXFoundation targets z/Architecture exclusively; ESA/390 compatibility mode is used only during the first instruction of the IPL sequence.
+z/Architecture (s390x) is IBM's 64-bit mainframe instruction set, introduced with the z900 in 2000. It supersedes ESA/390 (31-bit) and System/370 (24-bit). ZXFoundation™ targets z/Architecture exclusively; ESA/390 compatibility mode is used only during the first instruction of the IPL sequence.
 
 Key properties that distinguish z/Architecture from commodity architectures:
 
@@ -114,7 +114,7 @@ DAT is enabled by PSW bit 5. When on, every memory access is translated through 
 
 ### Address Space Control Element (ASCE)
 
-The ASCE is a 64-bit value in CR1 encoding the physical address of the root table, the Designation Type (DT), and the Table Length (TL). ZXFoundation uses `DT=11` (Region-First), selecting 5-level paging.
+The ASCE is a 64-bit value in CR1 encoding the physical address of the root table, the Designation Type (DT), and the Table Length (TL). ZXFoundation™ uses `DT=11` (Region-First), selecting 5-level paging.
 
 ### 5-Level Page Table Hierarchy
 

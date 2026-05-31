@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* arch/s390x/init/link.ld — ZXFoundation Kernel Linker Script */
+/* arch/s390x/init/link.ld — ZXFoundation™ Kernel Linker Script */
 
 ENTRY(__zx_start_kernel64)
 

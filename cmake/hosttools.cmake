@@ -34,5 +34,5 @@ if (ZX_HOST_CC)
     )
 
     set(BIN2REC       "${CMAKE_BINARY_DIR}/bin2rec")
-    set(GEN_CHECKSUMS "${CMAKE_BINARY_DIR}/zxsign")
+    set(ZXSIGN "${CMAKE_BINARY_DIR}/zxsign")
 endif()

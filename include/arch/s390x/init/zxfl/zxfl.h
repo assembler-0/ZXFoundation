@@ -39,6 +39,10 @@
 #define ZXFL_FLAG_SYSINFO       (1U << 5)   ///< system identification is valid
 #define ZXFL_FLAG_TOD           (1U << 6)   ///< tod_boot is valid
 
+/// @brief Modules limit
+#define ZXFL_MAX_MODULES        16U
+#define ZXFL_MAX_MODULE_NAME    32U
+
 /// @brief Maximum memory regions in the static map.
 #define ZXFL_MEM_MAP_MAX        16U
 
@@ -191,10 +195,10 @@ typedef struct {
     uint32_t module_count;
     uint32_t _pad8;
     struct {
-        char     name[32];      ///< Module name (NUL-terminated)
+        char     name[ZXFL_MAX_MODULE_NAME];      ///< Module name (NUL-terminated)
         uint64_t phys_start;    ///< Physical start address
         uint64_t size_bytes;    ///< Size of the module in bytes
-    } modules[16];
+    } modules[ZXFL_MAX_MODULES];
 
     // ---- DYNAMIC SEGMENT ADDRESSES (discovered by p_flags scan) ----
     uint64_t cksum_table_phys;  ///< Physical address of zxvl_checksum_table_t

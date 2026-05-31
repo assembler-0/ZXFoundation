@@ -69,9 +69,9 @@ void smp_prepare_aps(const zxfl_boot_protocol_t *boot) {
         }
 
         // Allocate stacks NUMA-local to the AP so register saves hit local memory.
-        zx_page_t *stack_page = pmm_alloc_page_node(node, ZX_GFP_ZERO);
-        zx_page_t *async_page = pmm_alloc_page_node(node, ZX_GFP_ZERO);
-        zx_page_t *mcck_page  = pmm_alloc_page_node(node, ZX_GFP_ZERO);
+        zx_page_t *stack_page = pmm_alloc_page_node(node, ZX_GFP_ZERO | ZX_GFP_DMA);
+        zx_page_t *async_page = pmm_alloc_page_node(node, ZX_GFP_ZERO | ZX_GFP_DMA);
+        zx_page_t *mcck_page  = pmm_alloc_page_node(node, ZX_GFP_ZERO | ZX_GFP_DMA);
         if (!stack_page || !async_page || !mcck_page) {
             printk(ZX_ERROR "smp: OOM allocating stacks for cpu %u\n", i);
             if (stack_page) pmm_free_page(stack_page);

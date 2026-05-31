@@ -1,16 +1,16 @@
-# ZXFoundation Kernel Design
+# ZXFoundation™ Kernel Design
 
 **Document:** ZXF-KRN-DESIGN-001
 **Revision:** 26h1.0
 **Status:** Draft
 **Date:** 2026-05-09
-**Author:** ZXFoundation Core Team
+**Author:** ZXFoundation™ Core Team
 
 ---
 
 ## Document Scope
 
-This document is the master architectural specification for the ZXFoundation
+This document is the master architectural specification for the ZXFoundation™
 kernel. It defines the design of every major subsystem — capability system,
 memory architecture, IPC, domain model, scheduler, time, trap handling,
 fault recovery, and the long-term implementation roadmap.
@@ -26,7 +26,7 @@ precision is required.
 
 ### 1.1 Design Axioms
 
-ZXFoundation is a **capability-based object microkernel** for IBM
+ZXFoundation™ is a **capability-based object microkernel** for IBM
 z/Architecture. Six axioms govern every design decision:
 
 1. **Minimal Trusted Computing Base.** The kernel enforces only what cannot
@@ -283,7 +283,7 @@ incremented, invalidating all capabilities before the final `koms_put`.
 
 ## 3. Memory Architecture
 
-Memory is the most critical subsystem in ZXFoundation. Every other subsystem
+Memory is the most critical subsystem in ZXFoundation™. Every other subsystem
 depends on it. This section defines strict requirements and invariants for
 every memory layer. Violations of these requirements are kernel panics, not
 recoverable errors.
@@ -666,7 +666,7 @@ not a kernel panic.
 ### 4.1 Design Goals
 
 IPC is the primary communication mechanism between all domains. Because
-ZXFoundation is a microkernel, IPC performance directly determines system
+ZXFoundation™ is a microkernel, IPC performance directly determines system
 throughput. The design targets:
 
 - Synchronous fastpath latency: < 1 µs on z/Architecture (single hop,
@@ -853,7 +853,7 @@ KOMS namespace (IPC endpoints):
 
 ### 5.1 Fundamental Units
 
-ZXFoundation defines two fundamental execution units:
+ZXFoundation™ defines two fundamental execution units:
 
 - **Domain:** the unit of isolation. Owns an address space (`vm_space_t`),
   a capability table, and one or more threads. Analogous to a process in a
@@ -1038,7 +1038,7 @@ koms_root_ns
 
 ### 6.1 Design Goals
 
-ZXFoundation targets **throughput/batch** workloads: long-running server
+ZXFoundation™ targets **throughput/batch** workloads: long-running server
 domains, high CPU utilization, and minimal context-switch overhead. The
 scheduler is not designed for sub-millisecond interactive latency. It is
 designed to keep all CPUs busy and to minimize the overhead of scheduling
@@ -1361,7 +1361,7 @@ and the context switch path.
 
 ### 8.3 SVC — System Call Dispatch
 
-ZXFoundation defines its own system call table. There is no POSIX
+ZXFoundation™ defines its own system call table. There is no POSIX
 compatibility layer. The SVC number is in `lowcore.svc_code` (16-bit).
 Arguments follow the SysV ABI: GPRs 2–7. Return value in GPR 2.
 
@@ -1384,7 +1384,7 @@ SVC dispatch:
       return syscall_table[svc_nr](object, rights, frame)
 ```
 
-**ZXFoundation v1 system call surface (~32 syscalls):**
+**ZXFoundation™ v1 system call surface (~32 syscalls):**
 
 | Number | Name | Capability type | Description |
 |---|---|---|---|

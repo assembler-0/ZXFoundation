@@ -1,5 +1,5 @@
 *.sys
 core.*
-gen_checksums
+zxsign
 *.o
 *.3390

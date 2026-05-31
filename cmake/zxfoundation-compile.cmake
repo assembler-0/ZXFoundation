@@ -93,12 +93,12 @@ if (COMPILER_ID STREQUAL "gcc")
     )
 endif()
 
-if (GEN_CHECKSUMS)
+if (ZXSIGN)
     add_dependencies(core.zxfoundation.nucleus tools)
 
     add_custom_command(
         TARGET core.zxfoundation.nucleus POST_BUILD
-        COMMAND "${GEN_CHECKSUMS}" "${CMAKE_BINARY_DIR}/core.zxfoundation.nucleus"
+        COMMAND "${ZXSIGN}" "${CMAKE_BINARY_DIR}/core.zxfoundation.nucleus"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "zxfoundation::build: signing kernel segments (zxsign)"
         VERBATIM

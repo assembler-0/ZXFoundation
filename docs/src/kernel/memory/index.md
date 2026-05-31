@@ -4,7 +4,7 @@
 
 ---
 
-ZXFoundation's memory management is organized in four layers:
+ZXFoundation™'s memory management is organized in four layers:
 
 ```
 ┌──────────────────────────────────────────┐
