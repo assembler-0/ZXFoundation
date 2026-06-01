@@ -9,7 +9,6 @@
 
     .section .text.handshake, "ax"
     .globl __zxfl_handshake_stub
-
 __zxfl_handshake_stub:
     llihf   %r0, ZXVL_SEED_HI
     iilf    %r0, ZXVL_SEED_LO

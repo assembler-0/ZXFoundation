@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/object/koms.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file koms.c
 /// @brief Kernel Object Management System — full implementation.
 
 #include <zxfoundation/object/koms.h>
@@ -8,9 +7,14 @@
 #include <zxfoundation/common.h>
 #include <lib/string.h>
 
+/// @brief Global registry of all kobject types.
 static list_head_t type_registry;
+/// @brief Protects access to the type_registry.
 static spinlock_t type_registry_lock;
 
+/// @brief Register a new kobject type.
+/// @param[in,out] type The type descriptor to register.
+/// @note Checks for duplicate type_ids.
 void koms_type_register(kobj_type_t *type) {
     irqflags_t flags;
     spin_lock_irqsave(&type_registry_lock, &flags);
@@ -30,7 +34,12 @@ void koms_type_register(kobj_type_t *type) {
     spin_unlock_irqrestore(&type_registry_lock, flags);
 }
 
+/// @brief Look up a type descriptor by its ID.
+/// @param[in] type_id The ID to search for.
+/// @return Pointer to the descriptor, or nullptr if not found.
 const kobj_type_t *koms_type_lookup(uint32_t type_id) {
+    // Note: This walk is currently unprotected by a lock.
+    // In a dynamic registry, this would need RCU or a lock.
     kobj_type_t *t;
     list_for_each_entry(t, &type_registry, registry_node) {
         if (t->type_id == type_id)
@@ -39,11 +48,13 @@ const kobj_type_t *koms_type_lookup(uint32_t type_id) {
     return nullptr;
 }
 
-
+/// @brief The root KOMS namespace.
 kobj_ns_t koms_root_ns;
 
 /// @section object initialization
 
+/// @brief Initialize the KOMS subsystem.
+/// @note Sets up the type registry and the root namespace.
 void koms_init(void) {
     list_init(&type_registry);
     spin_lock_init(&type_registry_lock);
@@ -51,6 +62,11 @@ void koms_init(void) {
     printk(ZX_INFO "koms: initialized\n");
 }
 
+/// @brief Initialize a kobject.
+/// @param[in,out] obj    The kobject to initialize.
+/// @param[in]     type   Type descriptor.
+/// @param[in]     name   Object name.
+/// @param[in,out] parent Parent kobject.
 void koms_init_obj(kobject_t *obj, const kobj_type_t *type,
                    const char *name, kobject_t *parent) {
     kref_init(&obj->ref);
@@ -79,6 +95,10 @@ void koms_init_obj(kobject_t *obj, const kobj_type_t *type,
 
 /// @section object allocation
 
+/// @brief Allocate a kobject.
+/// @param[in] type Type descriptor.
+/// @param[in] gfp  Allocation flags.
+/// @return Pointer to the kobject, or nullptr on failure.
 kobject_t *koms_alloc(const kobj_type_t *type, gfp_t gfp) {
     void *raw;
     size_t sz = type ? type->obj_size : sizeof(kobject_t);
@@ -96,6 +116,8 @@ kobject_t *koms_alloc(const kobj_type_t *type, gfp_t gfp) {
     return obj;
 }
 
+/// @brief Free a kobject allocated via koms_alloc().
+/// @param[in,out] obj The kobject to free.
 void koms_free(kobject_t *obj) {
     if (unlikely(!obj))
         return;
@@ -108,12 +130,17 @@ void koms_free(kobject_t *obj) {
 
 /// @section reference counting
 
+/// @brief Acquire a reference to a kobject.
+/// @param[in,out] obj The kobject.
+/// @return The same kobject pointer.
 kobject_t *koms_get(kobject_t *obj) {
     if (likely(obj))
         kref_get(&obj->ref);
     return obj;
 }
 
+/// @brief Internal release handler called when refcount hits zero.
+/// @param[in,out] ref Pointer to the embedded kref_t.
 static void koms_release_internal(kref_t *ref) {
     kobject_t *obj = kobject_container(ref, kobject_t, ref);
 
@@ -121,6 +148,7 @@ static void koms_release_internal(kref_t *ref) {
 
     koms_event_fire(obj, KOBJ_EVENT_DESTROYED);
 
+    // Auto-cleanup from containers.
     if (obj->flags & KOBJ_FLAG_IN_NS)
         koms_ns_remove(obj);
 
@@ -131,15 +159,21 @@ static void koms_release_internal(kref_t *ref) {
     if (type && type->type_ops && type->type_ops->destroy)
         type->type_ops->destroy(obj);
 
+    // Final release: frees the memory.
     if (likely(obj->ops && obj->ops->release))
         obj->ops->release(obj);
 }
 
+/// @brief Release a reference to a kobject.
+/// @param[in,out] obj The kobject.
 void koms_put(kobject_t *obj) {
     if (likely(obj))
         kref_put(&obj->ref, koms_release_internal);
 }
 
+/// @brief Acquire a reference if the object is still alive.
+/// @param[in,out] obj The kobject.
+/// @return true if reference was acquired, false otherwise.
 bool koms_get_unless_dead(kobject_t *obj) {
     if (unlikely(!obj))
         return false;
@@ -150,6 +184,8 @@ bool koms_get_unless_dead(kobject_t *obj) {
     return kref_get_unless_zero(&obj->ref);
 }
 
+/// @brief Freeze an object.
+/// @param[in,out] obj The kobject.
 void koms_freeze(kobject_t *obj) {
     irqflags_t flags;
     spin_lock_irqsave(&obj->lock, &flags);
@@ -159,12 +195,25 @@ void koms_freeze(kobject_t *obj) {
 
 /// @section namespace management
 
+/// @brief Simple hash function for namespace strings.
+static inline uint32_t ns_hash(const char *name) {
+    uint32_t hash = 5381;
+    int c;
+    while ((c = *name++))
+        hash = ((hash << 5) + hash) + (uint32_t)c;
+    return hash % KOBJ_NS_BUCKETS;
+}
+
+/// @brief Initialize a kobject namespace.
+/// @param[in,out] ns     The namespace.
+/// @param[in]     name   Name of the namespace.
+/// @param[in,out] parent Parent namespace.
+/// @param[in,out] owner  Object owning this namespace.
 void koms_ns_init(kobj_ns_t *ns, const char *name,
                   kobj_ns_t *parent, kobject_t *owner) {
     ns->name = name;
     ns->owner = owner;
     ns->count = 0;
-    // The root namespace has no parent; all others default to root.
     ns->parent = parent ? parent : (ns == &koms_root_ns ? nullptr : &koms_root_ns);
     spin_lock_init(&ns->write_lock);
     list_init(&ns->children);
@@ -181,6 +230,10 @@ void koms_ns_init(kobj_ns_t *ns, const char *name,
     }
 }
 
+/// @brief Add an object to a namespace.
+/// @param[in,out] ns  The namespace.
+/// @param[in,out] obj The kobject.
+/// @return 0 on success, -1 if duplicate name.
 int koms_ns_add(kobj_ns_t *ns, kobject_t *obj) {
     if (unlikely(!ns || !obj || !obj->name))
         return -1;
@@ -211,6 +264,8 @@ int koms_ns_add(kobj_ns_t *ns, kobject_t *obj) {
     return 0;
 }
 
+/// @brief Remove an object from its namespace.
+/// @param[in,out] obj The kobject.
 void koms_ns_remove(kobject_t *obj) {
     if (unlikely(!obj || !(obj->flags & KOBJ_FLAG_IN_NS)))
         return;
@@ -233,6 +288,10 @@ void koms_ns_remove(kobject_t *obj) {
         type->type_ops->ns_remove(obj, ns);
 }
 
+/// @brief Look up an object in a namespace.
+/// @param[in] ns   The namespace.
+/// @param[in] name The name to find.
+/// @return Pointer to the kobject, or nullptr if not found.
 kobject_t *koms_ns_find(kobj_ns_t *ns, const char *name) {
     if (unlikely(!ns || !name))
         return nullptr;
@@ -246,6 +305,10 @@ kobject_t *koms_ns_find(kobj_ns_t *ns, const char *name) {
     return nullptr;
 }
 
+/// @brief Find an object and acquire a reference.
+/// @param[in] ns   The namespace.
+/// @param[in] name The name to find.
+/// @return Pointer to the kobject with reference acquired, or nullptr.
 kobject_t *koms_ns_find_get(kobj_ns_t *ns, const char *name) {
     rcu_read_lock();
     kobject_t *obj = koms_ns_find(ns, name);
@@ -257,6 +320,10 @@ kobject_t *koms_ns_find_get(kobj_ns_t *ns, const char *name) {
 
 /// @section attributes
 
+/// @brief Attach an attribute to an object.
+/// @param[in,out] obj  The kobject.
+/// @param[in,out] attr The attribute.
+/// @return 0 on success, -1 if attribute name exists.
 int koms_attr_add(kobject_t *obj, kobj_attr_t *attr) {
     irqflags_t flags;
     spin_lock_irqsave(&obj->lock, &flags);
@@ -276,6 +343,9 @@ int koms_attr_add(kobject_t *obj, kobj_attr_t *attr) {
     return 0;
 }
 
+/// @brief Remove an attribute from an object.
+/// @param[in,out] obj  The kobject.
+/// @param[in,out] attr The attribute.
 void koms_attr_remove(kobject_t *obj, kobj_attr_t *attr) {
     irqflags_t flags;
     spin_lock_irqsave(&obj->lock, &flags);
@@ -284,6 +354,12 @@ void koms_attr_remove(kobject_t *obj, kobj_attr_t *attr) {
     spin_unlock_irqrestore(&obj->lock, flags);
 }
 
+/// @brief Read an attribute value.
+/// @param[in,out] obj  The kobject.
+/// @param[in]     name Attribute name.
+/// @param[out]    buf  Output buffer.
+/// @param[in]     size Buffer capacity.
+/// @return Result from the getter, or -1 on failure.
 int koms_attr_get(kobject_t *obj, const char *name, char *buf, size_t size) {
     irqflags_t flags;
     spin_lock_irqsave(&obj->lock, &flags);
@@ -303,6 +379,12 @@ int koms_attr_get(kobject_t *obj, const char *name, char *buf, size_t size) {
     return found->get(obj, found, buf, size);
 }
 
+/// @brief Write an attribute value.
+/// @param[in,out] obj  The kobject.
+/// @param[in]     name Attribute name.
+/// @param[in]     buf  Input string.
+/// @param[in]     size Input length.
+/// @return Result from the setter, or -1 on failure.
 int koms_attr_set(kobject_t *obj, const char *name, const char *buf, size_t size) {
     irqflags_t flags;
     spin_lock_irqsave(&obj->lock, &flags);
@@ -334,6 +416,9 @@ int koms_attr_set(kobject_t *obj, const char *name, const char *buf, size_t size
 
 /// @section events
 
+/// @brief Add an event listener to an object.
+/// @param[in,out] obj      The kobject.
+/// @param[in,out] listener The listener.
 void koms_listener_add(kobject_t *obj, kobj_listener_t *listener) {
     irqflags_t flags;
     spin_lock_irqsave(&obj->lock, &flags);
@@ -343,6 +428,9 @@ void koms_listener_add(kobject_t *obj, kobj_listener_t *listener) {
     spin_unlock_irqrestore(&obj->lock, flags);
 }
 
+/// @brief Remove an event listener from an object.
+/// @param[in,out] obj      The kobject.
+/// @param[in,out] listener The listener to remove.
 void koms_listener_remove(kobject_t *obj, kobj_listener_t *listener) {
     irqflags_t flags;
     spin_lock_irqsave(&obj->lock, &flags);
@@ -351,6 +439,9 @@ void koms_listener_remove(kobject_t *obj, kobj_listener_t *listener) {
     spin_unlock_irqrestore(&obj->lock, flags);
 }
 
+/// @brief Dispatch an event.
+/// @param[in,out] obj   Source kobject.
+/// @param[in,out] event The event.
 void koms_event_dispatch(kobject_t *obj, kobj_event_t *event) {
     if (unlikely(!obj))
         return;
@@ -383,6 +474,9 @@ void koms_event_dispatch(kobject_t *obj, kobj_event_t *event) {
 
 /// @section hierarchy
 
+/// @brief Add a child to a parent object.
+/// @param[in,out] parent The parent kobject.
+/// @param[in,out] child  The child kobject.
 void koms_child_add(kobject_t *parent, kobject_t *child) {
     irqflags_t flags;
     spin_lock_irqsave(&parent->lock, &flags);
@@ -399,6 +493,8 @@ void koms_child_add(kobject_t *parent, kobject_t *child) {
     koms_event_dispatch(parent, &ev);
 }
 
+/// @brief Remove a child from its parent.
+/// @param[in,out] child The child kobject.
 void koms_child_remove(kobject_t *child) {
     kobject_t *parent = child->parent;
     if (unlikely(!parent))
@@ -419,6 +515,10 @@ void koms_child_remove(kobject_t *child) {
     koms_event_dispatch(parent, &ev);
 }
 
+/// @brief Iterate over all children of an object.
+/// @param[in] parent The parent kobject.
+/// @param[in] fn     Callback function.
+/// @param[in] data   User data.
 void koms_children_walk(kobject_t *parent,
                         void (*fn)(kobject_t *child, void *data),
                         void *data) {
@@ -433,6 +533,7 @@ void koms_children_walk(kobject_t *parent,
 
 /// @section diagnostics
 
+/// @brief Convert object state to string.
 static const char *state_str(kobject_state_t s) {
     switch (s) {
         case KOBJECT_UNINITIALIZED: return "uninitialized";
@@ -442,6 +543,8 @@ static const char *state_str(kobject_state_t s) {
     }
 }
 
+/// @brief Dump object summary to log.
+/// @param[in] obj The kobject.
 void koms_dump_obj(const kobject_t *obj) {
     if (!obj) {
         printk("koms: (null)\n");
@@ -456,6 +559,9 @@ void koms_dump_obj(const kobject_t *obj) {
            obj->ns ? obj->ns->name : "(none)");
 }
 
+/// @brief Recursively dump object tree.
+/// @param[in] obj   The root kobject.
+/// @param[in] depth Initial depth.
 void koms_dump_tree(const kobject_t *obj, uint32_t depth) {
     if (!obj) return;
     for (uint32_t i = 0; i < depth; i++) printk("  ");
@@ -466,6 +572,8 @@ void koms_dump_tree(const kobject_t *obj, uint32_t depth) {
     }
 }
 
+/// @brief Dump all objects in a namespace.
+/// @param[in] ns The namespace.
 void koms_dump_ns(const kobj_ns_t *ns) {
     if (!ns) return;
     printk(ZX_INFO "koms: namespace '%s' (%u objects)\n", ns->name, ns->count);

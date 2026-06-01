@@ -13,3 +13,4 @@ flatboot/
 .DS_Store
 .antigravitycli
 include/zxfoundation/zxconfig.h
+doxygen-build/

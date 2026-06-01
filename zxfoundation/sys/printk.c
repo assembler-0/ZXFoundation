@@ -1,29 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/sys/printk.c
-//
-/// @brief Kernel logging — tag parsing, z/OS format, ring storage, sink emit.
-///
-///        FLOW
-///        ====
-///        vprintk(fmt, ap):
-///          1. Parse optional level tag "\x01<N>" from fmt.
-///          2. vsnprintf the message body into a stack buffer.
-///          3. Strip trailing newline from body (we add our own).
-///          4. Format the output line:  ZXF-SSSS.UUUUUU L body\n
-///          5. Store a zx_log_record_t in the log ring (irqsave spinlock).
-///          6. Emit the formatted line to the console sink (irqsave spinlock).
-///
-///        TAG PARSING
-///        ===========
-///        A tag is the 4-byte sequence "\x01<N>" where N is '0'..'7'.
-///        If the format string does not start with \x01, level = ZX_LVL_INFO.
-///        The tag is consumed before vsnprintf so it never appears in output.
-///
-///        TIMESTAMP
-///        =========
-///        ktime_get() returns nanoseconds since boot.  We split into seconds
-///        and microseconds for the SSSS.UUUUUU field.  Before time_init()
-///        runs, ktime_get() returns 0 → "ZXF-0000.000000" which is correct.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file printk.c
+/// @brief Kernel logging.
 
 #include <arch/s390x/cpu/processor.h>
 #include <zxfoundation/sys/printk.h>
@@ -31,16 +8,13 @@
 #include <zxfoundation/time/ktime.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/percpu.h>
-#include <zxfoundation/zxconfig.h>
 #include <lib/vsprintf.h>
 #include <lib/string.h>
 
-// ---------------------------------------------------------------------------
-// Log ring storage
-// ---------------------------------------------------------------------------
-
 #define CONFIG_LOG_BUF_SIZE                 65536U
 #define LOG_RING_RECORDS    (CONFIG_LOG_BUF_SIZE / sizeof(zx_log_record_t))
+
+// TODO: move the log ring implementation to a dedicated file.
 
 static zx_log_record_t s_log_ring[LOG_RING_RECORDS];
 static uint32_t        s_ring_head;     // next write slot (mod LOG_RING_RECORDS)
@@ -48,12 +22,15 @@ static uint32_t        s_ring_count;    // records stored (saturates at LOG_RING
 static uint16_t        s_seq;           // global sequence counter
 static spinlock_t      s_ring_lock = SPINLOCK_INIT;
 
+/// @brief Initialize the log ring buffer.
 void log_ring_init(void) {
     s_ring_head  = 0;
     s_ring_count = 0;
     s_seq        = 0;
 }
 
+/// @brief Store a log record in the ring buffer.
+/// @param[in] rec log record to store.
 void log_ring_store(const zx_log_record_t *rec) {
     irqflags_t f;
     spin_lock_irqsave(&s_ring_lock, &f);
@@ -66,10 +43,16 @@ void log_ring_store(const zx_log_record_t *rec) {
     spin_unlock_irqrestore(&s_ring_lock, f);
 }
 
+/// @brief Get the last stored sequence number.
 uint16_t log_ring_last_seq(void) {
     return s_seq;
 }
 
+/// @brief Read stored log records into *out.
+/// @param[in]  start_seq read all records after this sequence number.
+/// @param[out] out       output buffer.
+/// @param[in]  count     size of output buffer.
+/// @return number of records read.
 uint32_t log_ring_read(uint16_t start_seq, zx_log_record_t *out, uint32_t count) {
     irqflags_t f;
     spin_lock_irqsave(&s_ring_lock, &f);
@@ -89,23 +72,26 @@ uint32_t log_ring_read(uint16_t start_seq, zx_log_record_t *out, uint32_t count)
     return copied;
 }
 
-// ---------------------------------------------------------------------------
-// Console sink
-// ---------------------------------------------------------------------------
-
 static printk_putc_sink s_sink;
 static spinlock_t       s_sink_lock   = SPINLOCK_INIT;
 static spinlock_t       s_printk_lock = SPINLOCK_INIT;
 
+/// @brief Initialize the kernel console.
+/// @param[in] sink Console sink function.
 void printk_initialize(printk_putc_sink sink) {
     s_sink = sink;
     log_ring_init();
 }
 
+/// @brief Change the console sink function.
+/// @param[in] sink New console sink function.
 void printk_set_sink(printk_putc_sink sink) {
     s_sink = sink;
 }
 
+/// @brief Emit string to console sink.
+/// @param[in] buf String to emit.
+/// @param[in] len Length of string.
 static void sink_emit(const char *buf, size_t len) {
     if (!s_sink) return;
     irqflags_t f;
@@ -115,12 +101,8 @@ static void sink_emit(const char *buf, size_t len) {
     spin_unlock_irqrestore(&s_sink_lock, f);
 }
 
-// ---------------------------------------------------------------------------
-// Level helpers
-// ---------------------------------------------------------------------------
-
-// Level display characters indexed by zx_log_level_t value.
-static const char s_level_char[8] = { 'X', 'A', 'C', 'E', 'W', 'N', 'I', 'D' };
+/// @brief Level display characters indexed by zx_log_level_t value.
+static constexpr char s_level_char[8] = { 'X', 'A', 'C', 'E', 'W', 'N', 'I', 'D' };
 
 /// @brief Parse the optional "\x01<N>" tag from *fmt.
 ///        Advances *fmt past the tag if found.
@@ -135,10 +117,6 @@ static zx_log_level_t parse_level(const char **fmt) {
     return ZX_LVL_INFO;
 }
 
-// ---------------------------------------------------------------------------
-// Timestamp + prefix formatting
-// ---------------------------------------------------------------------------
-
 /// @brief Format "ZXF-SSSS.UUUUUU [cpuNN] L " into buf.
 ///        Returns number of bytes written (no NUL counted).
 static int fmt_prefix(char *buf, size_t bufsz, ktime_t ts, zx_log_level_t level, uint8_t cpu) {
@@ -151,14 +129,17 @@ static int fmt_prefix(char *buf, size_t bufsz, ktime_t ts, zx_log_level_t level,
                     s_level_char[level & 7]);
 }
 
-// ---------------------------------------------------------------------------
-// Core vprintk
-// ---------------------------------------------------------------------------
-
+/// @brief Flush buffered output.
+/// @param[in] buf Buffer to flush.
+/// @param[in] size Number of bytes in buffer.
 void printk_flush(const char *buf, size_t size) {
     sink_emit(buf, size);
 }
 
+/// @brief Format and emit a log record.
+/// @param[in] fmt Format string.
+/// @param[in] ap  Variable argument list.
+/// @return Number of bytes emitted.
 int vprintk(const char *fmt, va_list ap) {
     irqflags_t f;
     spin_lock_irqsave(&s_printk_lock, &f);
@@ -201,6 +182,10 @@ int vprintk(const char *fmt, va_list ap) {
     return total;
 }
 
+/// @brief Format and emit a log record.
+/// @param[in] fmt Format string.
+/// @param[in] ... Variable arguments.
+/// @return Number of bytes emitted.
 int printk(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);

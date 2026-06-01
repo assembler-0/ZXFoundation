@@ -1,35 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// include/zxfoundation/sync/srcu.h
-//
-/// @brief Sleepable RCU (SRCU) for ZXFoundation.
-///
-///        DESIGN
-///        ======
-///        Unlike classic RCU, SRCU allows read-side critical sections to
-///        sleep (block on a mutex, wait for I/O, etc.).  Each SRCU domain
-///        is an independent srcu_struct with its own grace-period counter
-///        and per-CPU read-side counters.
-///
-///        READ SIDE
-///        =========
-///        srcu_read_lock() increments the current CPU's read counter for
-///        the domain and returns an index (0 or 1) identifying which
-///        counter slot was used.  srcu_read_unlock() decrements that slot.
-///        Two slots are used alternately so that synchronize_srcu() can
-///        wait for the "old" slot to drain while new readers use the "new"
-///        slot.
-///
-///        WRITE SIDE
-///        ==========
-///        synchronize_srcu() flips the active slot, then waits until the
-///        sum of all per-CPU counters for the old slot reaches zero.
-///        This may sleep (calls mutex_lock internally) so it must not be
-///        called from interrupt context.
-///
-///        INITIALIZATION
-///        ==============
-///        DEFINE_SRCU(name)  — static definition
-///        srcu_init(s)       — runtime initialization
+/// SPDX-License-Identifier: Apache-2.0
+/// @file srcu.h
+/// @brief Sleepable RCU (SRCU).
 
 #pragma once
 
@@ -38,40 +9,52 @@
 #include <zxfoundation/sync/rcu.h>
 
 /// @brief Per-CPU read counters for one SRCU domain.
-///        Two slots, indexed by srcu_struct::idx.
 typedef struct {
-    atomic_t c[2];
+    atomic_t c[2]; ///< Two counter slots for the two SRCU phases.
 } srcu_percpu_t;
 
-/// @brief One SRCU domain.
+/// @brief SRCU domain structure.
 typedef struct srcu_struct {
-    int             idx;                        ///< Active slot (0 or 1).
+    int             idx;                        ///< Currently active slot (0 or 1).
     srcu_percpu_t   pcpu[MAX_CPUS];             ///< Per-CPU read counters.
     atomic_t        gp_seq;                     ///< Grace-period counter.
 } srcu_struct_t;
 
+/// @name SRCU Initialization
+/// @{
+/// @brief Static initializer for an SRCU domain.
 #define SRCU_INIT(name) {                       \
     .idx    = 0,                                \
     .gp_seq = ATOMIC_INIT(0),                   \
 }
 
+/// @brief Define and initialize a static SRCU domain.
 #define DEFINE_SRCU(name)   srcu_struct_t name = SRCU_INIT(name)
 
 /// @brief Initialize an SRCU domain at runtime.
+/// @param[in,out] s The SRCU domain to initialize.
 void srcu_init(srcu_struct_t *s);
+/// @}
 
 /// @brief Enter an SRCU read-side critical section.
-/// @return Index to pass to srcu_read_unlock().
+/// @param[in,out] s The SRCU domain.
+/// @return An index to be passed to the matching srcu_read_unlock().
+/// @note Readers may sleep or block within the critical section.
 int srcu_read_lock(srcu_struct_t *s);
 
 /// @brief Exit an SRCU read-side critical section.
-/// @param idx  Value returned by the matching srcu_read_lock().
+/// @param[in,out] s   The SRCU domain.
+/// @param[in]     idx The value returned by the matching srcu_read_lock().
 void srcu_read_unlock(srcu_struct_t *s, int idx);
 
 /// @brief Wait for all pre-existing SRCU readers to complete.
-///        May sleep.  Must not be called from interrupt context.
+/// @param[in,out] s The SRCU domain.
+/// @note This function may sleep and MUST NOT be called from interrupt context.
 void synchronize_srcu(srcu_struct_t *s);
 
 /// @brief Register a callback to be called after the next SRCU grace period.
+/// @param[in,out] s    The SRCU domain.
+/// @param[in,out] head RCU head embedded in the object to be freed.
+/// @param[in]     func Callback function.
 void call_srcu(srcu_struct_t *s, rcu_head_t *head,
                void (*func)(rcu_head_t *));

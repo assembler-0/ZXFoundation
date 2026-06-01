@@ -24,6 +24,8 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/time/ktime.h>
 
+/// @name Log Levels
+/// @{
 #define ZX_EMERG    "\x01<0>"   ///< Level 0 — system unusable
 #define ZX_ALERT    "\x01<1>"   ///< Level 1 — action required
 #define ZX_CRIT     "\x01<2>"   ///< Level 2 — critical
@@ -32,6 +34,7 @@
 #define ZX_NOTICE   "\x01<5>"   ///< Level 5 — notice
 #define ZX_INFO     "\x01<6>"   ///< Level 6 — informational (default)
 #define ZX_DEBUG    "\x01<7>"   ///< Level 7 — debug
+/// @}
 
 /// @brief Numeric log level values.
 typedef enum {

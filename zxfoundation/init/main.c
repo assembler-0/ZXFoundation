@@ -1,5 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/init/main.c — ZXFoundation kernel entry point
+/// SPDX-License-Identifier: Apache-2.0
+/// @file main.c
+/// @brief ZXFoundation kernel entry point
 
 #include <zxfoundation/sys/printk.h>
 #include <zxfoundation/zxconfig.h>
@@ -71,6 +72,7 @@ static void verify_kernel_checksums(const zxfl_boot_protocol_t *boot) {
     printk(ZX_INFO "sys: kernel checksums verified (%u segments)\n", tbl->count);
 }
 
+/// @brief Re-verify kernel protocol
 static void verify_protocol_integrity(zxfl_boot_protocol_t *boot) {
     if (boot->magic != ZXFL_MAGIC)
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: protocol missing or corrupt");
@@ -80,6 +82,7 @@ static void verify_protocol_integrity(zxfl_boot_protocol_t *boot) {
         zx_system_check(ZX_SYSCHK_CORE_CORRUPT, "sys: binding token mismatch — unauthorized loader");
 }
 
+/// @brief Dump machine information obtained from the loader.
 static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     if (boot->flags & ZXFL_FLAG_SYSINFO) {
         printk(ZX_DEBUG "machine: %s %s model %s (s/n %s) plant %s\n",
@@ -153,15 +156,22 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
     }
 }
 
+/// @brief shorthand for checking if 'option' is present in the kernel command line
 #define if_cmdline_has(boot, option)                                    \
     if (cmdline_find_option_bool((const char *)boot->cmdline_addr,      \
                                  (signed)boot->cmdline_len, option))
 
+/// @brief shorthand for checking if 'option' is not present in the kernel command line
 #define if_cmdline_not_has(boot, option)                                \
     if (!cmdline_find_option_bool((const char *)boot->cmdline_addr,     \
                                  (signed)boot->cmdline_len, option))
 
 
+/// @brief The global kernel entry point.
+///        This function is called by the boot assembly stub and is never
+///        returned from.
+/// @param[in] boot ZXFoundationLoad protocol pointer
+/// @note This function never returns. Even if it somehow did, a disabled-wait PSW will be issued.
 [[noreturn]] void zxfoundation_global_initialize(zxfl_boot_protocol_t *boot) {
     if (!boot)
         arch_sys_halt();

@@ -1,21 +1,26 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// zxfoundation/sync/qspinlock.c - Queue spinlock implementation
+/// @file spinlock.c
+/// @brief Queue spinlock implementation.
 
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/percpu.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/cpu/processor.h>
 
-/// Encode (cpu_id, depth) into the tail field of the lock word.
-/// cpu_id is stored as (cpu_id + 1) so that 0 means "no tail".
+/// @brief Encode (cpu_id, depth) into the tail field.
+/// @param cpu   CPU index.
+/// @param depth Recursion depth on this CPU.
+/// @return Encoded tail value.
 static inline uint32_t encode_tail(int cpu, uint32_t depth) {
     return (uint32_t)(((cpu + 1) << 4) | (depth & 0xFU)) << _Q_TAIL_OFFSET;
 }
 
+/// @brief Decode CPU index from a lock word.
 static inline int tail_cpu(uint32_t val) {
     return (int)((val >> (_Q_TAIL_OFFSET + 4)) & 0xFFFU) - 1;
 }
 
+/// @brief Decode recursion depth from a lock word.
 static inline uint32_t tail_depth(uint32_t val) {
     return (val >> _Q_TAIL_OFFSET) & 0xFU;
 }
@@ -24,19 +29,26 @@ static inline uint32_t tail_depth(uint32_t val) {
 // Per-CPU MCS node access
 // ---------------------------------------------------------------------------
 
+/// @brief Get the MCS node for a specific CPU and depth.
 static inline mcs_node_t *get_mcs_node(int cpu, uint32_t depth) {
     return percpu_ptr_on(cpu, lock_nodes[depth]);
 }
 
+/// @brief Get the MCS node for the calling CPU at a specific depth.
 static inline mcs_node_t *my_mcs_node(uint32_t depth) {
     return percpu_ptr_to(lock_nodes[depth]);
 }
 
+/// @brief Non-blocking spinlock attempt.
+/// @param[in,out] lock The spinlock.
+/// @return true if acquired, false otherwise.
 bool spin_trylock(spinlock_t *lock) {
     int32_t old = atomic_cmpxchg(&lock->val, 0, (int32_t)_Q_LOCKED_VAL);
     return old == 0;
 }
 
+/// @brief Acquire the spinlock.
+/// @param[in,out] lock The spinlock.
 void spin_lock(spinlock_t *lock) {
     // ---- FAST PATH ----
     if (atomic_cmpxchg(&lock->val, 0, (int32_t)_Q_LOCKED_VAL) == 0)
@@ -81,6 +93,7 @@ void spin_lock(spinlock_t *lock) {
     uint32_t prev_tail = (uint32_t)old_val & _Q_TAIL_MASK;
     if (prev_tail) {
         mcs_node_t *prev = get_mcs_node(tail_cpu(old_val), tail_depth(old_val));
+        // Memory barrier to ensure our node initialization is visible before linking.
         mb();
         prev->next = node;
         // Spin on our own cache line until predecessor hands off.
@@ -92,7 +105,7 @@ void spin_lock(spinlock_t *lock) {
             arch_cpu_relax();
     }
 
-    // We are now the queue head.  Claim the lock byte and clear our tail.
+    // We are now the queue head. Claim the lock byte and clear our tail.
     do {
         old_val = atomic_read(&lock->val);
         // Clear tail if it still points to us, set locked=1.
@@ -111,6 +124,8 @@ void spin_lock(spinlock_t *lock) {
     percpu_dec(lock_depth);
 }
 
+/// @brief Release the spinlock.
+/// @param[in,out] lock The spinlock.
 void spin_unlock(spinlock_t *lock) {
     smp_mb_release();
 
@@ -121,13 +136,13 @@ void spin_unlock(spinlock_t *lock) {
     } while (atomic_cmpxchg(&lock->val, old_val, new_val) != old_val);
 
     // If there is a next MCS node, wake it.
-    // We read the tail field from the value we just wrote.
     uint32_t tail = (uint32_t)new_val & _Q_TAIL_MASK;
     if (tail) {
         int cpu   = tail_cpu(new_val);
         uint32_t d = tail_depth(new_val);
         mcs_node_t *head = get_mcs_node(cpu, d);
         mcs_node_t *next = head->next;
+        // Wait for the next waiter to finish linking its node.
         while (!next) {
             arch_cpu_relax();
             next = head->next;

@@ -1,29 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/time/timer.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file timer.c
 /// @brief Per-CPU hierarchical timer wheel — 8 levels × 64 slots.
-///
-///        LEVEL GEOMETRY
-///        ==============
-///        Level 0: slot width = TOD_1MS (4 096 000 units), range = 64 ms.
-///        Level k: slot width = TOD_1MS << (6*k), range = 64 * slot_width.
-///
-///        A timer with delta d from now is placed in the lowest level l
-///        such that d < range(l).  Within that level it goes into slot
-///        (current_slot[l] + d/slot_width[l]) % 64.
-///
-///        LOCKING
-///        =======
-///        All wheel operations require IRQs disabled on the calling CPU.
-///        The wheel is strictly per-CPU; no cross-CPU access is performed.
-///        Callers are responsible for disabling IRQs before calling
-///        timer_add(), timer_cancel(), or timer_wheel_advance().
-///
-///        CALLBACKS
-///        =========
-///        Callbacks fire in hard-IRQ context (clock comparator EXT handler).
-///        They must not block, must not acquire locks held by process context,
-///        and must complete in bounded time.
 
 #include <arch/s390x/cpu/processor.h>
 #include <zxfoundation/time/timer.h>
@@ -32,10 +9,11 @@
 #include <lib/list.h>
 #include <zxfoundation/types.h>
 
-// One wheel per CPU, stored in BSS (zero-initialized).
-static timer_wheel_t s_wheels[CONFIG_ZX_MAX_CPUS];
+/// @brief One wheel per CPU, stored in BSS (zero-initialized).
+static timer_wheel_t s_wheels[MAX_CPUS];
 
-static const uint64_t s_slot_width[TIMER_WHEEL_LEVELS] = {
+/// @brief Slot width (in TOD ticks) of each level.
+static constexpr uint64_t s_slot_width[TIMER_WHEEL_LEVELS] = {
     TOD_1MS_IN_TOD,                         // level 0: 1 ms
     TOD_1MS_IN_TOD  << 6,                   // level 1: 64 ms
     TOD_1MS_IN_TOD  << 12,                  // level 2: ~4 s
@@ -46,10 +24,12 @@ static const uint64_t s_slot_width[TIMER_WHEEL_LEVELS] = {
     TOD_1MS_IN_TOD  << 42,                  // level 7: ~140 y
 };
 
+/// @brief Return the range spanned by one slot at level @p l.
 static inline uint64_t level_range(unsigned int l) {
     return s_slot_width[l] * TIMER_WHEEL_SLOTS;
 }
 
+///  @brief Initialize the timer wheel for the current CPU.
 void timer_wheel_init(void) {
     int cpu = arch_smp_processor_id();
     timer_wheel_t *w = &s_wheels[cpu];
@@ -62,9 +42,12 @@ void timer_wheel_init(void) {
     w->current_tod = tod_read();
 }
 
-/// @brief Choose the level and slot for a timer expiring at @p expires.
-///        @p now is the current TOD value.
-///        Returns the level in *out_level and slot index in *out_slot.
+/// @brief Determine the level and slot index for a given expiration time.
+/// @param[in]  w        timer wheel
+/// @param[in]  expires  absolute expiration time
+/// @param[in]  now      current time
+/// @param[out] out_level level index
+/// @param[out] out_slot  slot index
 static void wheel_place(const timer_wheel_t *w, uint64_t expires, uint64_t now,
                         unsigned int *out_level, unsigned int *out_slot) {
     uint64_t delta = (expires > now) ? (expires - now) : 0;
@@ -81,6 +64,8 @@ static void wheel_place(const timer_wheel_t *w, uint64_t expires, uint64_t now,
     *out_slot  = (unsigned int)(w->slot_idx[TIMER_WHEEL_LEVELS - 1]);
 }
 
+///  @brief Add timer to the wheel
+///  @param[in] t timer to add
 void timer_add(timer_t *t) {
     int cpu = arch_smp_processor_id();
     timer_wheel_t *w = &s_wheels[cpu];
@@ -95,6 +80,8 @@ void timer_add(timer_t *t) {
     t->pending = 1;
 }
 
+/// @brief Cancel timer
+/// @param[in] t timer to cancel
 void timer_cancel(timer_t *t) {
     if (!t->pending)
         return;
@@ -118,6 +105,8 @@ static void cascade(timer_wheel_t *w, unsigned int l) {
     }
 }
 
+/// @brief Advance timer wheel to new time
+/// @param[in] now  new time (TOD)
 void timer_wheel_advance(uint64_t now) {
     int cpu = arch_smp_processor_id();
     timer_wheel_t *w = &s_wheels[cpu];
@@ -150,6 +139,8 @@ void timer_wheel_advance(uint64_t now) {
     }
 }
 
+/// @brief Return the time of the earliest pending timer.
+/// @return time of earliest pending timer, or UINT64_MAX if none
 uint64_t timer_wheel_next_expiry(void) {
     int cpu = arch_smp_processor_id();
     timer_wheel_t *w = &s_wheels[cpu];

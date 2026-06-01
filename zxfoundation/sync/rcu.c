@@ -1,34 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/sync/rcu.c
-//
-/// @brief Classic non-preemptive RCU for ZXFoundation.
-///
-///        DESIGN
-///        ======
-///        In a non-preemptive kernel, a quiescent state (QS) occurs whenever
-///        a CPU is not inside an rcu_read_lock() section.  Because the kernel
-///        is non-preemptive, any context switch or explicit QS report is
-///        sufficient.
-///
-///        We track quiescence with a per-CPU bit in a global bitmask.
-///        synchronize_rcu() waits until every online CPU has passed through
-///        at least one quiescent state since the grace period began, then
-///        drains the callback list.
-///
-///        GRACE PERIOD SEQUENCE
-///        =====================
-///        1. Snapshot the set of online CPUs into gp_cpumask.
-///        2. Increment gp_seq (grace-period counter).
-///        3. Broadcast a QS request to all CPUs (sets their rcu_qs_seq).
-///        4. Spin until every CPU in gp_cpumask has reported QS
-///           (rcu_qs_seq == gp_seq on each CPU's per-CPU area).
-///        5. Drain the callback list.
-///
-///        CALLBACK LIST
-///        =============
-///        call_rcu() appends to a singly-linked list protected by a
-///        spinlock.  Callbacks are drained under the same lock after the
-///        grace period completes.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file rcu.c
+/// @brief minimal RCU implementation.
 
 #include <zxfoundation/sync/rcu.h>
 #include <arch/s390x/cpu/lowcore.h>
@@ -37,29 +9,25 @@
 #include <arch/s390x/cpu/atomic.h>
 #include <arch/s390x/cpu/processor.h>
 
-// ---------------------------------------------------------------------------
-// Global RCU state
-// ---------------------------------------------------------------------------
-
+/// @brief Global lock protecting the RCU callback list.
 static spinlock_t   rcu_lock    = SPINLOCK_INIT;
+/// @brief Head of the global RCU callback list.
 static rcu_head_t  *rcu_cb_head = nullptr;
+/// @brief Tail pointer for O(1) appends to the callback list.
 static rcu_head_t **rcu_cb_tail = &rcu_cb_head;
+/// @brief Global grace-period sequence counter.
 static atomic64_t   rcu_gp_seq  = ATOMIC64_INIT(0);
 
-// ---------------------------------------------------------------------------
-// rcu_init
-// ---------------------------------------------------------------------------
-
+/// @brief Initialize the RCU subsystem.
 void rcu_init(void) {
     atomic64_set(&rcu_gp_seq, 0);
     rcu_cb_head = nullptr;
     rcu_cb_tail = &rcu_cb_head;
 }
 
-// ---------------------------------------------------------------------------
-// call_rcu
-// ---------------------------------------------------------------------------
-
+/// @brief Register a callback for deferred execution.
+/// @param[in,out] head RCU head embedded in the object.
+/// @param[in]     func Function to call after the grace period.
 void call_rcu(rcu_head_t *head, void (*func)(rcu_head_t *)) {
     head->func = func;
     head->next = nullptr;
@@ -71,24 +39,16 @@ void call_rcu(rcu_head_t *head, void (*func)(rcu_head_t *)) {
     spin_unlock_irqrestore(&rcu_lock, flags);
 }
 
-// ---------------------------------------------------------------------------
-// rcu_report_qs — called by each CPU to report a quiescent state
-// ---------------------------------------------------------------------------
-
+/// @brief Report that the calling CPU has passed through a quiescent state.
 void rcu_report_qs(void) {
     uint64_t gp = (uint64_t)atomic64_read(&rcu_gp_seq);
     percpu_set(rcu_qs_seq, gp);
 }
 
-// ---------------------------------------------------------------------------
-// synchronize_rcu
-// ---------------------------------------------------------------------------
-
+/// @brief Wait for a grace period to complete and drain callbacks.
 void synchronize_rcu(void) {
-    // Advance the grace-period counter.
     uint64_t target = (uint64_t)atomic64_add_return(&rcu_gp_seq, 1);
 
-    // Broadcast the new GP sequence to all online CPUs.
     for (uint16_t i = 0; i < MAX_CPUS; i++) {
         if (zx_lowcore_cpu(i))
             percpu_set_on(i, rcu_gp_seq, target);
@@ -101,7 +61,6 @@ void synchronize_rcu(void) {
             arch_cpu_relax();
     }
 
-    // Drain callbacks.
     irqflags_t flags;
     spin_lock_irqsave(&rcu_lock, &flags);
     rcu_head_t *list = rcu_cb_head;

@@ -1,5 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/sys/syschk.c - system check implementation
+/// SPDX-License-Identifier: Apache-2.0
+/// @file syschk.c
+/// @brief system check implementation
 
 #include <arch/s390x/cpu/irq.h>
 #include <arch/s390x/cpu/processor.h>
@@ -26,11 +27,19 @@ static const char *const domain_names[] = {
     "core", "mem", "sync", "arch", "sched", "io"
 };
 
+/// @brief Initialize the system check subsystem.
+/// @param boot    Pointer to the boot protocol
 void zx_syschk_initialize(const zxfl_boot_protocol_t *boot) {
     g_cpu_map   = boot->cpu_map;
     g_cpu_count = boot->cpu_count;
 }
 
+/// @brief Issue a system check.
+///        All severity classes halt unconditionally.
+///        Acquires no locks.  Safe from any context.
+/// @param code  zx_syschk_code_t encoding class, domain, and type.
+/// @param fmt   printf-style format string.
+/// @param ...   Format arguments.
 [[noreturn]] void zx_system_check(const zx_syschk_code_t code,
                                   const char *fmt, ...) {
     arch_local_irq_disable();

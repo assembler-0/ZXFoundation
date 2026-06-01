@@ -1,36 +1,16 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/time/ktime.c
-//
-/// @brief Kernel time subsystem — ktime_get(), ktime_sleep(), time_init().
-///
-///        DESIGN
-///        ======
-///        ktime_get() reads STCKF (via tod_read()) and subtracts the boot
-///        offset recorded at time_init().  The result is converted from TOD
-///        units to nanoseconds using the exact rational 125/512.
-///
-///        ktime_sleep() programs the clock comparator for the target absolute
-///        TOD value and spins (with arch_cpu_relax()) until the TOD clock
-///        passes the deadline.  This is a busy-wait — acceptable for early
-///        boot and short delays.  Once the scheduler exists, this will be
-///        replaced with a proper block/wake implementation.
-///
-///        EXT INTERRUPT DISPATCH
-///        ======================
-///        The irqdesc table has ZX_IRQ_NR_MAX = 0x0400 entries.  The EXT
-///        dispatch in ext.c computes irq = ZX_IRQ_BASE_EXT + ext_code.
-///        For CPU timer (ext_code = 0x1004) that gives 0x1104, which is
-///        out of range.  Rather than expanding the table (which would waste
-///        memory for the sparse 16-bit ext_code space), we intercept the
-///        two hot EXT codes directly in do_ext_interrupt() before the
-///        generic irq_dispatch() call.  This is the same approach used by
-///        Linux for the s390 CPU timer and clock comparator.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file ktime.c
+/// @brief Kernel time subsystem
 
 #include <zxfoundation/time/ktime.h>
 #include <zxfoundation/time/timer.h>
 #include <arch/s390x/time/tod.h>
 #include <arch/s390x/cpu/processor.h>
 
+/// @brief Read the current kernel time.
+///        Callable from any context (hard-IRQ, softirq, process).
+///        No lock, no sleep.
+/// @return Nanoseconds since kernel boot.
 ktime_t ktime_get(void) {
     uint64_t tod = tod_read();
     uint64_t delta = tod - tod_boot_offset();
@@ -59,6 +39,10 @@ void time_clock_comparator_handler(void) {
         tod_clock_comparator_set(now + TOD_1S_IN_TOD);
 }
 
+/// @brief Sleep for at least @p ns nanoseconds.
+///        Blocks the calling thread using the clock comparator.
+/// @warning Must NOT be called from hard-IRQ or softirq context.
+/// @param ns  Duration in nanoseconds.
 void ktime_sleep(uint64_t ns) {
     uint64_t deadline = tod_read() + ktime_ns_to_tod(ns);
     tod_clock_comparator_set(deadline);
@@ -66,7 +50,10 @@ void ktime_sleep(uint64_t ns) {
         arch_cpu_relax();
 }
 
-static void time_init_cpu(void) {
+/// @brief Initialize the time subsystem on an AP.
+///        Enables CPU timer and clock comparator interrupts on the calling
+///        CPU.  Called from ap_startup() on each AP after SMP bringup.
+void time_init_ap(void) {
     timer_wheel_init();
 
     tod_enable_ext_interrupts();
@@ -75,11 +62,13 @@ static void time_init_cpu(void) {
     tod_clock_comparator_set(tod_read() + TOD_1S_IN_TOD);
 }
 
+/// @brief Initialize the time subsystem.
+///        Uses the loader-provided TOD value as the boot epoch so that
+///        ktime_get() reports time since IPL, not since time_init().
+///        Falls back to tod_read() if the loader did not set ZXFL_FLAG_TOD.
+/// @param[in] boot_tod  Loader-recorded TOD value (boot->tod_boot), or 0 to
+///                  read the current TOD clock as the epoch.
 void time_init(uint64_t boot_tod) {
     tod_set_boot_offset(boot_tod ? boot_tod : tod_read());
-    time_init_cpu();
-}
-
-void time_init_ap(void) {
-    time_init_cpu();
+    time_init_ap();
 }

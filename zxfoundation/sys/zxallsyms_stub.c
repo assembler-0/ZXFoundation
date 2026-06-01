@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/sys/zxallsyms_stub.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxallsyms_stub.c
 /// @brief First-pass link stub for the zxallsyms table.
 ///
 ///        During the first link pass the real zxallsyms_data.c has not yet

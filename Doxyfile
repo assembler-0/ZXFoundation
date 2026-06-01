@@ -1,0 +1,18 @@
+# Project Metadata
+
+PROJECT_NAME           = "ZXFoundation™"
+PROJECT_NUMBER         = "26h1"
+OUTPUT_DIRECTORY       = "doxygen-build"
+OPTIMIZE_OUTPUT_FOR_C  = YES
+EXTENSION_MAPPING      = c=C h=C
+INPUT                  = arch/ docs/ drivers/ include/ lib/ zxfoundation/
+RECURSIVE              = YES
+FILE_PATTERNS          = *.c *.h
+GENERATE_LATEX         = YES
+USE_PDFLATEX           = YES
+PDF_HYPERLINKS         = YES
+MARKDOWN_SUPPORT       = YES
+EXTRACT_STATIC         = YES
+EXTRACT_ALL            = NO
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES

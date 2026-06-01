@@ -1,10 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// include/zxfoundation/sys/preempt.h
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file preempt.h
 /// @brief Core preemption control primitives.
-///
-///        Uses the hardware-optimized `preempt_count` field in the s390x
-///        lowcore (0x03a8) for zero-cost prefix-relative access.
 
 #pragma once
 

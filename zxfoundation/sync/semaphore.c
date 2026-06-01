@@ -1,17 +1,21 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/sync/semaphore.c
+/// SPDX-License-Identifier: Apache-2.0
+/// @file semaphore.c
+/// @brief Counting semaphore implementation.
 
 #include <zxfoundation/sync/semaphore.h>
 #include <arch/s390x/cpu/processor.h>
 
+/// @brief Decrement (acquire) the semaphore.
+/// @param[in,out] s The semaphore.
 void semaphore_down(semaphore_t *s) {
     int32_t cur;
+    // Fast path: try to grab a unit if available.
     do {
         cur = atomic_read(&s->count);
         if (cur <= 0)
             goto slow;
     } while (atomic_cmpxchg(&s->count, cur, cur - 1) != cur);
-    barrier(); // acquire
+    barrier();
     return;
 
 slow:;
@@ -22,20 +26,19 @@ slow:;
     irqflags_t flags;
     spin_lock_irqsave(&s->wait_lock, &flags);
 
-    // Re-check under the lock.
+    // Re-check under the lock to avoid missing a wake.
     cur = atomic_read(&s->count);
     if (cur > 0) {
-        // Someone called up() between our check and acquiring the lock.
         atomic_add_return(&s->count, -1);
         spin_unlock_irqrestore(&s->wait_lock, flags);
         barrier();
         return;
     }
 
-    // Decrement into negative territory to record that we are waiting.
+    // Record our presence by taking the count negative.
     atomic_add_return(&s->count, -1);
 
-    // Enqueue at tail.
+    // Enqueue at tail (FIFO).
     if (!s->waiters.head) {
         s->waiters.head = &entry;
     } else {
@@ -46,18 +49,22 @@ slow:;
     }
     spin_unlock_irqrestore(&s->wait_lock, flags);
 
+    // Spin until woken by semaphore_up().
     while (!atomic_read(&entry.done))
         arch_cpu_relax();
 
-    barrier(); // acquire
+    barrier();
 }
 
+/// @brief Increment (release) the semaphore.
+/// @param[in,out] s The semaphore.
 void semaphore_up(semaphore_t *s) {
     smp_mb_release();
 
     irqflags_t flags;
     spin_lock_irqsave(&s->wait_lock, &flags);
 
+    // Increment count. atomic_add_return returns the NEW value.
     int32_t old = atomic_add_return(&s->count, 1) - 1;
     wq_entry_t *entry = nullptr;
     if (old < 0) {
@@ -68,10 +75,14 @@ void semaphore_up(semaphore_t *s) {
     }
     spin_unlock_irqrestore(&s->wait_lock, flags);
 
+    // Signal the waiter.
     if (entry)
         atomic_set(&entry->done, 1);
 }
 
+/// @brief Try to decrement the semaphore without blocking.
+/// @param[in,out] s The semaphore.
+/// @return true if acquired, false if count was <= 0.
 bool semaphore_trydown(semaphore_t *s) {
     int32_t cur;
     do {

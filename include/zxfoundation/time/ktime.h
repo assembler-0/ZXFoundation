@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// include/zxfoundation/time/ktime.h
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file ktime.h
 /// @brief Kernel time type and core time API.
 
 #pragma once
@@ -19,7 +18,7 @@ ktime_t ktime_get(void);
 
 /// @brief Convert nanoseconds to TOD units.
 ///        Inverse of the ktime conversion: tod = ns * 512 / 125.
-/// @param ns  Duration in nanoseconds.
+/// @param[in] ns  Duration in nanoseconds.
 /// @return Duration in TOD units.
 static inline uint64_t ktime_ns_to_tod(uint64_t ns) {
     return ns * 512 / 125;
@@ -44,7 +43,7 @@ void time_clock_comparator_handler(void);
 ///        Uses the loader-provided TOD value as the boot epoch so that
 ///        ktime_get() reports time since IPL, not since time_init().
 ///        Falls back to tod_read() if the loader did not set ZXFL_FLAG_TOD.
-/// @param boot_tod  Loader-recorded TOD value (boot->tod_boot), or 0 to
+/// @param[in] boot_tod  Loader-recorded TOD value (boot->tod_boot), or 0 to
 ///                  read the current TOD clock as the epoch.
 void time_init(uint64_t boot_tod);
 
@@ -55,6 +54,6 @@ void time_init_ap(void);
 
 /// @brief Sleep for at least @p ns nanoseconds.
 ///        Blocks the calling thread using the clock comparator.
-///        Must NOT be called from hard-IRQ or softirq context.
+/// @warning Must NOT be called from hard-IRQ or softirq context.
 /// @param ns  Duration in nanoseconds.
 void ktime_sleep(uint64_t ns);

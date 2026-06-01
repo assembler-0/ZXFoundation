@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// zxfoundation/sys/irq/irqdesc.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file irqdesc.c
 /// @brief IRQ descriptor table
 
 #include <zxfoundation/sys/irq/irqdesc.h>
@@ -30,12 +29,14 @@ static kobj_type_t irq_desc_type = {
     .type_ops = nullptr,
 };
 
-/// @brief Format an IRQ number into a static per-descriptor name buffer.
-///        Format: "pgm-XXXX", "ext-XXXX", "io-XXXX", "mck-XXXX"
-///        where XXXX is the lower 8 bits in hex.
 #define ZX_IRQ_NAMEBUF_SZ 12
 static char irq_name_bufs[ZX_IRQ_NR_MAX][ZX_IRQ_NAMEBUF_SZ];
 
+///  @brief Format an IRQ number into a static per-descriptor name buffer.
+///        Format: "pgm-XXXX", "ext-XXXX", "io-XXXX", "mck-XXXX"
+///        where XXXX is the lower 8 bits in hex.
+///  @param[in] irq IRQ number to format.
+///  @param[out] buf Buffer of at least ZX_IRQ_NAMEBUF_SZ bytes.
 static void irq_format_name(uint16_t irq, char *buf) {
     const char *prefix;
 
@@ -47,6 +48,7 @@ static void irq_format_name(uint16_t irq, char *buf) {
     snprintf(buf, ZX_IRQ_NAMEBUF_SZ, "%s-%04x", prefix, irq & 0x00FFU);
 }
 
+/// @brief Default handler for unregistered IRQs.
 static void irq_default_handler(uint16_t irq, arch_s390x_irq_frame_t *frame, void *data) {
     (void)data;
 
@@ -64,6 +66,7 @@ static void irq_default_handler(uint16_t irq, arch_s390x_irq_frame_t *frame, voi
            (unsigned)irq, (unsigned long long)frame->psw_addr);
 }
 
+/// @brief Initialize the IRQ subsystem: namespaces, objects, default handlers.
 void irq_subsystem_init(void) {
     koms_type_register(&irq_desc_type);
     koms_ns_init(&irq_ns, "irq", nullptr, nullptr);
@@ -86,6 +89,12 @@ void irq_subsystem_init(void) {
     printk(ZX_INFO "irq: namespaces and objects initialized for %u descriptors\n", ZX_IRQ_NR_MAX);
 }
 
+/// @brief Register an IRQ handler.
+/// @param[in] irq IRQ number
+/// @param[in] handler Pointer to handler function
+/// @param[in] data Pointer to data to be passed to handler
+/// @param[in] flags IRQ registration flags (e.g. ZX_IRQF_SHARED)
+/// @return 0 on success, -1 on failure
 int irq_register(uint16_t irq, irq_handler_t handler, void *data, uint32_t flags) {
     if (irq >= ZX_IRQ_NR_MAX)
         return -1;
@@ -110,6 +119,8 @@ int irq_register(uint16_t irq, irq_handler_t handler, void *data, uint32_t flags
     return 0;
 }
 
+/// @brief Unregister an IRQ handler.
+/// @param[in] irq IRQ number
 void irq_unregister(uint16_t irq) {
     if (irq >= ZX_IRQ_NR_MAX)
         return;
@@ -126,6 +137,9 @@ void irq_unregister(uint16_t irq) {
     koms_event_fire(&desc->obj, KOBJ_EVENT_STATE_CHANGE);
 }
 
+/// @brief Dispatch an IRQ to its registered handler.
+/// @param[in] irq IRQ number
+/// @param[in] frame Pointer to saved register state (PSW etc.)
 void irq_dispatch(uint16_t irq, arch_s390x_irq_frame_t *frame) {
     if (unlikely(irq >= ZX_IRQ_NR_MAX))
         zx_system_check(ZX_SYSCHK_ARCH_UNHANDLED_TRAP,
@@ -147,6 +161,9 @@ void irq_dispatch(uint16_t irq, arch_s390x_irq_frame_t *frame) {
     h(irq, frame, d);
 }
 
+/// @brief Get an IRQ descriptor.
+/// @param[in] irq IRQ number
+/// @return Pointer to IRQ descriptor, or nullptr if invalid IRQ number.
 irq_desc_t *irq_get_desc(uint16_t irq) {
     if (irq >= ZX_IRQ_NR_MAX)
         return nullptr;

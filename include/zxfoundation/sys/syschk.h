@@ -1,22 +1,14 @@
-// SPDX-License-Identifier: Apache-2.0
-// include/zxfoundation/sys/syschk.h
-//
-/// @brief ZXFoundation System Check (syschk) subsystem.
-///
-///        The halt path acquires no locks, calls no kernel subsystems,
-///        and dereferences no kernel data structures.  It is safe to call
-///        from any context: exception handlers, IRQ handlers, early init,
-///        or a corrupt-memory state.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file syschk.h
+/// @brief System Check (syschk) subsystem.
 
 #pragma once
 
 #include <zxfoundation/types.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 
-// ---------------------------------------------------------------------------
-// Code encoding
-// ---------------------------------------------------------------------------
-
+/// @name System Check Code Encoding
+/// @{
 #define ZX_SYSCHK_CLASS_SHIFT   12u
 #define ZX_SYSCHK_DOMAIN_SHIFT   8u
 #define ZX_SYSCHK_TYPE_MASK     0x00FFu
@@ -29,30 +21,27 @@
 #define ZX_SYSCHK_CLASS(code)   (((code) >> ZX_SYSCHK_CLASS_SHIFT) & 0xFu)
 #define ZX_SYSCHK_DOMAIN(code)  (((code) >> ZX_SYSCHK_DOMAIN_SHIFT) & 0xFu)
 #define ZX_SYSCHK_TYPE(code)    ((code) & ZX_SYSCHK_TYPE_MASK)
+/// @}
 
-// ---------------------------------------------------------------------------
-// Severity classes
-// ---------------------------------------------------------------------------
-
+/// @name Severity Classes
+/// @{
 #define ZX_SYSCHK_CLASS_FATAL       0xFu
 #define ZX_SYSCHK_CLASS_CRITICAL    0xCu
 #define ZX_SYSCHK_CLASS_WARNING     0x3u
+/// @}
 
-// ---------------------------------------------------------------------------
-// Domains
-// ---------------------------------------------------------------------------
-
+/// @name Domains
+/// @{
 #define ZX_SYSCHK_DOMAIN_CORE   0x0u
 #define ZX_SYSCHK_DOMAIN_MEM    0x1u
 #define ZX_SYSCHK_DOMAIN_SYNC   0x2u
 #define ZX_SYSCHK_DOMAIN_ARCH   0x3u
 #define ZX_SYSCHK_DOMAIN_SCHED  0x4u
 #define ZX_SYSCHK_DOMAIN_IO     0x5u
+/// @}
 
-// ---------------------------------------------------------------------------
-// Code table — FATAL
-// ---------------------------------------------------------------------------
-
+/// @name Code Table — FATAL
+/// @{
 #define ZX_SYSCHK_CORE_CORRUPT          ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x01)
 #define ZX_SYSCHK_CORE_UNINITIALIZED    ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x02)
 #define ZX_SYSCHK_CORE_ASSERT           ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_CORE, 0x03)
@@ -76,35 +65,28 @@
 #define ZX_SYSCHK_ARCH_CORRUPT          ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_ARCH, 0x04)
 
 #define ZX_SYSCHK_SCHED_CORRUPT         ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_FATAL, ZX_SYSCHK_DOMAIN_SCHED, 0x01)
+/// @}
 
-// ---------------------------------------------------------------------------
-// Code table — CRITICAL
-// ---------------------------------------------------------------------------
-
+/// @name Code Table — CRITICAL
+/// @{
 #define ZX_SYSCHK_CORE_CRIT_INVARIANT   ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_CRITICAL, ZX_SYSCHK_DOMAIN_CORE, 0x01)
 #define ZX_SYSCHK_MEM_CRIT_SLAB        ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_CRITICAL, ZX_SYSCHK_DOMAIN_MEM,  0x01)
 #define ZX_SYSCHK_ARCH_CRIT_SMP        ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_CRITICAL, ZX_SYSCHK_DOMAIN_ARCH, 0x01)
+/// @}
 
-// ---------------------------------------------------------------------------
-// Code table — WARNING
-// ---------------------------------------------------------------------------
-
+/// @name Code Table — WARNING
+/// @{
 #define ZX_SYSCHK_CORE_WARN_DEPRECATED  ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_WARNING, ZX_SYSCHK_DOMAIN_CORE, 0x01)
 #define ZX_SYSCHK_MEM_WARN_LOW          ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_WARNING, ZX_SYSCHK_DOMAIN_MEM,  0x01)
 #define ZX_SYSCHK_IO_WARN_TIMEOUT       ZX_SYSCHK_CODE(ZX_SYSCHK_CLASS_WARNING, ZX_SYSCHK_DOMAIN_IO,   0x01)
+/// @}
 
-// ---------------------------------------------------------------------------
-// Crash record
-//
-// Written to a fixed offset inside the BSP lowcore pad region (0x1400)
-// before halting.  The lowcore is always mapped and accessible regardless
-// of kernel state.  The record is read post-mortem by a debugger or
-// operator console.
-// ---------------------------------------------------------------------------
-
+/// @name Crash Record
+/// @{
 #define ZX_CRASH_RECORD_MAGIC   0x5A584352554E4348ULL  /* "ZXCRUNCH" */
 #define ZX_CRASH_RECORD_OFFSET  0x1400u                /* within lowcore */
 #define ZX_CRASH_MSG_LEN        128u
+/// @}
 
 typedef struct __attribute__((packed)) {
     uint64_t magic;                     ///< ZX_CRASH_RECORD_MAGIC

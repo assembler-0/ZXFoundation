@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// include/zxfoundation/time/timer.h
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file timer.h
 /// @brief Per-CPU hierarchical timer wheel.
 
 #pragma once
@@ -8,9 +7,9 @@
 #include <zxfoundation/types.h>
 #include <lib/list.h>
 
-/// Number of levels in the timer wheel.
+/// @brief Number of levels in the timer wheel.
 #define TIMER_WHEEL_LEVELS      8U
-/// Number of slots per level.
+/// @brief Number of slots per level.
 #define TIMER_WHEEL_SLOTS       64U
 
 /// @brief Timer callback function.
@@ -25,12 +24,12 @@ typedef struct timer {
     timer_fn_t      fn;         ///< Callback — called in hard-IRQ context.
     void           *data;       ///< Opaque argument to fn.
     uint8_t         pending;    ///< 1 if currently in a wheel slot.
-    uint8_t         _pad[7];
+    uint8_t         _pad[7];    ///< padding
 } timer_t;
 
 /// @brief Per-CPU timer wheel state.
 typedef struct timer_wheel {
-    list_head_t     slots[TIMER_WHEEL_LEVELS][TIMER_WHEEL_SLOTS];
+    list_head_t     slots[TIMER_WHEEL_LEVELS][TIMER_WHEEL_SLOTS]; ///< Wheel slots.
     uint64_t        current_tod;    ///< TOD value of the last advance.
     uint64_t        slot_idx[TIMER_WHEEL_LEVELS]; ///< Current slot per level.
 } timer_wheel_t;
@@ -39,18 +38,18 @@ typedef struct timer_wheel {
 ///        Called once per CPU from time_init() / time_init_ap().
 void timer_wheel_init(void);
 
-/// @brief Add a timer to the current CPU's wheel.
-/// @param t  Timer to add.  Must not already be pending.
+///  @brief Add timer to the wheel
+///  @param[in] t timer to add
 void timer_add(timer_t *t);
 
-/// @brief Cancel a pending timer.
-/// @param t  Timer to cancel.
+/// @brief Cancel timer
+/// @param[in] t timer to cancel
 void timer_cancel(timer_t *t);
 
-/// @brief Advance the current CPU's timer wheel to @p now.
-/// @param now  Current TOD clock value.
+/// @brief Advance timer wheel to new time
+/// @param[in] now  new time (TOD)
 void timer_wheel_advance(uint64_t now);
 
-/// @brief Return the TOD value of the next pending timer on this CPU,
-///        or UINT64_MAX if the wheel is empty.
+/// @brief Return the time of the earliest pending timer.
+/// @return time of earliest pending timer, or UINT64_MAX if none
 uint64_t timer_wheel_next_expiry(void);
