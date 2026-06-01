@@ -1,5 +1,9 @@
 #pragma once
 
+/// @brief concatenation
+#define __concat(a, b)    a ## b
+#define concat(a, b)   __concat(a,b)
+
 /// @brief branch prediction hints
 
 #define __likely(x)     __builtin_expect(!!(x), 1)
