@@ -6,6 +6,7 @@
 #include <arch/s390x/lib/libzxunwind/zxunwind.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <zxfoundation/sys/zxallsyms.h>
+#include <zxfoundation/memory/hhdm.h>
 #include <lib/vsprintf.h>
 
 /// @brief Verify if a given stack pointer is aligned and points to valid kernel memory.

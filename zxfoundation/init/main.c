@@ -177,8 +177,14 @@ static void dump_machine_info(zxfl_boot_protocol_t *boot) {
 
     time_init((boot->flags & ZXFL_FLAG_TOD) ? boot->tod_boot : 0);
 
-    printk(ZX_INFO "sys: ZXFoundation (TM) %s - copyright (C) 2026 assembler-0 all rights reserved.\n",
-           CONFIG_ZX_RELEASE);
+    printk(ZX_INFO "sys: ZXFoundation (TM) %s - copyright (C) %s assembler-0 all rights reserved.\n",
+           CONFIG_ZX_RELEASE, CONFIG_ZX_COPYRIGHT_DATE);
+
+    printk(ZX_INFO "sys: built on %s - %s with %s",
+        CONFIG_ZX_BUILD_DT_COMPILER,
+        CONFIG_ZX_BUILD_PLATFORM,
+        CONFIG_ZX_COMPILER_ID
+    );
 
     printk(ZX_INFO "cmdline: %s\n", (const char *)boot->cmdline_addr);
 

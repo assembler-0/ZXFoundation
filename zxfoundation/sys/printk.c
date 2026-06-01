@@ -39,7 +39,7 @@
 // Log ring storage
 // ---------------------------------------------------------------------------
 
-// Number of records the ring holds.
+#define CONFIG_LOG_BUF_SIZE                 65536U
 #define LOG_RING_RECORDS    (CONFIG_LOG_BUF_SIZE / sizeof(zx_log_record_t))
 
 static zx_log_record_t s_log_ring[LOG_RING_RECORDS];

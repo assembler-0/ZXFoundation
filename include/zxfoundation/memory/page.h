@@ -7,6 +7,7 @@
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/zxconfig.h>
+#include <zxfoundation/memory/hhdm.h>
 #include <arch/s390x/cpu/atomic.h>
 #include <lib/list.h>
 
@@ -62,7 +63,7 @@ _Static_assert(sizeof(zx_page_t) == 64, "zx_page_t must be 64 bytes");
 extern zx_page_t *zx_mem_map;
 
 #define PAGE_SHIFT   12U
-#define PAGE_SIZE    CONFIG_PAGE_SIZE
+#define PAGE_SIZE    4096UL
 #define PAGE_MASK    (~(PAGE_SIZE - 1UL))
 
 #define PMM_INVALID_PFN64  (~(uint64_t)0)

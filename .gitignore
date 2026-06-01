@@ -12,3 +12,4 @@ compile_flags.txt
 flatboot/
 .DS_Store
 .antigravitycli
+include/zxfoundation/zxconfig.h

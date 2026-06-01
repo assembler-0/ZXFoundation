@@ -8,7 +8,7 @@
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/zxvl.h>
-#include <zxfoundation/zxconfig.h>
+#include <zxfoundation/memory/hhdm.h>
 
 /// @brief Zero memory using MVCL pad-fill mode (srclen=0, pad=0x00).
 static void zxfl_bzero(uint64_t addr, uint64_t size) {

@@ -30,11 +30,11 @@ int arch_sclp_service_call(uint32_t command, void *sccb) {
 
     // Execute call, retry if busy
     int cc;
-    int retry = CONFIG_SCLP_SERVC_MAX_RETRIES;
+    int retry = SCLP_SERVC_MAX_RETRIES;
     do {
         cc = __sclp_servc(sccb_phys, command);
         if (cc == 1) { // Busy
-            for (int i = 0; i < CONFIG_SCLP_SERVC_BUSY_DELAY; i++)
+            for (int i = 0; i < SCLP_SERVC_BUSY_DELAY; i++)
                 arch_cpu_relax();
         }
     } while (cc == 1 && --retry > 0);

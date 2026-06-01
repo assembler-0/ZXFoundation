@@ -38,6 +38,7 @@
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/stfle.h>
 #include <arch/s390x/init/zxfl/diag.h>
+#include <zxfoundation/memory/hhdm.h>
 #include <zxfoundation/zxconfig.h>
 
 /// ASCE Designation-Type field (bits 60-61).
@@ -131,10 +132,6 @@ static uint64_t *alloc_page_table(void) {
     return tbl;
 }
 
-static inline uint64_t zxfl_hhdm_phys_to_virt(uint64_t phys) {
-    return CONFIG_KERNEL_VIRT_OFFSET + phys;
-}
-
 /// @brief Build 5-level page tables, enable DAT, and LPSWE into the kernel.
 /// @param entry      Kernel entry point (HHDM virtual address from ELF e_entry).
 /// @param boot_proto Physical address of the zxfl_boot_protocol_t struct.
@@ -213,13 +210,13 @@ static inline uint64_t zxfl_hhdm_phys_to_virt(uint64_t phys) {
     r2_table_hhdm[rsx_hhdm]     = (uint64_t)(uintptr_t)r3_tab | Z_TL_2048 | Z_TT_R2;
 
     // Update protocol addresses to be HHDM-virtual.
-    proto->kernel_stack_top = zxfl_hhdm_phys_to_virt(proto->kernel_stack_top);
-    proto->mem_map_addr     = zxfl_hhdm_phys_to_virt(proto->mem_map_addr);
-    proto->cmdline_addr     = zxfl_hhdm_phys_to_virt(proto->cmdline_addr);
+    proto->kernel_stack_top = hhdm_phys_to_virt(proto->kernel_stack_top);
+    proto->mem_map_addr     = hhdm_phys_to_virt(proto->mem_map_addr);
+    proto->cmdline_addr     = hhdm_phys_to_virt(proto->cmdline_addr);
     if (proto->cksum_table_phys)
-        proto->cksum_table_phys = zxfl_hhdm_phys_to_virt(proto->cksum_table_phys);
+        proto->cksum_table_phys = hhdm_phys_to_virt(proto->cksum_table_phys);
 
-    uint64_t v_proto = zxfl_hhdm_phys_to_virt(boot_proto);
+    uint64_t v_proto = hhdm_phys_to_virt(boot_proto);
     uint64_t v_stack = proto->kernel_stack_top;
 
     uint64_t cr0;

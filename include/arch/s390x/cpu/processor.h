@@ -6,9 +6,11 @@
 #pragma once
 
 #include <zxfoundation/zxconfig.h>
+#include <zxfoundation/memory/hhdm.h>
 #include <arch/s390x/cpu/features.h>
 #include <arch/s390x/cpu/psw.h>
 #include <arch/s390x/cpu/atomic.h>
+
 
 /// @brief Generic spin-loop hint.  Use inside every busy-wait loop.
 static inline void arch_cpu_relax(void) {
@@ -63,12 +65,12 @@ static inline void arch_set_prefix(uint32_t prefix) {
 
 /// @brief Return the logical CPU ID (0-based, dense) for the executing CPU.
 static inline int arch_smp_processor_id(void) {
-    const uint16_t *cpu_id_ptr = (const uint16_t *)(uintptr_t)
-        ((uint64_t)arch_get_prefix() + CONFIG_KERNEL_VIRT_OFFSET + 0x408UL);
-    uint16_t id = *cpu_id_ptr;
+    const auto cpu_id_ptr = (const uint16_t *)(uintptr_t)
+        (hhdm_phys_to_virt(arch_get_prefix()) + 0x408UL);
+    const uint16_t id = *cpu_id_ptr;
     if (id >= (uint16_t)CONFIG_ZX_MAX_CPUS)
         return 0;
-    return (int)id;
+    return id;
 }
 
 #define arch_ctl_store(array, low, high) ({		        \
@@ -123,7 +125,7 @@ static inline int arch_is_zvm(void) {
 [[noreturn]] static inline void arch_sys_halt(void) {
     static const zx_psw_t halt_psw __attribute__((aligned(8))) = {
         .mask = PSW_MASK_DISABLED_WAIT,
-        .addr = CONFIG_PANIC_HALT_ADDR,
+        .addr = PSW_STD_HALT_ADDR,
     };
     arch_load_psw(&halt_psw);
 }

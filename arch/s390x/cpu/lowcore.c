@@ -47,5 +47,5 @@ void zx_lowcore_setup_bsp(void) {
     lc_install_handler_psws(lc);
 
     lc->restart_psw.mask = PSW_MASK_DISABLED_WAIT;
-    lc->restart_psw.addr = CONFIG_PANIC_HALT_ADDR;
+    lc->restart_psw.addr = PSW_STD_HALT_ADDR;
 }

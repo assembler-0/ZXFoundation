@@ -7,6 +7,7 @@
 
 #include <zxfoundation/types.h>
 #include <zxfoundation/zxconfig.h>
+#include <zxfoundation/memory/hhdm.h>
 #include <arch/s390x/cpu/lowcore.h>
 
 #define MAX_CPUS        CONFIG_ZX_MAX_CPUS
@@ -17,20 +18,20 @@ extern zx_lowcore_t *__percpu_areas_raw[MAX_CPUS];
 
 /// @brief Safely retrieve another CPU's lowcore, applying inverse hardware
 ///        prefix-register swapping if necessary.
-#define zx_lowcore_cpu(cpu)                                                  \
-    ({                                                                       \
-        zx_lowcore_t *__lc = __percpu_areas_raw[(cpu)];                      \
-        zx_lowcore_t *__res = __lc;                                          \
-        if (__lc) {                                                          \
-            uint64_t __target_real = hhdm_virt_to_phys((uint64_t)__lc);      \
-            uint64_t __my_prefix = zx_lowcore()->percpu.prefix_base;         \
-            if (__target_real == __my_prefix) {                              \
-                __res = (zx_lowcore_t *)CONFIG_KERNEL_VIRT_OFFSET;           \
-            } else if (__target_real == 0) {                                 \
-                __res = (zx_lowcore_t *)hhdm_phys_to_virt(__my_prefix);      \
-            }                                                                \
-        }                                                                    \
-        __res;                                                               \
+#define zx_lowcore_cpu(cpu)                                                          \
+    ({                                                                               \
+        zx_lowcore_t *__lc = __percpu_areas_raw[(cpu)];                              \
+        zx_lowcore_t *__res = __lc;                                                  \
+        if (__lc) {                                                                  \
+            uint64_t __target_real = hhdm_virt_to_phys_inplace((uint64_t)__lc);      \
+            uint64_t __my_prefix = zx_lowcore()->percpu.prefix_base;                 \
+            if (__target_real == __my_prefix) {                                      \
+                __res = (zx_lowcore_t *)CONFIG_KERNEL_VIRT_OFFSET;                   \
+            } else if (__target_real == 0) {                                         \
+                __res = (zx_lowcore_t *)hhdm_phys_to_virt_inplace(__my_prefix);      \
+            }                                                                        \
+        }                                                                            \
+        __res;                                                                       \
     })
 
 

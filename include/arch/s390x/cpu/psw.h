@@ -33,6 +33,9 @@
 
 #pragma once
 
+/// Formerly CONFIG_HALT_ADDR
+#define PSW_STD_HALT_ADDR       0x0000000000DEAD00ULL
+
 /// DAT (address translation) enable bit.
 #define PSW_BIT_DAT             0x0400000000000000ULL
 /// I/O interrupt mask bit.

@@ -22,6 +22,8 @@
 #define SCLP_RC_INSUFFICIENT_SCCB_LENGTH    0x03f0
 
 #define SCLP_MAX_CORES                      512
+#define SCLP_SERVC_MAX_RETRIES       100
+#define SCLP_SERVC_BUSY_DELAY        100000
 
 #ifndef __ASSEMBLER__
 

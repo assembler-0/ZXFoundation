@@ -2,19 +2,9 @@
 // include/zxfoundation/sync/seqlock.h
 //
 /// @brief Sequence Locks — reader-writer lock with lockless readers.
-///
-///        A sequence lock (seqlock) allows lockless, wait-free read access to
-///        shared data by using a sequence counter. Writers increment the counter
-///        before and after modifications. Readers read the counter before and
-///        after reading the data; if the counter is odd (a write is in progress)
-///        or has changed (a write occurred during the read), the reader retries.
-///
-///        This is decoupled into `seqcount_t` (just the counter) and `seqlock_t`
-///        (counter + spinlock).
 
 #pragma once
 
-#include <zxfoundation/types.h>
 #include <zxfoundation/common.h>
 #include <arch/s390x/cpu/atomic.h>
 #include <arch/s390x/cpu/irq.h>
