@@ -195,15 +195,6 @@ void koms_freeze(kobject_t *obj) {
 
 /// @section namespace management
 
-/// @brief Simple hash function for namespace strings.
-static inline uint32_t ns_hash(const char *name) {
-    uint32_t hash = 5381;
-    int c;
-    while ((c = *name++))
-        hash = ((hash << 5) + hash) + (uint32_t)c;
-    return hash % KOBJ_NS_BUCKETS;
-}
-
 /// @brief Initialize a kobject namespace.
 /// @param[in,out] ns     The namespace.
 /// @param[in]     name   Name of the namespace.

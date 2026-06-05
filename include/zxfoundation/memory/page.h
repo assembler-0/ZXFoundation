@@ -8,6 +8,7 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/zxconfig.h>
 #include <zxfoundation/memory/hhdm.h>
+#include <zxfoundation/memory/pmm_types.h>
 #include <arch/s390x/cpu/atomic.h>
 #include <lib/list.h>
 
@@ -25,12 +26,6 @@
 #define PF_OFFLINE      (1U << 11)  ///< MCCK: uncorrected error; permanently removed.
 #define PF_ZERO_READY   (1U << 12)  ///< Pre-zeroed by idle thread; ZX_GFP_ZERO skips memset.
 #define PF_KEY_SET      (1U << 13)  ///< Storage key has been assigned via SSKE.
-
-typedef enum {
-    ZONE_DMA    = 0,
-    ZONE_NORMAL = 1,
-    ZONE_MAX    = 2,
-} zone_id_t;
 
 struct kmem_cache;
 

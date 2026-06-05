@@ -40,9 +40,9 @@
 #ifndef __ASSEMBLER__
 
 #include <zxfoundation/types.h>
-#include <zxfoundation/zxconfig.h>
 #include <zxfoundation/sync/spinlock.h>
-#include <zxfoundation/memory/pmm.h>
+#include <zxfoundation/memory/pmm_types.h>
+#include <zxfoundation/memory/hhdm.h>
 
 /// @brief Software per-CPU data block.  Embedded in the 8 KB prefix area
 ///        starting at LC_PERCPU_OFFSET (0x400).

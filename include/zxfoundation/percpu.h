@@ -8,6 +8,7 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/zxconfig.h>
 #include <zxfoundation/memory/hhdm.h>
+#include <zxfoundation/common.h>
 #include <arch/s390x/cpu/lowcore.h>
 
 #define MAX_CPUS        CONFIG_ZX_MAX_CPUS

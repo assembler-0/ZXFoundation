@@ -8,7 +8,7 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/common.h>
 #include <zxfoundation/sync/spinlock.h>
-#include <zxfoundation/sync/rcu.h>
+#include <zxfoundation/sync/rcu_types.h>
 #include <arch/s390x/cpu/atomic.h>
 
 typedef struct list_head {

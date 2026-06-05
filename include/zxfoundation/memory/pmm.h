@@ -7,6 +7,7 @@
 #include <zxfoundation/types.h>
 #include <zxfoundation/sync/spinlock.h>
 #include <zxfoundation/memory/page.h>
+#include <zxfoundation/memory/pmm_types.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <lib/list.h>
 
@@ -32,10 +33,6 @@
 
 /// Pages held back per zone for ZX_GFP_ATOMIC callers.
 #define PMM_ATOMIC_RESERVE  64U
-
-/// Per-CPU page cache sizing.
-#define PCP_HIGH            32U    ///< Hot magazine maximum depth.
-#define PCP_BATCH           16U    ///< Pages moved per refill / drain.
 
 // ---------------------------------------------------------------------------
 // Watermark indices
