@@ -3,8 +3,8 @@
 /// @brief STFLE (Store Facility List Extended) API.
 
 export module arch.s390x.cpu.stfle;
-
 import zxfoundation.base.types;
+
 export {
 
 namespace arch::s390x::cpu::stfle {
@@ -52,7 +52,7 @@ namespace arch::s390x::cpu::stfle {
 
         register u64 r0   __asm__("0") = max_dwords - 1U;
         register u64 addr __asm__("1") = *fac_list;
-        int cc;
+        i32 cc;
 
         __asm__ volatile (
             "   .insn   s,0xb2b00000,0(%[addr])\n"
@@ -66,7 +66,7 @@ namespace arch::s390x::cpu::stfle {
         if (cc == 3)
             return 0;
 
-        return static_cast<uint32_t>(r0 + 1U);
+        return static_cast<u32>(r0 + 1U);
     }
 
     /// @brief Test whether a specific facility bit is set.

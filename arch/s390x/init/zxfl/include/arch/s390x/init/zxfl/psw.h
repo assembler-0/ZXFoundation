@@ -128,6 +128,4 @@ static inline zx_psw_t arch_extract_psw(void) {
     __builtin_unreachable();
 }
 
-
-
 #endif /* __ASSEMBLER__ */

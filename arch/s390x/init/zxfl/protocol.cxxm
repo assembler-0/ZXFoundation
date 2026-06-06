@@ -3,7 +3,6 @@
 /// @brief ZXFoundationLoader protocol definitions
 
 export module arch.s390x.init.zxfl.protocol;
-
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.cpu.stfle;

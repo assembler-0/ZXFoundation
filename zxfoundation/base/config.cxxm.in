@@ -3,7 +3,6 @@
 /// @brief build-time host info and basic kernel configuration
 
 export module zxfoundation.base.config;
-
 export {
 
 namespace zxfoundation::base::config {

@@ -3,7 +3,6 @@
 /// @brief sha256 implementation
 
 export module crypto.sha256;
-
 import zxfoundation.base.types;
 
 export {
