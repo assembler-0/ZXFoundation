@@ -14,14 +14,10 @@ if (ZX_HOST_CC)
     add_custom_command(
         OUTPUT "${CMAKE_BINARY_DIR}/zxsign"
         COMMAND ${ZX_HOST_CC}
-                -I${CMAKE_SOURCE_DIR}/include
+                -I${CMAKE_SOURCE_DIR}/arch/s390x/init/zxfl/include
                 ${CMAKE_SOURCE_DIR}/tools/zxsign.c
-                ${CMAKE_SOURCE_DIR}/crypto/sha256.c
+                ${CMAKE_SOURCE_DIR}/arch/s390x/init/zxfl/common/sha256.c
                 -o "${CMAKE_BINARY_DIR}/zxsign"
-        DEPENDS
-            "${CMAKE_SOURCE_DIR}/tools/zxsign.c"
-            "${CMAKE_SOURCE_DIR}/crypto/sha256.c"
-            "${CMAKE_SOURCE_DIR}/include/crypto/sha256.h"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         VERBATIM
         COMMENT "zxfoundation::build: building zxsign"

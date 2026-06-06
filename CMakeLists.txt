@@ -8,9 +8,9 @@
 # @copyright (C) 2025-2026 assembler-0
 # ============================================================================
 
-cmake_minimum_required(VERSION 3.0...3.10)
+cmake_minimum_required(VERSION 3.30)
 project(ZXFoundation
-    LANGUAGES C ASM
+    LANGUAGES C CXX ASM
 )
 
 if (NOT CMAKE_TOOLCHAIN_FILE)

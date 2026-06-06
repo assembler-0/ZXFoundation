@@ -15,6 +15,7 @@ PHDRS {
 }
 
 nucleus_vma_base = 0xFFFF800000100000;
+BYTE = 8;
 
 SECTIONS {
     . = nucleus_vma_base;
@@ -38,6 +39,23 @@ SECTIONS {
         __rodata_end = .;
     } :nucleus_ro
 
+    .ctors ALIGN(BYTE) :
+    {
+        __ctors_start = .;
+        KEEP(*(.ctors*))
+        . = ALIGN(BYTE);
+        __ctors_end = .;
+    } :nucleus_ro
+
+	.dtors ALIGN(BYTE) :
+	{
+	    __dtors_start = .;
+	    KEEP(*(.dtors*))
+   	    . = ALIGN(BYTE);
+	    __dtors_end = .;
+	} :nucleus_ro
+
+
     .data : ALIGN(4096) {
         __data_start = .;
         *(.data .data.*)
@@ -48,7 +66,7 @@ SECTIONS {
         __bss_start = .;
         *(COMMON)
         *(.bss .bss.*)
-        . = ALIGN(8);
+        . = ALIGN(BYTE);
         __bss_end = .;
     } :nucleus_bss
 

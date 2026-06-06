@@ -6,8 +6,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
-#include <crypto/sha256.h>
-#include "../include/zxfoundation/memory/hhdm.h"
+#include <arch/s390x/init/zxfl/sha256.h>
+#include <zxfoundation/memory/hhdm.h>
 
 #define PT_LOAD          1
 #define ELFMAG           "\x7f""ELF"

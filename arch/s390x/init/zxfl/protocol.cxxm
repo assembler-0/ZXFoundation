@@ -1,0 +1,218 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file protocol.cxxm
+/// @brief ZXFoundationLoader protocol definitions
+
+export module arch.s390x.init.zxfl.protocol;
+
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import arch.s390x.cpu.stfle;
+import crypto.sha256;
+
+export {
+
+namespace arch::s390x::init::zxfl {
+
+    constexpr auto ZXFL_MAGIC        = 0x5A58464CU;
+    constexpr auto ZXFL_VERSION_4    = 0x00000004U;
+    constexpr auto ZXFL_LOADER_MAJOR = 1U;
+    constexpr auto ZXFL_LOADER_MINOR = 0U;
+    constexpr auto ZXFL_SEED         = 0xA5F0C3E1B2D49687UL;
+    constexpr auto ZXFL_OFFSET_KERNEL_STACK_TOP = 400U;
+
+    constexpr auto ZXFL_FLAG_SMP      = 1U << 0;  ///< cpu_map[] is valid
+    constexpr auto ZXFL_FLAG_MEM_MAP  = 1U << 1;  ///< mem_map is valid
+    constexpr auto ZXFL_FLAG_CMDLINE  = 1U << 2;  ///< cmdline_addr is valid
+    constexpr auto ZXFL_FLAG_LOWCORE  = 1U << 3;  ///< lowcore_phys is valid
+    constexpr auto ZXFL_FLAG_STFLE    = 1U << 4;  ///< stfle_fac[] is valid
+    constexpr auto ZXFL_FLAG_SYSINFO  = 1U << 5;  ///< system identification is valid
+    constexpr auto ZXFL_FLAG_TOD      = 1U << 6;  ///< tod_boot is valid
+
+    constexpr auto ZXFL_MEM_MAP_MAX   = 16U;
+    constexpr auto ZXFL_CPU_MAP_MAX    = zxfoundation::base::config::CONFIG_ZX_MAX_CPUS;
+
+    constexpr auto ZXFL_MEM_USABLE    = 0x01U;    ///< Conventional RAM
+    constexpr auto ZXFL_MEM_RESERVED  = 0x02U;    ///< Firmware/loader reserved
+    constexpr auto ZXFL_MEM_LOADER    = 0x03U;    ///< Occupied by the loader itself
+    constexpr auto ZXFL_MEM_KERNEL    = 0x04U;    ///< Occupied by the loaded kernel
+
+    constexpr auto ZXFL_CPU_ONLINE    = 0x01U;    ///< CPU is running (BSP)
+    constexpr auto ZXFL_CPU_STOPPED   = 0x02U;    ///< CPU is stopped (AP, ready for SIGP)
+    constexpr auto ZXFL_CPU_UNKNOWN   = 0x00U;    ///< State could not be determined
+
+    constexpr auto ZXFL_CPU_TYPE_CP      = 1U;    ///< General-purpose CP
+    constexpr auto ZXFL_CPU_TYPE_IFL     = 2U;    ///< Integrated Facility for Linux
+    constexpr auto ZXFL_CPU_TYPE_ICF     = 3U;    ///< Internal Coupling Facility
+    constexpr auto ZXFL_CPU_TYPE_ZIIP    = 4U;    ///< zIIP
+    constexpr auto ZXFL_CPU_TYPE_UNKNOWN = 0xFFU; ///< Unknown type
+
+    constexpr auto ZXFL_LOWCORE_PHYS     = 0x0ULL;
+    /// @}
+
+    /// @brief One entry in the physical memory map.
+    struct zxfl_mem_region {
+        u64 base{};      ///< Physical base address
+        u64 length{};    ///< Length in bytes
+        u32 type{};      ///< ZXFL_MEM_* constant
+        u8  numa_node{}; ///< NUMA node ID
+        u8  _pad[3]{};
+    };
+
+    /// @brief One entry in the CPU map.
+    struct zxfl_cpu_info {
+        u16 cpu_addr{};  ///< z/Arch CPU address (used with SIGP)
+        u8  type{};      ///< ZXFL_CPU_TYPE_* constant
+        u8  state{};     ///< ZXFL_CPU_* constant
+        u8  numa_node{}; ///< NUMA node ID (derived from book/socket)
+        u8  drawer_id{}; ///< Drawer ID from STSI 15.1.x
+        u8  book_id{};   ///< Book ID from STSI 15.1.x
+        u8  socket_id{}; ///< Socket ID from STSI 15.1.x
+        u8  chip_id{};   ///< Chip ID from STSI 15.1.x
+        u8  thread_id{}; ///< Thread ID from STSI 15.1.x
+        u8  _pad[2]{};   ///< Alignment padding to 12 bytes
+    };
+
+    /// @brief System identification — populated from STSI.
+    ///        All strings are EBCDIC from the hardware; the loader converts
+    ///        them to ASCII before filling this struct.
+    struct zxfl_sysinfo {
+        char     manufacturer[16]{}; ///< STSI 1.1.1 manufacturer (NUL-padded ASCII)
+        char     type[4]{};          ///< STSI 1.1.1 machine type (e.g. "2096")
+        char     model[16]{};        ///< STSI 1.1.1 model identifier
+        char     sequence[16]{};     ///< STSI 1.1.1 serial number
+        char     plant[4]{};         ///< STSI 1.1.1 manufacturing plant
+        char     lpar_name[8]{};     ///< STSI 2.2.2 LPAR name (NUL-padded ASCII)
+        u16 lpar_number{};      ///< STSI 2.2.2 LPAR number
+        u16 cpus_total{};       ///< STSI 1.2.2 total CPUs in CEC
+        u16 cpus_configured{};  ///< STSI 1.2.2 configured CPUs
+        u16 cpus_standby{};     ///< STSI 1.2.2 standby CPUs
+        u32 capability{};       ///< STSI 1.2.2 CPU capability rating
+        u32 _pad{};
+    };
+
+    struct zxfl_boot_protocol {
+        u32 magic{};             ///< ZXFL_MAGIC
+        u32 version{};           ///< ZXFL_VERSION_4
+        u32 flags{};             ///< ZXFL_FLAG_* bitmask
+        u32 _pad0{};
+
+        u64 binding_token{};
+
+        u16 loader_major{};      ///< ZXFL_LOADER_MAJOR
+        u16 loader_minor{};      ///< ZXFL_LOADER_MINOR
+        u32 loader_timestamp{};  ///< Compile-time timestamp (ZXFL_BUILD_TS macro)
+        u64 loader_build_id{};   ///< Reserved; set to 0
+
+        u32 ipl_schid{};         ///< Subchannel ID of the IPL device
+        u16 ipl_dev_type{};      ///< Device type (e.g. 0x3390)
+        u16 ipl_dev_model{};     ///< Device model (e.g. 0x000C for 3390-12)
+        u32 _pad1{};
+        u32 _pad2{};
+
+        u64 kernel_phys_start{}; ///< Physical base of the loaded kernel image
+        u64 kernel_phys_end{};   ///< Physical end (exclusive)
+        u64 kernel_entry{};      ///< Entry point (HHDM virtual address)
+
+        u64 mem_total_bytes{};   ///< Total detected RAM (bytes)
+        u64 mem_map_addr{};      ///< HHDM virtual address of zxfl_mem_region_t[]
+        u32 mem_map_count{};     ///< Number of valid entries in mem_map
+        u32 _pad3{};
+        u64 _pad5{};             ///< Reserved/Deprecated (formerly expanded storage size)
+
+        u64 stfle_fac[cpu::stfle::STFLE_MAX_DWORDS]{}; ///< Full STFLE output (32 dwords)
+        u32 stfle_count{};       ///< Actual dwords returned by STFLE
+        u32 _pad4{};
+
+        u64 lowcore_phys{};      ///< Physical address of BSP lowcore (always 0x0)
+
+        u64 cmdline_addr{};      ///< HHDM virtual address of NUL-terminated cmdline
+        u32 cmdline_len{};       ///< Length in bytes (excluding NUL)
+        u32 _pad6{};
+
+        u64 kernel_stack_top{};  ///< HHDM virtual address of initial stack top
+
+        u64 cr0_snapshot{};      ///< CR0 at time of kernel jump
+        u64 cr1_snapshot{};      ///< CR1 (ASCE) at time of kernel jump
+        u64 cr13_snapshot{};     ///< CR13 at time of kernel jump
+
+        u64 pgtbl_pool_end{};    ///< Physical end (exclusive) of the bootloader's
+                                    ///<   page-table bump pool.  The kernel PMM must
+                                    ///<   reserve [pool_base, pgtbl_pool_end) to avoid
+                                    ///<   overwriting live DAT tables.
+
+        zxfl_cpu_info cpu_map[ZXFL_CPU_MAP_MAX]{}; ///< CPU map (valid when FLAG_SMP)
+        u32 cpu_count{};         ///< Number of valid entries in cpu_map
+        u16 bsp_cpu_addr{};      ///< CPU address of the boot processor
+        u16 _pad7{};
+
+        zxfl_sysinfo sysinfo;     ///< Machine info (valid when FLAG_SYSINFO)
+
+        u64 tod_boot{};          ///< TOD clock value at boot (STCK)
+
+        u32 module_count{};
+        u32 _pad8{};
+        struct {
+            char     name[32]{};      ///< Module name (NUL-terminated)
+            u64 phys_start{};    ///< Physical start address
+            u64 size_bytes{};    ///< Size of the module in bytes
+        } modules[16];
+
+        u64 cksum_table_phys{};  ///< Physical address of zxvl_checksum_table_t
+        u64 lock_phys{};         ///< Physical address of .zxfl_lock segment
+    };
+
+} // namespace arch::s390x::init::zxfl
+
+namespace arch::s390x::init::zxvl {
+
+    /// @brief Binding token
+    constexpr auto ZXVL_SEED              = 0xA5F0C3E1B2D49687UL;
+    constexpr auto ZXVL_SEED_HI           = 0xA5F0C3E1U;
+    constexpr auto ZXVL_SEED_LO           = 0xB2D49687U;
+
+    /// @brief Handshake stub — first PT_LOAD segment (PF_X|PF_R, custom bit 22).
+    constexpr auto ZXVL_HS_CHALLENGE      = 0xFEEDFACECAFEBABEUL;
+    constexpr auto ZXVL_HS_RESPONSE       = 0xDEADBEEF0BADF00DUL;
+    constexpr auto ZXVL_HS_RESPONSE_HI    = 0xDEADBEEFU;
+    constexpr auto ZXVL_HS_RESPONSE_LO    = 0x0BADF00DU;
+    constexpr auto ZXVL_PFLAGS_HS         = 0x00400005U;
+    constexpr auto ZXVL_PFLAGS_ENTRY      = 0x00800005U;
+
+    /// @brief Stack frame canaries
+    constexpr auto ZXVL_FRAME_MAGIC_A     = 0xC0FFEE00FACADE42UL;
+    constexpr auto ZXVL_FRAME_MAGIC_B     = 0x1337BABE0DDBA115UL;
+    constexpr auto ZXVL_FRAME_SIZE        = 64U;
+
+    /// @brief Structural lock p_flags fingerprint (PT_LOAD RW, no execute).
+    constexpr auto ZXVL_LOCK_MASK         = 0x3C1E0F8704B2D596UL;
+    constexpr auto ZXVL_LOCK_EXPECTED     = 0xF0A5C3B2E1D49687UL;
+    constexpr auto ZXVL_LOCK_EMBED_HI     = 0xCCBBCC35U;
+    constexpr auto ZXVL_LOCK_EMBED_LO     = 0xE5664311U;
+    constexpr auto ZXVL_LOCK_SENTINEL     = 0x5A58464CU;
+    constexpr auto ZXVL_PFLAGS_LOCK       = 0x00100006U;
+
+    /// @brief SHA-256/512 kernel checksum table
+    constexpr auto ZXVL_CKSUM_MAGIC       = 0x5A58564CU;
+    constexpr auto ZXVL_CKSUM_VERSION     = 0x00000001U;
+    constexpr auto ZXVL_CKSUM_ALGO_SHA256 = 0x00000001U;
+    constexpr auto ZXVL_CKSUM_MAX_ENTRIES = 16U;
+    constexpr auto ZXVL_PFLAGS_CKSUM      = 0x00200004U;
+
+    u64 zxvl_compute_token(const u64 stfle0, const u64 schid) {
+        return ZXVL_SEED ^ stfle0 ^ schid;
+    }
+
+    struct [[gnu::packed]] zxvl_cksum_entry {
+        uint64_t phys_start{};
+        uint64_t size{};
+        uint8_t  digest[crypto::sha256::ZXFL_SHA256_DIGEST_SIZE]{};
+    };
+
+    struct [[gnu::packed]] zxvl_checksum_table {
+        uint32_t magic{}, version{}, algo{}, count{};
+        zxvl_cksum_entry entries[ZXVL_CKSUM_MAX_ENTRIES]{};
+    };
+
+} // namespace arch::s390x::init::zxvl
+
+} // end export

@@ -5,15 +5,21 @@ set(zxfoundation_LINKER_SCRIPT
         CACHE STRING "zxfoundation linker script")
 
 include(cmake/zxfl-compile.cmake)
-include(cmake/zxallsyms.cmake)
 
 add_executable(core.zxfoundation.nucleus
     ${ZX_SOURCES_64}
 )
 
+target_sources(core.zxfoundation.nucleus
+    PUBLIC
+    FILE_SET CXX_MODULES
+    TYPE CXX_MODULES
+    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+    FILES ${ZX_SOURCES_MODULES_64}
+)
+
 target_compile_options(core.zxfoundation.nucleus PRIVATE
     -ffreestanding
-    -nostdlib
     -fno-builtin
     -Wall -Wextra -Wpedantic -Werror
     -fno-strict-aliasing
@@ -22,11 +28,14 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -ftrivial-auto-var-init=pattern
     -fno-omit-frame-pointer
     -mbackchain
-    -fstack-protector-all
+    -fno-stack-protector
     -pipe
     -mno-packed-stack
     -msoft-float
     -mno-vx
+    -fno-exceptions
+    -fno-rtti
+    -Wno-pch-date-time
     -march=${MARCH_MODE}
     -mtune=${MARCH_MODE}
     -m64
@@ -64,22 +73,11 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -g${DSYM_LEVEL}
 )
 
-if (CONFIG_UBSAN)
-    message(STATUS "zxfoundation::build: CONFIG_UBSAN=ON — UBSAN instrumentation enabled")
-    target_compile_options(core.zxfoundation.nucleus PRIVATE
-        -fsanitize=undefined,bounds,shift,alignment,null,vla-bound,object-size,return
-    )
-    target_compile_definitions(core.zxfoundation.nucleus PUBLIC
-        CONFIG_UBSAN=1
-    )
-endif()
-
 set_target_properties(core.zxfoundation.nucleus PROPERTIES
     LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
 
 target_link_options(core.zxfoundation.nucleus PRIVATE
     -T ${zxfoundation_LINKER_SCRIPT}
-    -nostdlib
     -static
     --no-dynamic-linker
     -ztext
@@ -104,10 +102,3 @@ if (ZXSIGN)
         VERBATIM
     )
 endif()
-
-add_dependencies(core.zxfoundation.nucleus zxallsyms_data)
-
-set_source_files_properties(
-    "${CMAKE_BINARY_DIR}/zxallsyms_data.c"
-    PROPERTIES GENERATED TRUE
-)

@@ -1,0 +1,27 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file util.cxxm
+/// @brief C++ utility
+
+export module lib.util;
+import lib.concepts;
+
+export {
+
+namespace lib {
+
+    // @brief Forwards an l-value.
+    template <typename T>
+    [[nodiscard]] constexpr T&& forward(remove_reference_t<T>& arg) noexcept {
+        return static_cast<T&&>(arg);
+    }
+
+    /// @brief Forwards an r-value.
+    template <typename T>
+    [[nodiscard]] constexpr T&& forward(remove_reference_t<T>&& arg) noexcept {
+        static_assert(!is_l_value_reference<T>, "Cannot forward an r-value as an l-value.");
+        return static_cast<T&&>(arg);
+    }
+
+} // namespace lib
+
+} // end export

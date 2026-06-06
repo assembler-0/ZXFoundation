@@ -3,11 +3,17 @@
 //
 /// @brief System detection: SMP CPUs, STSI branding, TOD clock.
 
-#include <arch/s390x/cpu/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
-#include <arch/s390x/cpu/stsi.h>
+#include <arch/s390x/init/zxfl/stsi.h>
 #include <arch/s390x/init/zxfl/ebcdic.h>
 #include <arch/s390x/init/zxfl/string.h>
+
+/// @brief stap — returns the hardware CPU address (used for SIGP, not as a logical ID).
+static inline unsigned short arch_cpu_addr(void) {
+    unsigned short cpu_address;
+    __asm__ volatile("stap %0" : "=m" (cpu_address));
+    return cpu_address;
+}
 
 static void copy_ebcdic_field(char *dest, const char *src, uint32_t len) {
     if (len == 0) return;

@@ -1,0 +1,24 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file sha256.cxxm
+/// @brief sha256 implementation
+
+export module crypto.sha256;
+
+import zxfoundation.base.types;
+
+export {
+
+namespace crypto::sha256 {
+
+    constexpr auto ZXFL_SHA256_DIGEST_SIZE = 32U;
+
+    struct sha256_ctx {
+        u32 state[8]{};
+        u64 bit_count{};
+        u8  buf[64]{};
+        u32 buf_len{};
+    };
+
+} // namespace crypto::sha256
+
+} // end export

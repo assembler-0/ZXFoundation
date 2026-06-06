@@ -1,0 +1,32 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file config.cxxm.in
+/// @brief build-time host info and basic kernel configuration
+
+export module zxfoundation.base.config;
+
+export {
+
+namespace zxfoundation::base::config {
+
+    /// @brief kernel release
+    constexpr auto CONFIG_ZX_RELEASE           = "@ZXFoundation_Release@";
+
+    /// @brief kernel copyright date
+    constexpr auto CONFIG_ZX_COPYRIGHT_DATE    = "@ZXFoundation_Copyright_Date@";
+
+    /// @brief kernel build time (from compiler)
+    constexpr auto CONFIG_ZX_BUILD_DT_COMPILER = __DATE__ " " __TIME__;
+
+    /// @brief host build platform
+    constexpr auto CONFIG_ZX_BUILD_PLATFORM    = "@ZXFoundation_Host_Build_Platform@";
+
+    /// @brief compiler id
+    constexpr auto CONFIG_ZX_COMPILER_ID       = __VERSION__;
+
+    /// @brief maximum number of CPUs
+    constexpr auto CONFIG_ZX_MAX_CPUS          = 128U;
+
+}
+
+}
+

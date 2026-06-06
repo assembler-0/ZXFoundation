@@ -34,12 +34,12 @@
 ///          Both identity (RFX=0) and HHDM (RFX=2047) share the same R2
 ///          table because their RSX indices do not overlap (0 vs 2016).
 
-#include <arch/s390x/cpu/processor.h>
+#include <arch/s390x/init/zxfl/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
-#include <arch/s390x/cpu/stfle.h>
-#include <arch/s390x/init/zxfl/diag.h>
+#include <arch/s390x/init/zxfl/stfle.h>
+#include <arch/s390x/init/zxfl/psw.h>
 #include <zxfoundation/memory/hhdm.h>
-#include <zxfoundation/zxconfig.h>
+
 
 /// ASCE Designation-Type field (bits 60-61).
 /// DT=11 means the root table is a Region-First table (5-level paging).

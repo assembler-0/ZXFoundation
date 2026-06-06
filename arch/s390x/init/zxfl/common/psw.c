@@ -15,7 +15,7 @@
 ///          The bootloader's PSW setup is intentionally minimal: it only needs
 ///          disabled-wait PSWs for the pre-DAT window.
 
-#include <arch/s390x/cpu/psw.h>
+#include <arch/s390x/init/zxfl/psw.h>
 
 /// @brief Install disabled-wait PSWs into all six new PSW slots.
 void zxfl_psw_install_safe_psws(void) {

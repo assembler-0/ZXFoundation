@@ -1,0 +1,357 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file concepts.cxxm
+/// @brief concepts
+
+export module lib.concepts;
+import zxfoundation.base.types;
+
+export {
+
+namespace lib {
+
+    /// @brief checks if t and u are the same type.
+    template <typename t, typename u>
+    concept same_as = __is_same(t, u);
+
+    /// @brief checks if derived is derived from base.
+    template <typename derived, typename base>
+    concept derived_from = __is_base_of(base, derived) &&
+                         __is_convertible_to(const volatile derived*, const volatile base*);
+
+    /// @brief checks if from is convertible to to.
+    template <typename from, typename to>
+    concept convertible_to = __is_convertible_to(from, to);
+
+    /// @brief checks if base is a base class of derived.
+    template <typename base, typename derived>
+    concept base_of = __is_base_of(base, derived);
+
+    template <typename t> concept is_integral          = __is_integral(t);
+    template <typename t> concept is_floating_point    = __is_floating_point(t);
+    template <typename t> concept is_signed            = __is_signed(t);
+    template <typename t> concept is_unsigned          = __is_unsigned(t);
+    template <typename t> concept is_enum              = __is_enum(t);
+    template <typename t> concept is_union             = __is_union(t);
+    template <typename t> concept is_class             = __is_class(t);
+    template <typename t> concept is_pointer           = __is_pointer(t);
+    template <typename t> concept is_member_pointer    = __is_member_pointer(t);
+    template <typename t> concept is_l_value_reference = __is_lvalue_reference(t);
+    template <typename t> concept is_r_value_reference = __is_rvalue_reference(t);
+    template <typename t> concept is_reference         = is_l_value_reference<t> || is_r_value_reference<t>;
+    template <typename t> concept is_void              = __is_void(t);
+    template <typename t> concept is_null_pointer      = same_as<t, nullptr_t>;
+    template <typename t> concept is_array             = __is_array(t);
+    template <typename t> concept is_abstract          = __is_abstract(t);
+    template <typename t> concept is_final             = __is_final(t);
+    template <typename t> concept is_empty             = __is_empty(t);
+    template <typename t> concept is_polymorphic       = __is_polymorphic(t);
+    template <typename t> concept is_function          = __is_function(t);
+    template <typename t> concept is_standard_layout   = __is_standard_layout(t);
+    template <typename t> concept is_trivial           = __is_trivial(t);
+    template <typename t> concept is_pod               = is_trivial<t> && is_standard_layout<t>;
+
+    template <typename t>
+    concept is_arithmetic = is_integral<t> || is_floating_point<t>;
+
+    template <typename t>
+    concept is_scalar = is_arithmetic<t> || is_pointer<t> || is_member_pointer<t>
+                  || is_enum<t>       || is_null_pointer<t>;
+
+    template <typename t>
+    concept is_fundamental = is_scalar<t> || is_void<t>;
+
+    template <typename t>
+    concept is_compound = !is_fundamental<t>;
+
+    template <typename t> concept is_const          = __is_const(t);
+    template <typename t> concept is_volatile       = __is_volatile(t);
+    template <typename t> concept is_const_volatile = is_const<t> && is_volatile<t>;
+
+    template <typename t>
+    concept is_object_type = !is_reference<t> && !is_void<t> && !is_function<t>;
+
+    template <typename t>
+    concept is_referenceable = !is_void<t>;
+
+    template <typename t>
+    struct remove_cv_ref {
+        using type = __remove_cvref(t);
+    };
+
+    template <typename t>
+    using unqualified = remove_cv_ref<t>::type;
+
+    template <typename t>
+    struct remove_reference      { using type = t; };
+    template <typename t> struct remove_reference<t&>  { using type = t; };
+    template <typename t> struct remove_reference<t&&> { using type = t; };
+
+    template <typename t>
+    using remove_reference_t =  remove_reference<t>::type;
+
+    /// @brief remove array extent from a type.
+    template <typename t>           struct remove_extent       { using type = t; };
+    template <typename t>           struct remove_extent<t[]>  { using type = t; };
+    template <typename t, usize n>  struct remove_extent<t[n]> { using type = t; };
+
+    template <typename t>
+    using remove_reference_t = remove_reference<t>::type;
+
+    /// @brief casts a value to an r-value reference to enable move semantics.
+    template <typename t>
+    [[nodiscard]] constexpr remove_reference_t<t>&& move(t&& arg) noexcept {
+        return static_cast<remove_reference_t<t>&&>(arg);
+    }
+
+    /// @brief declares an object of type t in an unevaluated context.
+    /// @note this function has no implementation. it is only for type traits and concepts.
+    template <typename t>
+    t&& decl_val() noexcept;
+
+    template <typename T>
+    concept is_destructible = (is_object_type<T> || is_reference<T>) && requires(T& t) {
+        { t.~t() } noexcept;
+    };
+
+    template <typename t>
+    concept is_trivially_destructible = is_destructible<t> && __is_trivially_destructible(t);
+
+    template <typename T>
+    concept is_nothrow_destructible = is_destructible<T> && requires(T& t) {
+        { t.~t() } noexcept;
+    };
+
+    template <typename t, typename... args>
+    concept is_constructible_from = is_destructible<t> && __is_constructible(t, args...);
+
+    template <typename t>
+    concept is_default_constructible = is_constructible_from<t>;
+
+    template <typename t>
+    concept is_trivially_default_constructible = is_default_constructible<t> && __is_trivially_constructible(t);
+
+    template <typename t>
+    concept is_nothrow_default_constructible = is_default_constructible<t> && __is_nothrow_constructible(t);
+
+    template <typename t>
+    concept is_move_constructible = is_constructible_from<t, t> && convertible_to<t, t>;
+
+    template <typename t>
+    concept is_trivially_move_constructible = is_move_constructible<t> && __is_trivially_constructible(t, t);
+
+    template <typename t>
+    concept is_nothrow_move_constructible = is_move_constructible<t> && __is_nothrow_constructible(t, t);
+
+    template <typename t>
+    concept is_copy_constructible = is_move_constructible<t> &&
+                               is_constructible_from<t, t&> && convertible_to<t&, t> &&
+                               is_constructible_from<t, const t&> && convertible_to<const t&, t> &&
+                               is_constructible_from<t, const t> && convertible_to<const t, t>;
+
+    template <typename t>
+    concept is_trivially_copy_constructible = is_copy_constructible<t> &&
+                                        __is_trivially_constructible(t, const t&);
+
+    template <typename t>
+    concept is_nothrow_copy_constructible = is_copy_constructible<t> &&
+                                      __is_nothrow_constructible(t, const t&);
+
+    template <typename L, typename R>
+    concept assignable_from =
+        is_l_value_reference<L> &&
+        requires(L lhs, R&& rhs) {
+            { lhs = static_cast<R&&>(rhs) } -> same_as<R>;
+        };
+
+    template <typename t>
+    concept is_copy_assignable = assignable_from<t&, const t&>;
+
+    template <typename t>
+    concept is_trivially_copy_assignable = is_copy_assignable<t> && __is_trivially_assignable(t&, const t&);
+
+    template <typename t>
+    concept is_nothrow_copy_assignable = is_copy_assignable<t> && __is_nothrow_assignable(t&, const t&);
+
+    template <typename t>
+    concept is_move_assignable = assignable_from<t&, t>;
+
+    template <typename t>
+    concept is_trivially_move_assignable = is_move_assignable<t> && __is_trivially_assignable(t&, t);
+
+    template <typename t>
+    concept is_nothrow_move_assignable = is_move_assignable<t> && __is_nothrow_assignable(t&, t);
+
+    template <typename t>
+    void swap(t& a, t& b) noexcept; // forward declaration
+
+    template <typename t>
+    concept is_swappable = requires(t& a, t& b) {
+        { swap(a, b) } noexcept;
+    };
+
+    template <typename T>
+    concept boolean_testable = convertible_to<T, bool> &&
+        requires(T&& t) {
+            { !static_cast<T&&>(t) } -> convertible_to<bool>;
+        };
+
+    template <typename T, typename U>
+    concept weakly_equality_comparable_with =
+        requires(const unqualified<T>& t, const unqualified<U>& u) {
+            { t == u } -> boolean_testable;
+            { t != u } -> boolean_testable;
+            { u == t } -> boolean_testable;
+            { u != t } -> boolean_testable;
+        };
+
+    template <typename T>
+    concept equality_comparable = weakly_equality_comparable_with<T, T>;
+
+    template <typename T, typename U>
+    concept equality_comparable_with =
+        equality_comparable<T> &&
+        equality_comparable<U> &&
+        weakly_equality_comparable_with<T, U>;
+
+    template <typename T>
+    concept totally_ordered = equality_comparable<T> &&
+        requires(const unqualified<T>& a, const unqualified<T>& b) {
+            { a <  b } -> boolean_testable;
+            { a >  b } -> boolean_testable;
+            { a <= b } -> boolean_testable;
+            { a >= b } -> boolean_testable;
+        };
+
+    template <typename T>
+    concept three_way_comparable = requires(const T& a, const T& b) {
+        { a <=> b };
+    };
+
+    template <typename T>
+    concept movable = is_object_type<T> && is_move_constructible<T> &&
+                     assignable_from<T&, T> && is_swappable<T>;
+
+    template <typename t>
+    concept copyable = movable<t> && is_copy_constructible<t> &&
+                      assignable_from<t&, t&> &&
+                      assignable_from<t&, const t&> &&
+                      assignable_from<t&, const t>;
+
+    template <typename T>
+    concept trivially_copyable = copyable<T> && __is_trivially_copyable(T);
+    
+    template <typename T>
+    concept semiregular = copyable<T> && is_default_constructible<T>;
+
+    template <typename T>
+    concept regular = semiregular<T> && equality_comparable<T>;
+
+    template <typename F, typename... Args>
+    concept invocable = requires(F&& f, Args&&... args) {
+        static_cast<F&&>(f)(static_cast<Args&&>(args)...);
+    };
+
+    template <typename F, typename... Args>
+    concept regular_invocable = invocable<F, Args...>;
+
+    template <typename F, typename... Args>
+    concept predicate = regular_invocable<F, Args...> &&
+                       boolean_testable<decltype(decl_val<F>()(decl_val<Args>()...))>;
+
+    template <typename r, typename t, typename u>
+    concept relation = predicate<r, t, t> && predicate<r, u, u> &&
+                      predicate<r, t, u> && predicate<r, u, t>;
+
+    template <typename r, typename t, typename u>
+    concept strict_weak_order = relation<r, t, u>;
+
+    template <typename I>
+    concept iterator = requires(I it) {
+        { *it };
+        { ++it } -> same_as<I&>;
+    };
+
+    template <typename i>
+    using iter_value = unqualified<decltype(*decl_val<i>())>;
+
+    template <typename i>
+    concept input_iterator = iterator<i> && equality_comparable<i>;
+
+    template <typename i, typename t>
+    concept output_iterator = iterator<i> && requires(i it, t&& val) {
+        { *it = static_cast<t&&>(val) };
+    };
+
+    template <typename i>
+    concept forward_iterator = input_iterator<i> &&
+        is_default_constructible<i> &&
+        requires(i it) {
+            { it++ } -> same_as<i>;
+            { *it++ };
+        };
+
+    template <typename i>
+    concept bidirectional_iterator = forward_iterator<i> &&
+        requires(i it) {
+            { --it  } -> same_as<i&>;
+            { it--  } -> same_as<i>;
+        };
+
+    template <typename i>
+    concept random_access_iterator = bidirectional_iterator<i> &&
+        totally_ordered<i> &&
+        requires(i it, i jt, isize n) {
+            { it + n  } -> same_as<i>;
+            { it - n  } -> same_as<i>;
+            { it - jt } -> same_as<isize>;
+            { it[n]   };
+        };
+
+    template <typename R>
+    concept range = requires(R& r) {
+        { r.begin() } -> iterator;
+        { r.end()   };
+    };
+
+    template <typename R>
+    concept homogeneous_range = requires(R& r) {
+        { r.begin() } -> forward_iterator;
+        { r.end()   } -> same_as<decltype(r.begin())>;
+    };
+
+    template <typename T>
+    struct make_unsigned;
+
+    template <> struct make_unsigned<i8>   { using type = u8; };
+    template <> struct make_unsigned<u8>   { using type = u8; };
+    template <> struct make_unsigned<i16>  { using type = u16; };
+    template <> struct make_unsigned<u16>  { using type = u16; };
+    template <> struct make_unsigned<i32>  { using type = u32; };
+    template <> struct make_unsigned<u32>  { using type = u32; };
+    template <> struct make_unsigned<i64>  { using type = u64; };
+    template <> struct make_unsigned<u64>  { using type = u64; };
+
+    template <typename T>
+    struct make_signed;
+
+    template <> struct make_signed<i8>   { using type = i8; };
+    template <> struct make_signed<u8>   { using type = i8; };
+    template <> struct make_signed<i16>  { using type = i16; };
+    template <> struct make_signed<u16>  { using type = i16; };
+    template <> struct make_signed<i32>  { using type = i32; };
+    template <> struct make_signed<u32>  { using type = i32; };
+    template <> struct make_signed<i64>  { using type = i64; };
+    template <> struct make_signed<u64>  { using type = i64; };
+
+    template <typename T, usize N>
+    concept fits_in_bytes = sizeof(T) <= N;
+
+    template <typename T, usize N>
+    concept alignment_at_most = alignof(T) <= N;
+
+    template <typename T, usize N>
+    concept storable_in_buffer = fits_in_bytes<T, N> && trivially_copyable<T>;
+
+} // namespace lib
+
+} // end export

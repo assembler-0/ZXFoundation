@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/stage2/entry.c
 
-#include <arch/s390x/cpu/processor.h>
+#include <arch/s390x/init/zxfl/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/zxvl.h>
-#include <arch/s390x/cpu/stfle.h>
-#include <arch/s390x/cpu/sclp.h>
+#include <arch/s390x/init/zxfl/stfle.h>
+#include <arch/s390x/init/zxfl/sclp.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/dasd_eckd.h>

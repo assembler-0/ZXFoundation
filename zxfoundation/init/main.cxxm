@@ -1,0 +1,14 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file main.cxxm
+/// @brief kernel main entry point
+
+export module zxfoundation.init.main;
+
+import zxfoundation.base.types;
+import arch.s390x.init.zxfl.protocol;
+
+extern "C" [[noreturn]]
+void zxfoundation_global_initialize(const arch::s390x::init::zxfl::zxfl_boot_protocol& protocol) {
+    (void)protocol;
+    while (true);
+}

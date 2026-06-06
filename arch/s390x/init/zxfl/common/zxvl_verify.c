@@ -11,7 +11,7 @@
 #include <arch/s390x/init/zxfl/panic.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
-#include <crypto/sha256.h>
+#include <arch/s390x/init/zxfl/sha256.h>
 
 void zxvl_verify_nucleus_checksums(uint64_t cksum_table_phys) {
     const zxvl_checksum_table_t *tbl =

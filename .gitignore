@@ -13,4 +13,6 @@ flatboot/
 .DS_Store
 .antigravitycli
 include/zxfoundation/zxconfig.h
+zxfoundation/base/config.cxxm
 doxygen-build/
+convert*.py

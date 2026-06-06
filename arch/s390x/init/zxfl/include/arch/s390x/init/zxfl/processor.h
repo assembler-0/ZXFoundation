@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: Apache-2.0
+// include/arch/s390x/cpu/processor.h
+//
+/// @brief s390x CPU control primitives
+
+#pragma once
+
+#include <zxfoundation/zxconfig.h>
+#include <zxfoundation/memory/hhdm.h>
+#include <arch/s390x/init/zxfl/psw.h>
+#include <arch/s390x/init/zxfl/zxfl.h>
+#include <zxfoundation/common.h>
+
+/// @brief Generic spin-loop hint.  Use inside every busy-wait loop.
+static inline void arch_cpu_relax(void) {
+    barrier();
+}
+
+/// @brief Set the Storage Key for a 4KB physical block.
+/// @param paddr  Physical address (must be 4KB aligned).
+/// @param key    Storage key: bits 0-3 = ACC, bit 4 = F, bit 5 = R, bit 6 = C.
+static inline void arch_set_storage_key(uint64_t paddr, uint8_t key) {
+    __asm__ volatile (
+        "sske %[key], %[paddr]\n"
+        : : [key] "d" ((uint64_t)key), [paddr] "a" (paddr) : "memory"
+    );
+}
+
+/// @brief Perform Frame Management Function.
+static inline void arch_pfmf(uint64_t op1, uint64_t phys) {
+    __asm__ volatile (
+        "pfmf %[op1], %[addr]\n"
+        : : [op1] "d" (op1), [addr] "a" (phys) : "memory"
+    );
+}
+
+
+/// @brief stap — returns the hardware CPU address (used for SIGP, not as a logical ID).
+static inline unsigned short arch_cpu_addr(void) {
+    unsigned short cpu_address;
+    __asm__ volatile("stap %0" : "=m" (cpu_address));
+    return cpu_address;
+}
+
+static inline uint32_t arch_get_prefix(void) {
+    uint32_t prefix;
+    __asm__ volatile("stpx %0" : "=m" (prefix));
+    return prefix;
+}
+
+static inline void arch_set_prefix(uint32_t prefix) {
+    __asm__ volatile("spx %0" : : "m" (prefix) : "memory");
+}
+
+/// @brief Return the logical CPU ID (0-based, dense) for the executing CPU.
+static inline int arch_smp_processor_id(void) {
+    const auto cpu_id_ptr = (const uint16_t *)(uintptr_t)
+        (hhdm_phys_to_virt(arch_get_prefix()) + 0x408UL);
+    const uint16_t id = *cpu_id_ptr;
+    if (id >= (uint16_t)CONFIG_ZX_MAX_CPUS)
+        return 0;
+    return id;
+}
+
+#define arch_ctl_store(array, low, high) ({		        \
+	typedef struct { char _[sizeof(array)]; } addrtype; \
+	__asm__ volatile(					                \
+		"	stctg	%1,%2,%0\n"		                    \
+		: "=Q" (*(addrtype *)(&array))		            \
+		: "i" (low), "i" (high));		                \
+})
+
+#define arch_ctl_load(array, low, high) ({			        \
+	typedef struct { char _[sizeof(array)]; } addrtype; \
+	__asm__ volatile(					                \
+		"	lctlg	%1,%2,%0\n"	                		\
+		: : "Q" (*(addrtype *)(&array)),	        	\
+		  "i" (low), "i" (high));		            	\
+})
+
+static inline void arch_ctl_set_bit(unsigned int cr, unsigned int bit) {
+    unsigned long reg;
+    arch_ctl_store(reg, cr, cr);
+    reg |= 1UL << bit;
+    arch_ctl_load(reg, cr, cr);
+}
+
+static inline void arch_ctl_clear_bit(unsigned int cr, unsigned int bit) {
+    unsigned long reg;
+    arch_ctl_store(reg, cr, cr);
+    reg &= ~(1UL << bit);
+    arch_ctl_load(reg, cr, cr);
+}
+
+/// @brief cpuid structure
+struct s390x_cpuid {
+    unsigned int version:8;
+    unsigned int ident:24;
+    unsigned int machine:16;
+    unsigned int unused:16;
+} __attribute__((packed, aligned(8)));
+
+static inline void arch_get_cpu_id(struct s390x_cpuid *id) {
+    __asm__ volatile("stidp %0" : "=m" (*id));
+}
+
+static inline int arch_is_zvm(void) {
+    struct s390x_cpuid id;
+    arch_get_cpu_id(&id);
+    return id.version == 0xFF;
+}
+
+/// @brief Enter the disabled wait state.
+[[noreturn]] static inline void arch_sys_halt(void) {
+    static const zx_psw_t halt_psw __attribute__((aligned(8))) = {
+        .mask = PSW_MASK_DISABLED_WAIT,
+        .addr = PSW_STD_HALT_ADDR,
+    };
+    arch_load_psw(&halt_psw);
+}
+
+/// SIGP order codes (PoP SA22-7832 Chapter 4).
+#define SIGP_SENSE                      0x01U
+#define SIGP_EXTERNAL_CALL              0x02U
+#define SIGP_EMERGENCY_SIGNAL           0x03U
+#define SIGP_START                      0x04U
+#define SIGP_STOP                       0x05U
+#define SIGP_RESTART                    0x06U
+#define SIGP_STOP_AND_STORE_STATUS      0x09U
+#define SIGP_INITIAL_CPU_RESET          0x0BU
+#define SIGP_SET_PREFIX                 0x0DU
+#define SIGP_STORE_STATUS               0x0EU
+#define SIGP_SET_ARCHITECTURE           0x12U
+#define SIGP_SET_MULTI_THREADING        0x16U
+#define SIGP_STORE_ASTATUS_AT_ADDRESS   0x17U
+
+/// SIGP condition codes.
+#define SIGP_CC_ORDER_CODE_ACCEPTED     0
+#define SIGP_CC_STATUS_STORED           1
+#define SIGP_CC_BUSY                    2
+#define SIGP_CC_NOT_OPERATIONAL         3
+
+
+/// @brief Issue a SIGP (Signal Processor) instruction.
+///        The order code is passed in an address register per PoP SA22-7832.
+///        On CC=1 (status stored) the CPU status word is written to *status
+///        if status is non-null.
+/// @param cpu_addr  Target CPU address.
+/// @param order     SIGP order code (SIGP_* constants below).
+/// @param parm      Parameter (placed in r1; used by Set Prefix, Set Architecture, …).
+/// @param status    Out: CPU status word on CC=1, unchanged otherwise.
+/// @return Condition code: 0 = accepted, 1 = status stored, 2 = busy, 3 = not operational.
+static inline int sigp(uint16_t cpu_addr, uint8_t order, uint32_t parm,
+                       uint32_t *status) {
+    register uint32_t r1 __asm__("1") = parm;
+    int cc;
+    __asm__ volatile(
+        "sigp %1,%2,0(%3)\n"
+        "ipm  %0\n"
+        "srl  %0,28\n"
+        : "=d" (cc), "+d" (r1)
+        : "d" ((uint64_t)cpu_addr), "a" ((uint64_t)order)
+        : "cc"
+    );
+    if (status && cc == 1)
+        *status = r1;
+    return cc;
+}
+
+/// @brief Issue SIGP, retrying until the target CPU is no longer busy (CC≠2).
+///        Use this for all orders that must not be silently dropped.
+static inline int sigp_busy(uint16_t cpu_addr, uint8_t order, uint32_t parm,
+                            uint32_t *status) {
+    int cc;
+    do {
+        cc = sigp(cpu_addr, order, parm, status);
+    } while (cc == SIGP_CC_BUSY);
+    return cc;
+}
+
+/// @brief Convert CPU type to string.
+static inline const char *arch_cpu_type_to_string(uint8_t type) {
+    switch (type) {
+        case ZXFL_CPU_TYPE_CP: return "CP";
+        case ZXFL_CPU_TYPE_IFL: return "IFL";
+        case ZXFL_CPU_TYPE_ICF: return "ICF";
+        case ZXFL_CPU_TYPE_ZIIP: return "zIIP";
+        default: return "Unknown";
+    }
+}

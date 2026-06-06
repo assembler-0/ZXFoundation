@@ -20,10 +20,10 @@ set(ZXFL_STAGE2_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/mmu.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/system.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/psw.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stfle.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/sclp.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/cpu/stsi.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/crypto/sha256.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stfle.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/sclp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/stsi.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/sha256.c
 )
 
 set(ZXFL_COMMON_FLAGS

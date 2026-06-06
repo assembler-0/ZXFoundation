@@ -5,7 +5,13 @@ set(ZXFoundation_Copyright_Date "2026")
 set(ZXFoundation_Host_Build_Platform "${CMAKE_HOST_SYSTEM_NAME}@${CMAKE_HOST_SYSTEM_VERSION}::${CMAKE_HOST_SYSTEM_PROCESSOR}")
 
 configure_file(
-    ${CMAKE_SOURCE_DIR}/include/zxfoundation/zxconfig.h.in
-    ${CMAKE_SOURCE_DIR}/include/zxfoundation/zxconfig.h
+    ${CMAKE_SOURCE_DIR}/zxfoundation/base/config.cxxm.in
+    ${CMAKE_SOURCE_DIR}/zxfoundation/base/config.cxxm
+    @ONLY
+)
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/arch/s390x/init/zxfl/include/zxfoundation/zxconfig.h.in
+    ${CMAKE_SOURCE_DIR}/arch/s390x/init/zxfl/include/zxfoundation/zxconfig.h
     @ONLY
 )
