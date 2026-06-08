@@ -4,18 +4,17 @@
 
 export module zxfoundation.memory.hhdm;
 import zxfoundation.base.types;
+import zxfoundation.memory.hhdm_types;
 
 export {
 
 namespace zxfoundation::memory::hhdm {
 
-    constexpr auto KERNEL_VIRTUAL_OFFSET = 0xFFFF800000000000ULL;
-
-    u64 phys_to_virt(const u64 phys) {
+    u64 phys_to_virt(const u64 phys) noexcept {
         return phys + KERNEL_VIRTUAL_OFFSET;
     }
 
-    u64 virt_to_phys(const u64 virt) {
+    u64 virt_to_phys(const u64 virt) noexcept {
         return virt - KERNEL_VIRTUAL_OFFSET;
     }
 

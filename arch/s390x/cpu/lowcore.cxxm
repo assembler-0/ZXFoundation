@@ -1,0 +1,86 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lowcore.cxxm
+/// @brief z/Architecture lowcore definitions
+
+export module arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu_types;
+import arch.s390x.cpu.psw_types;
+import arch.s390x.cpu.lowcore_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.memory.hhdm_types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+
+export {
+
+namespace arch::s390x::cpu::lowcore {
+
+    zx_lowcore* __percpu_lowcore_area_raw[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS];
+
+    /// @name Lowcore access
+    /// @{
+    zx_lowcore* zx_lowcore_current_raw() noexcept {
+        return reinterpret_cast<zx_lowcore*>(reinterpret_cast<uptr>(nullptr));
+    }
+
+    zx_lowcore* zx_lowcore_current() noexcept {
+        return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(0x0));
+    }
+
+    /// @brief Get the lowcore for a specific CPU.
+    /// @param cpu CPU index
+    /// @return Pointer to the CPU's lowcore, or nullptr if invalid
+    zx_lowcore* zx_lowcore_cpu(const u8 cpu) noexcept {
+        if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
+            return nullptr;
+        
+        zx_lowcore* lc = __percpu_lowcore_area_raw[cpu];
+        if (!lc)
+            return nullptr;
+        
+        u64 target = zxfoundation::memory::hhdm::virt_to_phys(reinterpret_cast<u64>(lc));
+        u64 prefix = zx_lowcore_current()->percpu.prefix_base;
+        
+        if (target == prefix) {
+            return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::KERNEL_VIRTUAL_OFFSET);
+        }
+
+        if (target == 0) {
+            return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(prefix));
+        }
+
+        return lc;
+    }
+
+    /// @}
+
+    /// @brief Write the restart new PSW into a lowcore for AP bringup.
+    /// @param lc         AP lowcore (HHDM-mapped pointer).
+    /// @param entry_phys Physical address of ap_entry.
+    void set_restart_psw(zx_lowcore& lc, u64 entry_phys) noexcept {
+        lc.restart_psw.mask = psw::PSW_MASK_KERNEL;
+        lc.restart_psw.addr = entry_phys;
+    }
+
+    /// @brief Store the kernel ASCE into an AP's lowcore so ap_entry can load it.
+    /// @param lc   AP lowcore (HHDM-mapped pointer).
+    /// @param asce Kernel ASCE value (from CR1 on the BSP after mmu_init()).
+    void set_kernel_asce(zx_lowcore& lc, uint64_t asce) noexcept {
+        lc.kernel_asce = asce;
+    }
+
+    /// @brief Get current CPU's per-CPU data.
+    /// @return Reference to current CPU's per-CPU data.
+    inline percpu::s390x_percpu_data& this_cpu_percpu_data() noexcept {
+        return zx_lowcore_current()->percpu;
+    }
+
+    /// @brief Get CPU per-CPU data.
+    /// @return Reference to current CPU's per-CPU data.
+    inline percpu::s390x_percpu_data& cpu_percpu_data(const u8 cpu) noexcept {
+        return zx_lowcore_cpu(cpu)->percpu;
+    }
+
+}
+
+}

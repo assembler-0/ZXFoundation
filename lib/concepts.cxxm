@@ -4,6 +4,8 @@
 
 export module lib.concepts;
 import zxfoundation.base.types;
+import lib.type_traits;
+import lib.util;
 
 export {
 
@@ -35,9 +37,6 @@ namespace lib {
     template <typename t> concept is_class             = __is_class(t);
     template <typename t> concept is_pointer           = __is_pointer(t);
     template <typename t> concept is_member_pointer    = __is_member_pointer(t);
-    template <typename t> concept is_l_value_reference = __is_lvalue_reference(t);
-    template <typename t> concept is_r_value_reference = __is_rvalue_reference(t);
-    template <typename t> concept is_reference         = is_l_value_reference<t> || is_r_value_reference<t>;
     template <typename t> concept is_void              = __is_void(t);
     template <typename t> concept is_null_pointer      = same_as<t, nullptr_t>;
     template <typename t> concept is_array             = __is_array(t);
@@ -81,27 +80,10 @@ namespace lib {
     template <typename t>
     using unqualified = remove_cv_ref<t>::type;
 
-    template <typename t>
-    struct remove_reference      { using type = t; };
-    template <typename t> struct remove_reference<t&>  { using type = t; };
-    template <typename t> struct remove_reference<t&&> { using type = t; };
-
-    template <typename t>
-    using remove_reference_t =  remove_reference<t>::type;
-
     /// @brief remove array extent from a type.
     template <typename t>           struct remove_extent       { using type = t; };
     template <typename t>           struct remove_extent<t[]>  { using type = t; };
     template <typename t, usize n>  struct remove_extent<t[n]> { using type = t; };
-
-    template <typename t>
-    using remove_reference_t = remove_reference<t>::type;
-
-    /// @brief casts a value to an r-value reference to enable move semantics.
-    template <typename t>
-    [[nodiscard]] constexpr remove_reference_t<t>&& move(t&& arg) noexcept {
-        return static_cast<remove_reference_t<t>&&>(arg);
-    }
 
     /// @brief declares an object of type t in an unevaluated context.
     /// @note this function has no implementation. it is only for type traits and concepts.
@@ -180,9 +162,6 @@ namespace lib {
 
     template <typename t>
     concept is_nothrow_move_assignable = is_move_assignable<t> && __is_nothrow_assignable(t&, t);
-
-    template <typename t>
-    void swap(t& a, t& b) noexcept; // forward declaration
 
     template <typename t>
     concept is_swappable = requires(t& a, t& b) {

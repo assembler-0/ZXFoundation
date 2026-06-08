@@ -1,0 +1,54 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file sigp.cxxm
+/// @brief SIGP (SIGnal Processor) API.
+
+export module arch.s390x.cpu.sigp;
+import arch.s390x.cpu.sigp_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::sigp {
+
+    /// @brief Issue a SIGP (Signal Processor) instruction.
+    /// @param cpu_addr Target CPU address.
+    /// @param order SIGP order code (SIGP_* constants).
+    /// @param parm Parameter (placed in r1; used by Set Prefix, Set Architecture, …).
+    /// @param status Out: CPU status word on CC=1, unchanged otherwise.
+    /// @return Condition code: 0 = accepted, 1 = status stored, 2 = busy, 3 = not operational.
+    /// @note The order code is passed in an address register per PoP SA22-7832.
+    ///       On CC=1 (status stored) the CPU status word is written to status.
+    inline int sigp(u16 cpu_addr, u8 order, u32 parm, u32& status) noexcept {
+        register uint32_t r1 __asm__("1") = parm;
+        int cc;
+        __asm__ volatile(
+            "sigp %1,%2,0(%3)\n"
+            "ipm  %0\n"
+            "srl  %0,28\n"
+            : "=d" (cc), "+d" (r1)
+            : "d" (static_cast<u64>(cpu_addr)), "a" (static_cast<u64>(order))
+            : "cc"
+        );
+        if (cc == 1)
+            status = r1;
+        return cc;
+    }
+
+    /// @brief Issue SIGP, retrying until the target CPU is no longer busy (CC≠2).
+    /// @param cpu_addr Target CPU address.
+    /// @param order SIGP order code.
+    /// @param parm Parameter value.
+    /// @param status Out: CPU status word.
+    /// @return Final condition code (0, 1, or 3).
+    /// @note Use this for all orders that must not be silently dropped.
+    inline int sigp_busy(u16 cpu_addr, u8 order, u32 parm, u32& status) noexcept {
+        int cc;
+        do {
+            cc = sigp(cpu_addr, order, parm, status);
+        } while (cc == SIGP_CC_BUSY);
+        return cc;
+    }
+
+} // namespace arch::s390x::cpu::sigp
+
+} // end export

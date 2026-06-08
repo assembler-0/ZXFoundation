@@ -1,0 +1,35 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file stsi.cxxm
+/// @brief STSI (STore System Information) API
+
+export module arch.s390x.cpu.stsi;
+
+export {
+
+namespace arch::s390x::cpu::stsi {
+
+    /// @brief Issue STSI instruction to store system information.
+    /// @param sysinfo 4KB-aligned output block.
+    /// @param fc Function code (e.g. 1).
+    /// @param sel1 Selector 1 (e.g. 1).
+    /// @param sel2 Selector 2 (e.g. 1).
+    /// @return 0 on success, -1 if not supported.
+    inline int stsi(void* sysinfo, int fc, int sel1, int sel2) noexcept {
+		int r0 = fc << 28 | sel1;
+		int cc;
+		__asm__ volatile (
+			"   lr      %%r0,%[r0]\n"
+			"   lr      %%r1,%[r1]\n"
+			"   stsi    %[sysinfo]\n"
+			"   ipm     %[cc]\n"
+			"   srl     %[cc],28\n"
+			: [cc] "=d" (cc), [sysinfo] "=Q" (*static_cast<char*>(sysinfo))
+			: [r0] "d" (r0), [r1] "d" (sel2)
+			: "0", "1", "cc", "memory"
+		);
+		return cc == 3 ? -1 : 0;
+	}
+
+} // namespace arch::s390x::cpu::stsi
+
+} // end export

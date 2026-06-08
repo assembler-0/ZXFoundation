@@ -3,13 +3,14 @@
 /// @brief C++ utility
 
 export module lib.util;
-import lib.concepts;
+import zxfoundation.base.types;
+import lib.type_traits;
 
 export {
 
 namespace lib {
 
-    // @brief Forwards an l-value.
+    /// @brief Forwards an l-value.
     template <typename T>
     [[nodiscard]] constexpr T&& forward(remove_reference_t<T>& arg) noexcept {
         return static_cast<T&&>(arg);
@@ -20,6 +21,26 @@ namespace lib {
     [[nodiscard]] constexpr T&& forward(remove_reference_t<T>&& arg) noexcept {
         static_assert(!is_l_value_reference<T>, "Cannot forward an r-value as an l-value.");
         return static_cast<T&&>(arg);
+    }
+
+    /// @brief Move an object to enable move semantics.
+    template <typename T>
+    [[nodiscard]] constexpr remove_reference_t<T>&& move(T&& t) noexcept {
+        return static_cast<remove_reference_t<T>&&>(t);
+    }
+
+    /// @brief Exchange values of two objects.
+    template <typename T>
+    constexpr void swap(T& a, T& b) noexcept {
+        T temp = move(a);
+        a = move(b);
+        b = move(temp);
+    }
+
+    /// @brief Compiler memory barrier.
+    /// @note Prevents compiler reordering; does NOT emit hardware fence.
+    inline void barrier() noexcept {
+        __asm__ volatile("" ::: "memory");
     }
 
 } // namespace lib

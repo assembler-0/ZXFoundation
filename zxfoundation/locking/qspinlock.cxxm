@@ -1,0 +1,182 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file qspinlock.cxxm
+/// @brief Queued spinlock implementation for s390x
+
+export module zxfoundation.locking.qspinlock;
+import zxfoundation.locking.qspinlock_types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import arch.s390x.lib.atomic;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.processor_types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
+
+export {
+
+namespace zxfoundation::locking::qspinlock {
+
+    using arch::s390x::lib::atomic::atomic;
+    using arch::s390x::lib::atomic::memory_order;
+    static_assert(sizeof(qspinlock_node) == arch::s390x::cpu::processor::S390X_CACHE_LINE_SIZE);
+
+    constexpr u32 QSPINLOCK_LOCKED_MASK    = 0x0000FFFFU;
+    constexpr u32 QSPINLOCK_LOCKED_VAL     = 0x00000001U;
+    constexpr u32 QSPINLOCK_PENDING_MASK   = 0x00030000U;
+    constexpr u32 QSPINLOCK_PENDING_BIT    = 16;
+    constexpr u32 QSPINLOCK_TAIL_SHIFT     = 18;
+    constexpr u32 QSPINLOCK_TAIL_MASK      = 0xFFFC0000U;
+    constexpr u32 QSPINLOCK_TAIL_CPU_BITS  = 14;
+
+    /// @brief Get the current CPU's MCS node for a given depth.
+    /// @param depth Lock depth (0 to MAX_LOCK_DEPTH-1).
+    /// @return Pointer to the current CPU's qspinlock_node.
+    inline qspinlock_node* qspinlock_get_node(u32 depth) noexcept {
+        return &arch::s390x::cpu::lowcore::this_cpu_percpu_data().lock_nodes[depth % MAX_LOCK_DEPTH];
+    }
+
+    /// @brief Initialize a queued spinlock.
+    /// @param lock The spinlock to initialize.
+    inline void qspinlock_init(qspinlock& lock) noexcept {
+        lock.val.store(0, memory_order::relaxed);
+    }
+
+    /// @brief Try to acquire the lock (fast path).
+    /// @param lock The spinlock.
+    /// @return true if lock was acquired, false otherwise.
+    inline bool qspinlock_trylock(qspinlock& lock) noexcept {
+        u32 expected = 0;
+        return lock.val.compare_exchange_strong(expected, QSPINLOCK_LOCKED_VAL,
+                                                 memory_order::acquire,
+                                                 memory_order::relaxed);
+    }
+
+    /// @brief Check if the lock is currently held.
+    /// @param lock The spinlock.
+    /// @return true if locked, false otherwise.
+    [[nodiscard]] inline bool qspinlock_is_locked(const qspinlock& lock) noexcept {
+        return (lock.val.load(memory_order::relaxed) & QSPINLOCK_LOCKED_MASK) != 0;
+    }
+
+    /// @brief Unlock the queued spinlock.
+    /// @param lock The spinlock to release.
+    /// @warning MUST be called by the same CPU that acquired the lock.
+    /// @note Fast path: single atomic store. Slow path: wake next waiter.
+    inline void qspinlock_unlock(qspinlock& lock) noexcept {
+        u32 val = lock.val.load(memory_order::relaxed);
+
+        // Fast path: no waiters, just clear locked bit
+        if (val == QSPINLOCK_LOCKED_VAL) {
+            lock.val.store(0, memory_order::release);
+            return;
+        }
+
+        // Slow path: there are waiters in the queue
+        auto* lc = arch::s390x::cpu::lowcore::zx_lowcore_current();
+        const u32 depth = (lc->percpu.lock_depth > 0) ? --lc->percpu.lock_depth : 0;
+        const int cpu_id = arch::s390x::cpu::processor::arch_smp_processor_id();
+        qspinlock_node* node = &lc->percpu.lock_nodes[depth % MAX_LOCK_DEPTH];
+        qspinlock_node* next_node = node->next.load(memory_order::acquire);
+
+        if (next_node) {
+            // Wake the next waiter
+            next_node->locked.store(0, memory_order::release);
+        } else {
+            // Try to clear the tail if we're the last
+            u32 tail_val = (static_cast<u32>(cpu_id) << QSPINLOCK_TAIL_SHIFT) | QSPINLOCK_LOCKED_VAL;
+            u32 expected = tail_val;
+            
+            if (lock.val.compare_exchange_strong(expected, 0,
+                                                  memory_order::release,
+                                                  memory_order::relaxed)) {
+                return;
+            }
+
+            // Race: someone enqueued; wait for next pointer
+            while (!((next_node = node->next.load(memory_order::acquire)))) {
+                arch::s390x::cpu::processor::arch_cpu_relax();
+            }
+            next_node->locked.store(0, memory_order::release);
+        }
+
+        node->next.store(nullptr, memory_order::relaxed);
+    }
+
+    /// @brief Acquire the queued spinlock.
+    /// @param lock The spinlock to acquire.
+    /// @warning NOT recursive. Calling from the same CPU twice will deadlock.
+    /// @warning Must not be called from interrupt context if the lock is held in process context.
+    /// @note Fast path: uncontended CAS. Slow path: MCS queue.
+    inline void qspinlock_lock(qspinlock& lock) noexcept {
+        // Fast path: try to acquire with a single CAS
+        if (qspinlock_trylock(lock)) {
+            return;
+        }
+
+        // Pending path: set pending bit and spin
+        u32 val = lock.val.load(memory_order::relaxed);
+        
+        if ((val & (QSPINLOCK_LOCKED_MASK | QSPINLOCK_PENDING_MASK)) == 0) {
+            u32 expected = val;
+            u32 new_val = val | (1U << QSPINLOCK_PENDING_BIT);
+            
+            if (lock.val.compare_exchange_strong(expected, new_val,
+                                                  memory_order::acquire,
+                                                  memory_order::relaxed)) {
+                // Spin on the locked bit
+                while (lock.val.load(memory_order::relaxed) & QSPINLOCK_LOCKED_MASK) {
+                    arch::s390x::cpu::processor::arch_cpu_relax();
+                }
+
+                // Clear pending, set locked
+                val = lock.val.load(memory_order::relaxed);
+                val &= ~QSPINLOCK_PENDING_MASK;
+                val |= QSPINLOCK_LOCKED_VAL;
+                lock.val.store(val, memory_order::acquire);
+                return;
+            }
+        }
+
+        // Slow path: enqueue in MCS queue
+        auto* lc = arch::s390x::cpu::lowcore::zx_lowcore_current();
+        const u32 depth = lc->percpu.lock_depth++;
+        const int cpu_id = arch::s390x::cpu::processor::arch_smp_processor_id();
+        qspinlock_node* node = qspinlock_get_node(depth);
+        
+        node->next.store(nullptr, memory_order::relaxed);
+        node->locked.store(1, memory_order::relaxed);
+
+        // Encode CPU ID in tail
+        const u32 tail = (static_cast<u32>(cpu_id) << QSPINLOCK_TAIL_SHIFT);
+
+        // Atomically add ourselves to the tail
+        const u32 old_val = lock.val.fetch_add(tail, memory_order::acquire);
+        u32 old_tail = (old_val & QSPINLOCK_TAIL_MASK);
+
+        if (old_tail) {
+            // There's a predecessor; link to them
+            const u32 prev_cpu = old_tail >> QSPINLOCK_TAIL_SHIFT;
+            auto* prev_lc = arch::s390x::cpu::lowcore::zx_lowcore_cpu(prev_cpu);
+            if (!prev_lc) return;
+            qspinlock_node* prev_node = &prev_lc->percpu.lock_nodes[depth % MAX_LOCK_DEPTH];
+            
+            prev_node->next.store(node, memory_order::release);
+
+            // Spin on our node's locked flag
+            while (node->locked.load(memory_order::acquire)) {
+                arch::s390x::cpu::processor::arch_cpu_relax();
+            }
+        } else {
+            // We're first in queue; spin on lock itself
+            while (lock.val.load(memory_order::relaxed) & QSPINLOCK_LOCKED_MASK) {
+                arch::s390x::cpu::processor::arch_cpu_relax();
+            }
+
+            // Acquire the lock
+            (void)lock.val.fetch_or(QSPINLOCK_LOCKED_VAL, memory_order::acquire);
+        }
+    }
+
+} // namespace zxfoundation::locking::qspinlock
+
+} // end export

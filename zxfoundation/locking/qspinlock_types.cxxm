@@ -1,0 +1,30 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file qspinlock_types.cxxm
+/// @brief Queued spinlock type definitions
+
+export module zxfoundation.locking.qspinlock_types;
+import zxfoundation.base.types;
+import arch.s390x.lib.atomic;
+import arch.s390x.cpu.processor_types;
+
+export {
+
+namespace zxfoundation::locking::qspinlock {
+
+    using arch::s390x::lib::atomic::atomic;
+
+    constexpr usize MAX_LOCK_DEPTH = 4;
+
+    struct alignas(arch::s390x::cpu::processor::S390X_CACHE_LINE_SIZE) qspinlock_node {
+        atomic<qspinlock_node*> next{nullptr};
+        atomic<u32> locked{0};
+        u8 _pad[arch::s390x::cpu::processor::S390X_CACHE_LINE_SIZE - 16]{};
+    };
+
+    struct qspinlock {
+        atomic<u32> val{};
+    };
+
+} // namespace zxfoundation::locking::qspinlock
+
+} // end export

@@ -1,0 +1,35 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file stfle_types.cxxm
+/// @brief STFLE (Store Facility List Extended) API.
+
+export module arch.s390x.cpu.stfle_types;
+
+export {
+
+namespace arch::s390x::cpu::stfle {
+
+    constexpr auto STFLE_MAX_DWORDS        = 32U;
+    constexpr auto STFLE_BIT_ZARCH         = 2U;   ///< < z/Architecture installed
+    constexpr auto STFLE_BIT_STFLE         = 7U;   ///< < STFLE itself
+    constexpr auto STFLE_BIT_EDAT1         = 8U;   ///< < Enhanced-DAT facility 1 (1 MB FC=1 segment entries)
+    constexpr auto STFLE_BIT_PFMF          = 14U;  ///< < Perform-Frame-Management-Function
+    constexpr auto STFLE_BIT_EDAT2         = 78U;  ///< < Enhanced-DAT facility 2 (2 GB FC=1 region-third entries)
+    constexpr auto STFLE_BIT_EIMM          = 21U;  ///< < Extended-immediate facility
+    constexpr auto STFLE_BIT_GEN_INST      = 25U;  ///< < General-instructions-extension
+    constexpr auto STFLE_BIT_EXECUTE_EXT   = 35U;  ///< < Execute-extensions facility
+    constexpr auto STFLE_BIT_FLOATING_PT   = 41U;  ///< < Floating-point extension
+    constexpr auto STFLE_BIT_DFP           = 42U;  ///< < Decimal-floating-point
+    constexpr auto STFLE_BIT_PFPO          = 44U;  ///< < PFPO instruction
+    constexpr auto STFLE_BIT_VECTOR        = 129U; ///< < Vector facility
+    constexpr auto STFLE_BIT_VX            = 134U; ///< < Vector-enhancements facility 0
+    constexpr auto STFLE_BIT_VXRS          = 149U; ///< < Vector-enhancements facility 3
+    constexpr auto STFLE_BIT_VECTOR_ENH    = 135U; ///< < Vector-enhancements facility 1
+    constexpr auto STFLE_BIT_VECTOR_ENH2   = 148U; ///< < Vector-enhancements facility 2
+    constexpr auto STFLE_BIT_GUARDED_STOR  = 133U; ///< < Guarded-storage facility
+    constexpr auto STFLE_BIT_MISC_INST_EXT = 58U;  ///< < Miscellaneous-instruction-extensions 1
+    constexpr auto STFLE_BIT_MISC_INST_EX2 = 76U;  ///< < Miscellaneous-instruction-extensions 2
+    constexpr auto STFLE_BIT_MISC_INST_EX3 = 61U;  ///< < Miscellaneous-instruction-extensions 3
+
+} // namespace arch::cpu::stfle
+
+} // end export

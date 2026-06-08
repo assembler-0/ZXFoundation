@@ -1,0 +1,15 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file hhdm_types.cxxm
+/// @brief HHDM (Higher-Half Direct Map) constants and helper
+
+export module zxfoundation.memory.hhdm_types;
+
+export {
+
+namespace zxfoundation::memory::hhdm {
+
+    constexpr auto KERNEL_VIRTUAL_OFFSET = 0xFFFF800000000000ULL;
+
+} // namespace zxfoundation::memory::hhdm
+
+} // end export

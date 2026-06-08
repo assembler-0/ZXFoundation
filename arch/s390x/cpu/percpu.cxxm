@@ -1,0 +1,15 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file percpu.cxxm
+/// @brief s390x per-CPU data structures
+
+export module arch.s390x.cpu.percpu;
+
+export {
+
+namespace arch::s390x::cpu::percpu {
+
+
+
+} // namespace arch::s390x::cpu::percpu
+
+} // end export

@@ -1,0 +1,52 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file psw_types.cxxm
+/// @brief PSW (Program Status Word) definitions.
+
+export module arch.s390x.cpu.psw_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::psw {
+
+    constexpr auto PSW_STD_HALT_ADDR  = 0x0000000000DEAD00ULL;
+    constexpr auto PSW_BIT_DAT        = 0x0400000000000000ULL;
+    constexpr auto PSW_BIT_IO         = 0x0200000000000000ULL;
+    constexpr auto PSW_BIT_EXT        = 0x0100000000000000ULL;
+    constexpr auto PSW_BIT_MCCK       = 0x0008000000000000ULL;
+    constexpr auto PSW_BIT_WAIT       = 0x0002000000000000ULL;
+    constexpr auto PSW_BIT_PSTATE     = 0x0001000000000000ULL;
+    constexpr auto PSW_BIT_EA         = 0x0000000100000000ULL;
+    constexpr auto PSW_BIT_BA         = 0x0000000080000000ULL;
+
+    /// EA|BA — 64-bit addressing mode bits.  Present in every valid z/Arch PSW.
+    constexpr auto PSW_ARCH_BITS      = PSW_BIT_EA | PSW_BIT_BA;
+
+    /// Supervisor mode, DAT off, all interrupts disabled, 64-bit.
+    constexpr auto PSW_MASK_KERNEL    = PSW_ARCH_BITS;
+
+    /// Home Space Mode bit mask (ASC bits 16-17 = 11).
+    constexpr auto PSW_BIT_HOME_SPACE = 0x0000C00000000000ULL;
+
+    /// Supervisor mode, DAT on, all interrupts disabled, 64-bit.
+    constexpr auto PSW_MASK_KERNEL_DAT = PSW_BIT_DAT | PSW_BIT_HOME_SPACE | PSW_ARCH_BITS;
+
+    /// Disabled wait: wait state set, DAT off, all interrupts disabled, 64-bit.
+    constexpr auto PSW_MASK_DISABLED_WAIT = PSW_BIT_WAIT | PSW_ARCH_BITS;
+
+    constexpr auto PSW_LC_RESTART     = 0x01A0ULL;
+    constexpr auto PSW_LC_EXTERNAL    = 0x01B0ULL;
+    constexpr auto PSW_LC_SVC         = 0x01C0ULL;
+    constexpr auto PSW_LC_PROGRAM     = 0x01D0ULL;
+    constexpr auto PSW_LC_MCCK        = 0x01E0ULL;
+    constexpr auto PSW_LC_IO          = 0x01F0ULL;
+
+    /// @brief 64-bit z/Architecture PSW (16 bytes, 8-byte aligned).
+    struct [[gnu::packed]] alignas(8) zx_psw {
+        u64 mask{};  ///< PSW mask word (bits 0–63 per PoP Figure 4-1).
+        u64 addr{};  ///< Instruction address (bits 64–127).
+    };
+
+} // namespace arch::s390x::cpu::psw
+
+} // end export

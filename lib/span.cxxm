@@ -1,0 +1,83 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file span.cxxm
+/// @brief freestanding std::span implementation
+
+export module lib.span;
+import zxfoundation.base.types;
+
+export {
+
+namespace lib {
+
+    /// @brief A non-owning view over a contiguous sequence of objects.
+    /// @tparam T Type of the elements in the span.
+    template <typename T>
+    class span {
+    public:
+        using pointer         = T*;
+        using reference       = T&;
+        using iterator        = T*;
+
+        constexpr span() noexcept = default;
+
+        constexpr span(pointer ptr, usize count) noexcept
+            : m_data(ptr), m_size(count) {}
+
+        constexpr span(pointer first, pointer last) noexcept
+            : m_data(first), m_size(static_cast<usize>(last - first)) {}
+
+        template <usize N>
+        constexpr span(T (&arr)[N]) noexcept
+            : m_data(arr), m_size(N) {}
+
+        [[nodiscard]] constexpr pointer data() const noexcept { return m_data; }
+        [[nodiscard]] constexpr usize size() const noexcept { return m_size; }
+        [[nodiscard]] constexpr bool empty() const noexcept { return m_size == 0; }
+
+        [[nodiscard]] constexpr reference operator[](usize index) const noexcept {
+            return m_data[index];
+        }
+
+        [[nodiscard]] constexpr reference front() const noexcept {
+            return m_data[0];
+        }
+
+        [[nodiscard]] constexpr reference back() const noexcept {
+            return m_data[m_size - 1];
+        }
+
+        [[nodiscard]] constexpr iterator begin() const noexcept { return m_data; }
+        [[nodiscard]] constexpr iterator end() const noexcept { return m_data + m_size; }
+
+        [[nodiscard]] constexpr span sub_span(usize offset, usize count = static_cast<usize>(-1)) const noexcept {
+            const usize actual_count = (count == static_cast<usize>(-1) || offset + count > m_size)
+                                          ? m_size - offset
+                                          : count;
+            return span(m_data + offset, actual_count);
+        }
+
+        [[nodiscard]] constexpr span first(usize count) const noexcept {
+            return span(m_data, count);
+        }
+
+        [[nodiscard]] constexpr span last(usize count) const noexcept {
+            return span(m_data + (m_size - count), count);
+        }
+
+        constexpr span(const span&) noexcept = default;
+        constexpr span(span&&) noexcept = default;
+        constexpr span& operator=(const span&) noexcept = default;
+        constexpr span& operator=(span&&) noexcept = default;
+
+    private:
+        pointer  m_data{nullptr};
+        usize m_size{0};
+    };
+
+    /// @brief Deduction guide for Span from arrays.
+    template <typename T, usize N>
+    span(T (&)[N]) -> span<T>;
+
+}
+
+}

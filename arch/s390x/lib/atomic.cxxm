@@ -1,0 +1,385 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file atomic.cxxm
+/// @brief s390x architecture-specific atomic operations
+
+export module arch.s390x.lib.atomic;
+import zxfoundation.base.types;
+import lib.type_traits;
+import lib.concepts;
+import lib.util;
+
+export {
+
+namespace arch::s390x::lib::atomic {
+
+    /// @brief Memory ordering for atomic operations.
+    enum class memory_order : int {
+        relaxed = 0,
+        acquire = 1,
+        release = 2,
+        acq_rel = 3,
+        seq_cst = 4
+    };
+
+    /// @brief Full memory barrier (BCR 15,0).
+    /// @note s390x TSO-like model: all stores are ordered, loads can pass stores.
+    ///       BCR 15,0 ensures all prior memory operations complete before subsequent ones.
+    inline void memory_barrier() noexcept {
+        __asm__ volatile("bcr 15,0" ::: "memory");
+    }
+
+    /// @brief Acquire barrier (compiler + control dependency).
+    /// @note Prevents loads/stores after this from being reordered before it.
+    inline void acquire_barrier() noexcept {
+        __asm__ volatile("" ::: "memory");
+    }
+
+    /// @brief Release barrier (compiler barrier).
+    /// @note Prevents loads/stores before this from being reordered after it.
+    inline void release_barrier() noexcept {
+        __asm__ volatile("" ::: "memory");
+    }
+
+    /// @brief Atomic type for integral and pointer types up to 64 bits.
+    /// @tparam T Integral type (u8, u16, u32, u64, i8, i16, i32, i64) or pointer type.
+    /// @note s390x guarantees naturally aligned loads/stores up to 8 bytes are atomic.
+    ///       For RMW operations, we use Compare-And-Swap (CS/CSG) instructions.
+    ///       Pointer types are internally represented as u64.
+    /// @warning Pointer atomics are susceptible to ABA problem without external mitigation.
+    template<typename T>
+        requires ((::lib::is_integral<T> || ::lib::is_pointer<T>) && sizeof(T) <= 8)
+    class atomic {
+    public:
+        using value_type = T;
+        using storage_type = ::lib::conditional_t<::lib::is_pointer<T>, u64, T>;
+
+        constexpr atomic() noexcept = default;
+        constexpr atomic(T desired) noexcept : value{ptr_to_int(desired)} {}
+        
+        atomic(const atomic&) = delete;
+        atomic& operator=(const atomic&) = delete;
+
+        /// @brief Atomically load the value.
+        /// @param order Memory ordering constraint.
+        /// @return Current value.
+        /// @note s390x: naturally aligned loads are atomic.
+        [[nodiscard]] T load(memory_order order = memory_order::seq_cst) const noexcept {
+            storage_type result;
+            if constexpr (sizeof(storage_type) == 1) {
+                __asm__ volatile("llc %0,%1" : "=d"(result) : "Q"(value) : "memory");
+            } else if constexpr (sizeof(storage_type) == 2) {
+                __asm__ volatile("llgh %0,%1" : "=d"(result) : "Q"(value) : "memory");
+            } else if constexpr (sizeof(storage_type) == 4) {
+                __asm__ volatile("l %0,%1" : "=d"(result) : "Q"(value) : "memory");
+            } else if constexpr (sizeof(storage_type) == 8) {
+                __asm__ volatile("lg %0,%1" : "=d"(result) : "Q"(value) : "memory");
+            }
+            
+            if (order == memory_order::acquire || order == memory_order::seq_cst) {
+                acquire_barrier();
+            }
+            return int_to_ptr(result);
+        }
+
+        /// @brief Atomically store a value.
+        /// @param desired New value to store.
+        /// @param order Memory ordering constraint.
+        /// @note s390x: naturally aligned stores are atomic.
+        void store(T desired, memory_order order = memory_order::seq_cst) noexcept {
+            if (order == memory_order::release || order == memory_order::seq_cst) {
+                release_barrier();
+            }
+
+            storage_type val = ptr_to_int(desired);
+            if constexpr (sizeof(storage_type) == 1) {
+                __asm__ volatile("stc %1,%0" : "=Q"(value) : "d"(val) : "memory");
+            } else if constexpr (sizeof(storage_type) == 2) {
+                __asm__ volatile("sth %1,%0" : "=Q"(value) : "d"(val) : "memory");
+            } else if constexpr (sizeof(storage_type) == 4) {
+                __asm__ volatile("st %1,%0" : "=Q"(value) : "d"(val) : "memory");
+            } else if constexpr (sizeof(storage_type) == 8) {
+                __asm__ volatile("stg %1,%0" : "=Q"(value) : "d"(val) : "memory");
+            }
+
+            if (order == memory_order::seq_cst) {
+                memory_barrier();
+            }
+        }
+
+        /// @brief Atomically exchange the value.
+        /// @param desired New value.
+        /// @param order Memory ordering constraint.
+        /// @return Previous value.
+        /// @note Uses compare-and-swap loop.
+        [[nodiscard]] T exchange(T desired, memory_order order = memory_order::seq_cst) noexcept {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, desired, order, memory_order::relaxed));
+            return old_val;
+        }
+
+        /// @brief Strong compare-and-swap.
+        /// @param expected Reference to expected value; updated on failure.
+        /// @param desired New value if comparison succeeds.
+        /// @param success Memory order on success.
+        /// @param failure Memory order on failure.
+        /// @return true if exchange occurred, false otherwise.
+        /// @note Uses CS (32-bit) or CSG (64-bit) instruction.
+        ///       For pointer types: susceptible to ABA problem without external mitigation.
+        [[nodiscard]] bool compare_exchange_strong(T& expected, T desired,
+                                                    memory_order success = memory_order::seq_cst,
+                                                    memory_order failure = memory_order::seq_cst) noexcept {
+            if (success == memory_order::release || success == memory_order::seq_cst) {
+                release_barrier();
+            }
+
+            storage_type old_val = ptr_to_int(expected);
+            storage_type new_val = ptr_to_int(desired);
+            int cc;
+
+            if constexpr (sizeof(storage_type) == 4) {
+                __asm__ volatile(
+                    "   cs  %[old],%[n],%[mem]\n"
+                    "   ipm %[cc]\n"
+                    "   srl %[cc],28\n"
+                    : [old] "+d"(old_val), [mem] "+Q"(value), [cc] "=d"(cc)
+                    : [n] "d"(new_val)
+                    : "cc", "memory"
+                );
+            } else if constexpr (sizeof(storage_type) == 8) {
+                __asm__ volatile(
+                    "   csg %[old],%[n],%[mem]\n"
+                    "   ipm %[cc]\n"
+                    "   srl %[cc],28\n"
+                    : [old] "+d"(old_val), [mem] "+Q"(value), [cc] "=d"(cc)
+                    : [n] "d"(new_val)
+                    : "cc", "memory"
+                );
+            } else {
+                // For 1 and 2 byte types, emulate using 4-byte CAS
+                return compare_exchange_strong_emulated(expected, desired, success, failure);
+            }
+
+            expected = int_to_ptr(old_val);
+            bool success_flag = (cc == 0);
+
+            if (success_flag) {
+                if (success == memory_order::acquire || success == memory_order::seq_cst) {
+                    acquire_barrier();
+                }
+            } else {
+                if (failure == memory_order::acquire || failure == memory_order::seq_cst) {
+                    acquire_barrier();
+                }
+            }
+
+            return success_flag;
+        }
+
+        /// @brief Weak compare-and-swap (same as strong on s390x).
+        /// @note s390x CS/CSG are inherently strong; no spurious failures.
+        [[nodiscard]] bool compare_exchange_weak(T& expected, T desired,
+                                                  memory_order success = memory_order::seq_cst,
+                                                  memory_order failure = memory_order::seq_cst) noexcept {
+            return compare_exchange_strong(expected, desired, success, failure);
+        }
+
+        /// @brief Atomic fetch-and-add.
+        /// @param arg Value to add.
+        /// @param order Memory ordering.
+        /// @return Previous value.
+        /// @note Uses LAA (Load-And-Add) or emulated CAS loop for older hardware.
+        ///       Only available for integral types.
+        [[nodiscard]] T fetch_add(T arg, memory_order order = memory_order::seq_cst) noexcept
+            requires ::lib::is_integral<T>
+        {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val + arg, order, memory_order::relaxed));
+            return old_val;
+        }
+
+        /// @brief Atomic fetch-and-subtract.
+        /// @param arg Value to subtract.
+        /// @param order Memory ordering.
+        /// @return Previous value.
+        /// @note Only available for integral types.
+        [[nodiscard]] T fetch_sub(T arg, memory_order order = memory_order::seq_cst) noexcept
+            requires ::lib::is_integral<T>
+        {
+            return fetch_add(-arg, order);
+        }
+
+        /// @brief Atomic fetch-and-bitwise-AND.
+        /// @param arg Mask value.
+        /// @param order Memory ordering.
+        /// @return Previous value.
+        /// @note Only available for integral types.
+        [[nodiscard]] T fetch_and(T arg, memory_order order = memory_order::seq_cst) noexcept
+            requires ::lib::is_integral<T>
+        {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val & arg, order, memory_order::relaxed));
+            return old_val;
+        }
+
+        /// @brief Atomic fetch-and-bitwise-OR.
+        /// @param arg Mask value.
+        /// @param order Memory ordering.
+        /// @return Previous value.
+        /// @note Only available for integral types.
+        [[nodiscard]] T fetch_or(T arg, memory_order order = memory_order::seq_cst) noexcept
+            requires ::lib::is_integral<T>
+        {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val | arg, order, memory_order::relaxed));
+            return old_val;
+        }
+
+        /// @brief Atomic fetch-and-bitwise-XOR.
+        /// @param arg Mask value.
+        /// @param order Memory ordering.
+        /// @return Previous value.
+        /// @note Only available for integral types.
+        [[nodiscard]] T fetch_xor(T arg, memory_order order = memory_order::seq_cst) noexcept
+            requires ::lib::is_integral<T>
+        {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val ^ arg, order, memory_order::relaxed));
+            return old_val;
+        }
+
+        /// @brief Implicit conversion to T for convenient usage.
+        [[nodiscard]] operator T() const noexcept {
+            return load();
+        }
+
+        /// @brief Assignment operator.
+        T operator=(T desired) noexcept {
+            store(desired);
+            return desired;
+        }
+
+        /// @brief Pre-increment operator (integral types only).
+        T operator++() noexcept requires ::lib::is_integral<T> {
+            return fetch_add(1) + 1;
+        }
+
+        /// @brief Post-increment operator (integral types only).
+        T operator++(int) noexcept requires ::lib::is_integral<T> {
+            return fetch_add(1);
+        }
+
+        /// @brief Pre-decrement operator (integral types only).
+        T operator--() noexcept requires ::lib::is_integral<T> {
+            return fetch_sub(1) - 1;
+        }
+
+        /// @brief Post-decrement operator (integral types only).
+        T operator--(int) noexcept requires ::lib::is_integral<T> {
+            return fetch_sub(1);
+        }
+
+        /// @brief Compound assignment += (integral types only).
+        T operator+=(T arg) noexcept requires ::lib::is_integral<T> {
+            return fetch_add(arg) + arg;
+        }
+
+        /// @brief Compound assignment -= (integral types only).
+        T operator-=(T arg) noexcept requires ::lib::is_integral<T> {
+            return fetch_sub(arg) - arg;
+        }
+
+        /// @brief Compound assignment &= (integral types only).
+        T operator&=(T arg) noexcept requires ::lib::is_integral<T> {
+            return fetch_and(arg) & arg;
+        }
+
+        /// @brief Compound assignment |= (integral types only).
+        T operator|=(T arg) noexcept requires ::lib::is_integral<T> {
+            return fetch_or(arg) | arg;
+        }
+
+        /// @brief Compound assignment ^= (integral types only).
+        T operator^=(T arg) noexcept requires ::lib::is_integral<T> {
+            return fetch_xor(arg) ^ arg;
+        }
+
+    private:
+        storage_type value{};
+
+        /// @brief Convert pointer to integer for storage.
+        /// @param ptr Pointer value (or integral value).
+        /// @return Integer representation.
+        static constexpr storage_type ptr_to_int(T ptr) noexcept {
+            if constexpr (::lib::is_pointer<T>) {
+                return reinterpret_cast<u64>(ptr);
+            } else {
+                return ptr;
+            }
+        }
+
+        /// @brief Convert integer back to pointer.
+        /// @param val Integer value.
+        /// @return Pointer value (or integral value).
+        static constexpr T int_to_ptr(storage_type val) noexcept {
+            if constexpr (::lib::is_pointer<T>) {
+                return reinterpret_cast<T>(val);
+            } else {
+                return val;
+            }
+        }
+
+        /// @brief Emulated CAS for 1 and 2 byte types using 4-byte CAS.
+        /// @note Requires careful alignment handling and masking.
+        [[nodiscard]] bool compare_exchange_strong_emulated(T& expected, T desired,
+                                                             memory_order success,
+                                                             memory_order failure) noexcept
+            requires ::lib::is_integral<T>
+        {
+            // Align to 4-byte boundary
+            u64 addr = reinterpret_cast<u64>(&value);
+            u32* aligned_ptr = reinterpret_cast<u32*>(addr & ~3ULL);
+            usize shift = (addr & 3) * 8;
+
+            u32 mask = (1U << (sizeof(T) * 8)) - 1;
+            u32 exp_shifted = static_cast<u32>(ptr_to_int(expected)) << shift;
+            u32 des_shifted = static_cast<u32>(ptr_to_int(desired)) << shift;
+
+            if (success == memory_order::release || success == memory_order::seq_cst) {
+                release_barrier();
+            }
+
+            u32 old_word = *aligned_ptr;
+            u32 new_word;
+            int cc;
+
+            do {
+                if ((old_word & (mask << shift)) != exp_shifted) {
+                    expected = int_to_ptr(static_cast<storage_type>((old_word >> shift) & mask));
+                    if (failure == memory_order::acquire || failure == memory_order::seq_cst) {
+                        acquire_barrier();
+                    }
+                    return false;
+                }
+
+                new_word = (old_word & ~(mask << shift)) | des_shifted;
+
+                __asm__ volatile(
+                    "   cs  %[old],%[n],%[mem]\n"
+                    "   ipm %[cc]\n"
+                    "   srl %[cc],28\n"
+                    : [old] "+d"(old_word), [mem] "+Q"(*aligned_ptr), [cc] "=d"(cc)
+                    : [n] "d"(new_word)
+                    : "cc", "memory"
+                );
+            } while (cc != 0);
+
+            if (success == memory_order::acquire || success == memory_order::seq_cst) {
+                acquire_barrier();
+            }
+            return true;
+        }
+    };
+
+} // namespace arch::s390x::lib::atomic
+
+} // end export

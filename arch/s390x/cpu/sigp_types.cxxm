@@ -1,0 +1,34 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file sigp_types.cxxm
+/// @brief SIGP (SIGnal Processor) API.
+
+export module arch.s390x.cpu.sigp_types;
+
+export {
+
+namespace arch::s390x::cpu::sigp {
+
+    /// SIGP order codes (PoP SA22-7832 Chapter 4).
+    constexpr auto SIGP_SENSE                    = 0x01U;
+    constexpr auto SIGP_EXTERNAL_CALL            = 0x02U;
+    constexpr auto SIGP_EMERGENCY_SIGNAL         = 0x03U;
+    constexpr auto SIGP_START                    = 0x04U;
+    constexpr auto SIGP_STOP                     = 0x05U;
+    constexpr auto SIGP_RESTART                  = 0x06U;
+    constexpr auto SIGP_STOP_AND_STORE_STATUS    = 0x09U;
+    constexpr auto SIGP_INITIAL_CPU_RESET        = 0x0BU;
+    constexpr auto SIGP_SET_PREFIX               = 0x0DU;
+    constexpr auto SIGP_STORE_STATUS             = 0x0EU;
+    constexpr auto SIGP_SET_ARCHITECTURE         = 0x12U;
+    constexpr auto SIGP_SET_MULTI_THREADING      = 0x16U;
+    constexpr auto SIGP_STORE_STATUS_AT_ADDRESS  = 0x17U;
+
+    /// SIGP condition codes.
+    constexpr auto SIGP_CC_ORDER_CODE_ACCEPTED   = 0;
+    constexpr auto SIGP_CC_STATUS_STORED         = 1;
+    constexpr auto SIGP_CC_BUSY                  = 2;
+    constexpr auto SIGP_CC_NOT_OPERATIONAL       = 3;
+
+} // namespace arch::s390x::cpu::sigp
+
+} // end export

@@ -3,54 +3,27 @@
 /// @brief STFLE (Store Facility List Extended) API.
 
 export module arch.s390x.cpu.stfle;
+import arch.s390x.cpu.stfle_types;
 import zxfoundation.base.types;
 
 export {
 
 namespace arch::s390x::cpu::stfle {
 
-    constexpr auto STFLE_MAX_DWORDS        = 32U;
-
-    constexpr auto STFLE_BIT_ZARCH         = 2U;   ///< < z/Architecture installed
-    constexpr auto STFLE_BIT_STFLE         = 7U;   ///< < STFLE itself
-    constexpr auto STFLE_BIT_EDAT1         = 8U;   ///< < Enhanced-DAT facility 1 (1 MB FC=1 segment entries)
-    constexpr auto STFLE_BIT_PFMF          = 14U;  ///< < Perform-Frame-Management-Function
-    constexpr auto STFLE_BIT_EDAT2         = 78U;  ///< < Enhanced-DAT facility 2 (2 GB FC=1 region-third entries)
-    constexpr auto STFLE_BIT_EIMM          = 21U;  ///< < Extended-immediate facility
-    constexpr auto STFLE_BIT_GEN_INST      = 25U;  ///< < General-instructions-extension
-    constexpr auto STFLE_BIT_EXECUTE_EXT   = 35U;  ///< < Execute-extensions facility
-    constexpr auto STFLE_BIT_FLOATING_PT   = 41U;  ///< < Floating-point extension
-    constexpr auto STFLE_BIT_DFP           = 42U;  ///< < Decimal-floating-point
-    constexpr auto STFLE_BIT_PFPO          = 44U;  ///< < PFPO instruction
-    constexpr auto STFLE_BIT_VECTOR        = 129U; ///< < Vector facility
-    constexpr auto STFLE_BIT_VX            = 134U; ///< < Vector-enhancements facility 0
-    constexpr auto STFLE_BIT_VXRS          = 149U; ///< < Vector-enhancements facility 3
-    constexpr auto STFLE_BIT_VECTOR_ENH    = 135U; ///< < Vector-enhancements facility 1
-    constexpr auto STFLE_BIT_VECTOR_ENH2   = 148U; ///< < Vector-enhancements facility 2
-    constexpr auto STFLE_BIT_GUARDED_STOR  = 133U; ///< < Guarded-storage facility
-    constexpr auto STFLE_BIT_MISC_INST_EXT = 58U;  ///< < Miscellaneous-instruction-extensions 1
-    constexpr auto STFLE_BIT_MISC_INST_EX2 = 76U;  ///< < Miscellaneous-instruction-extensions 2
-    constexpr auto STFLE_BIT_MISC_INST_EX3 = 61U;  ///< < Miscellaneous-instruction-extensions 3
-
     /// @brief Detect CPU facilities using STFLE.
-    ///
-    ///        Stores up to @p max_dwords doublewords into @p fac_list.
-    ///        If STFLE is not available (CC=3), stores zero and returns 0.
-    ///
     /// @param fac_list   Output buffer; must hold at least @p max_dwords uint64_t.
-    /// @param max_dwords Maximum doublewords to request (capped at STFLE_MAX_DWORDS).
+    /// @tparam MaxDwords Maximum doublewords to request (capped at STFLE_MAX_DWORDS).
     /// @return Actual number of doublewords stored, or 0 if STFLE unavailable.
-    u32 stfle_detect(u64* fac_list, u32 max_dwords) {
-        if (!fac_list || max_dwords == 0)
+    template <u32 MaxDwords>
+        requires (MaxDwords <= STFLE_MAX_DWORDS)
+    u32 stfle_detect(u64* fac_list) noexcept {
+        if (!fac_list || MaxDwords == 0)
             return 0;
 
-        if (max_dwords > STFLE_MAX_DWORDS)
-            max_dwords = STFLE_MAX_DWORDS;
-
-        for (u32 i = 0; i < max_dwords; i++)
+        for (u32 i = 0; i < MaxDwords; i++)
             fac_list[i] = 0;
 
-        register u64 r0   __asm__("0") = max_dwords - 1U;
+        register u64 r0   __asm__("0") = MaxDwords - 1U;
         register u64 addr __asm__("1") = *fac_list;
         i32 cc;
 
@@ -70,14 +43,10 @@ namespace arch::s390x::cpu::stfle {
     }
 
     /// @brief Test whether a specific facility bit is set.
-    ///
-    ///        Uses big-endian bit numbering: bit 0 is the MSB of fac_list[0].
-    ///        This matches the z/Architecture PoP facility bit numbering.
-    ///
     /// @param fac_list  Facility list filled by stfle_detect().
     /// @param bit       Facility bit number (0-based, per PoP Appendix B).
     /// @return true if the facility is present, false otherwise.
-    bool stfle_has_facility(const u64 *fac_list, const u32 bit) {
+    bool stfle_has_facility(const u64 *fac_list, const u32 bit) noexcept {
         const u32 dword_idx = bit / 64U;
         const u32 bit_pos   = 63U - bit % 64U;  // big-endian bit within dword
         if (dword_idx >= STFLE_MAX_DWORDS)

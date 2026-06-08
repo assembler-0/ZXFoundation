@@ -52,6 +52,8 @@ using word   = u16;
 using dword  = u32;
 using qword  = u64;
 
+using uuid_t = unsigned char[16];
+
 using nullptr_t = decltype(nullptr);
 
 } // end export

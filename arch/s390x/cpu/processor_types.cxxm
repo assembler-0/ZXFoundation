@@ -1,0 +1,16 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file processor.cxxm
+/// @brief Architecture-specific processor API.
+
+export module arch.s390x.cpu.processor_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::processor {
+
+    constexpr usize S390X_CACHE_LINE_SIZE = 256;
+
+} // namespace arch::s390x::cpu::processor
+
+} // end export

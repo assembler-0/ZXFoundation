@@ -36,6 +36,7 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -fno-exceptions
     -fno-rtti
     -Wno-pch-date-time
+    -Wno-c99-extensions
     -march=${MARCH_MODE}
     -mtune=${MARCH_MODE}
     -m64
