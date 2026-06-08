@@ -13,9 +13,28 @@ export {
 
 namespace arch::s390x::cpu::processor {
 
+    /// @brief Issue the DIAG 8 instruction with a 64-bit buffer address.
+    void diag8(const char *addr, u64 len) {
+        register u64 r2 __asm__("2") = reinterpret_cast<uptr>(addr);
+        register u64 r3 __asm__("3") = len;
+        __asm__ __volatile__ (
+            "diag %[r2], %[r3], 8\n"
+            :
+            : [r2] "d" (r2), [r3] "d" (r3)
+            : "memory"
+        );
+    }
+
+
+    /// @brief Compiler memory barrier.
+    /// @note Prevents compiler reordering; does NOT emit hardware fence.
+    inline void barrier() noexcept {
+        __asm__ volatile("" ::: "memory");
+    }
+
     /// @brief Generic spin-loop hint. Use inside every busy-wait loop.
     inline void arch_cpu_relax() noexcept {
-        lib::barrier();
+        barrier();
     }
 
     /// @brief Yield the virtual CPU timeslice to the hypervisor.

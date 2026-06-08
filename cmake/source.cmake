@@ -12,6 +12,8 @@ file(GLOB INIT_SOURCES       "arch/s390x/init/*.cxxm")
 file(GLOB ARCH_CPU_SOURCES   "arch/s390x/cpu/*.cxxm")
 file(GLOB ARCH_LIB_SOURCES   "arch/s390x/lib/*.cxxm")
 file(GLOB ZX_LOCKING_SOURCES "zxfoundation/locking/*.cxxm")
+file(GLOB DRIVERS_SOURCES    "drivers/*.cxxm")
+file(GLOB CONSOLE_SOURCES    "drivers/console/*.cxxm")
 
 include_directories(SYSTEM
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
@@ -33,4 +35,6 @@ set(ZX_SOURCES_MODULES_64
     ${ZXFL_SOURCES}
     ${INIT_SOURCES}
     ${ZX_START_SOURCES}
+    ${DRIVERS_SOURCES}
+    ${CONSOLE_SOURCES}
 )

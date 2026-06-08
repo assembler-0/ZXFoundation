@@ -37,10 +37,9 @@ namespace lib {
         b = move(temp);
     }
 
-    /// @brief Compiler memory barrier.
-    /// @note Prevents compiler reordering; does NOT emit hardware fence.
-    inline void barrier() noexcept {
-        __asm__ volatile("" ::: "memory");
+    template <typename T>
+    T clamp(T val, T max) {
+        return val > max ? max : val;
     }
 
 } // namespace lib
