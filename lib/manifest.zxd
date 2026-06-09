@@ -9,11 +9,13 @@
     endian.cxxm
     error.cxxm
     expected.cxxm
+    format.cxxm
     list.cxxm
     optional.cxxm
     pair.cxxm
     placementnew.cxxm
     queue.cxxm
+    ring_buffer.cxxm
     span.cxxm
     string_view.cxxm
     string.cxxm

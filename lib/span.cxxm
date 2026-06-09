@@ -72,6 +72,15 @@ namespace lib {
         /// @brief Copy constructor.
         constexpr span(const span&) noexcept = default;
 
+        /// @brief Move constructor.
+        constexpr span(span&&) noexcept = default;
+
+        /// @brief Copy assignment operator.
+        constexpr auto operator=(const span&) noexcept -> span& = default;
+
+        /// @brief Move assignment operator.
+        constexpr auto operator=(span&&) noexcept -> span& = default;
+
         /// @brief Access data.
         [[nodiscard]] constexpr auto data() const noexcept -> pointer { return storage.data_ptr; }
         

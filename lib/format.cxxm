@@ -1,0 +1,234 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/format.cxxm
+/// @brief Type-safe minimal formatter for kernel usage.
+
+export module lib.format;
+import zxfoundation.base.types;
+import lib.string_view;
+import lib.span;
+import lib.concepts;
+import lib.string;
+
+export {
+
+namespace lib::format {
+
+    /// @brief Internal buffer management for formatting.
+    struct format_context {
+        span<char> buffer;
+        usize offset{0};
+
+        auto write(char c) noexcept -> void {
+            if (offset < buffer.size()) {
+                buffer[offset++] = c;
+            }
+        }
+
+        auto write(string_view s) noexcept -> void {
+            for (char c : s) {
+                write(c);
+            }
+        }
+    };
+
+    /// @brief Default formatter implementation for various types.
+    template <typename T>
+    struct formatter {
+        auto format(format_context& ctx, const T& val) const noexcept -> void;
+    };
+
+    /// @brief Formatter for characters.
+    template <>
+    struct formatter<char> {
+        auto format(format_context& ctx, char val) const noexcept -> void {
+            ctx.write(val);
+        }
+    };
+
+    /// @brief Formatter for string views.
+    template <>
+    struct formatter<string_view> {
+        auto format(format_context& ctx, string_view val) const noexcept -> void {
+            ctx.write(val);
+        }
+    };
+
+    /// @brief Formatter for C-style strings.
+    template <>
+    struct formatter<const char*> {
+        auto format(format_context& ctx, const char* val) const noexcept -> void {
+            if (val) ctx.write(string_view(val));
+            else ctx.write("(null)");
+        }
+    };
+
+    /// @brief Base formatter for integers.
+    template <is_integral T>
+    struct formatter<T> {
+        auto format(format_context& ctx, T val) const noexcept -> void {
+            if constexpr (is_signed<T>) {
+                if (val < 0) {
+                    ctx.write('-');
+                    format_unsigned(ctx, static_cast<make_unsigned<T>::type>(-val), 0, false);
+                    return;
+                }
+            }
+            format_unsigned(ctx, static_cast<make_unsigned<T>::type>(val), 0, false);
+        }
+
+    private:
+        auto format_unsigned(format_context& ctx, auto val, usize width, bool pad_zero) const noexcept -> void {
+            if (val == 0) {
+                if (width > 1) {
+                    for (usize p = 0; p < width - 1; ++p) ctx.write(pad_zero ? '0' : ' ');
+                }
+                ctx.write('0');
+                return;
+            }
+            char tmp[21];
+            usize i = 0;
+            auto v = val;
+            while (v > 0) {
+                tmp[i++] = '0' + (v % 10);
+                v /= 10;
+            }
+            if (width > i) {
+                usize pad = width - i;
+                for (usize p = 0; p < pad; ++p) ctx.write(pad_zero ? '0' : ' ');
+            }
+            while (i > 0) {
+                ctx.write(tmp[--i]);
+            }
+        }
+    };
+
+    /// @brief Integer with padding options.
+    struct dec {
+        u64 value;
+        usize width{0};
+        bool pad_zero{false};
+    };
+
+    template <>
+    struct formatter<dec> {
+        auto format(format_context& ctx, dec d) const noexcept -> void {
+            if (d.value == 0) {
+                if (d.width > 1) {
+                    for (usize p = 0; p < d.width - 1; ++p) ctx.write(d.pad_zero ? '0' : ' ');
+                }
+                ctx.write('0');
+                return;
+            }
+            char tmp[21];
+            usize i = 0;
+            u64 v = d.value;
+            while (v > 0) {
+                tmp[i++] = '0' + (v % 10);
+                v /= 10;
+            }
+            if (d.width > i) {
+                usize pad = d.width - i;
+                for (usize p = 0; p < pad; ++p) ctx.write(d.pad_zero ? '0' : ' ');
+            }
+            while (i > 0) {
+                ctx.write(tmp[--i]);
+            }
+        }
+    };
+
+    /// @brief Formatter for pointers.
+    template <typename T>
+    struct formatter<T*> {
+        auto format(format_context& ctx, T* val) const noexcept -> void {
+            ctx.write("0x");
+            uptr addr = reinterpret_cast<uptr>(val);
+            if (addr == 0) {
+                ctx.write('0');
+                return;
+            }
+            char tmp[16];
+            const char* hex = "0123456789abcdef";
+            usize i = 0;
+            while (addr > 0) {
+                tmp[i++] = hex[addr & 0xf];
+                addr >>= 4;
+            }
+            while (i > 0) {
+                ctx.write(tmp[--i]);
+            }
+        }
+    };
+
+    /// @brief Hexadecimal wrapper for integers.
+    struct hex {
+        u64 value;
+        usize width{0};
+        bool pad_zero{false};
+    };
+
+    template <>
+    struct formatter<hex> {
+        auto format(format_context& ctx, hex h) const noexcept -> void {
+            char tmp[16];
+            const char* hex_chars = "0123456789abcdef";
+            usize i = 0;
+            u64 val = h.value;
+            
+            if (val == 0) tmp[i++] = '0';
+            else {
+                while (val > 0) {
+                    tmp[i++] = hex_chars[val & 0xf];
+                    val >>= 4;
+                }
+            }
+
+            if (h.width > i) {
+                usize pad = h.width - i;
+                for (usize p = 0; p < pad; ++p) {
+                    ctx.write(h.pad_zero ? '0' : ' ');
+                }
+            }
+
+            while (i > 0) {
+                ctx.write(tmp[--i]);
+            }
+        }
+    };
+
+    /// @brief Entry point for formatting.
+    template <typename... Args>
+    auto format_to(span<char> buf, string_view fmt, Args&&... args) -> usize {
+        format_context ctx{buf};
+        usize arg_idx = 0;
+
+        auto format_arg = [&]<typename T>(const T& val) {
+            formatter<unqualified<T>>{}.format(ctx, val);
+        };
+
+        auto dispatch_arg = [&](usize index) {
+            usize i = 0;
+            (void)((i++ == index ? (format_arg(args), true) : false) || ...);
+        };
+
+        for (usize i = 0; i < fmt.size(); ++i) {
+            if (fmt[i] == '{' && i + 1 < fmt.size() && fmt[i+1] == '}') {
+                dispatch_arg(arg_idx++);
+                i++; // skip '}'
+            } else {
+                ctx.write(fmt[i]);
+            }
+        }
+
+        // Null-terminate if possible
+        if (ctx.offset < buf.size()) {
+            buf[ctx.offset] = '\0';
+        } else if (buf.size() > 0) {
+            buf[buf.size() - 1] = '\0';
+        }
+
+        return ctx.offset;
+    }
+
+} // namespace lib::format
+
+} // end export

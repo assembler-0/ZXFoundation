@@ -1,46 +1,102 @@
 /// SPDX-License-Identifier: Apache 2.0
 /// @file diag.cxxm
-/// @brief diag console
+/// @brief idiomatic C++23 DIAG 8 hypervisor console driver.
 
 export module drivers.console.diag;
 import zxfoundation.base.types;
+import zxfoundation.sys.printk_types;
 import lib.charconv;
 import lib.string;
 import lib.util;
 import lib.concepts;
+import lib.string_view;
+import lib.span;
+import lib.algorithm;
 import arch.s390x.cpu.processor;
+
+namespace _internal {
+
+    /// @brief Encapsulates a Hercules-compatible DIAG 8 message.
+    /// @note Hercules requires a specific EBCDIC "MSG * " prefix for hypervisor logs.
+    class hercules_message {
+        static constexpr usize MAX_CAPACITY = 256;
+        static constexpr usize PREFIX_SIZE  = 6;
+
+        // Pre-built EBCDIC "MSG * " (CP037)
+        static constexpr u8 EBCDIC_M  = 0xD4U;
+        static constexpr u8 EBCDIC_S  = 0xE2U;
+        static constexpr u8 EBCDIC_G  = 0xC7U;
+        static constexpr u8 EBCDIC_SP = 0x40U;
+        static constexpr u8 EBCDIC_ST = 0x5CU;
+
+        char m_data[MAX_CAPACITY]{};
+        usize m_total_len{PREFIX_SIZE};
+
+    public:
+        /// @brief Constructs a message with the mandatory Hercules prefix.
+        constexpr hercules_message() noexcept {
+            m_data[0] = static_cast<char>(EBCDIC_M);
+            m_data[1] = static_cast<char>(EBCDIC_S);
+            m_data[2] = static_cast<char>(EBCDIC_G);
+            m_data[3] = static_cast<char>(EBCDIC_SP);
+            m_data[4] = static_cast<char>(EBCDIC_ST);
+            m_data[5] = static_cast<char>(EBCDIC_SP);
+        }
+
+        /// @brief Transcribes an ASCII string into the EBCDIC message buffer.
+        /// @param s The ASCII input string.
+        auto transcribe(lib::string_view s) noexcept -> void {
+            constexpr usize payload_limit = MAX_CAPACITY - PREFIX_SIZE;
+            const usize payload_len   = lib::min(s.size(), payload_limit);
+
+            for (usize i = 0; i < payload_len; ++i) {
+                const u8 ebcdic_byte = lib::charconv::ascii_to_ebcdic(static_cast<u8>(s[i]));
+                m_data[PREFIX_SIZE + i] = static_cast<char>(ebcdic_byte);
+            }
+
+            m_total_len = PREFIX_SIZE + payload_len;
+        }
+
+        /// @brief Transmit the message via the DIAG 8 instruction.
+        auto transmit() const noexcept -> void {
+            arch::s390x::cpu::processor::diag8(m_data, m_total_len);
+        }
+    };
+
+} // namespace _internal
 
 export {
 
 namespace drivers::console::diag {
 
-    constexpr auto DIAG_HV_CON_BUF_SIZE = 256U;
-    #define MSG_PREFIX_LEN                6U
-
-    /// @brief Flush line_buf to DIAG 8 using a separate EBCDIC transmit buffer.
-    ///        The ASCII line_buf is never modified — no double-conversion hazard.
-    /// @param[in] line_buf  ASCII string to transmit.
-    /// @param[in] line_len  Length of line_buf in bytes.
-    /// @warning NOT SMP-safe due to static buffer; requires external synchronization.
-    void write(const char *line_buf, usize line_len) {
-        static char tx[DIAG_HV_CON_BUF_SIZE] = "MSG * ";
-
-        const usize payload_len = lib::clamp<usize>(line_len, DIAG_HV_CON_BUF_SIZE - MSG_PREFIX_LEN);
-        lib::strncpy(&tx[MSG_PREFIX_LEN], line_buf, payload_len + 1);
-        lib::charconv::ascii_to_ebcdic(tx, lib::strlen(tx));
-
-        const usize total_len = MSG_PREFIX_LEN + payload_len;
-        arch::s390x::cpu::processor::diag8(tx, total_len);
+    /// @brief Flush ASCII content to the DIAG 8 console.
+    /// @param[in] s The ASCII string view to transmit.
+    /// @note This function is re-entrant and handles ASCII->EBCDIC conversion.
+    auto write(const lib::string_view s) noexcept -> void {
+        _internal::hercules_message msg;
+        msg.transcribe(s);
+        msg.transmit();
     }
 
-    /// @brief Flush line_buf to DIAG 8 using a separate EBCDIC transmit buffer.
-    ///        The ASCII line_buf is never modified — no double-conversion hazard.
-    /// @param[in] line_buf  NUL-terminated ASCII string to transmit.
-    /// @warning NOT SMP-safe due to static buffer; requires external synchronization.
-    void write(const char *line_buf) {
-        write(line_buf, lib::strlen(line_buf));
+    /// @brief Initializer for the DIAG console backend.
+    auto init() noexcept -> void {
+        // No hardware initialization required for hypervisor DIAG.
     }
 
-}
+    /// @brief Global printk backend for the DIAG 8 console.
+    constexpr zxfoundation::sys::printk::printk_backend
+    diag_hv_con_printk_backend = {
+        .name   = "diag_hv_con",
+        .emit   = write,
+        .init   = init,
+        .active = false
+    };
+
+    /// @brief Retrieve the DIAG 8 console backend reference.
+    auto get_backend() noexcept -> const zxfoundation::sys::printk::printk_backend& {
+        return diag_hv_con_printk_backend;
+    }
+
+} // namespace drivers::console::diag
 
 } // end export

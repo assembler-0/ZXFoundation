@@ -1,0 +1,45 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file zxfoundation/sys/printk_types.cxxm
+/// @brief Types and interfaces for the kernel logging system.
+
+export module zxfoundation.sys.printk_types;
+import zxfoundation.base.types;
+import lib.string_view;
+
+export {
+
+namespace zxfoundation::sys::printk {
+
+    /// @brief Log levels for the kernel logging system.
+    /// @note Maps to the historical ZXFoundation/Linux log levels.
+    enum class log_level : u8 {
+        EMERG   = 0, ///< System unusable — imminent halt (X)
+        ALERT   = 1, ///< Action required immediately (A)
+        CRIT    = 2, ///< Critical condition (C)
+        ERROR   = 3, ///< Error condition (E)
+        WARN    = 4, ///< Warning (W)
+        NOTICE  = 5, ///< Normal but significant (N)
+        INFO    = 6, ///< Informational (default) (I)
+        DEBUG   = 7  ///< Debug detail (D)
+    };
+
+    /// @brief Interface for a logging backend.
+    /// @note Backends are responsible for the final emission of log strings.
+    struct printk_backend {
+        /// @brief Backend name for identification.
+        lib::string_view name{};
+
+        /// @brief Emit a formatted string to the backend.
+        /// @param[in] s The string to emit.
+        auto (*emit)(lib::string_view s) noexcept -> void{};
+
+        /// @brief Optional initialization for the backend.
+        auto (*init)() noexcept -> void{};
+
+        /// @brief Is this backend currently active?
+        mutable bool active{false};
+    };
+
+} // namespace zxfoundation::sys::printk
+
+} // end export

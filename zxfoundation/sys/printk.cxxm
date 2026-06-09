@@ -1,0 +1,168 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file zxfoundation/sys/printk.cxxm
+/// @brief SMP-aware industrial kernel logging framework with circular history.
+
+export module zxfoundation.sys.printk;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk_types;
+import zxfoundation.sys.time;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import arch.s390x.cpu.smp;
+import lib.string_view;
+import lib.span;
+import lib.format;
+import lib.util;
+import lib.ring_buffer;
+import lib.algorithm;
+
+namespace _internal {
+    using namespace zxfoundation::sys::printk;
+
+    /// @brief Maximum number of registered backends.
+    static constexpr usize MAX_BACKENDS = 4;
+    
+    /// @brief Capacity of the circular log buffer (128 KB).
+    /// @note Must be a power of two for lib::ring_buffer.
+    static constexpr usize LOG_BUFFER_SIZE = 128 * 1024;
+
+    /// @brief Global state for the logging system.
+    struct printk_state {
+        zxfoundation::locking::qspinlock::qspinlock lock;
+        printk_backend backends[MAX_BACKENDS]{};
+        usize backend_count{0};
+        log_level min_level{log_level::INFO};
+        lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
+    };
+
+    printk_state g_state;
+
+    /// @brief Map log levels to their display tags.
+    static constexpr char level_tags[] = "XACENWID";
+
+} // namespace _internal
+
+export {
+
+namespace zxfoundation::sys::printk {
+
+    /// @brief Initialize the logging framework.
+    auto initialize() noexcept -> void {
+        // Initialization logic if needed.
+    }
+
+    /// @brief Register a new logging backend.
+    /// @param[in] backend Reference to the backend structure (must be persistent).
+    auto register_backend(const printk_backend& backend) noexcept -> void {
+        if (!backend.emit) return;
+
+        locking::irq_lock_guard guard(_internal::g_state.lock);
+        if (_internal::g_state.backend_count < _internal::MAX_BACKENDS) {
+            if (backend.init) backend.init();
+            backend.active = true;
+            _internal::g_state.backends[_internal::g_state.backend_count++] = backend;
+        }
+    }
+
+    /// @brief Set the global minimum log level.
+    /// @param[in] level The new minimum level.
+    auto set_min_level(const log_level level) noexcept -> void {
+        _internal::g_state.min_level = level;
+    }
+
+    /// @brief Read logs from the circular buffer.
+    /// @param[out] dest  Destination buffer.
+    /// @param[in]  consume  If true, remove read bytes from the buffer.
+    /// @return Number of bytes read.
+    auto read_logs(lib::span<u8> dest, bool consume) noexcept -> usize {
+        locking::irq_lock_guard guard(_internal::g_state.lock);
+        if (consume) {
+            return _internal::g_state.log_buffer.pop(dest);
+        } else {
+            return _internal::g_state.log_buffer.peek(dest);
+        }
+    }
+
+    /// @brief Get the current size of the log buffer.
+    /// @return Number of bytes currently stored.
+    auto log_size() noexcept -> usize {
+        return _internal::g_state.log_buffer.size();
+    }
+
+    /// @brief The main kernel logging function.
+    /// @param[in] level  Log level.
+    /// @param[in] fmt    Format string.
+    /// @param[in] args   Formatting arguments.
+    template <typename... Args>
+    auto printk(log_level level, lib::string_view fmt, Args&&... args) noexcept -> void {
+        if (static_cast<u8>(level) > static_cast<u8>(_internal::g_state.min_level)) {
+            return;
+        }
+
+        // 1. Prepare formatting buffer on stack.
+        char buf[512];
+        const lib::span s_buf(buf, 512);
+
+        // 2. Format Header: "ZXF-SSSS.UUUUUU [cpuNN] L "
+        const auto now = time::monotonic_now();
+        const u64 s = now.nanoseconds_since_epoch() / 1000000000U;
+        const u64 us = (now.nanoseconds_since_epoch() % 1000000000U) / 1000U;
+        const u16 cpu = arch::s390x::cpu::smp::cpu_id();
+        const char tag = _internal::level_tags[static_cast<u8>(level)];
+
+        usize offset = lib::format::format_to(s_buf, "ZXF-{}.{} [cpu{}] {} ", 
+            lib::format::dec{s, 4, true}, 
+            lib::format::dec{us, 6, true},
+            lib::format::dec{static_cast<u64>(cpu), 2, true}, 
+            tag
+        );
+        
+        // 3. Format Message
+        offset += lib::format::format_to(s_buf.subspan(offset), fmt, lib::forward<Args>(args)...);
+
+        // 4. Ensure newline
+        if (offset < 511 && (offset == 0 || buf[offset-1] != '\n')) {
+            buf[offset++] = '\n';
+        }
+        buf[offset] = '\0';
+
+        lib::string_view final_msg(buf, offset);
+
+        // 5. Emit and Store
+        locking::irq_lock_guard guard(_internal::g_state.lock);
+
+        // 5.1 Store in ring buffer (with wrap-around)
+        lib::span<const u8> to_push(reinterpret_cast<const u8*>(final_msg.data()), final_msg.size());
+        
+        while (to_push.size() > 0) {
+            usize written = _internal::g_state.log_buffer.push(to_push);
+            if (written == to_push.size()) break;
+            
+            u8 discard[1024];
+            (void)_internal::g_state.log_buffer.pop({discard, lib::min(static_cast<usize>(sizeof(discard)), _internal::g_state.log_buffer.size())});
+            
+            if (written > 0) {
+                to_push = to_push.subspan(written);
+            }
+        }
+
+        // 5.2 Emit to all active backends
+        for (usize i = 0; i < _internal::g_state.backend_count; ++i) {
+            if (const auto b = _internal::g_state.backends[i]; b.active) {
+                b.emit(final_msg);
+            }
+        }
+    }
+
+    template <typename... Args> auto pemerg(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::EMERG, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto palert(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ALERT, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pcrit(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::CRIT, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto perr(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ERROR, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pwarn(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::WARN, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pnotice(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::NOTICE, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pinfo(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::INFO, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pdebug(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::DEBUG, fmt, lib::forward<Args>(args)...); }
+
+} // namespace zxfoundation::sys::printk
+
+} // end export

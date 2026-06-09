@@ -5,11 +5,16 @@
 export module zxfoundation.init.main;
 import zxfoundation.base.types;
 import zxfoundation.sys.time;
+import zxfoundation.sys.printk;
+import zxfoundation.base.config;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.psw;
+import drivers.console.diag;
+
+using zxfoundation::sys::printk::pinfo;
 
 extern "C" [[noreturn]] auto zxfoundation_global_initialize(
      [[maybe_unused]] const arch::s390x::init::zxfl::protocol* protocol
@@ -22,6 +27,20 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     arch::s390x::cpu::lowcore::get_current()->kernel_stack = protocol->kernel_stack_top;
 
     zxfoundation::sys::time::initialize(protocol->tod_boot);
+
+    zxfoundation::sys::printk::initialize();
+    zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
+
+    pinfo("sys: ZXFoundation (TM) {} - copyright (c) {} assembler-0 all rights reserved.\n",
+        zxfoundation::base::config::CONFIG_ZX_RELEASE,
+        zxfoundation::base::config::CONFIG_ZX_COPYRIGHT_DATE
+    );
+
+    pinfo("sys: built on {} - {} with {}\n",
+        zxfoundation::base::config::CONFIG_ZX_BUILD_DT_COMPILER,
+        zxfoundation::base::config::CONFIG_ZX_BUILD_PLATFORM,
+        zxfoundation::base::config::CONFIG_ZX_COMPILER_ID
+    );
 
     while (true)
         arch::s390x::cpu::processor::cpu_relax();
