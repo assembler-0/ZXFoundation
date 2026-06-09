@@ -1,0 +1,22 @@
+!files : !compile_group -> [auto] {
+    algorithm.cxxm
+    array.cxxm
+    bit.cxxm
+    bitmap.cxxm
+    charconv.cxxm
+    compare.cxxm
+    concepts.cxxm
+    endian.cxxm
+    error.cxxm
+    expected.cxxm
+    list.cxxm
+    optional.cxxm
+    pair.cxxm
+    placementnew.cxxm
+    queue.cxxm
+    span.cxxm
+    string_view.cxxm
+    string.cxxm
+    type_traits.cxxm
+    util.cxxm
+}

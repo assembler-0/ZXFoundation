@@ -27,6 +27,7 @@ include(configuration) 		  # Build options
 include(platform)       	  # Platform checks
 include(standard)   	      # C/C++ Standards
 include(hosttools)			  # Host tools
+include(zx-discovery)         # zx-discovery DSL interpreter
 include(source)        		  # Core kernel sources
 include(zxfoundation-compile) # Full kernel compilation
 include(run)       		      # Run targets (mostly post-build targets)

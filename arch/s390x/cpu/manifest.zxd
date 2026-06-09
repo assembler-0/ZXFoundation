@@ -1,0 +1,19 @@
+!files : !compile_group -> [auto] {
+    irq_frame.cxxm
+    irq.cxxm
+    lowcore_types.cxxm
+    lowcore.cxxm
+    percpu_types.cxxm
+    percpu.cxxm
+    processor_types.cxxm
+    processor.cxxm
+    psw_types.cxxm
+    psw.cxxm
+    sigp_types.cxxm
+    sigp.cxxm
+    smp.cxxm
+    stfle_types.cxxm
+    stfle.cxxm
+    stsi_types.cxxm
+    stsi.cxxm
+}

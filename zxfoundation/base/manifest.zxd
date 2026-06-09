@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    config.cxxm
+    types.cxxm
+}

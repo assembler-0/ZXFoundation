@@ -6,17 +6,25 @@ set(zxfoundation_LINKER_SCRIPT
 
 include(cmake/zxfl-compile.cmake)
 
-add_executable(core.zxfoundation.nucleus
-    ${ZX_SOURCES_64}
-)
+add_executable(core.zxfoundation.nucleus)
 
-target_sources(core.zxfoundation.nucleus
-    PUBLIC
-    FILE_SET CXX_MODULES
-    TYPE CXX_MODULES
-    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES ${ZX_SOURCES_MODULES_64}
-)
+if (ZX_SOURCES_64)
+    target_sources(core.zxfoundation.nucleus PRIVATE ${ZX_SOURCES_64})
+endif()
+
+if (ZX_SOURCES_MODULES_64)
+    target_sources(core.zxfoundation.nucleus
+        PUBLIC
+        FILE_SET CXX_MODULES
+        TYPE CXX_MODULES
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${ZX_SOURCES_MODULES_64}
+    )
+endif()
+
+if (NOT ZX_SOURCES_64 OR NOT ZX_SOURCES_MODULES_64)
+    message(FATAL_ERROR "zxfoundation::build: no sources found for nucleus target (should not be possible)")
+endif()
 
 target_compile_options(core.zxfoundation.nucleus PRIVATE
     -ffreestanding

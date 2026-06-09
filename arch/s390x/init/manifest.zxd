@@ -1,0 +1,5 @@
+!files : !compile_group -> [auto] {
+    head64.S
+    zxvl_cksum.cxxm
+    zxfl/protocol.cxxm
+}
