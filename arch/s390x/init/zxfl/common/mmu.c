@@ -38,6 +38,7 @@
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/stfle.h>
 #include <arch/s390x/init/zxfl/psw.h>
+#include <arch/s390x/init/zxfl/string.h>
 #include <zxfoundation/memory/hhdm.h>
 
 
@@ -171,6 +172,15 @@ static uint64_t *alloc_page_table(void) {
     // For 8 GB, we only need 4 entries in ONE R3 table.
     uint64_t *r3_tab = alloc_r3_table();
 
+    // --- Relocate BSP Lowcore ---
+    // Allocate 8KB for the new prefix area (lowcore), 8KB aligned.
+    uint64_t bsp_lowcore_phys = pool_alloc(8192, 8192);
+    memset((void*)(uintptr_t)bsp_lowcore_phys, 0, 8192);
+    
+    // Pass the relocated lowcore address to the kernel.
+    proto->lowcore_phys = bsp_lowcore_phys;
+    proto->flags |= ZXFL_FLAG_LOWCORE;
+
     const uint32_t num_r3_entries = (uint32_t)((map_bytes + SEG_TABLE_COVERAGE - 1) / SEG_TABLE_COVERAGE);
 
     for (uint32_t r3e = 0; r3e < num_r3_entries; r3e++) {
@@ -238,6 +248,8 @@ static uint64_t *alloc_page_table(void) {
     proto->cr1_snapshot = asce;
     proto->cr13_snapshot = asce;
     proto->cr0_snapshot = cr0;
+
+    arch_set_prefix((uint32_t)bsp_lowcore_phys);
 
     __asm__ volatile("ptlb" ::: "memory");
 

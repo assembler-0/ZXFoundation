@@ -18,6 +18,7 @@ namespace lib {
         crypto,      ///< Cryptographic operation errors.
         driver,      ///< Device driver errors.
         init,        ///< Initialization and boot errors.
+        time,        ///< Time and clock errors.
         generic      ///< Generic kernel errors.
     };
 
@@ -35,6 +36,16 @@ namespace lib {
             stsi_failed             = 7,  ///< STSI instruction failed or returned invalid data.
             cpu_not_available       = 8,  ///< Target CPU is not available.
             invalid_cpu_id          = 9,  ///< CPU ID exceeds CONFIG_ZX_MAX_CPUS.
+        };
+    }
+
+    /// @brief Time and clock error codes.
+    namespace time_error {
+        enum code : u32 {
+            none                = 0,
+            clock_not_available = 1,  ///< Requested clock source is not available.
+            invalid_timestamp   = 2,  ///< Provided timestamp is invalid or out of range.
+            adjustment_failed   = 3,  ///< Clock adjustment (e.g. steering) failed.
         };
     }
 
@@ -164,6 +175,13 @@ namespace lib {
         /// @return kernel_error with category=init.
         static constexpr auto from_init(init_error::code c) noexcept -> kernel_error {
             return kernel_error(error_category::init, static_cast<u32>(c));
+        }
+
+        /// @brief Construct time error.
+        /// @param[in] c  time_error::code value.
+        /// @return kernel_error with category=time.
+        static constexpr auto from_time(time_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::time, static_cast<u32>(c));
         }
 
         /// @brief Construct generic error.

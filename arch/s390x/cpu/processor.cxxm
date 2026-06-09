@@ -26,6 +26,27 @@ namespace arch::s390x::cpu::processor {
         );
     }
 
+    /// @brief Store Clock (STCK) - stores the 64-bit TOD clock.
+    inline auto stck() noexcept -> u64 {
+        u64 tod;
+        __asm__ volatile("stck %0" : "=Q" (tod) : : "cc", "memory");
+        return tod;
+    }
+
+    /// @brief Store Clock Fast (STCKF) - stores the 64-bit TOD clock faster if facility 25 is present.
+    inline auto stckf() noexcept -> u64 {
+        u64 tod;
+        __asm__ volatile("stckf %0" : "=Q" (tod) : : "cc", "memory");
+        return tod;
+    }
+
+    /// @brief Store Clock Extended (STCKE) - stores the 128-bit TOD clock + epoch index.
+    inline auto stcke() noexcept -> u128 {
+        u128 tod;
+        __asm__ volatile("stcke %0" : "=Q" (tod) : : "cc", "memory");
+        return tod;
+    }
+
     /// @brief Compiler memory barrier.
     /// @note Prevents compiler reordering; does NOT emit hardware fence.
     inline auto barrier() noexcept -> void {

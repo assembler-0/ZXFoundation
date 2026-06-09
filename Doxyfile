@@ -4,10 +4,11 @@ PROJECT_NAME           = "ZXFoundation™"
 PROJECT_NUMBER         = "26h1"
 OUTPUT_DIRECTORY       = "doxygen-build"
 OPTIMIZE_OUTPUT_FOR_C  = YES
-EXTENSION_MAPPING      = c=C h=C
-INPUT                  = arch/ docs/ drivers/ include/ lib/ zxfoundation/
+INPUT                  = arch/ docs/ drivers/ lib/ zxfoundation/
 RECURSIVE              = YES
-FILE_PATTERNS          = *.c *.h
+FILE_PATTERNS          = *.c *.h *.cxxm
+CLANG_ASSISTED_PARSING = YES
+CLANG_OPTIONS          = -std=c++23
 GENERATE_HTML 	       = YES
 GENERATE_LATEX         = NO
 DISABLE_INDEX          = NO

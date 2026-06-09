@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lowcore.cxxm
 /// @brief z/Architecture lowcore definitions
 
@@ -6,6 +6,7 @@ export module arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.psw_types;
 import arch.s390x.cpu.lowcore_types;
+import arch.s390x.cpu.processor;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.hhdm_types;
 import zxfoundation.base.types;
@@ -31,37 +32,21 @@ namespace arch::s390x::cpu::lowcore {
 
     /// @name Lowcore access
     /// @{
-    auto get_current_raw() noexcept -> zx_lowcore* {
-        return reinterpret_cast<zx_lowcore*>(reinterpret_cast<uptr>(nullptr));
-    }
 
+    /// @brief Get the current CPU's lowcore (prefix area) via HHDM.
+    /// @note Uses STPX instruction for O(1) location-agnostic access.
     auto get_current() noexcept -> zx_lowcore* {
-        return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(0x0));
+        const u32 prefix = processor::get_prefix();
+        return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(prefix));
     }
 
     /// @brief Get the lowcore for a specific CPU.
-    /// @param cpu CPU index
-    /// @return Pointer to the CPU's lowcore, or nullptr if invalid
+    /// @param cpu CPU logical index.
+    /// @return Pointer to the CPU's lowcore, or nullptr if invalid.
     auto get_cpu(const u8 cpu) noexcept -> zx_lowcore* {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
             return nullptr;
-        
-        zx_lowcore* lc = __percpu_lowcore_area_raw[cpu];
-        if (!lc)
-            return nullptr;
-        
-        u64 target = zxfoundation::memory::hhdm::virt_to_phys(reinterpret_cast<u64>(lc));
-        u64 prefix = get_current()->percpu.prefix_base;
-        
-        if (target == prefix) {
-            return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::KERNEL_VIRTUAL_OFFSET);
-        }
-
-        if (target == 0) {
-            return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(prefix));
-        }
-
-        return lc;
+        return __percpu_lowcore_area_raw[cpu];
     }
 
     /// @}
@@ -88,7 +73,7 @@ namespace arch::s390x::cpu::lowcore {
     }
 
     /// @brief Get CPU per-CPU data.
-    /// @return Reference to current CPU's per-CPU data.
+    /// @return Reference to specific CPU's per-CPU data.
     inline auto cpu_percpu_data(const u8 cpu) noexcept -> percpu::s390x_percpu_data& {
         return get_cpu(cpu)->percpu;
     }
@@ -112,7 +97,7 @@ namespace arch::s390x::cpu::lowcore {
         lc.svc_new_psw.addr      = 0x000000000DEAD1C0ULL;
     }
 
-    /// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
+    /// @brief Initialize the current (BSP) lowcore.
     auto init_bsp() -> void {
         zx_lowcore *lc = get_current();
 

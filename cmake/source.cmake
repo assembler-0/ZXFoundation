@@ -4,6 +4,7 @@ file(GLOB ZX_START_SOURCES   "zxfoundation/init/*.cxxm")
 file(GLOB ZX_SOURCES         "zxfoundation/*.cxxm")
 file(GLOB ZX_BASE_SOURCES    "zxfoundation/base/*.cxxm")
 file(GLOB ZX_MEMORY_SOURCES  "zxfoundation/memory/*.cxxm")
+file(GLOB ZX_SYS_SOURCES     "zxfoundation/sys/*.cxxm")
 file(GLOB LIB_SOURCES        "lib/*.cxxm")
 file(GLOB CRYPTO_SOURCES     "crypto/*.cxxm")
 file(GLOB ZXFL_SOURCES       "arch/s390x/init/zxfl/*.cxxm")
@@ -37,6 +38,7 @@ set(ZX_SOURCES_MODULES_64
     ${ZXFL_SOURCES}
     ${INIT_SOURCES}
     ${ZX_START_SOURCES}
+    ${ZX_SYS_SOURCES}
     ${DRIVERS_SOURCES}
     ${CONSOLE_SOURCES}
 )

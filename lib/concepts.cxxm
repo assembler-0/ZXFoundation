@@ -37,7 +37,6 @@ namespace lib {
     template <typename t> concept is_class             = __is_class(t);
     template <typename t> concept is_pointer           = __is_pointer(t);
     template <typename t> concept is_member_pointer    = __is_member_pointer(t);
-    template <typename t> concept is_void              = __is_void(t);
     template <typename t> concept is_null_pointer      = same_as<t, nullptr_t>;
     template <typename t> concept is_array             = __is_array(t);
     template <typename t> concept is_abstract          = __is_abstract(t);
@@ -56,8 +55,8 @@ namespace lib {
     concept is_scalar = is_arithmetic<t> || is_pointer<t> || is_member_pointer<t>
                   || is_enum<t>       || is_null_pointer<t>;
 
-    template <typename t>
-    concept is_fundamental = is_scalar<t> || is_void<t>;
+    template <typename T>
+    concept is_fundamental = is_scalar<T> || is_void<T>;
 
     template <typename t>
     concept is_compound = !is_fundamental<t>;

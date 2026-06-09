@@ -4,6 +4,7 @@
 
 export module zxfoundation.init.main;
 import zxfoundation.base.types;
+import zxfoundation.sys.time;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
@@ -19,6 +20,8 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     arch::s390x::cpu::percpu::init_bsp();
     arch::s390x::cpu::lowcore::init_bsp();
     arch::s390x::cpu::lowcore::get_current()->kernel_stack = protocol->kernel_stack_top;
+
+    zxfoundation::sys::time::initialize(protocol->tod_boot);
 
     while (true)
         arch::s390x::cpu::processor::cpu_relax();
