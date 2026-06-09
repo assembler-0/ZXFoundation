@@ -4,8 +4,8 @@
 
 export module lib.bit;
 import zxfoundation.base.types;
+import zxfoundation.base.endian;
 import lib.concepts;
-import lib.endian;
 
 export {
 
@@ -177,7 +177,7 @@ namespace lib {
 
     template <is_integral T>
     [[nodiscard]] constexpr auto native_to_big(T val) noexcept -> T {
-        if constexpr (endian::native == endian::big) return val;
+        if constexpr (zxfoundation::base::endian::native == zxfoundation::base::endian::big) return val;
         else return byteswap(val);
     }
 
@@ -186,7 +186,7 @@ namespace lib {
 
     template <is_integral T>
     [[nodiscard]] constexpr auto native_to_little(T val) noexcept -> T {
-        if constexpr (endian::native == endian::little) return val;
+        if constexpr (zxfoundation::base::endian::native == zxfoundation::base::endian::little) return val;
         else return byteswap(val);
     }
 

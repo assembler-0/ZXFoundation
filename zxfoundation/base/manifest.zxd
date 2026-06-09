@@ -1,4 +1,5 @@
 !files : !compile_group -> [auto] {
     config.cxxm
     types.cxxm
+    endian.cxxm
 }

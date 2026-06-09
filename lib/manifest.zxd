@@ -6,7 +6,6 @@
     charconv.cxxm
     compare.cxxm
     concepts.cxxm
-    endian.cxxm
     error.cxxm
     expected.cxxm
     format.cxxm

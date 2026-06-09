@@ -14,6 +14,16 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.psw;
 import drivers.console.diag;
 
+export {
+
+namespace zxfoundation::init {
+
+    arch::s390x::init::zxfl::protocol protocol;
+
+} // namespace zxfoundation::init
+
+} // end export
+
 using zxfoundation::sys::printk::pinfo;
 
 extern "C" [[noreturn]] auto zxfoundation_global_initialize(
@@ -21,6 +31,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 ) noexcept -> void {
     if (!protocol) [[unlikely]]
         arch::s390x::cpu::psw::load_disabled_wait_psw();
+    zxfoundation::init::protocol = *protocol;
 
     arch::s390x::cpu::percpu::init_bsp();
     arch::s390x::cpu::lowcore::init_bsp();

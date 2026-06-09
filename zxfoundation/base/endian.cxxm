@@ -1,12 +1,12 @@
 /// SPDX-License-Identifier: Apache 2.0
-/// @file lib/endian.cxxm
+/// @file endian.cxxm
 /// @brief Endianness detection and constants
 
-export module lib.endian;
+export module zxfoundation.base.endian;
 
 export {
 
-namespace lib {
+namespace zxfoundation::base {
 
     /// @brief Enum representing endianness.
     enum class endian {
