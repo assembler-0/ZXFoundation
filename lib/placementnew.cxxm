@@ -1,0 +1,14 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file placementnew.cxxm
+/// @brief Placement new
+
+export module lib.placementnew;
+
+export {
+
+[[nodiscard]] auto operator new(unsigned long, void* p) noexcept -> void*;
+[[nodiscard]] auto operator new[](unsigned long, void* p) noexcept -> void*;
+auto operator delete(void*, void*) noexcept -> void;
+auto operator delete[](void*, void*) noexcept -> void;
+
+} // end export

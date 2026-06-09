@@ -9,7 +9,7 @@ export {
 
 namespace lib {
 
-    void strncpy(char *dest, const char *src, usize max_len) {
+    auto strncpy(char *dest, const char *src, usize max_len) -> void {
         if (!dest || !src)
             return;
         usize i = 0;
@@ -18,7 +18,7 @@ namespace lib {
         dest[i] = '\0';
     }
 
-    void strcpy(char *dest, const char *src) {
+    auto strcpy(char *dest, const char *src) -> void{
         if (!dest || !src)
             return;
         // Optimize for 64-bit aligned copies when possible
@@ -52,7 +52,7 @@ namespace lib {
         }
     }
 
-    void strcat(char *dest, const char *src) {
+    auto strcat(char *dest, const char *src) -> void {
         if (!dest || !src)
             return;
         while (*dest)
@@ -60,14 +60,204 @@ namespace lib {
         strcpy(dest, src); // Reuse optimized strcpy
     }
 
-    usize strlen(const char *s) {
+    auto strlen(const char *s) -> usize{
         usize n = 0;
         while (s[n])
             n++;
         return n;
     }
 
+    auto memset(void *s, int c, usize n) -> void* {
+        if (n == 0) return s;
 
+        auto *mem = static_cast<unsigned char*>(s);
+        auto x = static_cast<unsigned char>(c);
+
+        // MVCL is good for very large blocks (e.g. > 1KB).
+        // For smaller blocks, EX + XC or EX + MVC is faster.
+        if (n > 1024) {
+            register void *r0 __asm__("r0") = mem;
+            register usize r1 __asm__("r1") = n;
+            register void *r2 __asm__("r2") = nullptr;
+            register usize r3 __asm__("r3") = static_cast<usize>(x) << 56;
+
+            __asm__ volatile(
+                "0: mvcl %%r0,%%r2\n"
+                "   jo   0b"
+                : "+d" (r0), "+d" (r1), "+d" (r2), "+d" (r3)
+                :
+                : "memory", "cc"
+            );
+            return s;
+        }
+
+        if (x == 0) {
+            while (n > 256) {
+                __asm__ volatile("xc 0(256,%[dst]),0(%[dst])" : : [dst] "a" (mem) : "memory", "cc");
+                mem += 256;
+                n -= 256;
+            }
+            usize l = n - 1;
+            __asm__ volatile(
+                "   larl    1, 1f\n"
+                "   ex      %[l], 0(1)\n"
+                "   j       2f\n"
+                "1: xc      0(1,%[dst]), 0(%[dst])\n"
+                "2:\n"
+                : [l] "+r" (l)
+                : [dst] "a" (mem)
+                : "r1", "memory", "cc"
+            );
+        } else {
+            *mem = x;
+            if (n > 1) {
+                unsigned char *dst = mem + 1;
+                usize len = n - 1;
+                while (len > 256) {
+                    __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (dst - 1) : "memory", "cc");
+                    dst += 256;
+                    len -= 256;
+                }
+                usize l = len - 1;
+                __asm__ volatile(
+                    "   larl    1, 1f\n"
+                    "   ex      %[l], 0(1)\n"
+                    "   j       2f\n"
+                    "1: mvc     0(1,%[dst]), 0(%[src])\n"
+                    "2:\n"
+                    : [l] "+r" (l)
+                    : [dst] "a" (dst), [src] "a" (dst - 1)
+                    : "r1", "memory", "cc"
+                );
+            }
+        }
+        return s;
+    }
+
+    auto memcpy(void *d, const void *s, usize n) -> void* {
+        if (n == 0 || d == s) return d;
+
+        if (n > 1024) {
+            register void *r0 __asm__("r0") = d;
+            register usize r1 __asm__("r1") = n;
+            register const void *r2 __asm__("r2") = s;
+            register usize r3 __asm__("r3") = n;
+
+            __asm__ volatile(
+                "0: mvcl %%r0,%%r2\n"
+                "   jo   0b"
+                : "+d" (r0), "+d" (r1), "+d" (r2), "+d" (r3)
+                :
+                : "memory", "cc"
+            );
+            return d;
+        }
+
+        auto *dst = static_cast<unsigned char*>(d);
+        const auto *src = static_cast<const unsigned char*>(s);
+        while (n > 256) {
+            __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (src) : "memory", "cc");
+            dst += 256;
+            src += 256;
+            n -= 256;
+        }
+        usize l = n - 1;
+        __asm__ volatile(
+            "   larl    1, 1f\n"
+            "   ex      %[l], 0(1)\n"
+            "   j       2f\n"
+            "1: mvc     0(1,%[dst]), 0(%[src])\n"
+            "2:\n"
+            : [l] "+r" (l)
+            : [dst] "a" (dst), [src] "a" (src)
+            : "r1", "memory", "cc"
+        );
+        return d;
+    }
+
+    auto memmove(void *dest, const void *src, usize n) -> void* {
+        if (n == 0 || dest == src) return dest;
+
+        if (dest < src || reinterpret_cast<uptr>(dest) >= reinterpret_cast<uptr>(src) + n) {
+            return memcpy(dest, src, n);
+        }
+
+        auto *d = static_cast<unsigned char*>(dest) + n;
+        const auto *s = static_cast<const unsigned char*>(src) + n;
+
+        while (n > 0) {
+            usize chunk = (n > 256) ? 256 : n;
+            d -= chunk;
+            s -= chunk;
+            n -= chunk;
+
+            usize l = chunk - 1;
+            __asm__ volatile(
+                "   larl    1, 1f\n"
+                "   ex      %[l], 0(1)\n"
+                "   j       2f\n"
+                "1: mvc     0(1,%[dst]), 0(%[src])\n"
+                "2:\n"
+                : [l] "+r" (l)
+                : [dst] "a" (d), [src] "a" (s)
+                : "r1", "memory", "cc"
+            );
+        }
+
+        return dest;
+    }
+    
+    auto memcmp(const void *s1, const void *s2, usize n) -> int {
+        if (n == 0) return 0;
+
+        const auto *p1 = static_cast<const unsigned char*>(s1);
+        const auto *p2 = static_cast<const unsigned char*>(s2);
+
+        while (n > 256) {
+            int cc;
+            __asm__ volatile(
+                "   clc     0(256,%[p1]), 0(%[p2])\n"
+                "   ipm     %[cc]\n"
+                "   srl     %[cc], 28\n"
+                : [cc] "=d" (cc)
+                : [p1] "a" (p1), [p2] "a" (p2)
+                : "cc"
+            );
+            if (cc != 0) {
+                for (int i = 0; i < 256; i++) {
+                    if (p1[i] != p2[i]) return static_cast<int>(p1[i]) - static_cast<int>(p2[i]);
+                }
+            }
+            p1 += 256;
+            p2 += 256;
+            n -= 256;
+        }
+
+        if (n > 0) {
+            usize l = n - 1;
+            int cc;
+            __asm__ volatile(
+                "   larl    1, 1f\n"
+                "   ex      %[l], 0(1)\n"
+                "   ipm     %[cc]\n"
+                "   srl     %[cc], 28\n"
+                "   j       2f\n"
+                "1: clc     0(1,%[p1]), 0(%[p2])\n"
+                "2:\n"
+                : [cc] "=d" (cc), [l] "+r" (l)
+                : [p1] "a" (p1), [p2] "a" (p2)
+                : "r1", "cc"
+            );
+            if (cc != 0) {
+                for (usize i = 0; i < n; i++) {
+                    if (p1[i] != p2[i]) return (int) p1[i] - (int) p2[i];
+                }
+            }
+        }
+
+        return 0;
+    }
+    
 }
 
 }

@@ -1,0 +1,20 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/endian.cxxm
+/// @brief Endianness detection and constants
+
+export module lib.endian;
+
+export {
+
+namespace lib {
+
+    /// @brief Enum representing endianness.
+    enum class endian {
+        little = 0,
+        big    = 1,
+        native = __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ ? little : big
+    };
+
+} // namespace lib
+
+} // end export

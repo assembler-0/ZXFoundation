@@ -1,0 +1,195 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file error.cxxm
+/// @brief Kernel error code system for all subsystems
+
+export module lib.error;
+import zxfoundation.base.types;
+
+export {
+
+namespace lib {
+
+    /// @brief Error category discriminator for kernel subsystems.
+    enum class error_category : u8 {
+        none = 0,    ///< No error.
+        arch,        ///< s390x architecture errors (SIGP, PSW, facilities).
+        memory,      ///< Memory management errors.
+        locking,     ///< Lock and synchronization errors.
+        crypto,      ///< Cryptographic operation errors.
+        driver,      ///< Device driver errors.
+        init,        ///< Initialization and boot errors.
+        generic      ///< Generic kernel errors.
+    };
+
+    /// @brief s390x architecture-specific error codes.
+    /// @note Maps to SIGP condition codes, PSW validation failures, and facility checks.
+    namespace arch_error {
+        enum code : u32 {
+            none                    = 0,
+            sigp_busy               = 1,  ///< SIGP instruction returned CC=2 (busy).
+            sigp_not_operational    = 2,  ///< SIGP instruction returned CC=3 (not operational).
+            sigp_invalid_order      = 3,  ///< Invalid SIGP order code.
+            psw_invalid_mask        = 4,  ///< PSW mask word contains invalid bits.
+            psw_invalid_address     = 5,  ///< PSW instruction address is invalid.
+            stfle_failed            = 6,  ///< STFLE instruction failed.
+            stsi_failed             = 7,  ///< STSI instruction failed or returned invalid data.
+            cpu_not_available       = 8,  ///< Target CPU is not available.
+            invalid_cpu_id          = 9,  ///< CPU ID exceeds CONFIG_ZX_MAX_CPUS.
+        };
+    }
+
+    /// @brief Memory management error codes.
+    namespace memory_error {
+        enum code : u32 {
+            none                = 0,
+            out_of_memory       = 1,  ///< Memory allocation failed (OOM).
+            invalid_address     = 2,  ///< Address is outside valid range.
+            alignment_error     = 3,  ///< Address violates alignment requirements.
+            region_overlap      = 4,  ///< Memory regions overlap illegally.
+            hhdm_init_failed    = 5,  ///< High-Half Direct Map initialization failed.
+            page_fault          = 6,  ///< Page fault occurred.
+        };
+    }
+
+    /// @brief Locking and synchronization error codes.
+    namespace locking_error {
+        enum code : u32 {
+            none                = 0,
+            timeout             = 1,  ///< Lock acquisition timed out.
+            deadlock_detected   = 2,  ///< Potential deadlock detected.
+            already_locked      = 3,  ///< Lock is already held.
+            not_locked          = 4,  ///< Attempt to unlock a non-held lock.
+            max_depth_exceeded  = 5,  ///< Exceeded MAX_LOCK_DEPTH.
+        };
+    }
+
+    /// @brief Cryptographic operation error codes.
+    namespace crypto_error {
+        enum code : u32 {
+            none                = 0,
+            invalid_input       = 1,  ///< Input data is malformed.
+            hash_mismatch       = 2,  ///< Computed hash does not match expected.
+            verification_failed = 3,  ///< Signature or checksum verification failed.
+        };
+    }
+
+    /// @brief Device driver error codes.
+    namespace driver_error {
+        enum code : u32 {
+            none            = 0,
+            not_found       = 1,  ///< Device not found.
+            not_ready       = 2,  ///< Device not ready for I/O.
+            io_error        = 3,  ///< I/O operation failed.
+            timeout         = 4,  ///< Device operation timed out.
+            busy            = 5,  ///< Device is busy.
+        };
+    }
+
+    /// @brief Initialization and boot error codes.
+    namespace init_error {
+        enum code : u32 {
+            none                = 0,
+            boot_failed         = 1,  ///< Boot sequence failed.
+            invalid_protocol    = 2,  ///< ZXFL protocol violation.
+            checksum_mismatch   = 3,  ///< Boot image checksum mismatch.
+        };
+    }
+
+    /// @brief Generic kernel error codes.
+    namespace generic_error {
+        enum code : u32 {
+            none            = 0,
+            invalid_arg     = 1,  ///< Invalid argument passed to function.
+            not_supported   = 2,  ///< Operation not supported.
+            not_implemented = 3,  ///< Feature not yet implemented.
+            unknown         = 4,  ///< Unknown error.
+        };
+    }
+
+    /// @brief Unified kernel error type.
+    /// @note Combines an error category with a subsystem-specific code.
+    ///       Use the from_* factory methods for type-safe construction.
+    struct kernel_error {
+        error_category category;  ///< Error category discriminator.
+        u32 code;                 ///< Subsystem-specific error code.
+
+        /// @brief Default constructor: no error.
+        constexpr kernel_error() noexcept 
+            : category(error_category::none), code(0) {}
+
+        /// @brief Construct from category and raw code.
+        /// @param[in] cat  Error category.
+        /// @param[in] c    Raw error code.
+        /// @warning Prefer type-safe from_* methods.
+        constexpr kernel_error(error_category cat, u32 c) noexcept
+            : category(cat), code(c) {}
+
+        /// @brief Construct architecture error.
+        /// @param[in] c  arch_error::code value.
+        /// @return kernel_error with category=arch.
+        static constexpr auto from_arch(arch_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::arch, static_cast<u32>(c));
+        }
+
+        /// @brief Construct memory error.
+        /// @param[in] c  memory_error::code value.
+        /// @return kernel_error with category=memory.
+        static constexpr auto from_memory(memory_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::memory, static_cast<u32>(c));
+        }
+
+        /// @brief Construct locking error.
+        /// @param[in] c  locking_error::code value.
+        /// @return kernel_error with category=locking.
+        static constexpr auto from_locking(locking_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::locking, static_cast<u32>(c));
+        }
+
+        /// @brief Construct cryptographic error.
+        /// @param[in] c  crypto_error::code value.
+        /// @return kernel_error with category=crypto.
+        static constexpr auto from_crypto(crypto_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::crypto, static_cast<u32>(c));
+        }
+
+        /// @brief Construct driver error.
+        /// @param[in] c  driver_error::code value.
+        /// @return kernel_error with category=driver.
+        static constexpr auto from_driver(driver_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::driver, static_cast<u32>(c));
+        }
+
+        /// @brief Construct initialization error.
+        /// @param[in] c  init_error::code value.
+        /// @return kernel_error with category=init.
+        static constexpr auto from_init(init_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::init, static_cast<u32>(c));
+        }
+
+        /// @brief Construct generic error.
+        /// @param[in] c  generic_error::code value.
+        /// @return kernel_error with category=generic.
+        static constexpr auto from_generic(generic_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::generic, static_cast<u32>(c));
+        }
+
+        /// @brief Check if two errors are identical.
+        constexpr auto operator==(const kernel_error& other) const noexcept -> bool {
+            return category == other.category && code == other.code;
+        }
+
+        /// @brief Check if two errors differ.
+        constexpr auto operator!=(const kernel_error& other) const noexcept -> bool {
+            return !(*this == other);
+        }
+
+        /// @brief Check if error is non-zero.
+        /// @return true if category is not none.
+        constexpr explicit operator bool() const noexcept {
+            return category != error_category::none;
+        }
+    };
+
+} // namespace lib
+
+} // end export

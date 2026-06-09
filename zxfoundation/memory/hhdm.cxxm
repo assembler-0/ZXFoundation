@@ -10,11 +10,11 @@ export {
 
 namespace zxfoundation::memory::hhdm {
 
-    u64 phys_to_virt(const u64 phys) noexcept {
+    auto phys_to_virt(const u64 phys) noexcept -> u64 {
         return phys + KERNEL_VIRTUAL_OFFSET;
     }
 
-    u64 virt_to_phys(const u64 virt) noexcept {
+    auto virt_to_phys(const u64 virt) noexcept -> u64 {
         return virt - KERNEL_VIRTUAL_OFFSET;
     }
 

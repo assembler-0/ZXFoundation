@@ -12,34 +12,70 @@ namespace lib {
 
     /// @brief Forwards an l-value.
     template <typename T>
-    [[nodiscard]] constexpr T&& forward(remove_reference_t<T>& arg) noexcept {
+    [[nodiscard]] constexpr auto forward(remove_reference_t<T>& arg) noexcept -> T&& {
         return static_cast<T&&>(arg);
     }
 
     /// @brief Forwards an r-value.
     template <typename T>
-    [[nodiscard]] constexpr T&& forward(remove_reference_t<T>&& arg) noexcept {
+    [[nodiscard]] constexpr auto forward(remove_reference_t<T>&& arg) noexcept -> T&& {
         static_assert(!is_l_value_reference<T>, "Cannot forward an r-value as an l-value.");
         return static_cast<T&&>(arg);
     }
 
     /// @brief Move an object to enable move semantics.
     template <typename T>
-    [[nodiscard]] constexpr remove_reference_t<T>&& move(T&& t) noexcept {
+    [[nodiscard]] constexpr auto move(T&& t) noexcept -> remove_reference_t<T>&& {
         return static_cast<remove_reference_t<T>&&>(t);
     }
 
     /// @brief Exchange values of two objects.
     template <typename T>
-    constexpr void swap(T& a, T& b) noexcept {
+    constexpr auto swap(T& a, T& b) noexcept -> void {
         T temp = move(a);
         a = move(b);
         b = move(temp);
     }
 
     template <typename T>
-    T clamp(T val, T max) {
+    auto clamp(T val, T max) -> T {
         return val > max ? max : val;
+    }
+
+    /// @brief Recover the enclosing object from a pointer to one of its members.
+    ///
+    /// Given a pointer to a field of type @p Member embedded inside @p Owner,
+    /// computes and returns the address of the enclosing @p Owner instance.
+    ///
+    /// @tparam Owner   Type of the enclosing struct.
+    /// @tparam Member  Type of the embedded field.
+    /// @tparam member  Pointer-to-member identifying the field within @p Owner.
+    /// @param[in] ptr  Non-null pointer to the embedded field.
+    /// @return Pointer to the @p Owner instance that contains @p ptr.
+    ///
+    /// @note  The byte offset is a compile-time constant; at -O1 and above the
+    ///        compiler emits a single subtraction instruction.
+    /// @note  Requires @c -fno-strict-aliasing (already in kernel compile flags).
+    /// @warning Behavior is undefined if @p ptr does not belong to an @p Owner.
+    /// @warning Behavior is undefined if @p ptr is null.
+    template <typename Owner, typename Member, Member Owner::* member>
+    [[nodiscard]] inline auto container_of(Member* ptr) noexcept -> Owner* {
+        const uptr offset = reinterpret_cast<uptr>(
+            &(reinterpret_cast<Owner*>(static_cast<uptr>(0))->*member));
+        return reinterpret_cast<Owner*>(reinterpret_cast<uptr>(ptr) - offset);
+    }
+
+    /// @brief Const-qualified overload of @ref container_of.
+    /// @tparam Owner   Type of the enclosing struct.
+    /// @tparam Member  Type of the embedded field.
+    /// @tparam member  Pointer-to-member identifying the field within @p Owner.
+    /// @param[in] ptr  Non-null const pointer to the embedded field.
+    /// @return Const pointer to the @p Owner instance that contains @p ptr.
+    template <typename Owner, typename Member, Member Owner::* member>
+    [[nodiscard]] inline auto container_of(const Member* ptr) noexcept -> const Owner* {
+        const uptr offset = reinterpret_cast<uptr>(
+            &(reinterpret_cast<Owner*>(static_cast<uptr>(0))->*member));
+        return reinterpret_cast<const Owner*>(reinterpret_cast<uptr>(ptr) - offset);
     }
 
 } // namespace lib

@@ -3,12 +3,29 @@
 /// @brief s390x per-CPU data structures
 
 export module arch.s390x.cpu.percpu;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
+import arch.s390x.cpu.processor;
+import zxfoundation.base.types;
+import lib.string;
 
 export {
 
 namespace arch::s390x::cpu::percpu {
 
+    auto init_bsp() -> void {
+        lowcore::zx_lowcore* lc = lowcore::get_current();
 
+        ::lib::memset(&lc->percpu, 0, sizeof(lc->percpu));
+
+        const uint16_t cpu_addr = processor::cpu_addr();
+        lc->percpu.prefix_base = 0;
+        lc->percpu.cpu_id      = 0;
+        lc->percpu.cpu_addr    = cpu_addr;
+        lc->percpu.lock_depth  = 0;
+
+        lowcore::__percpu_lowcore_area_raw[0] = lc;
+    }
 
 } // namespace arch::s390x::cpu::percpu
 

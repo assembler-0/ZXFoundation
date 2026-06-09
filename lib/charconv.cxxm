@@ -82,31 +82,31 @@ namespace lib::charconv {
         0x38, 0x39, 0xB3, 0xDB, 0xDC, 0xD9, 0xDA, 0x9F   // 0xF8-0xFF
     };
 
-    u8 ebcdic_to_ascii(const u8 ebcdic) {
+    auto ebcdic_to_ascii(const u8 ebcdic) -> u8{
         return ebcdic_to_ascii_table[ebcdic];
     }
 
-    u8 ascii_to_ebcdic(const u8 ascii) {
+    auto ascii_to_ebcdic(const u8 ascii) -> u8 {
         return ascii_to_ebcdic_table[ascii];
     }
 
-    void ebcdic_to_ascii(const span<char>& buff) {
+    auto ebcdic_to_ascii(const span<char>& buff) -> void{
         for (char& c : buff)
             c = ebcdic_to_ascii(c);
     }
 
-    void ascii_to_ebcdic(const span<char>& buff) {
+    auto ascii_to_ebcdic(const span<char>& buff) -> void {
         for (char& c : buff)
             c = ascii_to_ebcdic(c);
     }
 
-    void ebcdic_to_ascii(char* buff, const usize sz) {
+    auto ebcdic_to_ascii(char* buff, const usize sz) -> void{
         if (!buff) return;
         for (usize i = 0; i < sz; ++i)
             buff[i] = ebcdic_to_ascii(buff[i]);
     }
 
-    void ascii_to_ebcdic(char* buff, const usize sz) {
+    auto ascii_to_ebcdic(char* buff, const usize sz) -> void {
         if (!buff) return;
         for (usize i = 0; i < sz; ++i)
             buff[i] = ascii_to_ebcdic(buff[i]);

@@ -5,9 +5,21 @@
 export module zxfoundation.init.main;
 import zxfoundation.base.types;
 import arch.s390x.init.zxfl.protocol;
+import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.psw;
 
-extern "C" [[noreturn]]
-void zxfoundation_global_initialize(const arch::s390x::init::zxfl::zxfl_boot_protocol& protocol) noexcept {
-    (void)protocol;
-    while (true);
+extern "C" [[noreturn]] auto zxfoundation_global_initialize(
+     [[maybe_unused]] const arch::s390x::init::zxfl::protocol* protocol
+) noexcept -> void {
+    if (!protocol) [[unlikely]]
+        arch::s390x::cpu::psw::load_disabled_wait_psw();
+
+    arch::s390x::cpu::percpu::init_bsp();
+    arch::s390x::cpu::lowcore::init_bsp();
+    arch::s390x::cpu::lowcore::get_current()->kernel_stack = protocol->kernel_stack_top;
+
+    while (true)
+        arch::s390x::cpu::processor::cpu_relax();
 }

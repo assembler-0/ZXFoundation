@@ -1,0 +1,20 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file mcs_types.cxxm
+/// @brief mcs types
+
+export module zxfoundation.locking.mcs_types;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace zxfoundation::locking::mcs {
+
+    /// @brief MCS node for queued spinlocks.
+    struct mcs_node {
+        arch::s390x::lib::atomic::atomic<mcs_node*> next{nullptr};
+        arch::s390x::lib::atomic::atomic<int>       locked{0};
+    };
+
+} // namespace zxfoundation::locking::mcs
+
+} // end export

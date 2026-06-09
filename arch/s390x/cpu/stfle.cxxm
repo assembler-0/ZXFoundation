@@ -5,26 +5,28 @@
 export module arch.s390x.cpu.stfle;
 import arch.s390x.cpu.stfle_types;
 import zxfoundation.base.types;
+import lib.expected;
+import lib.error;
+import lib.string;
+import lib.span;
+import lib.algorithm;
+import lib.bit;
 
 export {
 
 namespace arch::s390x::cpu::stfle {
 
     /// @brief Detect CPU facilities using STFLE.
-    /// @param fac_list   Output buffer; must hold at least @p max_dwords uint64_t.
-    /// @tparam MaxDwords Maximum doublewords to request (capped at STFLE_MAX_DWORDS).
-    /// @return Actual number of doublewords stored, or 0 if STFLE unavailable.
-    template <u32 MaxDwords>
-        requires (MaxDwords <= STFLE_MAX_DWORDS)
-    u32 stfle_detect(u64* fac_list) noexcept {
-        if (!fac_list || MaxDwords == 0)
-            return 0;
+    /// @param fac_list   A span pointing to the output buffer.
+    /// @return Actual number of doublewords stored, or a kernel error.
+    template <usize Extent>
+        requires (Extent > 0 && Extent <= STFLE_MAX_DWORDS)
+    auto stfle_detect(lib::span<u64, Extent> fac_list) noexcept -> lib::expected<u32, lib::kernel_error> {
 
-        for (u32 i = 0; i < MaxDwords; i++)
-            fac_list[i] = 0;
+        lib::fill(fac_list.begin(), fac_list.end(), 0ULL);
 
-        register u64 r0   __asm__("0") = MaxDwords - 1U;
-        register u64 addr __asm__("1") = *fac_list;
+        register u64 r0   __asm__("0") = fac_list.size() - 1U;
+        register u64 r1   __asm__("1") = reinterpret_cast<u64>(fac_list.data());
         i32 cc;
 
         __asm__ volatile (
@@ -32,28 +34,28 @@ namespace arch::s390x::cpu::stfle {
             "   ipm     %[cc]\n"
             "   srl     %[cc],28\n"
             : [cc] "=d" (cc), "+d" (r0)
-            : [addr] "a" (addr)
+            : [addr] "a" (r1)
             : "cc", "memory"
         );
 
-        if (cc == 3)
-            return 0;
+        if (cc == 3) [[unlikely]] {
+            return lib::unexpected(lib::kernel_error::from_arch(lib::arch_error::code::stfle_failed));
+        }
 
         return static_cast<u32>(r0 + 1U);
     }
 
     /// @brief Test whether a specific facility bit is set.
     /// @param fac_list  Facility list filled by stfle_detect().
-    /// @param bit       Facility bit number (0-based, per PoP Appendix B).
+    /// @tparam Bit       Facility bit number (0-based, per PoP Appendix B).
     /// @return true if the facility is present, false otherwise.
-    bool stfle_has_facility(const u64 *fac_list, const u32 bit) noexcept {
-        const u32 dword_idx = bit / 64U;
-        const u32 bit_pos   = 63U - bit % 64U;  // big-endian bit within dword
-        if (dword_idx >= STFLE_MAX_DWORDS)
-            return false;
-        return fac_list[dword_idx] >> bit_pos & 1U;
+    template <u32 Bit>
+        requires (Bit / 64U < STFLE_MAX_DWORDS)
+    auto stfle_has_facility(const u64* fac_list) noexcept -> bool {
+        const u32 dword_idx = Bit / 64U;
+        const u32 bit_in_dword = Bit % 64U;
+        return lib::bit_test_msb(fac_list[dword_idx], bit_in_dword);
     }
-
 
 } // namespace arch::cpu::stfle
 

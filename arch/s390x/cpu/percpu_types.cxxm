@@ -1,11 +1,12 @@
 /// SPDX-License-Identifier: Apache 2.0
-/// @file percpu.cxxm
+/// @file percpu_types.cxxm
 /// @brief s390x per-CPU data structures
 
 export module arch.s390x.cpu.percpu_types;
-import zxfoundation.base.types;
-import zxfoundation.locking.qspinlock_types;
 import arch.s390x.cpu.processor_types;
+import arch.s390x.lib.atomic;
+import zxfoundation.base.types;
+import zxfoundation.locking.mcs_types;
 
 export {
 
@@ -15,19 +16,20 @@ namespace arch::s390x::cpu::percpu {
     /// @note Available space: 0x0400-0x1200 (3584 bytes).
     struct alignas(processor::S390X_CACHE_LINE_SIZE) s390x_percpu_data {
         // Cache line 0: Hot fields
-        u64    prefix_base;
-        u16    cpu_id;
-        u16    cpu_addr;
-        u32    preempt_count;
-        u64    current_task;
-        u64    kernel_stack;
-        u64    user_asce;
-        u32    lock_depth;
-        u32    irq_count;
-        u64    _pad0[25];
+        u64    prefix_base{};
+        u16    cpu_id{};
+        u16    cpu_addr{};
+        u32    preempt_count{};
+        u64    current_task{};
+        u64    kernel_stack{};
+        u64    user_asce{};
+        u32    lock_depth{};
+        u32    irq_count{};
 
-        // Cache lines 1-4: MCS lock nodes
-        zxfoundation::locking::qspinlock::qspinlock_node lock_nodes[zxfoundation::locking::qspinlock::MAX_LOCK_DEPTH];
+        // MCS nodes for queued spinlocks (4 levels: Task, SoftIRQ, HardIRQ, NMI)
+        zxfoundation::locking::mcs::mcs_node qnodes[4]{};
+
+        u64    _pad0[17]{};
     };
 
     static_assert(sizeof(s390x_percpu_data) <= 0xE00);
@@ -35,3 +37,4 @@ namespace arch::s390x::cpu::percpu {
 } // namespace arch::s390x::cpu::percpu
 
 } // end export
+

@@ -1,0 +1,192 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/array.cxxm
+/// @brief C++ STL-like array implementation
+
+export module lib.array;
+import zxfoundation.base.types;
+import lib.concepts;
+import lib.expected;
+import lib.error;
+import lib.util;
+import lib.compare;
+
+export {
+
+namespace lib {
+
+    /// @brief A fixed-size array container.
+    /// @tparam T Type of the elements.
+    /// @tparam N Number of elements.
+    template <typename T, usize N>
+    struct array {
+        T storage[N];
+
+        using value_type      = T;
+        using size_type       = usize;
+        using difference_type = isize;
+        using reference       = T&;
+        using const_reference = const T&;
+        using pointer         = T*;
+        using const_pointer   = const T*;
+        using iterator        = T*;
+        using const_iterator  = const T*;
+
+        /// @brief Returns an iterator to the beginning.
+        [[nodiscard]] constexpr auto begin() noexcept -> iterator { return storage; }
+        /// @brief Returns an iterator to the beginning (const).
+        [[nodiscard]] constexpr auto begin() const noexcept -> const_iterator { return storage; }
+
+        /// @brief Returns an iterator to the end.
+        [[nodiscard]] constexpr auto end() noexcept -> iterator { return storage + N; }
+        /// @brief Returns an iterator to the end (const).
+        [[nodiscard]] constexpr auto end() const noexcept -> const_iterator { return storage + N; }
+
+        /// @brief Returns the number of elements.
+        [[nodiscard]] constexpr auto size() const noexcept -> size_type { return N; }
+
+        /// @brief Checks if the array is empty.
+        [[nodiscard]] constexpr auto empty() const noexcept -> bool { return N == 0; }
+
+        /// @brief Access element at index (unchecked).
+        [[nodiscard]] constexpr auto operator[](size_type index) noexcept -> reference {
+            return storage[index];
+        }
+
+        /// @brief Access element at index (unchecked, const).
+        [[nodiscard]] constexpr auto operator[](size_type index) const noexcept -> const_reference {
+            return storage[index];
+        }
+
+        /// @brief Access element at index (checked).
+        [[nodiscard]] constexpr auto at(size_type index) noexcept -> expected<reference, kernel_error> {
+            if (index >= N) {
+                return unexpected(kernel_error::from_generic(generic_error::code::invalid_arg));
+            }
+            return storage[index];
+        }
+
+        /// @brief Access element at index (checked, const).
+        [[nodiscard]] constexpr auto at(size_type index) const noexcept -> expected<const_reference, kernel_error> {
+            if (index >= N) {
+                return unexpected(kernel_error::from_generic(generic_error::code::invalid_arg));
+            }
+            return storage[index];
+        }
+
+        /// @brief Access the first element.
+        [[nodiscard]] constexpr auto front() noexcept -> reference { return storage[0]; }
+        /// @brief Access the first element (const).
+        [[nodiscard]] constexpr auto front() const noexcept -> const_reference { return storage[0]; }
+
+        /// @brief Access the last element.
+        [[nodiscard]] constexpr auto back() noexcept -> reference { return storage[N - 1]; }
+        /// @brief Access the last element (const).
+        [[nodiscard]] constexpr auto back() const noexcept -> const_reference { return storage[N - 1]; }
+
+        /// @brief Returns a pointer to the underlying data.
+        [[nodiscard]] constexpr auto data() noexcept -> pointer { return storage; }
+        /// @brief Returns a pointer to the underlying data (const).
+        [[nodiscard]] constexpr auto data() const noexcept -> const_pointer { return storage; }
+
+        /// @brief Fills the array with a value.
+        constexpr auto fill(const T& value) -> void {
+            for (usize i = 0; i < N; ++i) {
+                storage[i] = value;
+            }
+        }
+
+        /// @brief Swaps the contents of two arrays.
+        constexpr auto swap(array& other) noexcept -> void {
+            for (usize i = 0; i < N; ++i) {
+                lib::swap(storage[i], other.storage[i]);
+            }
+        }
+
+        /// @brief Equality comparison.
+        [[nodiscard]] constexpr auto operator==(const array& other) const -> bool {
+            for (usize i = 0; i < N; ++i) {
+                if (storage[i] != other.storage[i]) return false;
+            }
+            return true;
+        }
+
+        /// @brief Three-way comparison.
+        [[nodiscard]] constexpr auto operator<=>(const array& other) const {
+            for (usize i = 0; i < N; ++i) {
+                if (auto cmp = storage[i] <=> other.storage[i]; cmp != 0) {
+                    return cmp;
+                }
+            }
+            return (0 <=> 0); // Equivalent to strong_ordering::equal
+        }
+    };
+
+    /// @brief Specialization for zero-sized arrays.
+    template <typename T>
+    struct array<T, 0> {
+        using value_type      = T;
+        using size_type       = usize;
+        using difference_type = isize;
+        using reference       = T&;
+        using const_reference = const T&;
+        using pointer         = T*;
+        using const_pointer   = const T*;
+        using iterator        = T*;
+        using const_iterator  = const T*;
+
+        [[nodiscard]] constexpr auto begin() noexcept -> iterator { return nullptr; }
+        [[nodiscard]] constexpr auto begin() const noexcept -> const_iterator { return nullptr; }
+        [[nodiscard]] constexpr auto end() noexcept -> iterator { return nullptr; }
+        [[nodiscard]] constexpr auto end() const noexcept -> const_iterator { return nullptr; }
+        [[nodiscard]] constexpr auto size() const noexcept -> size_type { return 0; }
+        [[nodiscard]] constexpr auto empty() const noexcept -> bool { return true; }
+        [[nodiscard]] constexpr auto data() noexcept -> pointer { return nullptr; }
+        [[nodiscard]] constexpr auto data() const noexcept -> const_pointer { return nullptr; }
+
+        constexpr auto swap(array&) noexcept -> void {}
+        [[nodiscard]] constexpr auto operator==(const array&) const -> bool { return true; }
+        [[nodiscard]] constexpr auto operator<=>(const array&) const { return (0 <=> 0); }
+    };
+
+    /// @brief Non-member swap for array.
+    template <typename T, usize N>
+    constexpr auto swap(array<T, N>& a, array<T, N>& b) noexcept -> void {
+        a.swap(b);
+    }
+
+    /// @name Structured binding support
+    /// @{
+
+    template <typename T> struct tuple_size;
+    template <usize I, typename T> struct tuple_element;
+
+    template <typename T, usize N>
+    struct tuple_size<array<T, N>> {
+        static constexpr usize value = N;
+    };
+
+    template <usize I, typename T, usize N>
+    struct tuple_element<I, array<T, N>> {
+        using type = T;
+    };
+
+    template <usize I, typename T, usize N>
+    [[nodiscard]] constexpr auto get(array<T, N>& a) noexcept -> T& {
+        return a.storage[I];
+    }
+
+    template <usize I, typename T, usize N>
+    [[nodiscard]] constexpr auto get(const array<T, N>& a) noexcept -> const T& {
+        return a.storage[I];
+    }
+
+    template <usize I, typename T, usize N>
+    [[nodiscard]] constexpr auto get(array<T, N>&& a) noexcept -> T&& {
+        return lib::move(a.storage[I]);
+    }
+
+    /// @}
+
+} // namespace lib
+
+} // end export

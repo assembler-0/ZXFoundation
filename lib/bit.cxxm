@@ -1,0 +1,243 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/bit.cxxm
+/// @brief Comprehensive bit manipulation suite for kernel development
+
+export module lib.bit;
+import zxfoundation.base.types;
+import lib.concepts;
+import lib.endian;
+
+export {
+
+namespace lib {
+
+    /// @brief Bit numbering conventions.
+    enum class bit_numbering {
+        lsb0, ///< Standard C++: bit 0 is the least significant bit (2^0).
+        msb0  ///< IBM/zArch: bit 0 is the most significant bit (2^N-1).
+    };
+
+    // --- Fundamental Bit Primitives ---
+
+    /// @brief Creates a mask with a single bit set (LSB0 numbering).
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_mask(unsigned int bit) noexcept -> T {
+        return T(1) << bit;
+    }
+
+    /// @brief Creates a mask with a single bit set (MSB0/IBM numbering).
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_mask_msb(unsigned int bit) noexcept -> T {
+        return T(1) << (sizeof(T) * 8 - 1 - bit);
+    }
+
+    /// @brief Creates a mask for a range of bits [start, end] (inclusive, LSB0).
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_range_mask(unsigned int start, unsigned int end) noexcept -> T {
+        if (start > end) return 0;
+        const unsigned int len = end - start + 1;
+        if (len >= sizeof(T) * 8) return ~T(0);
+        return ((T(1) << len) - 1) << start;
+    }
+
+    /// @brief Creates a mask for a range of bits [start, end] (inclusive, IBM MSB0).
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_range_mask_msb(unsigned int start, unsigned int end) noexcept -> T {
+        if (start > end) return 0;
+        const unsigned int len = end - start + 1;
+        const unsigned int shift = sizeof(T) * 8 - 1 - end;
+        if (len >= sizeof(T) * 8) return ~T(0);
+        return ((T(1) << len) - 1) << shift;
+    }
+
+    // --- Bit Manipulation (LSB0) ---
+
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_test(T val, unsigned int bit) noexcept -> bool {
+        return (val & bit_mask<T>(bit)) != 0;
+    }
+
+    template <is_unsigned T>
+    constexpr auto bit_set(T& val, unsigned int bit) noexcept -> void {
+        val |= bit_mask<T>(bit);
+    }
+
+    template <is_unsigned T>
+    constexpr auto bit_clear(T& val, unsigned int bit) noexcept -> void {
+        val &= ~bit_mask<T>(bit);
+    }
+
+    template <is_unsigned T>
+    constexpr auto bit_toggle(T& val, unsigned int bit) noexcept -> void {
+        val ^= bit_mask<T>(bit);
+    }
+
+    // --- Bit Manipulation (MSB0/IBM) ---
+
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_test_msb(T val, unsigned int bit) noexcept -> bool {
+        return (val & bit_mask_msb<T>(bit)) != 0;
+    }
+
+    template <is_unsigned T>
+    constexpr auto bit_set_msb(T& val, unsigned int bit) noexcept -> void {
+        val |= bit_mask_msb<T>(bit);
+    }
+
+    template <is_unsigned T>
+    constexpr auto bit_clear_msb(T& val, unsigned int bit) noexcept -> void {
+        val &= ~bit_mask_msb<T>(bit);
+    }
+
+    // --- Bitfield Extraction/Insertion ---
+
+    /// @brief Extracts a bitfield [start, end] (inclusive, LSB0) and shifts it to LSB.
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_extract(T val, unsigned int start, unsigned int end) noexcept -> T {
+        return (val & bit_range_mask<T>(start, end)) >> start;
+    }
+
+    /// @brief Extracts a bitfield [start, end] (inclusive, IBM MSB0) and shifts it to LSB.
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_extract_msb(T val, unsigned int start, unsigned int end) noexcept -> T {
+        const unsigned int shift = sizeof(T) * 8 - 1 - end;
+        return (val & bit_range_mask_msb<T>(start, end)) >> shift;
+    }
+
+    /// @brief Inserts a value into a bitfield [start, end] (inclusive, LSB0).
+    template <is_unsigned T>
+    constexpr auto bit_insert(T& target, unsigned int start, unsigned int end, T val) noexcept -> void {
+        const T mask = bit_range_mask<T>(start, end);
+        target = (target & ~mask) | ((val << start) & mask);
+    }
+
+    /// @brief Inserts a value into a bitfield [start, end] (inclusive, IBM MSB0).
+    template <is_unsigned T>
+    constexpr auto bit_insert_msb(T& target, unsigned int start, unsigned int end, T val) noexcept -> void {
+        const T mask = bit_range_mask_msb<T>(start, end);
+        const unsigned int shift = sizeof(T) * 8 - 1 - end;
+        target = (target & ~mask) | ((val << shift) & mask);
+    }
+
+    // --- Advanced Wrappers ---
+
+    /// @brief A non-owning wrapper around an unsigned integer for bit manipulation.
+    /// @tparam T Underlying integer type.
+    /// @tparam Conv Default numbering convention.
+    template <is_unsigned T, bit_numbering Conv = bit_numbering::lsb0>
+    struct bit_view {
+        T& value;
+
+        constexpr explicit bit_view(T& v) noexcept : value(v) {}
+
+        [[nodiscard]] constexpr auto test(unsigned int bit) const noexcept -> bool {
+            if constexpr (Conv == bit_numbering::msb0) return bit_test_msb(value, bit);
+            else return bit_test(value, bit);
+        }
+
+        constexpr auto set(unsigned int bit) noexcept -> bit_view& {
+            if constexpr (Conv == bit_numbering::msb0) bit_set_msb(value, bit);
+            else bit_set(value, bit);
+            return *this;
+        }
+
+        constexpr auto clear(unsigned int bit) noexcept -> bit_view& {
+            if constexpr (Conv == bit_numbering::msb0) bit_clear_msb(value, bit);
+            else bit_clear(value, bit);
+            return *this;
+        }
+
+        [[nodiscard]] constexpr auto extract(unsigned int start, unsigned int end) const noexcept -> T {
+            if constexpr (Conv == bit_numbering::msb0) return bit_extract_msb(value, start, end);
+            else return bit_extract(value, start, end);
+        }
+
+        constexpr auto insert(unsigned int start, unsigned int end, T val) noexcept -> bit_view& {
+            if constexpr (Conv == bit_numbering::msb0) bit_insert_msb(value, start, end, val);
+            else bit_insert(value, start, end, val);
+            return *this;
+        }
+    };
+
+    // --- Endian & Casting (Existing functionality preserved and expanded) ---
+
+    template <typename To, typename From>
+    requires (sizeof(To) == sizeof(From)) && is_pod<To> && is_pod<From>
+    [[nodiscard]] constexpr auto bit_cast(const From& src) noexcept -> To {
+        return __builtin_bit_cast(To, src);
+    }
+
+    template <is_integral T>
+    [[nodiscard]] constexpr auto byteswap(T value) noexcept -> T {
+        if constexpr (sizeof(T) == 1) return value;
+        else if constexpr (sizeof(T) == 2) return static_cast<T>(__builtin_bswap16(static_cast<u16>(value)));
+        else if constexpr (sizeof(T) == 4) return static_cast<T>(__builtin_bswap32(static_cast<u32>(value)));
+        else if constexpr (sizeof(T) == 8) return static_cast<T>(__builtin_bswap64(static_cast<u64>(value)));
+    }
+
+    template <is_integral T>
+    [[nodiscard]] constexpr auto native_to_big(T val) noexcept -> T {
+        if constexpr (endian::native == endian::big) return val;
+        else return byteswap(val);
+    }
+
+    template <is_integral T>
+    [[nodiscard]] constexpr auto big_to_native(T val) noexcept -> T { return native_to_big(val); }
+
+    template <is_integral T>
+    [[nodiscard]] constexpr auto native_to_little(T val) noexcept -> T {
+        if constexpr (endian::native == endian::little) return val;
+        else return byteswap(val);
+    }
+
+    template <is_integral T>
+    [[nodiscard]] constexpr auto little_to_native(T val) noexcept -> T { return native_to_little(val); }
+
+    // --- Counting & Optimization ---
+
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto countl_zero(T value) noexcept -> int {
+        if (value == 0) return sizeof(T) * 8;
+        if constexpr (sizeof(T) <= sizeof(unsigned int)) return __builtin_clz(static_cast<unsigned int>(value)) - (sizeof(unsigned int) - sizeof(T)) * 8;
+        else if constexpr (sizeof(T) == sizeof(unsigned long)) return __builtin_clzl(value);
+        else if constexpr (sizeof(T) == sizeof(unsigned long long)) return __builtin_clzll(value);
+    }
+
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto countr_zero(T value) noexcept -> int {
+        if (value == 0) return sizeof(T) * 8;
+        if constexpr (sizeof(T) <= sizeof(unsigned int)) return __builtin_ctz(static_cast<unsigned int>(value));
+        else if constexpr (sizeof(T) == sizeof(unsigned long)) return __builtin_ctzl(value);
+        else if constexpr (sizeof(T) == sizeof(unsigned long long)) return __builtin_ctzll(value);
+    }
+
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto popcount(T value) noexcept -> int {
+        if constexpr (sizeof(T) <= sizeof(unsigned int)) return __builtin_popcount(static_cast<unsigned int>(value));
+        else if constexpr (sizeof(T) == sizeof(unsigned long)) return __builtin_popcountl(value);
+        else if constexpr (sizeof(T) == sizeof(unsigned long long)) return __builtin_popcountll(value);
+    }
+
+    /// @brief Checks if a value is a power of two.
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto has_single_bit(T value) noexcept -> bool {
+        return value != 0 && (value & (value - 1)) == 0;
+    }
+
+    /// @brief Rounds up to the next power of two.
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_ceil(T value) noexcept -> T {
+        if (value <= 1) return 1;
+        return T(1) << (sizeof(T) * 8 - countl_zero(static_cast<T>(value - 1)));
+    }
+
+    /// @brief Rounds down to the previous power of two.
+    template <is_unsigned T>
+    [[nodiscard]] constexpr auto bit_floor(T value) noexcept -> T {
+        if (value == 0) return 0;
+        return T(1) << (sizeof(T) * 8 - 1 - countl_zero(value));
+    }
+
+} // namespace lib
+
+} // end export

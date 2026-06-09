@@ -1,0 +1,91 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file zxfoundation/locking/lock.cxxm
+/// @brief locking concepts and RAII guards
+
+export module zxfoundation.locking.lock;
+import lib.concepts;
+import lib.optional;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::locking {
+
+    /// @brief Concept for basic lockable types.
+    template <typename L>
+    concept lockable = requires(L& l) {
+        { l.lock()      } noexcept -> lib::same_as<void>;
+        { l.try_lock()  } noexcept -> lib::same_as<bool>;
+        { l.unlock()    } noexcept -> lib::same_as<void>;
+    };
+
+    /// @brief Concept for lockable types that handle IRQ state.
+    template <typename L>
+    concept irq_lockable = requires(L& l, const irqflags& flags) {
+        { l.lock_irqsave()      } noexcept -> lib::same_as<irqflags>;
+        { l.unlock_irqrestore(flags) } noexcept -> lib::same_as<void>;
+    };
+
+    /// @name RAII scoped lock guards
+    /// @{
+
+    /// @brief Standard blocking lock guard.
+    /// @tparam L A type satisfying the @ref lockable concept.
+    template <lockable L>
+    struct lock_guard {
+        /// @brief Acquire the lock (blocking).
+        /// @param[in] l The lock to acquire.
+        explicit lock_guard(L& l) noexcept : m_lock(l) {
+            m_lock.lock();
+        }
+
+        /// @brief Release the lock.
+        ~lock_guard() noexcept {
+            m_lock.unlock();
+        }
+
+        lock_guard(const lock_guard&)     = delete;
+        lock_guard(lock_guard&&)          = delete;
+        auto operator=(const lock_guard&) = delete;
+        auto operator=(lock_guard&&)      = delete;
+
+    private:
+        L& m_lock;
+    };
+
+    /// @brief Scoped lock guard that saves and restores IRQ state.
+    /// @tparam L A type satisfying the @ref irq_lockable concept.
+    template <irq_lockable L>
+    struct irq_lock_guard {
+        /// @brief Acquire the lock and save IRQ state (blocking).
+        /// @param[in] l The lock to acquire.
+        explicit irq_lock_guard(L& l) noexcept : m_lock(l), m_flags(m_lock.lock_irqsave()) {}
+
+        /// @brief Release the lock and restore IRQ state.
+        ~irq_lock_guard() noexcept {
+            m_lock.unlock_irqrestore(m_flags);
+        }
+
+        irq_lock_guard(const irq_lock_guard&)     = delete;
+        irq_lock_guard(irq_lock_guard&&)          = delete;
+        auto operator=(const irq_lock_guard&) = delete;
+        auto operator=(irq_lock_guard&&)      = delete;
+
+    private:
+        L& m_lock;
+        irqflags m_flags;
+    };
+
+    /// @brief Deduction guide for lock_guard.
+    template <lockable L>
+    lock_guard(L&) -> lock_guard<L>;
+
+    /// @brief Deduction guide for irq_lock_guard.
+    template <irq_lockable L>
+    irq_lock_guard(L&) -> irq_lock_guard<L>;
+
+    /// @}
+
+} // namespace lib
+
+} // end export

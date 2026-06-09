@@ -7,6 +7,7 @@ import zxfoundation.base.types;
 import lib.type_traits;
 import lib.concepts;
 import lib.util;
+import lib.bit;
 
 export {
 
@@ -155,7 +156,6 @@ namespace arch::s390x::lib::atomic {
                     : "cc", "memory"
                 );
             } else {
-                // For 1 and 2 byte types, emulate using 4-byte CAS
                 return compare_exchange_strong_emulated(expected, desired, success, failure);
             }
 
@@ -335,14 +335,11 @@ namespace arch::s390x::lib::atomic {
                                                              memory_order failure) noexcept
             requires ::lib::is_integral<T>
         {
-            // Align to 4-byte boundary
             u64 addr = reinterpret_cast<u64>(&value);
             u32* aligned_ptr = reinterpret_cast<u32*>(addr & ~3ULL);
-            usize shift = (addr & 3) * 8;
-
-            u32 mask = (1U << (sizeof(T) * 8)) - 1;
-            u32 exp_shifted = static_cast<u32>(ptr_to_int(expected)) << shift;
-            u32 des_shifted = static_cast<u32>(ptr_to_int(desired)) << shift;
+            
+            const unsigned int start_bit = (addr & 3) * 8;
+            const unsigned int end_bit = start_bit + (sizeof(T) * 8) - 1;
 
             if (success == memory_order::release || success == memory_order::seq_cst) {
                 release_barrier();
@@ -353,15 +350,17 @@ namespace arch::s390x::lib::atomic {
             int cc;
 
             do {
-                if ((old_word & (mask << shift)) != exp_shifted) {
-                    expected = int_to_ptr(static_cast<storage_type>((old_word >> shift) & mask));
+                T current_val = static_cast<T>(::lib::bit_extract_msb(old_word, start_bit, end_bit));
+                if (current_val != expected) {
+                    expected = current_val;
                     if (failure == memory_order::acquire || failure == memory_order::seq_cst) {
                         acquire_barrier();
                     }
                     return false;
                 }
 
-                new_word = (old_word & ~(mask << shift)) | des_shifted;
+                new_word = old_word;
+                ::lib::bit_insert_msb(new_word, start_bit, end_bit, static_cast<u32>(desired));
 
                 __asm__ volatile(
                     "   cs  %[old],%[n],%[mem]\n"

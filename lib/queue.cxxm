@@ -1,0 +1,96 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/queue.cxxm
+/// @brief Fixed-capacity FIFO queue implementation
+
+export module lib.queue;
+import zxfoundation.base.types;
+import lib.concepts;
+import lib.util;
+import lib.optional;
+
+export {
+
+namespace lib {
+
+    /// @brief A fixed-capacity FIFO queue (circular buffer).
+    /// @tparam T Type of the elements.
+    /// @tparam N Capacity of the queue.
+    template <typename T, usize N>
+    class static_queue {
+        T storage[N];
+        usize head_idx;
+        usize tail_idx;
+        usize count_val;
+
+    public:
+        using value_type = T;
+        using size_type  = usize;
+
+        constexpr static_queue() noexcept : head_idx(0), tail_idx(0), count_val(0) {}
+
+        /// @brief Returns the number of elements in the queue.
+        [[nodiscard]] constexpr auto size() const noexcept -> size_type { return count_val; }
+
+        /// @brief Returns true if the queue is empty.
+        [[nodiscard]] constexpr auto empty() const noexcept -> bool { return count_val == 0; }
+
+        /// @brief Returns true if the queue is full.
+        [[nodiscard]] constexpr auto full() const noexcept -> bool { return count_val == N; }
+
+        /// @brief Returns the capacity of the queue.
+        [[nodiscard]] constexpr auto capacity() const noexcept -> size_type { return N; }
+
+        /// @brief Adds an element to the end of the queue.
+        /// @param[in] value The value to add.
+        /// @return true if successful, false if full.
+        constexpr auto push(const T& value) noexcept -> bool {
+            if (full()) return false;
+            storage[tail_idx] = value;
+            tail_idx = (tail_idx + 1) % N;
+            ++count_val;
+            return true;
+        }
+
+        /// @brief Adds an element to the end of the queue (move).
+        /// @param[in] value The value to add.
+        /// @return true if successful, false if full.
+        constexpr auto push(T&& value) noexcept -> bool {
+            if (full()) return false;
+            storage[tail_idx] = lib::move(value);
+            tail_idx = (tail_idx + 1) % N;
+            ++count_val;
+            return true;
+        }
+
+        /// @brief Returns the first element of the queue.
+        [[nodiscard]] constexpr auto front() noexcept -> optional<T&> {
+            if (empty()) return nullopt;
+            return storage[head_idx];
+        }
+
+        /// @brief Returns the first element of the queue (const).
+        [[nodiscard]] constexpr auto front() const noexcept -> optional<const T&> {
+            if (empty()) return nullopt;
+            return storage[head_idx];
+        }
+
+        /// @brief Removes the first element from the queue.
+        /// @return true if successful, false if empty.
+        constexpr auto pop() noexcept -> bool {
+            if (empty()) return false;
+            head_idx = (head_idx + 1) % N;
+            --count_val;
+            return true;
+        }
+
+        /// @brief Clears the queue.
+        constexpr auto clear() noexcept -> void {
+            head_idx = 0;
+            tail_idx = 0;
+            count_val = 0;
+        }
+    };
+
+} // namespace lib
+
+} // end export

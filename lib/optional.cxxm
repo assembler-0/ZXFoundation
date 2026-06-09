@@ -1,0 +1,320 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/optional.cxxm
+/// @brief C++ STL-like optional implementation
+
+export module lib.optional;
+import zxfoundation.base.types;
+import lib.concepts;
+import lib.util;
+import lib.placementnew;
+import lib.expected;
+import lib.error;
+import lib.compare;
+
+export {
+
+namespace lib {
+
+    /// @brief Tag type for empty optional.
+    struct nullopt_t {
+        explicit constexpr nullopt_t(int) {}
+    };
+
+    /// @brief Constant for empty optional.
+    inline constexpr nullopt_t nullopt{0};
+
+    /// @brief Tag type for in-place construction.
+    struct in_place_t {
+        explicit in_place_t() = default;
+    };
+
+    /// @brief Constant for in-place construction.
+    inline constexpr in_place_t in_place{};
+
+    /// @brief A container that may or may not contain a value.
+    /// @tparam T Type of the value to store.
+    template <typename T>
+    class optional {
+        union storage_t {
+            T val;
+            char dummy;
+
+            constexpr storage_t() : dummy(0) {}
+            constexpr ~storage_t() {}
+        };
+
+        storage_t storage;
+        bool has_val;
+
+        constexpr auto destroy() noexcept -> void {
+            if (has_val) {
+                storage.val.~T();
+                has_val = false;
+            }
+        }
+
+    public:
+        using value_type = T;
+
+        /// @brief Default constructor (empty).
+        constexpr optional() noexcept : has_val(false) {}
+
+        /// @brief Construct as empty.
+        constexpr optional(nullopt_t) noexcept : has_val(false) {}
+
+        /// @brief Construct with value (copy).
+        constexpr optional(const T& value) : has_val(true) {
+            new (&storage.val) T(value);
+        }
+
+        /// @brief Construct with value (move).
+        constexpr optional(T&& value) : has_val(true) {
+            new (&storage.val) T(lib::move(value));
+        }
+
+        /// @brief In-place constructor.
+        template <typename... Args>
+        constexpr explicit optional(in_place_t, Args&&... args) : has_val(true) {
+            new (&storage.val) T(lib::forward<Args>(args)...);
+        }
+
+        /// @brief Copy constructor.
+        constexpr optional(const optional& other) : has_val(other.has_val) {
+            if (has_val) {
+                new (&storage.val) T(other.storage.val);
+            }
+        }
+
+        /// @brief Move constructor.
+        constexpr optional(optional&& other) noexcept : has_val(other.has_val) {
+            if (has_val) {
+                new (&storage.val) T(lib::move(other.storage.val));
+            }
+        }
+
+        /// @brief Destructor.
+        constexpr ~optional() {
+            destroy();
+        }
+
+        /// @brief Copy assignment.
+        auto operator=(const optional& other) -> optional& {
+            if (this != &other) {
+                destroy();
+                has_val = other.has_val;
+                if (has_val) {
+                    new (&storage.val) T(other.storage.val);
+                }
+            }
+            return *this;
+        }
+
+        /// @brief Move assignment.
+        auto operator=(optional&& other) noexcept -> optional& {
+            if (this != &other) {
+                destroy();
+                has_val = other.has_val;
+                if (has_val) {
+                    new (&storage.val) T(lib::move(other.storage.val));
+                }
+            }
+            return *this;
+        }
+
+        /// @brief Assignment from value.
+        auto operator=(const T& value) -> optional& {
+            destroy();
+            new (&storage.val) T(value);
+            has_val = true;
+            return *this;
+        }
+
+        /// @brief Assignment from moving value.
+        auto operator=(T&& value) -> optional& {
+            destroy();
+            new (&storage.val) T(lib::move(value));
+            has_val = true;
+            return *this;
+        }
+
+        /// @brief Assignment from nullopt.
+        auto operator=(nullopt_t) noexcept -> optional& {
+            destroy();
+            return *this;
+        }
+
+        /// @brief Construct value in-place.
+        template <typename... Args>
+        auto emplace(Args&&... args) -> T& {
+            destroy();
+            new (&storage.val) T(lib::forward<Args>(args)...);
+            has_val = true;
+            return storage.val;
+        }
+
+        /// @brief Check if optional has a value.
+        [[nodiscard]] constexpr auto has_value() const noexcept -> bool {
+            return has_val;
+        }
+
+        /// @brief Boolean conversion.
+        [[nodiscard]] constexpr explicit operator bool() const noexcept {
+            return has_val;
+        }
+
+        /// @brief Access value (unchecked).
+        [[nodiscard]] constexpr auto operator*() & noexcept -> T& {
+            return storage.val;
+        }
+
+        /// @brief Access value (unchecked, const).
+        [[nodiscard]] constexpr auto operator*() const& noexcept -> const T& {
+            return storage.val;
+        }
+
+        /// @brief Access value (unchecked, r-value).
+        [[nodiscard]] constexpr auto operator*() && noexcept -> T&& {
+            return lib::move(storage.val);
+        }
+
+        /// @brief Access via pointer.
+        [[nodiscard]] constexpr auto operator->() noexcept -> T* {
+            return &storage.val;
+        }
+
+        /// @brief Access via pointer (const).
+        [[nodiscard]] constexpr auto operator->() const noexcept -> const T* {
+            return &storage.val;
+        }
+
+        /// @brief Access value (checked).
+        /// @return expected containing reference or error if empty.
+        [[nodiscard]] constexpr auto value() & noexcept -> expected<T&, kernel_error> {
+            if (!has_val) return unexpected(kernel_error::from_generic(generic_error::code::invalid_arg));
+            return storage.val;
+        }
+
+        /// @brief Access value (checked, const).
+        /// @return expected containing const reference or error if empty.
+        [[nodiscard]] constexpr auto value() const& noexcept -> expected<const T&, kernel_error> {
+            if (!has_val) return unexpected(kernel_error::from_generic(generic_error::code::invalid_arg));
+            return storage.val;
+        }
+
+        /// @brief Access value or default.
+        template <typename U>
+        [[nodiscard]] constexpr auto value_or(U&& default_value) const& -> T {
+            return has_val ? storage.val : static_cast<T>(lib::forward<U>(default_value));
+        }
+
+        /// @brief Access value or default (r-value).
+        template <typename U>
+        [[nodiscard]] constexpr auto value_or(U&& default_value) && -> T {
+            return has_val ? lib::move(storage.val) : static_cast<T>(lib::forward<U>(default_value));
+        }
+
+        /// @brief Reset the optional.
+        auto reset() noexcept -> void {
+            destroy();
+        }
+
+        /// @brief Swaps the contents of two optionals.
+        constexpr auto swap(optional& other) noexcept -> void {
+            if (has_val && other.has_val) {
+                lib::swap(storage.val, other.storage.val);
+            } else if (has_val) {
+                new (&other.storage.val) T(lib::move(storage.val));
+                destroy();
+                other.has_val = true;
+            } else if (other.has_val) {
+                new (&storage.val) T(lib::move(other.storage.val));
+                other.destroy();
+                has_val = true;
+            }
+        }
+
+        /// @brief Monadic transform.
+        template <typename F>
+        [[nodiscard]] constexpr auto transform(F&& f) & {
+            if (has_val) {
+                using U = decltype(f(storage.val));
+                return optional<U>(f(storage.val));
+            } else {
+                using U = decltype(f(lib::decl_val<T&>()));
+                return optional<U>(nullopt);
+            }
+        }
+
+        /// @brief Monadic transform (const).
+        template <typename F>
+        [[nodiscard]] constexpr auto transform(F&& f) const& {
+            if (has_val) {
+                using U = decltype(f(storage.val));
+                return optional<U>(f(storage.val));
+            } else {
+                using U = decltype(f(lib::decl_val<const T&>()));
+                return optional<U>(nullopt);
+            }
+        }
+
+        /// @brief Monadic and_then.
+        template <typename F>
+        [[nodiscard]] constexpr auto and_then(F&& f) & {
+            if (has_val) {
+                return f(storage.val);
+            } else {
+                using result_t = decltype(f(storage.val));
+                return result_t(nullopt);
+            }
+        }
+
+        /// @brief Monadic or_else.
+        template <typename F>
+        [[nodiscard]] constexpr auto or_else(F&& f) const& {
+            if (has_val) {
+                return *this;
+            } else {
+                return f();
+            }
+        }
+
+        // --- Comparison Operators ---
+
+        [[nodiscard]] constexpr auto operator==(const optional& other) const noexcept -> bool {
+            if (has_val != other.has_val) return false;
+            if (!has_val) return true;
+            return storage.val == other.storage.val;
+        }
+
+        [[nodiscard]] constexpr auto operator==(nullopt_t) const noexcept -> bool {
+            return !has_val;
+        }
+
+        [[nodiscard]] constexpr auto operator==(const T& value) const noexcept -> bool {
+            return has_val && storage.val == value;
+        }
+
+        [[nodiscard]] constexpr auto operator<=>(const optional& other) const noexcept {
+            if (has_val && other.has_val) return storage.val <=> other.storage.val;
+            return has_val <=> other.has_val;
+        }
+
+        [[nodiscard]] constexpr auto operator<=>(nullopt_t) const noexcept {
+            return has_val <=> false;
+        }
+
+        [[nodiscard]] constexpr auto operator<=>(const T& value) const noexcept {
+            if (!has_val) return false <=> true;
+            return storage.val <=> value;
+        }
+    };
+
+    /// @brief Non-member swap for optional.
+    template <typename T>
+    constexpr auto swap(optional<T>& a, optional<T>& b) noexcept -> void {
+        a.swap(b);
+    }
+
+} // namespace lib
+
+} // end export

@@ -6,7 +6,7 @@ export module arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.stfle_types;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import crypto.sha256;
+import crypto.sha256_types;
 
 export {
 
@@ -49,7 +49,7 @@ namespace arch::s390x::init::zxfl {
     /// @}
 
     /// @brief One entry in the physical memory map.
-    struct zxfl_mem_region {
+    struct mem_region {
         u64 base{};      ///< Physical base address
         u64 length{};    ///< Length in bytes
         u32 type{};      ///< ZXFL_MEM_* constant
@@ -58,7 +58,7 @@ namespace arch::s390x::init::zxfl {
     };
 
     /// @brief One entry in the CPU map.
-    struct zxfl_cpu_info {
+    struct cpu_info {
         u16 cpu_addr{};  ///< z/Arch CPU address (used with SIGP)
         u8  type{};      ///< ZXFL_CPU_TYPE_* constant
         u8  state{};     ///< ZXFL_CPU_* constant
@@ -74,7 +74,7 @@ namespace arch::s390x::init::zxfl {
     /// @brief System identification — populated from STSI.
     ///        All strings are EBCDIC from the hardware; the loader converts
     ///        them to ASCII before filling this struct.
-    struct zxfl_sysinfo {
+    struct sysinfo {
         char     manufacturer[16]{}; ///< STSI 1.1.1 manufacturer (NUL-padded ASCII)
         char     type[4]{};          ///< STSI 1.1.1 machine type (e.g. "2096")
         char     model[16]{};        ///< STSI 1.1.1 model identifier
@@ -89,7 +89,7 @@ namespace arch::s390x::init::zxfl {
         u32 _pad{};
     };
 
-    struct zxfl_boot_protocol {
+    struct protocol {
         u32 magic{};             ///< ZXFL_MAGIC
         u32 version{};           ///< ZXFL_VERSION_4
         u32 flags{};             ///< ZXFL_FLAG_* bitmask
@@ -139,12 +139,12 @@ namespace arch::s390x::init::zxfl {
                                     ///<   reserve [pool_base, pgtbl_pool_end) to avoid
                                     ///<   overwriting live DAT tables.
 
-        zxfl_cpu_info cpu_map[ZXFL_CPU_MAP_MAX]{}; ///< CPU map (valid when FLAG_SMP)
+        cpu_info cpu_map[ZXFL_CPU_MAP_MAX]{}; ///< CPU map (valid when FLAG_SMP)
         u32 cpu_count{};         ///< Number of valid entries in cpu_map
         u16 bsp_cpu_addr{};      ///< CPU address of the boot processor
         u16 _pad7{};
 
-        zxfl_sysinfo sysinfo;     ///< Machine info (valid when FLAG_SYSINFO)
+        sysinfo sysinfo;     ///< Machine info (valid when FLAG_SYSINFO)
 
         u64 tod_boot{};          ///< TOD clock value at boot (STCK)
 
@@ -197,19 +197,19 @@ namespace arch::s390x::init::zxvl {
     constexpr auto ZXVL_CKSUM_MAX_ENTRIES = 16U;
     constexpr auto ZXVL_PFLAGS_CKSUM      = 0x00200004U;
 
-    u64 zxvl_compute_token(const u64 stfle0, const u64 schid) {
+    auto compute_token(const u64 stfle0, const u64 schid) -> u64 {
         return ZXVL_SEED ^ stfle0 ^ schid;
     }
 
-    struct [[gnu::packed]] zxvl_cksum_entry {
+    struct [[gnu::packed]] cksum_entry {
         uint64_t phys_start{};
         uint64_t size{};
         uint8_t  digest[crypto::sha256::ZXFL_SHA256_DIGEST_SIZE]{};
     };
 
-    struct [[gnu::packed]] zxvl_checksum_table {
+    struct [[gnu::packed]] checksum_table {
         uint32_t magic{}, version{}, algo{}, count{};
-        zxvl_cksum_entry entries[ZXVL_CKSUM_MAX_ENTRIES]{};
+        cksum_entry entries[ZXVL_CKSUM_MAX_ENTRIES]{};
     };
 
 } // namespace arch::s390x::init::zxvl

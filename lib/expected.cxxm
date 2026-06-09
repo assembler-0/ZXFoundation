@@ -1,0 +1,414 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file expected.cxxm
+/// @brief C++23 STL-compatible expected<T, E> implementation
+
+export module lib.expected;
+import zxfoundation.base.types;
+import lib.type_traits;
+import lib.util;
+import lib.concepts;
+import lib.placementnew;
+
+export {
+
+namespace lib {
+
+    /// @brief Unexpected error wrapper for expected<T, E>.
+    /// @tparam E Error type.
+    template <typename E>
+    struct unexpected {
+        E error_value;
+
+        constexpr explicit unexpected(const E& e) : error_value(e) {}
+        constexpr explicit unexpected(E&& e) : error_value(lib::move(e)) {}
+
+        constexpr auto error() const& noexcept -> const E& { return error_value; }
+        constexpr auto error() & noexcept -> E& { return error_value; }
+        constexpr auto error() const&& noexcept -> const E&& { return lib::move(error_value); }
+        constexpr auto error() && noexcept -> E&& { return lib::move(error_value); }
+    };
+
+    /// @brief Deduction guide for unexpected.
+    template <typename E>
+    unexpected(E) -> unexpected<E>;
+
+    /// @brief STL-compatible expected<T, E> type for freestanding environments.
+    /// @tparam T Value type.
+    /// @tparam E Error type.
+    /// @note Provides monadic operations (and_then, or_else, transform, transform_error).
+    ///       No exceptions; all operations are constexpr and noexcept where possible.
+    template <typename T, typename E>
+    class expected {
+        union storage_t {
+            T val;
+            E err;
+
+            constexpr storage_t() : val() {}
+            constexpr ~storage_t() {}
+        };
+
+        storage_t storage;
+        bool has_val;
+
+        constexpr auto destroy() noexcept -> void {
+            if (has_val) {
+                storage.val.~T();
+            } else {
+                storage.err.~E();
+            }
+        }
+
+    public:
+        using value_type = T;
+        using error_type = E;
+
+        /// @brief Construct with a value (copy).
+        /// @param[in] value  Value to store.
+        constexpr expected(const T& value) : has_val(true) {
+            new (&storage.val) T(value);
+        }
+
+        /// @brief Construct with a value (move).
+        /// @param[in] value  Value to move in.
+        constexpr expected(T&& value) : has_val(true) {
+            new (&storage.val) T(lib::move(value));
+        }
+
+        /// @brief Construct with an error (copy).
+        /// @param[in] err  Unexpected error to store.
+        constexpr expected(const unexpected<E>& err) : has_val(false) {
+            new (&storage.err) E(err.error());
+        }
+
+        /// @brief Construct with an error (move).
+        /// @param[in] err  Unexpected error to move in.
+        constexpr expected(unexpected<E>&& err) : has_val(false) {
+            new (&storage.err) E(lib::move(err.error()));
+        }
+
+        /// @brief Copy constructor.
+        constexpr expected(const expected& other) : has_val(other.has_val) {
+            if (has_val) {
+                new (&storage.val) T(other.storage.val);
+            } else {
+                new (&storage.err) E(other.storage.err);
+            }
+        }
+
+        /// @brief Move constructor.
+        constexpr expected(expected&& other) noexcept : has_val(other.has_val) {
+            if (has_val) {
+                new (&storage.val) T(lib::move(other.storage.val));
+            } else {
+                new (&storage.err) E(lib::move(other.storage.err));
+            }
+        }
+
+        /// @brief Copy assignment.
+        constexpr auto operator=(const expected& other) -> expected& {
+            if (this != &other) {
+                destroy();
+                has_val = other.has_val;
+                if (has_val) {
+                    new (&storage.val) T(other.storage.val);
+                } else {
+                    new (&storage.err) E(other.storage.err);
+                }
+            }
+            return *this;
+        }
+
+        /// @brief Move assignment.
+        constexpr auto operator=(expected&& other) noexcept -> expected& {
+            if (this != &other) {
+                destroy();
+                has_val = other.has_val;
+                if (has_val) {
+                    new (&storage.val) T(lib::move(other.storage.val));
+                } else {
+                    new (&storage.err) E(lib::move(other.storage.err));
+                }
+            }
+            return *this;
+        }
+
+        /// @brief Destructor.
+        constexpr ~expected() {
+            destroy();
+        }
+
+        /// @brief Check if the expected contains a value.
+        /// @return true if value is present, false if error.
+        [[nodiscard]] constexpr auto has_value() const noexcept -> bool {
+            return has_val;
+        }
+
+        /// @brief Contextual conversion to bool.
+        /// @return true if value is present, false if error.
+        [[nodiscard]] constexpr explicit operator bool() const noexcept {
+            return has_val;
+        }
+
+        /// @brief Access the contained value (l-value const reference).
+        /// @return Const reference to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto value() const& noexcept -> const T& {
+            return storage.val;
+        }
+
+        /// @brief Access the contained value (l-value reference).
+        /// @return Reference to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto value() & noexcept -> T& {
+            return storage.val;
+        }
+
+        /// @brief Access the contained value (r-value reference).
+        /// @return R-value reference to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto value() && noexcept -> T&& {
+            return lib::move(storage.val);
+        }
+
+        /// @brief Access the contained error (l-value const reference).
+        /// @return Const reference to error.
+        /// @warning Behavior is undefined if has_value() is true.
+        [[nodiscard]] constexpr auto error() const& noexcept -> const E& {
+            return storage.err;
+        }
+
+        /// @brief Access the contained error (l-value reference).
+        /// @return Reference to error.
+        /// @warning Behavior is undefined if has_value() is true.
+        [[nodiscard]] constexpr auto error() & noexcept -> E& {
+            return storage.err;
+        }
+
+        /// @brief Access the contained error (r-value reference).
+        /// @return R-value reference to error.
+        /// @warning Behavior is undefined if has_value() is true.
+        [[nodiscard]] constexpr auto error() && noexcept -> E&& {
+            return lib::move(storage.err);
+        }
+
+        /// @brief Dereference operator (l-value const).
+        /// @return Const reference to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto operator*() const& noexcept -> const T& {
+            return storage.val;
+        }
+
+        /// @brief Dereference operator (l-value).
+        /// @return Reference to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto operator*() & noexcept -> T& {
+            return storage.val;
+        }
+
+        /// @brief Dereference operator (r-value).
+        /// @return R-value reference to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto operator*() && noexcept -> T&& {
+            return lib::move(storage.val);
+        }
+
+        /// @brief Arrow operator (const).
+        /// @return Pointer to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto operator->() const noexcept -> const T* {
+            return &storage.val;
+        }
+
+        /// @brief Arrow operator.
+        /// @return Pointer to value.
+        /// @warning Behavior is undefined if has_value() is false.
+        [[nodiscard]] constexpr auto operator->() noexcept -> T* {
+            return &storage.val;
+        }
+
+        /// @brief Return value or default (l-value const).
+        /// @param[in] default_val  Default value if expected contains error.
+        /// @return Value if present, otherwise default_val.
+        [[nodiscard]] constexpr auto value_or(const T& default_val) const& -> T {
+            return has_val ? storage.val : default_val;
+        }
+
+        /// @brief Return value or default (r-value).
+        /// @param[in] default_val  Default value if expected contains error.
+        /// @return Value if present, otherwise default_val.
+        [[nodiscard]] constexpr auto value_or(T&& default_val) && -> T {
+            return has_val ? lib::move(storage.val) : lib::move(default_val);
+        }
+
+        /// @brief Monadic and_then: chains operations that return expected.
+        /// @tparam F Callable type: T -> expected<U, E>.
+        /// @param[in] f  Function to apply if value is present.
+        /// @return Result of f(value) if has_value(), otherwise propagates error.
+        /// @note C++23 monadic operation.
+        template <typename F>
+        [[nodiscard]] constexpr auto and_then(F&& f) & {
+            using result_t = decltype(f(storage.val));
+            if (has_val) {
+                return f(storage.val);
+            } else {
+                return result_t(unexpected<E>(storage.err));
+            }
+        }
+
+        /// @brief Monadic and_then: chains operations that return expected (const l-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto and_then(F&& f) const& {
+            using result_t = decltype(f(storage.val));
+            if (has_val) {
+                return f(storage.val);
+            } else {
+                return result_t(unexpected<E>(storage.err));
+            }
+        }
+
+        /// @brief Monadic and_then: chains operations that return expected (r-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto and_then(F&& f) && {
+            using result_t = decltype(f(lib::move(storage.val)));
+            if (has_val) {
+                return f(lib::move(storage.val));
+            } else {
+                return result_t(unexpected<E>(lib::move(storage.err)));
+            }
+        }
+
+        /// @brief Monadic or_else: chains error recovery operations.
+        /// @tparam F Callable type: E -> expected<T, F>.
+        /// @param[in] f  Function to apply if error is present.
+        /// @return Result of f(error) if !has_value(), otherwise propagates value.
+        /// @note C++23 monadic operation.
+        template <typename F>
+        [[nodiscard]] constexpr auto or_else(F&& f) & {
+            using result_t = decltype(f(storage.err));
+            if (!has_val) {
+                return f(storage.err);
+            } else {
+                return result_t(storage.val);
+            }
+        }
+
+        /// @brief Monadic or_else (const l-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto or_else(F&& f) const& {
+            using result_t = decltype(f(storage.err));
+            if (!has_val) {
+                return f(storage.err);
+            } else {
+                return result_t(storage.val);
+            }
+        }
+
+        /// @brief Monadic or_else (r-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto or_else(F&& f) && {
+            using result_t = decltype(f(lib::move(storage.err)));
+            if (!has_val) {
+                return f(lib::move(storage.err));
+            } else {
+                return result_t(lib::move(storage.val));
+            }
+        }
+
+        /// @brief Monadic transform: applies function to value, wrapping result in expected.
+        /// @tparam F Callable type: T -> U.
+        /// @param[in] f  Function to apply to value.
+        /// @return expected<U, E> containing f(value) if has_value(), otherwise propagates error.
+        /// @note C++23 monadic operation.
+        template <typename F>
+        [[nodiscard]] constexpr auto transform(F&& f) & {
+            using U = decltype(f(storage.val));
+            using result_t = expected<U, E>;
+            if (has_val) {
+                return result_t(f(storage.val));
+            } else {
+                return result_t(unexpected<E>(storage.err));
+            }
+        }
+
+        /// @brief Monadic transform (const l-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto transform(F&& f) const& {
+            using U = decltype(f(storage.val));
+            using result_t = expected<U, E>;
+            if (has_val) {
+                return result_t(f(storage.val));
+            } else {
+                return result_t(unexpected<E>(storage.err));
+            }
+        }
+
+        /// @brief Monadic transform (r-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto transform(F&& f) && {
+            using U = decltype(f(lib::move(storage.val)));
+            using result_t = expected<U, E>;
+            if (has_val) {
+                return result_t(f(lib::move(storage.val)));
+            } else {
+                return result_t(unexpected<E>(lib::move(storage.err)));
+            }
+        }
+
+        /// @brief Monadic transform_error: applies function to error, wrapping result in expected.
+        /// @tparam F Callable type: E -> G.
+        /// @param[in] f  Function to apply to error.
+        /// @return expected<T, G> containing value if has_value(), otherwise expected<T, G>(f(error)).
+        /// @note C++23 monadic operation.
+        template <typename F>
+        [[nodiscard]] constexpr auto transform_error(F&& f) & {
+            using G = decltype(f(storage.err));
+            using result_t = expected<T, G>;
+            if (!has_val) {
+                return result_t(unexpected<G>(f(storage.err)));
+            } else {
+                return result_t(storage.val);
+            }
+        }
+
+        /// @brief Monadic transform_error (const l-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto transform_error(F&& f) const& {
+            using G = decltype(f(storage.err));
+            using result_t = expected<T, G>;
+            if (!has_val) {
+                return result_t(unexpected<G>(f(storage.err)));
+            } else {
+                return result_t(storage.val);
+            }
+        }
+
+        /// @brief Monadic transform_error (r-value).
+        template <typename F>
+        [[nodiscard]] constexpr auto transform_error(F&& f) && {
+            using G = decltype(f(lib::move(storage.err)));
+            using result_t = expected<T, G>;
+            if (!has_val) {
+                return result_t(unexpected<G>(f(lib::move(storage.err))));
+            } else {
+                return result_t(lib::move(storage.val));
+            }
+        }
+
+        [[nodiscard]] constexpr auto operator==(const expected& other) const noexcept -> bool {
+            if (has_val != other.has_val) return false;
+            if (has_val) return storage.val == other.storage.val;
+            return storage.err == other.storage.err;
+        }
+
+        [[nodiscard]] constexpr auto operator==(const T& value) const noexcept -> bool {
+            return has_val && storage.val == value;
+        }
+
+        [[nodiscard]] constexpr auto operator==(const unexpected<E>& err) const noexcept -> bool {
+            return !has_val && storage.err == err.error();
+        }
+    };
+
+} // namespace lib
+
+} // end export

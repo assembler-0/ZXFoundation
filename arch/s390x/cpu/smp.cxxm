@@ -1,0 +1,40 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file smp.cxxm
+/// @brief smp startup and helpers
+
+export module arch.s390x.cpu.smp;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.lowcore_types;
+import zxfoundation.base.types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.base.config;
+import lib.expected;
+import lib.error;
+
+extern "C" {
+
+    auto ap_entry() -> void;
+    auto ap_dat_on() -> void;
+
+    [[noreturn]] auto ap_startup() -> void {
+        while (true)
+            arch::s390x::cpu::processor::cpu_relax();
+    }
+
+} // extern "C"
+
+export {
+
+namespace arch::s390x::cpu::smp {
+
+    /// @brief Return the logical CPU ID (0-based, dense) for the executing CPU.
+    auto cpu_id() noexcept -> u16 {
+        const u16 id = *reinterpret_cast<const u16*>(zxfoundation::memory::hhdm::phys_to_virt(processor::get_prefix()) + lowcore::LC_CPU_ID_OFFSET);
+        if (id >= static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS))
+            return 0;
+        return id;
+    }
+
+}
+
+} // end export

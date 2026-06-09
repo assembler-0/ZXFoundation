@@ -1,0 +1,230 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file list.cxxm
+/// @brief Intrusive circular doubly-linked list types
+
+export module lib.list;
+import zxfoundation.base.types;
+import lib.util;
+
+export {
+
+namespace lib {
+
+    /// @brief Embeddable anchor for an intrusive doubly-linked list.
+    ///
+    /// Place one (or more) of these inside any struct that must participate
+    /// in a list.  A node is self-linked on construction and after removal,
+    /// so it is always safe to call @ref list_head::remove on it.
+    ///
+    /// @note A struct may embed multiple @c list_node members to participate
+    ///       in multiple independent lists simultaneously.
+    struct list_node {
+        list_node* next;
+        list_node* prev;
+
+        /// @brief Initialize node to the self-linked (unlinked) state.
+        constexpr list_node() noexcept : next(this), prev(this) {}
+
+        // Non-copyable, non-movable: a node's identity is its address.
+        list_node(const list_node&)            = delete;
+        list_node(list_node&&)                 = delete;
+        auto operator=(const list_node&)       = delete;
+        auto operator=(list_node&&)            = delete;
+    };
+
+    /// @brief Bidirectional iterator over raw @ref list_node pointers.
+    ///
+    /// The sentinel head is never yielded.
+    /// @note Advance BEFORE removing the current node to avoid use-after-free:
+    /// @code
+    ///   for (auto it = head.begin(); it != head.end(); ) {
+    ///       list_node* cur = *it++;
+    ///       // safe to remove cur here
+    ///   }
+    /// @endcode
+    struct list_iterator {
+        list_node* current;
+
+        constexpr explicit list_iterator(list_node* cur) noexcept : current(cur) {}
+
+        [[nodiscard]] constexpr auto operator*()       noexcept -> list_node*       { return current; }
+        [[nodiscard]] constexpr auto operator*() const noexcept -> const list_node* { return current; }
+
+        constexpr auto operator++()    noexcept -> list_iterator& { current = current->next; return *this; }
+        constexpr auto operator++(int) noexcept -> list_iterator  { auto t = *this; current = current->next; return t; }
+        constexpr auto operator--()    noexcept -> list_iterator& { current = current->prev; return *this; }
+        constexpr auto operator--(int) noexcept -> list_iterator  { auto t = *this; current = current->prev; return t; }
+
+        [[nodiscard]] constexpr auto operator==(const list_iterator& o) const noexcept -> bool { return current == o.current; }
+        [[nodiscard]] constexpr auto operator!=(const list_iterator& o) const noexcept -> bool { return current != o.current; }
+    };
+
+    /// @brief Typed bidirectional iterator that yields @c Owner& directly.
+    ///
+    /// Uses @ref lib::container_of to recover the enclosing object from
+    /// the embedded @ref list_node member.
+    ///
+    /// @tparam Owner   Enclosing struct type.
+    /// @tparam member  Pointer-to-member identifying the @ref list_node field.
+    template <typename Owner, list_node Owner::* member>
+    struct typed_list_iterator {
+        list_node* current;
+
+        constexpr explicit typed_list_iterator(list_node* cur) noexcept : current(cur) {}
+
+        [[nodiscard]] constexpr auto operator*()       noexcept -> Owner&       { return *container_of<Owner, list_node, member>(current); }
+        [[nodiscard]] constexpr auto operator*() const noexcept -> const Owner& { return *container_of<Owner, list_node, member>(current); }
+
+        constexpr auto operator++()    noexcept -> typed_list_iterator& { current = current->next; return *this; }
+        constexpr auto operator++(int) noexcept -> typed_list_iterator  { auto t = *this; current = current->next; return t; }
+        constexpr auto operator--()    noexcept -> typed_list_iterator& { current = current->prev; return *this; }
+        constexpr auto operator--(int) noexcept -> typed_list_iterator  { auto t = *this; current = current->prev; return t; }
+
+        [[nodiscard]] constexpr auto operator==(const typed_list_iterator& o) const noexcept -> bool { return current == o.current; }
+        [[nodiscard]] constexpr auto operator!=(const typed_list_iterator& o) const noexcept -> bool { return current != o.current; }
+    };
+
+    /// @brief Intrusive circular doubly-linked list.
+    ///
+    /// Acts as both the sentinel and the primary API surface.  An empty list
+    /// satisfies @c head.next == &head.  All operations are O(1) except
+    /// @ref count which is O(N).
+    ///
+    /// @note The list does not own its elements.  Destroying a @c list_head
+    ///       while nodes are still linked leaves dangling pointers.  Callers
+    ///       must remove all nodes before the head goes out of scope.
+    /// @note Not thread-safe.  Callers must hold an appropriate lock.
+    struct list_head {
+        list_node sentinel;
+
+        /// @brief Construct an empty list (sentinel self-linked).
+        constexpr list_head() noexcept = default;
+
+        // Non-copyable: list identity is its sentinel address.
+        list_head(const list_head&)      = delete;
+        list_head(list_head&&)           = delete;
+        auto operator=(const list_head&) = delete;
+        auto operator=(list_head&&)      = delete;
+
+        // ----- predicates ------------------------------------------------
+
+        /// @brief Returns true if the list contains no elements.
+        [[nodiscard]] constexpr auto empty() const noexcept -> bool {
+            return sentinel.next == &sentinel;
+        }
+
+        /// @brief Returns true if the list contains exactly one element.
+        [[nodiscard]] constexpr auto singular() const noexcept -> bool {
+            return !empty() && sentinel.next == sentinel.prev;
+        }
+
+        /// @brief Returns the number of elements.  O(N) — avoid hot paths.
+        [[nodiscard]] constexpr auto count() const noexcept -> usize {
+            usize n = 0;
+            for (const list_node* c = sentinel.next; c != &sentinel; c = c->next) ++n;
+            return n;
+        }
+
+        // ----- insertion -------------------------------------------------
+
+        /// @brief Prepend @p node (new first element).
+        /// @param[in,out] node  Must not already be linked into any list.
+        /// @warning Double-insertion silently corrupts both lists.
+        constexpr auto push_front(list_node& node) noexcept -> void {
+            splice_raw(&node, &node, &sentinel, sentinel.next);
+        }
+
+        /// @brief Append @p node (new last element).
+        /// @param[in,out] node  Must not already be linked into any list.
+        constexpr auto push_back(list_node& node) noexcept -> void {
+            splice_raw(&node, &node, sentinel.prev, &sentinel);
+        }
+
+        // ----- removal ---------------------------------------------------
+
+        /// @brief Remove @p node from this list.
+        ///
+        /// Leaves @p node self-linked so a subsequent @ref remove is safe.
+        ///
+        /// @param[in,out] node  Node to remove.
+        /// @warning Do NOT pass the sentinel itself.
+        static constexpr auto remove(list_node& node) noexcept -> void {
+            node.prev->next = node.next;
+            node.next->prev = node.prev;
+            node.next = &node;
+            node.prev = &node;
+        }
+
+        /// @brief Remove and return the first element, or nullptr if empty.
+        /// @return Pointer to the removed @ref list_node, or nullptr.
+        constexpr auto pop_front() noexcept -> list_node* {
+            if (empty()) return nullptr;
+            list_node* n = sentinel.next;
+            remove(*n);
+            return n;
+        }
+
+        // ----- splice ----------------------------------------------------
+
+        /// @brief Move all elements of @p src to the back of this list.
+        ///
+        /// @p src is empty on return.  No-op if @p src is empty.
+        ///
+        /// @param[in,out] src  Source list.  Must not be @c *this.
+        /// @warning Splicing a list into itself corrupts the list.
+        constexpr auto splice_back(list_head& src) noexcept -> void {
+            if (src.empty()) return;
+            splice_raw(src.sentinel.next, src.sentinel.prev,
+                       sentinel.prev, &sentinel);
+            // leave src empty
+            src.sentinel.next = &src.sentinel;
+            src.sentinel.prev = &src.sentinel;
+        }
+
+        // ----- iteration -------------------------------------------------
+
+        /// @brief Raw bidirectional begin iterator.
+        [[nodiscard]] constexpr auto begin() noexcept -> list_iterator { return list_iterator(sentinel.next); }
+        /// @brief Raw bidirectional end iterator (sentinel).
+        [[nodiscard]] constexpr auto end()   noexcept -> list_iterator { return list_iterator(&sentinel); }
+
+        [[nodiscard]] constexpr auto begin() const noexcept -> list_iterator { return list_iterator(sentinel.next); }
+        [[nodiscard]] constexpr auto end()   const noexcept -> list_iterator { return list_iterator(const_cast<list_node*>(&sentinel)); }
+
+        /// @brief Typed range that yields @c Owner& for range-for.
+        ///
+        /// @code
+        ///   struct task { list_node sched; };
+        ///   list_head run_queue;
+        ///   for (task& t : run_queue.iter<task, &task::sched>()) { ... }
+        /// @endcode
+        template <typename Owner, list_node Owner::* member>
+        struct typed_range {
+            list_head& h;
+            [[nodiscard]] constexpr auto begin() noexcept { return typed_list_iterator<Owner, member>(h.sentinel.next); }
+            [[nodiscard]] constexpr auto end()   noexcept { return typed_list_iterator<Owner, member>(&h.sentinel); }
+        };
+
+        /// @brief Return a typed range adaptor for range-for over @c Owner&.
+        template <typename Owner, list_node Owner::* member>
+        [[nodiscard]] constexpr auto iter() noexcept -> typed_range<Owner, member> {
+            return typed_range<Owner, member>{*this};
+        }
+
+    private:
+        /// @brief Core graft primitive.  All insertions reduce to this.
+        static constexpr auto splice_raw(
+            list_node* first, list_node* last,
+            list_node* prev,  list_node* next
+        ) noexcept -> void {
+            first->prev = prev;  prev->next = first;
+            last->next  = next;  next->prev = last;
+        }
+    };
+
+    static_assert(__is_standard_layout(list_node),
+                  "list_node must be standard-layout for container_of");
+
+} // namespace lib
+
+} // end export

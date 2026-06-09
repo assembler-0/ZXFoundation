@@ -1,83 +1,145 @@
 /// SPDX-License-Identifier: Apache 2.0
 /// @file span.cxxm
-/// @brief freestanding std::span implementation
+/// @brief C++23 STL-compatible span implementation
 
 export module lib.span;
 import zxfoundation.base.types;
+import lib.concepts;
+import lib.type_traits;
 
 export {
 
 namespace lib {
 
-    /// @brief A non-owning view over a contiguous sequence of objects.
-    /// @tparam T Type of the elements in the span.
-    template <typename T>
-    class span {
-    public:
-        using pointer         = T*;
-        using reference       = T&;
-        using iterator        = T*;
+    /// @brief Dynamic extent sentinel for span.
+    inline constexpr usize dynamic_extent = static_cast<usize>(-1);
 
-        constexpr span() noexcept = default;
-
-        constexpr span(pointer ptr, usize count) noexcept
-            : m_data(ptr), m_size(count) {}
-
-        constexpr span(pointer first, pointer last) noexcept
-            : m_data(first), m_size(static_cast<usize>(last - first)) {}
-
-        template <usize N>
-        constexpr span(T (&arr)[N]) noexcept
-            : m_data(arr), m_size(N) {}
-
-        [[nodiscard]] constexpr pointer data() const noexcept { return m_data; }
-        [[nodiscard]] constexpr usize size() const noexcept { return m_size; }
-        [[nodiscard]] constexpr bool empty() const noexcept { return m_size == 0; }
-
-        [[nodiscard]] constexpr reference operator[](usize index) const noexcept {
-            return m_data[index];
-        }
-
-        [[nodiscard]] constexpr reference front() const noexcept {
-            return m_data[0];
-        }
-
-        [[nodiscard]] constexpr reference back() const noexcept {
-            return m_data[m_size - 1];
-        }
-
-        [[nodiscard]] constexpr iterator begin() const noexcept { return m_data; }
-        [[nodiscard]] constexpr iterator end() const noexcept { return m_data + m_size; }
-
-        [[nodiscard]] constexpr span sub_span(usize offset, usize count = static_cast<usize>(-1)) const noexcept {
-            const usize actual_count = (count == static_cast<usize>(-1) || offset + count > m_size)
-                                          ? m_size - offset
-                                          : count;
-            return span(m_data + offset, actual_count);
-        }
-
-        [[nodiscard]] constexpr span first(usize count) const noexcept {
-            return span(m_data, count);
-        }
-
-        [[nodiscard]] constexpr span last(usize count) const noexcept {
-            return span(m_data + (m_size - count), count);
-        }
-
-        constexpr span(const span&) noexcept = default;
-        constexpr span(span&&) noexcept = default;
-        constexpr span& operator=(const span&) noexcept = default;
-        constexpr span& operator=(span&&) noexcept = default;
-
-    private:
-        pointer  m_data{nullptr};
-        usize m_size{0};
+    /// @brief Internal storage helper to optimize static extents.
+    template <typename T, usize Extent>
+    struct span_storage {
+        T* data_ptr;
+        constexpr span_storage() noexcept : data_ptr(nullptr) {}
+        constexpr span_storage(T* ptr, usize) noexcept : data_ptr(ptr) {}
+        [[nodiscard]] static constexpr auto size() noexcept -> usize { return Extent; }
     };
 
-    /// @brief Deduction guide for Span from arrays.
+    /// @brief Internal storage specialization for dynamic extents.
+    template <typename T>
+    struct span_storage<T, dynamic_extent> {
+        T* data_ptr;
+        usize size_val;
+        constexpr span_storage() noexcept : data_ptr(nullptr), size_val(0) {}
+        constexpr span_storage(T* ptr, usize count) noexcept : data_ptr(ptr), size_val(count) {}
+        [[nodiscard]] constexpr auto size() const noexcept -> usize { return size_val; }
+    };
+
+    /// @brief A non-owning view over a contiguous sequence of objects.
+    /// @tparam T Type of the elements in the span.
+    /// @tparam Extent Number of elements (dynamic_extent for runtime size).
+    template <typename T, usize Extent = dynamic_extent>
+    class span {
+        span_storage<T, Extent> storage;
+
+    public:
+        using element_type    = T;
+        using value_type      = unqualified<T>;
+        using size_type       = usize;
+        using difference_type = isize;
+        using pointer         = T*;
+        using const_pointer   = const T*;
+        using reference       = T&;
+        using const_reference = const T&;
+        using iterator        = T*;
+        using const_iterator  = const T*;
+
+        static constexpr usize extent = Extent;
+
+        /// @brief Default constructor.
+        constexpr span() noexcept requires (Extent == 0 || Extent == dynamic_extent) = default;
+
+        /// @brief Construct from pointer and count.
+        constexpr span(pointer ptr, size_type count) noexcept : storage(ptr, count) {}
+
+        /// @brief Construct from pointer range.
+        constexpr span(pointer first, pointer last) noexcept 
+            : storage(first, static_cast<size_type>(last - first)) {}
+
+        /// @brief Construct from C-style array.
+        template <usize N>
+        requires (Extent == dynamic_extent || Extent == N)
+        constexpr span(T (&arr)[N]) noexcept : storage(arr, N) {}
+
+        /// @brief Copy constructor.
+        constexpr span(const span&) noexcept = default;
+
+        /// @brief Access data.
+        [[nodiscard]] constexpr auto data() const noexcept -> pointer { return storage.data_ptr; }
+        
+        /// @brief Access size.
+        [[nodiscard]] constexpr auto size() const noexcept -> size_type { return storage.size(); }
+        
+        /// @brief Access size in bytes.
+        [[nodiscard]] constexpr auto size_bytes() const noexcept -> size_type { return size() * sizeof(T); }
+        
+        /// @brief Check if empty.
+        [[nodiscard]] constexpr auto empty() const noexcept -> bool { return size() == 0; }
+
+        /// @brief Element access.
+        [[nodiscard]] constexpr auto operator[](size_type index) const noexcept -> reference {
+            return storage.data_ptr[index];
+        }
+
+        /// @brief Access first element.
+        [[nodiscard]] constexpr auto front() const noexcept -> reference { return storage.data_ptr[0]; }
+        
+        /// @brief Access last element.
+        [[nodiscard]] constexpr auto back() const noexcept -> reference { return storage.data_ptr[size() - 1]; }
+
+        /// @brief Iterators.
+        [[nodiscard]] constexpr auto begin() const noexcept -> iterator { return storage.data_ptr; }
+        [[nodiscard]] constexpr auto end() const noexcept -> iterator { return storage.data_ptr + size(); }
+
+        /// @brief Subspan (dynamic).
+        [[nodiscard]] constexpr auto subspan(size_type offset, size_type count = dynamic_extent) const noexcept -> span<T, dynamic_extent> {
+            const size_type actual_count = (count == dynamic_extent) ? (size() - offset) : count;
+            return { storage.data_ptr + offset, actual_count };
+        }
+
+        /// @brief Fixed-size subspan.
+        template <usize Offset, usize Count = dynamic_extent>
+        [[nodiscard]] constexpr auto subspan() const noexcept -> span<T, Count != dynamic_extent ? Count : (Extent != dynamic_extent ? Extent - Offset : dynamic_extent)> {
+            constexpr usize actual_count = (Count != dynamic_extent) ? Count : (Extent != dynamic_extent ? Extent - Offset : dynamic_extent);
+            return { storage.data_ptr + Offset, actual_count };
+        }
+
+        /// @brief Get first N elements.
+        [[nodiscard]] constexpr auto first(size_type count) const noexcept -> span<T, dynamic_extent> {
+            return { storage.data_ptr, count };
+        }
+
+        template <usize Count>
+        [[nodiscard]] constexpr auto first() const noexcept -> span<T, Count> {
+            return { storage.data_ptr, Count };
+        }
+
+        /// @brief Get last N elements.
+        [[nodiscard]] constexpr auto last(size_type count) const noexcept -> span<T, dynamic_extent> {
+            return { storage.data_ptr + (size() - count), count };
+        }
+
+        template <usize Count>
+        [[nodiscard]] constexpr auto last() const noexcept -> span<T, Count> {
+            return { storage.data_ptr + (size() - Count), Count };
+        }
+    };
+
+    /// @brief Deduction guides.
     template <typename T, usize N>
-    span(T (&)[N]) -> span<T>;
+    span(T (&)[N]) -> span<T, N>;
 
-}
+    template <typename T>
+    span(T*, usize) -> span<T>;
 
-}
+} // namespace lib
+
+} // end export

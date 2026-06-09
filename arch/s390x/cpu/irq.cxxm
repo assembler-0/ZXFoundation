@@ -1,0 +1,66 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file irq.cxxm
+/// @brief irq types and helpers
+
+export module arch.s390x.cpu.irq;
+import zxfoundation.base.types;
+import lib.bit;
+
+export {
+
+namespace arch::s390x::cpu::irq {
+    
+    auto save_flags() -> irqflags {
+        u32 hi, lo;
+        __asm__ volatile (
+            "epsw %[hi], %[lo]\n"
+            : [hi] "=d" (hi), [lo] "=d" (lo)
+            :
+            : "cc"
+        );
+        return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    }
+
+    auto irq_disable() -> void {
+        u8 dummy;
+        __asm__ volatile (
+            "stnsm  %0, 0xFC\n"
+            : "=Q" (dummy)
+            :
+            : "memory"
+        );
+    }
+
+    auto irq_enable() -> void {
+        u8 dummy;
+        __asm__ volatile (
+            "stosm  %0, 0x03\n"
+            : "=Q" (dummy)
+            :
+            : "memory"
+        );
+    }
+
+    auto irq_restore(irqflags flags) -> void {
+        const u8 irq_mask = static_cast<u8>(lib::bit_extract_msb(flags, 6, 7));
+        u8 dummy;
+        switch (irq_mask) {
+            case 0x03U: {
+                __asm__ volatile ("stosm %0, 0x03\n" : "=Q" (dummy) :: "memory");
+                break;
+            }
+            case 0x02U: {
+                __asm__ volatile ("stosm %0, 0x02\n" : "=Q" (dummy) :: "memory");
+                break;
+            }
+            case 0x01U: {
+                __asm__ volatile ("stosm %0, 0x01\n" : "=Q" (dummy) :: "memory");
+                break;
+            }
+            default: break;
+        }
+    }
+
+}
+
+}

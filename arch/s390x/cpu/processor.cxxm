@@ -8,13 +8,14 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.base.config;
 import arch.s390x.cpu.lowcore_types;
 import lib.util;
+import lib.bit;
 
 export {
 
 namespace arch::s390x::cpu::processor {
 
     /// @brief Issue the DIAG 8 instruction with a 64-bit buffer address.
-    void diag8(const char *addr, u64 len) {
+    auto diag8(const char *addr, u64 len) noexcept -> void {
         register u64 r2 __asm__("2") = reinterpret_cast<uptr>(addr);
         register u64 r3 __asm__("3") = len;
         __asm__ __volatile__ (
@@ -25,27 +26,26 @@ namespace arch::s390x::cpu::processor {
         );
     }
 
-
     /// @brief Compiler memory barrier.
     /// @note Prevents compiler reordering; does NOT emit hardware fence.
-    inline void barrier() noexcept {
+    inline auto barrier() noexcept -> void {
         __asm__ volatile("" ::: "memory");
     }
 
     /// @brief Generic spin-loop hint. Use inside every busy-wait loop.
-    inline void arch_cpu_relax() noexcept {
+    inline auto cpu_relax() noexcept -> void {
         barrier();
     }
 
     /// @brief Yield the virtual CPU timeslice to the hypervisor.
-    void arch_smp_yield() noexcept {
-        arch_cpu_relax();
+    auto smp_yield() noexcept -> void {
+        cpu_relax();
     }
 
     /// @brief Set the Storage Key for a 4KB physical block.
     /// @param paddr  Physical address (must be 4KB aligned).
     /// @param key    Storage key: bits 0-3 = ACC, bit 4 = F, bit 5 = R, bit 6 = C.
-    void arch_set_storage_key(u64 paddr, u8 key) noexcept {
+    auto set_storage_key(u64 paddr, u8 key) noexcept -> void {
         __asm__ volatile (
             "sske %[key], %[paddr]\n"
             : : [key] "d" (static_cast<u64>(key)), [paddr] "a" (paddr) : "memory"
@@ -53,7 +53,7 @@ namespace arch::s390x::cpu::processor {
     }
 
     /// @brief Perform Frame Management Function.
-    void arch_pfmf(u64 op1, u64 phys) noexcept {
+    auto pfmf(u64 op1, u64 phys) noexcept -> void {
         __asm__ volatile (
             "pfmf %[op1], %[addr]\n"
             : : [op1] "d" (op1), [addr] "a" (phys) : "memory"
@@ -62,28 +62,20 @@ namespace arch::s390x::cpu::processor {
 
 
     /// @brief stap — returns the hardware CPU address (used for SIGP, not as a logical ID).
-    unsigned short arch_cpu_addr() noexcept {
+    auto cpu_addr() noexcept -> unsigned short {
         unsigned short cpu_address;
         __asm__ volatile("stap %0" : "=m" (cpu_address));
         return cpu_address;
     }
 
-    u32 arch_get_prefix() noexcept {
+    auto get_prefix() noexcept -> u32 {
         u32 prefix;
         __asm__ volatile("stpx %0" : "=m" (prefix));
         return prefix;
     }
 
-    void arch_set_prefix(u32 prefix) noexcept {
+    auto set_prefix(u32 prefix) noexcept -> void {
         __asm__ volatile("spx %0" : : "m" (prefix) : "memory");
-    }
-
-    /// @brief Return the logical CPU ID (0-based, dense) for the executing CPU.
-    int arch_smp_processor_id() noexcept {
-        const u16 id = *reinterpret_cast<const u16*>(zxfoundation::memory::hhdm::phys_to_virt(arch_get_prefix()) + lowcore::LC_CPU_ID_OFFSET);
-        if (id >= static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS))
-            return 0;
-        return id;
     }
 
     /// @brief Stores control registers into an array or variable.
@@ -91,7 +83,7 @@ namespace arch::s390x::cpu::processor {
     /// @tparam High The ending control register index (0-15)
     template <u32 Low, u32 High, typename T>
         requires (Low <= 15 && High <= 15 && sizeof(T) >= ((High - Low + 1) * 8))
-    void arch_ctl_store(T& storage) noexcept {
+    auto ctl_store(T& storage) noexcept -> void {
         __asm__ volatile(
             "    stctg  %1, %2, %0\n"
             : "=Q" (storage)
@@ -105,7 +97,7 @@ namespace arch::s390x::cpu::processor {
     /// @tparam High The ending control register index (0-15)
     template <u32 Low, u32 High, typename T>
         requires (Low <= 15 && High <= 15 && sizeof(T) >= ((High - Low + 1) * 8))
-    void arch_ctl_load(const T& storage) noexcept {
+    auto ctl_load(const T& storage) noexcept -> void {
         __asm__ volatile(
             "    lctlg  %1, %2, %0\n"
             :
@@ -115,21 +107,21 @@ namespace arch::s390x::cpu::processor {
     }
 
     template <u32 ControlReg>
-    void arch_ctl_set_bit(u32 bit) noexcept {
+    auto ctl_set_bit(u32 bit) noexcept -> void {
         static_assert(ControlReg <= 15, "s390x only has control registers 0-15");
         u64 reg;
-        arch_ctl_store<ControlReg, ControlReg>(reg);
-        reg |= (1UL << bit);
-        arch_ctl_load<ControlReg, ControlReg>(reg);
+        ctl_store<ControlReg, ControlReg>(reg);
+        ::lib::bit_set_msb(reg, bit);
+        ctl_load<ControlReg, ControlReg>(reg);
     }
 
     template <u32 ControlReg>
-    void arch_ctl_clear_bit(u32 bit) noexcept {
+    auto ctl_clear_bit(u32 bit) noexcept -> void {
         static_assert(ControlReg <= 15, "s390x only has control registers 0-15");
         u64 reg;
-        arch_ctl_store<ControlReg, ControlReg>(reg);
-        reg &= ~(1UL << bit);
-        arch_ctl_load<ControlReg, ControlReg>(reg);
+        ctl_store<ControlReg, ControlReg>(reg);
+        ::lib::bit_clear_msb(reg, bit);
+        ctl_load<ControlReg, ControlReg>(reg);
     }
 
 } // namespace arch::s390x::cpu::processor

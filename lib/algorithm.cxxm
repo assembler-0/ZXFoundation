@@ -1,0 +1,88 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/algorithm.cxxm
+/// @brief C++ STL-like algorithms implementation
+
+export module lib.algorithm;
+import zxfoundation.base.types;
+import lib.concepts;
+import lib.util;
+
+export {
+
+namespace lib {
+
+    /// @brief Returns the smaller of two values.
+    template <typename T>
+    [[nodiscard]] constexpr auto min(const T& a, const T& b) noexcept -> const T& {
+        return (b < a) ? b : a;
+    }
+
+    /// @brief Returns the larger of two values.
+    template <typename T>
+    [[nodiscard]] constexpr auto max(const T& a, const T& b) noexcept -> const T& {
+        return (a < b) ? b : a;
+    }
+
+    /// @brief Clamps a value between a minimum and a maximum.
+    template <typename T>
+    [[nodiscard]] constexpr auto clamp(const T& v, const T& lo, const T& hi) noexcept -> const T& {
+        return (v < lo) ? lo : (hi < v) ? hi : v;
+    }
+
+    /// @brief Copies a range of elements.
+    template <input_iterator InputIt, output_iterator<iter_value<InputIt>> OutputIt>
+    constexpr auto copy(InputIt first, InputIt last, OutputIt d_first) -> OutputIt {
+        while (first != last) {
+            *d_first++ = *first++;
+        }
+        return d_first;
+    }
+
+    /// @brief Moves a range of elements.
+    template <input_iterator InputIt, output_iterator<iter_value<InputIt>> OutputIt>
+    constexpr auto move(InputIt first, InputIt last, OutputIt d_first) -> OutputIt {
+        while (first != last) {
+            *d_first++ = lib::move(*first++);
+        }
+        return d_first;
+    }
+
+    /// @brief Fills a range with a value.
+    template <forward_iterator ForwardIt, typename T>
+    constexpr auto fill(ForwardIt first, ForwardIt last, const T& value) -> void {
+        while (first != last) {
+            *first++ = value;
+        }
+    }
+
+    /// @brief Finds the first element satisfying a predicate.
+    template <input_iterator InputIt, typename UnaryPredicate>
+    [[nodiscard]] constexpr auto find_if(InputIt first, InputIt last, UnaryPredicate p) -> InputIt {
+        while (first != last) {
+            if (p(*first)) return first;
+            ++first;
+        }
+        return last;
+    }
+
+    /// @brief Checks if all elements satisfy a predicate.
+    template <input_iterator InputIt, typename UnaryPredicate>
+    [[nodiscard]] constexpr auto all_of(InputIt first, InputIt last, UnaryPredicate p) -> bool {
+        return find_if(first, last, [&](const auto& x) { return !p(x); }) == last;
+    }
+
+    /// @brief Checks if any element satisfies a predicate.
+    template <input_iterator InputIt, typename UnaryPredicate>
+    [[nodiscard]] constexpr auto any_of(InputIt first, InputIt last, UnaryPredicate p) -> bool {
+        return find_if(first, last, p) != last;
+    }
+
+    /// @brief Checks if no elements satisfy a predicate.
+    template <input_iterator InputIt, typename UnaryPredicate>
+    [[nodiscard]] constexpr auto none_of(InputIt first, InputIt last, UnaryPredicate p) -> bool {
+        return find_if(first, last, p) == last;
+    }
+
+} // namespace lib
+
+} // end export
