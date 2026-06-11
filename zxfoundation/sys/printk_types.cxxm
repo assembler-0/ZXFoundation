@@ -37,7 +37,7 @@ namespace zxfoundation::sys::printk {
         auto (*init)() noexcept -> void{};
 
         /// @brief Is this backend currently active?
-        mutable bool active{false};
+        bool active{false};
     };
 
 } // namespace zxfoundation::sys::printk

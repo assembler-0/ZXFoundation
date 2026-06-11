@@ -22,17 +22,17 @@ typedef struct {
 void zxfl_sha256_init(zxfl_sha256_ctx_t *ctx);
 
 /// @brief Feed bytes into the hash.
-void zxfl_sha256_update(zxfl_sha256_ctx_t *ctx, const void *data, size_t len);
+void zxfl_sha256_update(zxfl_sha256_ctx_t* ctx, const void* data, size_t len);
 
 /// @brief Finalize and write the 32-byte digest.
-void zxfl_sha256_final(zxfl_sha256_ctx_t *ctx, uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]);
+void zxfl_sha256_final(zxfl_sha256_ctx_t* ctx, uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]);
 
 /// @brief One-shot SHA-256: hash data and write digest.
 /// @param data    Input bytes
 /// @param len     Number of bytes
 /// @param digest  Output buffer (must be ZXFL_SHA256_DIGEST_SIZE bytes)
-static inline void zxfl_sha256(const void *data, size_t len,
-                                uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]) {
+static inline void zxfl_sha256(const void* data, size_t len,
+                               uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]) {
     zxfl_sha256_ctx_t ctx;
     zxfl_sha256_init(&ctx);
     zxfl_sha256_update(&ctx, data, len);

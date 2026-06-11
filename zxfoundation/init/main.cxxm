@@ -1,6 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/init/main.cxxm
-/// @brief Kernel main entry point
+/// @brief Kernel main entry point.
 
 export module zxfoundation.init.main;
 import zxfoundation.base.types;
@@ -11,32 +11,147 @@ import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sys.syschk;
+import zxfoundation.memory.hhdm;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.smp;
+import crypto.sha256_types;
+import crypto.sha256;
 import drivers.console.diag;
+import lib.span;
 import lib.error;
+
+using zxfoundation::sys::printk::pinfo;
 
 export {
 
 namespace zxfoundation::init {
 
-    arch::s390x::init::zxfl::protocol boot_protocol;
+    arch::s390x::init::zxfl::protocol boot_protocol{};
 
 } // namespace zxfoundation::init
 
 } // end export
 
-using zxfoundation::sys::printk::pinfo;
+
+namespace _internal {
+
+    using namespace zxfoundation::memory::hhdm;
+    using namespace zxfoundation::sys::syschk;
+
+    /// @brief Verify the boot protocol magic and binding token.
+    /// @param[in] boot  Kernel-side copy of the ZXFL boot protocol.
+    static auto verify_protocol_integrity(const arch::s390x::init::zxfl::protocol& boot) -> void {
+        if (boot.magic != arch::s390x::init::zxfl::ZXFL_MAGIC)
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: invalid protocol magic"
+            );
+
+        const uint64_t expected = arch::s390x::init::zxvl::compute_token(
+            boot.stfle_fac[0], boot.ipl_schid);
+        if (boot.binding_token != expected)
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::checksum_mismatch),
+                "sys: invalid binding token"
+            );
+    }
+
+    /// @brief Validate the loader-written stack frame canary at kernel_stack_top.
+    /// @param[in] boot  Kernel-side copy of the ZXFL boot protocol.
+    static auto validate_stack_frame(const arch::s390x::init::zxfl::protocol& boot) -> void {
+        if (!boot.kernel_stack_top) [[unlikely]]
+            goto bad;
+
+        {
+            const auto* frame = reinterpret_cast<const uint64_t*>(boot.kernel_stack_top);
+            if (frame[0] != arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_A)
+                goto bad;
+            const uint64_t expected_b =
+                arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_B ^ boot.binding_token;
+            if (frame[1] == expected_b)
+                return;
+        }
+    bad:
+        syschk_fatal(
+            lib::kernel_error::from_init(lib::init_error::code::checksum_mismatch),
+            "sys: stack frame corruption - unauthorized loader"
+        );
+    }
+
+    /// @brief Re-verify all kernel segment checksums from the HHDM-mapped image.
+    /// @param[in] boot  Kernel-side copy of the ZXFL boot protocol.
+    static auto verify_kernel_checksums(const arch::s390x::init::zxfl::protocol& boot) -> void {
+        if (!boot.cksum_table_phys) [[unlikely]]
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: no kernel checksum table — unauthorized loader"
+            );
+
+        const auto* tbl = reinterpret_cast<const arch::s390x::init::zxvl::checksum_table*>(
+            boot.cksum_table_phys);
+
+        if (tbl->magic != arch::s390x::init::zxvl::ZXVL_CKSUM_MAGIC)
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: nucleus checksum table absent or corrupt"
+            );
+
+        if (tbl->version != arch::s390x::init::zxvl::ZXVL_CKSUM_VERSION)
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: nucleus checksum table version mismatch"
+            );
+
+        if (tbl->count == 0U || tbl->count > arch::s390x::init::zxvl::ZXVL_CKSUM_MAX_ENTRIES)
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: nucleus checksum table entry count invalid"
+            );
+
+        if (tbl->algo != arch::s390x::init::zxvl::ZXVL_CKSUM_ALGO_SHA256)
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: nucleus checksum algorithm unrecognized"
+            );
+
+        for (u32 i = 0U; i < tbl->count; ++i) {
+            const auto& e = tbl->entries[i];
+            if (e.size == 0U) continue;
+
+            const u64 virt_seg = phys_to_virt(e.phys_start);
+            const lib::span data(reinterpret_cast<const u8*>(virt_seg), e.size);
+            const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
+                expected(e.digest, crypto::sha256::SHA256_DIGEST_SIZE);
+
+            if (const auto r = crypto::sha256::sha256_verify(data, expected); !r)
+                syschk_fatal(
+                    lib::kernel_error::from_init(lib::init_error::code::checksum_mismatch),
+                    "sys: nucleus checksum mismatch - unauthorized loader"
+                );
+        }
+
+        pinfo("sys: nucleus checksums verified ({} segments)\n", tbl->count);
+    }
+
+} // namespace _internal
+
 
 extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     const arch::s390x::init::zxfl::protocol* protocol
 ) noexcept -> void {
     if (!protocol) [[unlikely]]
         arch::s390x::cpu::psw::load_disabled_wait_psw();
+
+    zxfoundation::sys::printk::initialize();
+    zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
+
+    _internal::verify_protocol_integrity(*protocol);
+    _internal::validate_stack_frame(*protocol);
+    _internal::verify_kernel_checksums(*protocol);
 
     zxfoundation::init::boot_protocol = *protocol;
 
@@ -46,10 +161,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::sys::syschk::syschk_init(*protocol);
     zxfoundation::sys::time::initialize(protocol->tod_boot);
 
-    zxfoundation::sys::printk::initialize();
-    zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
-
-    pinfo("sys: ZXFoundation (TM) {} - copyright (c) {} assembler-0 all rights reserved.\n",
+    pinfo("sys: ZXFoundation (TM) {} - Copyright (c) {} assembler-0. Licensed under the Apache License, Version 2.0.\n",
         zxfoundation::base::config::CONFIG_ZX_RELEASE,
         zxfoundation::base::config::CONFIG_ZX_COPYRIGHT_DATE);
 
@@ -61,11 +173,12 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::memory::pmm::init(*protocol);
     zxfoundation::memory::pmm::reserve(protocol->lowcore_phys, 1);
 
-
     zxfoundation::sys::irq::irq_subsystem_init();
 
     arch::s390x::cpu::smp::init_bsp();
     arch::s390x::cpu::smp::init_aps(*protocol);
+
+    pinfo("sys: core.zxfoundation.nucleus initialization complete\n");
 
     while (true)
         arch::s390x::cpu::processor::cpu_relax();

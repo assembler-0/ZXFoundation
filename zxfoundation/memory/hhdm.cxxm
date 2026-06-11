@@ -1,6 +1,6 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file hhdm.cxxm
-/// @brief HHDM (Higher-Half Direct Map) constants and helper
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/hhdm.cxxm
+/// @brief HHDM (Higher-Half Direct Map) translation helpers.
 
 export module zxfoundation.memory.hhdm;
 import zxfoundation.base.types;
@@ -10,11 +10,18 @@ export {
 
 namespace zxfoundation::memory::hhdm {
 
-    auto phys_to_virt(const u64 phys) noexcept -> u64 {
+    /// @brief Translate a physical address (raw integer) to its HHDM virtual counterpart.
+    /// @param[in] phys  Raw physical address.
+    /// @return  HHDM virtual address: @p phys + KERNEL_VIRTUAL_OFFSET.
+    [[nodiscard]] auto phys_to_virt(u64 phys) noexcept -> u64 {
         return phys + KERNEL_VIRTUAL_OFFSET;
     }
 
-    auto virt_to_phys(const u64 virt) noexcept -> u64 {
+    /// @brief Translate an HHDM virtual address back to its physical counterpart.
+    ///
+    /// @param[in] virt  HHDM virtual address (must be >= KERNEL_VIRTUAL_OFFSET).
+    /// @return  Physical address: @p virt - KERNEL_VIRTUAL_OFFSET.
+    [[nodiscard]] auto virt_to_phys(u64 virt) noexcept -> u64 {
         return virt - KERNEL_VIRTUAL_OFFSET;
     }
 

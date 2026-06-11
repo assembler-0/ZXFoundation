@@ -1,13 +1,17 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file hhdm_types.cxxm
-/// @brief HHDM (Higher-Half Direct Map) constants and helper
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/hhdm_types.cxxm
+/// @brief HHDM constants and physical-address newtype.
 
 export module zxfoundation.memory.hhdm_types;
+import zxfoundation.base.types;
+import lib.compare;
 
 export {
 
 namespace zxfoundation::memory::hhdm {
 
+    /// @brief Higher-Half Direct Map base offset.
+    ///        Physical address P maps to virtual address P + KERNEL_VIRTUAL_OFFSET.
     constexpr auto KERNEL_VIRTUAL_OFFSET = 0xFFFF800000000000ULL;
 
 } // namespace zxfoundation::memory::hhdm

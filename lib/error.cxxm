@@ -106,7 +106,7 @@ namespace lib {
         enum code : u32 {
             none                = 0,
             boot_failed         = 1,  ///< Boot sequence failed.
-            invalid_protocol    = 2,  ///< ZXFL protocol violation.
+            invalid_protocol    = 2,  ///< ZXFL/ZXVL protocol violation.
             checksum_mismatch   = 3,  ///< Boot image checksum mismatch.
         };
     }
@@ -118,7 +118,7 @@ namespace lib {
             invalid_arg     = 1,  ///< Invalid argument passed to function.
             not_supported   = 2,  ///< Operation not supported.
             not_implemented = 3,  ///< Feature not yet implemented.
-            unknown         = 4,  ///< Unknown error.
+            unknown         = 5,  ///< Unknown error.
         };
     }
 

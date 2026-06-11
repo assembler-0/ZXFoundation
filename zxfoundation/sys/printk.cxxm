@@ -31,7 +31,7 @@ namespace _internal {
         zxfoundation::locking::qspinlock::qspinlock lock;
         printk_backend backends[MAX_BACKENDS]{};
         usize backend_count{0};
-        log_level min_level{log_level::INFO};
+        log_level min_level{log_level::EMERG};
         lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
     };
 
@@ -48,7 +48,7 @@ namespace zxfoundation::sys::printk {
 
     /// @brief Initialize the logging framework.
     auto initialize() noexcept -> void {
-        // Initialization logic if needed.
+        _internal::g_state.min_level = log_level::INFO;
     }
 
     /// @brief Register a new logging backend.
@@ -59,8 +59,9 @@ namespace zxfoundation::sys::printk {
         locking::irq_lock_guard guard(_internal::g_state.lock);
         if (_internal::g_state.backend_count < _internal::MAX_BACKENDS) {
             if (backend.init) backend.init();
-            backend.active = true;
-            _internal::g_state.backends[_internal::g_state.backend_count++] = backend;
+            auto& b = _internal::g_state.backends[_internal::g_state.backend_count++];
+            b = backend;
+            b.active = true;
         }
     }
 
@@ -99,28 +100,33 @@ namespace zxfoundation::sys::printk {
             return;
         }
 
-        // 1. Prepare formatting buffer on stack.
         char buf[512];
         const lib::span s_buf(buf, 512);
 
-        // 2. Format Header: "ZXF-SSSS.UUUUUU [cpuNN] L "
+        // Format Header: "ZXF-[SSSS.UUUUUU] [cpuNN] L "
         const auto now = time::monotonic_now();
         const u64 s = now.nanoseconds_since_epoch() / 1000000000U;
         const u64 us = (now.nanoseconds_since_epoch() % 1000000000U) / 1000U;
         const u16 cpu = arch::s390x::cpu::percpu::cpu_id();
         const char tag = _internal::level_tags[static_cast<u8>(level)];
 
-        usize offset = lib::format::format_to(s_buf, "ZXF-{}.{} [cpu{}] {} ", 
-            lib::format::dec{s, 4, true}, 
-            lib::format::dec{us, 6, true},
-            lib::format::dec{static_cast<u64>(cpu), 2, true}, 
-            tag
-        );
+        usize offset = 0;
+        if (s > 1'000'000'000U) [[unlikely]] {
+            offset = lib::format::format_to(s_buf, "ZXF-[XXXX.xxxxxx] [cpu{}] {} ",
+                lib::format::dec{static_cast<u64>(cpu), 2, true},
+                tag
+            );
+        } else {
+            offset = lib::format::format_to(s_buf, "ZXF-[{}.{}] [cpu{}] {} ",
+                lib::format::dec{s, 4, true}, 
+                lib::format::dec{us, 6, true},
+                lib::format::dec{static_cast<u64>(cpu), 2, true}, 
+                tag
+            );
+        }
         
-        // 3. Format Message
         offset += lib::format::format_to(s_buf.subspan(offset), fmt, lib::forward<Args>(args)...);
 
-        // 4. Ensure newline
         if (offset < 511 && (offset == 0 || buf[offset-1] != '\n')) {
             buf[offset++] = '\n';
         }
@@ -128,10 +134,8 @@ namespace zxfoundation::sys::printk {
 
         lib::string_view final_msg(buf, offset);
 
-        // 5. Emit and Store
         locking::irq_lock_guard guard(_internal::g_state.lock);
 
-        // 5.1 Store in ring buffer (with wrap-around)
         lib::span<const u8> to_push(reinterpret_cast<const u8*>(final_msg.data()), final_msg.size());
         
         while (to_push.size() > 0) {
@@ -146,7 +150,6 @@ namespace zxfoundation::sys::printk {
             }
         }
 
-        // 5.2 Emit to all active backends
         for (usize i = 0; i < _internal::g_state.backend_count; ++i) {
             if (const auto b = _internal::g_state.backends[i]; b.active) {
                 b.emit(final_msg);

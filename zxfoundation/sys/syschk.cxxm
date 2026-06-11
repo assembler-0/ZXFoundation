@@ -109,7 +109,7 @@ namespace zxfoundation::sys::syschk {
         lib::strncpy(rec->msg, msg.data(), ZX_CRASH_MSG_LEN);
 
         printk::pemerg(
-            "syschk [{}] (cat={} code={:#x}): {}\n",
+            "syschk [{}]:[category={} code={:#x}]: {}\n",
             severity_name(sev),
             static_cast<u32>(err.category),
             err.code,

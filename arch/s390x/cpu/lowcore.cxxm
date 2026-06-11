@@ -19,10 +19,10 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.init.zxfl.protocol;
 
-alignas(16) static u8 s_boot_async_stack[arch::s390x::cpu::processor::S390X_ASYNC_STACK_SIZE];
-alignas(16) static u8 s_boot_mcck_stack[arch::s390x::cpu::processor::S390X_MCCK_STACK_SIZE];
-alignas(16) static u8 s_boot_nodat_stack[arch::s390x::cpu::processor::S390X_NODAT_STACK_SIZE];
-alignas(16) static u8 s_boot_restart_stack[arch::s390x::cpu::processor::S390X_STACK_SIZE];
+alignas(16) static u8 s_boot_async_stack[arch::s390x::cpu::processor::S390X_ASYNC_STACK_SIZE]{};
+alignas(16) static u8 s_boot_mcck_stack[arch::s390x::cpu::processor::S390X_MCCK_STACK_SIZE]{};
+alignas(16) static u8 s_boot_nodat_stack[arch::s390x::cpu::processor::S390X_NODAT_STACK_SIZE]{};
+alignas(16) static u8 s_boot_restart_stack[arch::s390x::cpu::processor::S390X_STACK_SIZE]{};
 
 extern "C" {
     auto trap_pgm_entry()  -> void;
