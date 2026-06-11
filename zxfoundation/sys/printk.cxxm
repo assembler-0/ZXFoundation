@@ -1,6 +1,6 @@
 /// SPDX-License-Identifier: Apache 2.0
 /// @file zxfoundation/sys/printk.cxxm
-/// @brief SMP-aware industrial kernel logging framework with circular history.
+/// @brief kernel logging framework
 
 export module zxfoundation.sys.printk;
 import zxfoundation.base.types;
@@ -8,7 +8,7 @@ import zxfoundation.sys.printk_types;
 import zxfoundation.sys.time;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
-import arch.s390x.cpu.smp;
+import arch.s390x.cpu.percpu;
 import lib.string_view;
 import lib.span;
 import lib.format;
@@ -107,7 +107,7 @@ namespace zxfoundation::sys::printk {
         const auto now = time::monotonic_now();
         const u64 s = now.nanoseconds_since_epoch() / 1000000000U;
         const u64 us = (now.nanoseconds_since_epoch() % 1000000000U) / 1000U;
-        const u16 cpu = arch::s390x::cpu::smp::cpu_id();
+        const u16 cpu = arch::s390x::cpu::percpu::cpu_id();
         const char tag = _internal::level_tags[static_cast<u8>(level)];
 
         usize offset = lib::format::format_to(s_buf, "ZXF-{}.{} [cpu{}] {} ", 

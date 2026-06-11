@@ -1,0 +1,35 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ipi.cxxm
+/// @brief Leaf IPI send primitives for s390x.
+
+export module arch.s390x.cpu.ipi;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu_types;
+import arch.s390x.cpu.sigp;
+import arch.s390x.cpu.sigp_types;
+import arch.s390x.cpu.smp_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::ipi {
+
+    /// @brief Send a halt IPI to a logical CPU via SIGP_STOP_AND_STORE_STATUS.
+    /// @param[in] target_cpu_id  Logical CPU ID (0-based).  If the target has no
+    ///                           registered lowcore (not yet online or already torn
+    ///                           down) the call is a safe no-op.
+    auto send_halt_ipi(u16 target_cpu_id) noexcept -> void {
+        percpu::s390x_percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+
+        __atomic_fetch_or(&pcp->ec_bits, smp::EC_HALT_BIT, __ATOMIC_SEQ_CST);
+
+        u32 status{0};
+        sigp::sigp_busy(pcp->cpu_addr,
+                        sigp::SIGP_STOP_AND_STORE_STATUS,
+                        0, status);
+    }
+
+} // namespace arch::s390x::cpu::ipi
+
+} // end export

@@ -1,6 +1,6 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file psw_types.cxxm
-/// @brief PSW (Program Status Word) definitions.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/psw_types.cxxm
+/// @brief z/Architecture PSW (Program Status Word) bit definitions.
 
 export module arch.s390x.cpu.psw_types;
 import zxfoundation.base.types;
@@ -9,43 +9,84 @@ export {
 
 namespace arch::s390x::cpu::psw {
 
-    constexpr auto PSW_STD_HALT_ADDR  = 0x0000000000DEAD00ULL;
-    constexpr auto PSW_BIT_DAT        = 0x0400000000000000ULL;
-    constexpr auto PSW_BIT_IO         = 0x0200000000000000ULL;
-    constexpr auto PSW_BIT_EXT        = 0x0100000000000000ULL;
-    constexpr auto PSW_BIT_MCCK       = 0x0008000000000000ULL;
-    constexpr auto PSW_BIT_WAIT       = 0x0002000000000000ULL;
-    constexpr auto PSW_BIT_PSTATE     = 0x0001000000000000ULL;
-    constexpr auto PSW_BIT_EA         = 0x0000000100000000ULL;
-    constexpr auto PSW_BIT_BA         = 0x0000000080000000ULL;
+    /// @brief DAT (Dynamic Address Translation) enable bit — PoP §4.2, bit 5 of byte 0.
+    constexpr u64 PSW_BIT_DAT        = 0x0400000000000000ULL;
 
-    /// EA|BA — 64-bit addressing mode bits.  Present in every valid z/Arch PSW.
-    constexpr auto PSW_ARCH_BITS      = PSW_BIT_EA | PSW_BIT_BA;
+    /// @brief I/O interrupt enable bit — PoP §4.2, bit 6 of byte 0.
+    constexpr u64 PSW_BIT_IO         = 0x0200000000000000ULL;
 
-    /// Supervisor mode, DAT off, all interrupts disabled, 64-bit.
-    constexpr auto PSW_MASK_KERNEL    = PSW_ARCH_BITS;
+    /// @brief External interrupt enable bit — PoP §4.2, bit 7 of byte 0.
+    constexpr u64 PSW_BIT_EXT        = 0x0100000000000000ULL;
 
-    /// Home Space Mode bit mask (ASC bits 16-17 = 11).
-    constexpr auto PSW_BIT_HOME_SPACE = 0x0000C00000000000ULL;
+    /// @brief Machine-check interrupt enable bit — PoP §4.2, bit 13 of byte 1.
+    constexpr u64 PSW_BIT_MCCK       = 0x0008000000000000ULL;
 
-    /// Supervisor mode, DAT on, all interrupts disabled, 64-bit.
-    constexpr auto PSW_MASK_KERNEL_DAT = PSW_BIT_DAT | PSW_BIT_HOME_SPACE | PSW_ARCH_BITS;
+    /// @brief Wait state bit — PoP §4.2, bit 14 of byte 1.
+    constexpr u64 PSW_BIT_WAIT       = 0x0002000000000000ULL;
 
-    /// Disabled wait: wait state set, DAT off, all interrupts disabled, 64-bit.
-    constexpr auto PSW_MASK_DISABLED_WAIT = PSW_BIT_WAIT | PSW_ARCH_BITS;
+    /// @brief Problem state (user mode) bit — PoP §4.2, bit 15 of byte 1.
+    constexpr u64 PSW_BIT_PSTATE     = 0x0001000000000000ULL;
 
-    constexpr auto PSW_LC_RESTART     = 0x01A0ULL;
-    constexpr auto PSW_LC_EXTERNAL    = 0x01B0ULL;
-    constexpr auto PSW_LC_SVC         = 0x01C0ULL;
-    constexpr auto PSW_LC_PROGRAM     = 0x01D0ULL;
-    constexpr auto PSW_LC_MCCK        = 0x01E0ULL;
-    constexpr auto PSW_LC_IO          = 0x01F0ULL;
+    /// @brief Extended addressing (EA) bit — PoP §4.2, bit 31 of the mask word.
+    constexpr u64 PSW_BIT_EA         = 0x0000000100000000ULL;
 
-    /// @brief 64-bit z/Architecture PSW (16 bytes, 8-byte aligned).
+    /// @brief Basic addressing (BA) bit — PoP §4.2, bit 32 of the mask word.
+    constexpr u64 PSW_BIT_BA         = 0x0000000080000000ULL;
+
+    /// @brief Primary Space Mode (ASC = 00) — no bits set.
+    /// @note This is the correct mode for kernel code. CR1 is the primary ASCE.
+    constexpr u64 PSW_ASC_PRIMARY    = 0x0000000000000000ULL;
+
+    /// @brief Secondary Space Mode (ASC = 01).
+    constexpr u64 PSW_ASC_SECONDARY  = 0x0000800000000000ULL;
+
+    /// @brief Access register mode (ASC = 10).
+    constexpr u64 PSW_ASC_ACCREG     = 0x0000400000000000ULL;
+
+    /// @brief Home Space Mode (ASC = 11) — CR13 is the effective ASCE.
+    constexpr u64 PSW_ASC_HOME       = 0x0000C00000000000ULL;
+
+    /// @brief 64-bit mode bits that MUST be present in every valid z/Arch PSW.
+    constexpr u64 PSW_ARCH_BITS      = PSW_BIT_EA | PSW_BIT_BA;
+
+    /// @brief Kernel execution mask: supervisor, DAT off, all interrupts disabled, 64-bit,
+    constexpr u64 PSW_MASK_KERNEL    = PSW_ARCH_BITS | PSW_ASC_PRIMARY;
+
+    /// @brief Kernel DAT-on mask: supervisor, DAT on, all interrupts disabled, 64-bit,
+    /// @brief Kernel DAT-on mask for interrupt handler new-PSWs.
+    constexpr u64 PSW_MASK_KERNEL_DAT = PSW_BIT_DAT | PSW_ARCH_BITS | PSW_ASC_HOME;
+
+    /// @brief Kernel DAT-on mask with interrupts enabled (normal execution).
+    constexpr u64 PSW_MASK_KERNEL_ENABLED =
+        PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_ARCH_BITS | PSW_ASC_HOME;
+
+    /// @brief Disabled-wait PSW mask: wait state, no interrupts, 64-bit.
+    constexpr u64 PSW_MASK_DISABLED_WAIT = PSW_BIT_WAIT | PSW_ARCH_BITS;
+
+    /// @brief Standard halt address (appears in disabled-wait PSW during normal shutdown).
+    constexpr u64 PSW_STD_HALT_ADDR  = 0x0000000000DEAD00ULL;
+
+    constexpr u64 PSW_LC_RESTART     = 0x01A0ULL; ///< Restart new PSW — PoP §4.3.3.
+    constexpr u64 PSW_LC_EXTERNAL    = 0x01B0ULL; ///< External new PSW.
+    constexpr u64 PSW_LC_SVC         = 0x01C0ULL; ///< Supervisor-call new PSW.
+    constexpr u64 PSW_LC_PROGRAM     = 0x01D0ULL; ///< Program-check new PSW.
+    constexpr u64 PSW_LC_MCCK        = 0x01E0ULL; ///< Machine-check new PSW.
+    constexpr u64 PSW_LC_IO          = 0x01F0ULL; ///< I/O new PSW.
+
+    /// @brief 64-bit z/Architecture PSW (16 bytes, 8-byte aligned per PoP §4.2).
     struct [[gnu::packed]] alignas(8) zx_psw {
         u64 mask{};  ///< PSW mask word (bits 0–63 per PoP Figure 4-1).
         u64 addr{};  ///< Instruction address (bits 64–127).
     };
+
+    // Two u32 registers from EPSW packed into irqflags (u64).
+    struct [[gnu::packed]] alignas(u64) epsw_words {
+        u32 hi;
+        u32 lo;
+    };
+
+    static_assert(sizeof(zx_psw) == 16,       "zx_psw must be exactly 16 bytes");
+    static_assert(alignof(zx_psw) == 8,       "zx_psw must be 8-byte aligned");
 
 } // namespace arch::s390x::cpu::psw
 

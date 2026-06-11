@@ -1,15 +1,14 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/locking/qspinlock.cxxm
-/// @brief queued spinlock (MCS-based)
-
+/// @brief Queued spinlock (MCS-based) for z/Architecture.
+///
 export module zxfoundation.locking.qspinlock;
 import zxfoundation.base.types;
 import zxfoundation.locking.mcs_types;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu;
-import arch.s390x.cpu.percpu_types;
+import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.irq;
 import arch.s390x.lib.atomic;
 import lib.bit;
@@ -18,53 +17,78 @@ export {
 
 namespace zxfoundation::locking::qspinlock {
 
-    /// @brief Queued spinlock implementation for s390x.
-    /// @note Optimized for low cache-line contention via MCS queueing.
-    ///       Layout (IBM bit numbering):
-    ///       Bits 0-17: Tail (CPU ID + Node Index)
-    ///       Bit 30: Pending Bit
-    ///       Bit 31: Locked Bit
+    /// @brief Queued spinlock — SMP-safe, cache-line-efficient.
+    ///
+    /// Callers must not use this lock in NMI/MCCK context unless the NMI/MCCK
+    /// handler never acquires a lock that is also used in task context, because
+    /// the MCS queue uses per-CPU nodes indexed by lock_depth (0-3).
     class qspinlock {
-        using memory_order = arch::s390x::lib::atomic::memory_order;
-        using atomic_u32 = arch::s390x::lib::atomic::atomic<u32>;
+        using atomic_u32    = arch::s390x::lib::atomic::atomic<u32>;
+        using atomic_mcs    = arch::s390x::lib::atomic::atomic<mcs::mcs_node*>;
+        using memory_order  = arch::s390x::lib::atomic::memory_order;
 
-        static constexpr u32 _Q_LOCKED_VAL  = 1U << 0;
-        static constexpr u32 _Q_PENDING_VAL = 1U << 1;
-        static constexpr u32 _Q_LOCKED_MASK = _Q_LOCKED_VAL | _Q_PENDING_VAL;
+        // ---- Lock word bit positions ----------------------------------------
+        static constexpr u32 _Q_LOCKED_VAL   = 1U;      ///< Bit 0: lock held.
+        static constexpr u32 _Q_PENDING_VAL  = 2U;      ///< Bit 1: pending waiter.
+        static constexpr u32 _Q_LOCKED_MASK  = _Q_LOCKED_VAL | _Q_PENDING_VAL;
 
-        static constexpr u32 _Q_TAIL_CPU_OFFSET = 18;
-        static constexpr u32 _Q_TAIL_NODE_OFFSET = 16;
-        static constexpr u32 _Q_TAIL_MASK = ~static_cast<u32>(_Q_LOCKED_MASK);
+        /// Tail field occupies bits [31:2] (bits above LOCKED and PENDING).
+        static constexpr u32 _Q_TAIL_OFFSET  = 2U;
+        static constexpr u32 _Q_TAIL_MASK    = ~static_cast<u32>(_Q_LOCKED_MASK);
+
+        /// Within the tail field:
+        ///   [11:2] = 10-bit encoded tail (cpu_id+1 in [11:4], node_idx in [3:2])
+        static constexpr u32 _Q_NODE_BITS    = 2U;
+        static constexpr u32 _Q_NODE_MASK    = (1U << _Q_NODE_BITS) - 1U;  // 0x3
+        static constexpr u32 _Q_CPU_BITS     = 10U;
 
         atomic_u32 m_val{0};
+
+        // ---- Tail encoding helpers ------------------------------------------
+
+        /// @brief Encode (cpu_id + 1, node_idx) into a tail value shifted into
+        ///        the correct position in the lock word.
+        static constexpr auto encode_tail(const u16 cpu_id, const u32 node_idx) noexcept -> u32 {
+            // cpu_id+1 occupies the upper _Q_CPU_BITS bits of the tail field.
+            // node_idx occupies the lower _Q_NODE_BITS bits.
+            const u32 tail_raw = ((static_cast<u32>(cpu_id) + 1U) << _Q_NODE_BITS)
+                                 | (node_idx & _Q_NODE_MASK);
+            // Shift the packed tail left by _Q_TAIL_OFFSET to skip LOCKED+PENDING.
+            return tail_raw << _Q_TAIL_OFFSET;
+        }
+
+        /// @brief Decode the CPU index from a full lock word.
+        static constexpr auto decode_tail_cpu(const u32 lock_val) noexcept -> u16 {
+            const u32 tail_raw = (lock_val & _Q_TAIL_MASK) >> _Q_TAIL_OFFSET;
+            return static_cast<u16>((tail_raw >> _Q_NODE_BITS) - 1U);
+        }
+
+        /// @brief Decode the node index from a full lock word.
+        static constexpr auto decode_tail_node(const u32 lock_val) noexcept -> u32 {
+            const u32 tail_raw = (lock_val & _Q_TAIL_MASK) >> _Q_TAIL_OFFSET;
+            return tail_raw & _Q_NODE_MASK;
+        }
 
     public:
         constexpr qspinlock() noexcept = default;
 
-        /// @brief Acquire the lock (blocking).
+        /// @brief Acquire the lock (blocking, SMP-safe).
+        /// @note  Interrupts must be disabled by the caller before acquiring
+        ///        a spinlock to prevent priority inversion.  Use lock_irqsave().
         auto lock() noexcept -> void {
             u32 expected = 0;
-            // Fast path: uncontended
-            if (m_val.compare_exchange_strong(expected, _Q_LOCKED_VAL, memory_order::acquire, memory_order::relaxed)) {
+            if (m_val.compare_exchange_strong(
+                    expected, _Q_LOCKED_VAL, memory_order::acquire, memory_order::relaxed))
                 return;
-            }
             lock_slow();
         }
 
-        /// @brief Try to acquire the lock (non-blocking).
-        auto try_lock() noexcept -> bool {
+        /// @brief Try to acquire the lock without blocking.
+        /// @return true if the lock was acquired, false if it was already held.
+        [[nodiscard]] auto try_lock() noexcept -> bool {
             u32 expected = 0;
-            if (m_val.compare_exchange_strong(expected, _Q_LOCKED_VAL, memory_order::acquire, memory_order::relaxed)) {
-                return true;
-            }
-            
-            u32 v = m_val.load(memory_order::relaxed);
-            if (!(v & _Q_LOCKED_MASK)) {
-                expected = v & ~_Q_LOCKED_MASK;
-                return m_val.compare_exchange_strong(expected, expected | _Q_LOCKED_VAL, memory_order::acquire, memory_order::relaxed);
-            }
-            
-            return false;
+            return m_val.compare_exchange_strong(
+                expected, _Q_LOCKED_VAL, memory_order::acquire, memory_order::relaxed);
         }
 
         /// @brief Release the lock.
@@ -72,122 +96,111 @@ namespace zxfoundation::locking::qspinlock {
             (void)m_val.fetch_and(~_Q_LOCKED_VAL, memory_order::release);
         }
 
-        /// @brief Check if the lock is held.
+        /// @brief Test whether the lock is held (non-deterministic snapshot).
         [[nodiscard]] auto is_locked() const noexcept -> bool {
             return (m_val.load(memory_order::relaxed) & _Q_LOCKED_VAL) != 0;
         }
 
-        /// @name IRQ-safe variants
-        /// @{
-
+        /// @brief Acquire the lock and save + disable IRQs atomically.
+        /// @return Saved irqflags (pass to unlock_irqrestore()).
         auto lock_irqsave() noexcept -> irqflags {
-            irqflags flags = arch::s390x::cpu::irq::save_flags();
-            arch::s390x::cpu::irq::irq_disable();
+            const irqflags flags = arch::s390x::cpu::irq::irq_save_disable();
             lock();
             return flags;
         }
 
-        auto unlock_irqrestore(irqflags flags) noexcept -> void {
+        /// @brief Release the lock and restore IRQs.
+        /// @param flags  Value returned by lock_irqsave().
+        auto unlock_irqrestore(const irqflags flags) noexcept -> void {
             unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
         }
 
-        /// @}
-
     private:
-        /// @brief Slow path implementation handling pending and MCS queueing.
+        /// @brief Slow acquisition path handling pending and MCS queue scenarios.
         auto lock_slow() noexcept -> void {
             u32 v = m_val.load(memory_order::relaxed);
 
-            // 1. Try to become the 'pending' waiter.
-            // If the lock is held but no one is pending and no one is queued.
             if ((v & _Q_LOCKED_MASK) == _Q_LOCKED_VAL && !(v & _Q_TAIL_MASK)) {
-                u32 expected = _Q_LOCKED_VAL;
-                if (m_val.compare_exchange_strong(expected, _Q_LOCKED_VAL | _Q_PENDING_VAL, memory_order::acquire, memory_order::relaxed)) {
-                    // Successfully became pending. Wait for the owner to release.
-                    while (m_val.load(memory_order::relaxed) & _Q_LOCKED_VAL) {
+                u32 expected_pending = _Q_LOCKED_VAL;
+                if (m_val.compare_exchange_strong(
+                        expected_pending,
+                        _Q_LOCKED_VAL | _Q_PENDING_VAL,
+                        memory_order::acquire,
+                        memory_order::relaxed)) {
+                    while (m_val.load(memory_order::relaxed) & _Q_LOCKED_VAL)
                         arch::s390x::cpu::processor::cpu_relax();
-                    }
-                    // Take the lock and clear pending.
                     (void)m_val.fetch_add(_Q_LOCKED_VAL - _Q_PENDING_VAL, memory_order::acquire);
                     return;
                 }
-                // If failed, someone else became pending or joined the queue.
+                // Another thread raced us; fall through to the MCS queue path.
+                v = m_val.load(memory_order::relaxed);
             }
 
-            // 2. Queue Path: Join the MCS queue.
-            auto* cpu_data = &arch::s390x::cpu::lowcore::get_current()->percpu;
-            u32 node_idx = cpu_data->lock_depth++;
-            if (node_idx >= 4) arch::s390x::cpu::psw::load_disabled_wait_psw();
+            // ---- MCS queue path ---------------------------------------------
+            auto& pcp = arch::s390x::cpu::lowcore::get_current()->percpu;
 
-            mcs::mcs_node* node = &cpu_data->qnodes[node_idx];
+            // Claim a node at the current nesting depth.
+            const u32 node_idx = pcp.lock_depth;
+            if (node_idx >= mcs::MCS_MAX_LOCK_DEPTH)
+                [[unlikely]] arch::s390x::cpu::psw::load_disabled_wait_psw();
+            pcp.lock_depth++;
+
+            mcs::mcs_node* const node = &pcp.qnodes[node_idx];
+            // Initialize the node: we are locked (spinning) and have no successor.
             node->locked.store(1, memory_order::relaxed);
             node->next.store(nullptr, memory_order::relaxed);
 
-            // Encode our CPU ID and node index into the tail.
-            // We use (cpu_id + 1) to distinguish from null tail (0).
-            u32 tail = (static_cast<u32>(cpu_data->cpu_id + 1) << 2) | node_idx;
-            u32 encoded_tail = tail << 2; // Shift past LOCKED/PENDING
+            // Encode our position into the tail field.
+            const u32 my_tail = encode_tail(pcp.cpu_id, node_idx);
 
-            // Atomically swap the tail.
             u32 old_val = m_val.load(memory_order::relaxed);
             u32 new_val;
             do {
-                new_val = (old_val & _Q_LOCKED_MASK) | encoded_tail;
-            } while (!m_val.compare_exchange_weak(old_val, new_val, memory_order::acq_rel, memory_order::relaxed));
+                new_val = (old_val & _Q_LOCKED_MASK) | my_tail;
+            } while (!m_val.compare_exchange_weak(
+                         old_val, new_val, memory_order::acq_rel, memory_order::relaxed));
 
-            // If there was a previous tail, we are not first in line.
             if (old_val & _Q_TAIL_MASK) {
-                u32 prev_tail = (old_val & _Q_TAIL_MASK) >> 2;
-                u32 prev_cpu = (prev_tail >> 2) - 1;
-                u32 prev_idx = prev_tail & 3;
-                
-                // Find previous node via lowcore array.
-                auto* prev_lc = arch::s390x::cpu::lowcore::__percpu_lowcore_area_raw[prev_cpu];
-                mcs::mcs_node* prev_node = &prev_lc->percpu.qnodes[prev_idx];
-                
-                // Link ourselves.
+                const u16 prev_cpu  = decode_tail_cpu(old_val);
+                const u32 prev_idx  = decode_tail_node(old_val);
+
+                arch::s390x::cpu::lowcore::zx_lowcore* prev_lc =
+                    arch::s390x::cpu::lowcore::get_for_cpu(prev_cpu);
+                if (!prev_lc) [[unlikely]]
+                    arch::s390x::cpu::psw::load_disabled_wait_psw();
+
+                mcs::mcs_node* const prev_node = &prev_lc->percpu.qnodes[prev_idx];
+
                 prev_node->next.store(node, memory_order::release);
-                
-                // Wait for the signal from the predecessor.
-                while (node->locked.load(memory_order::acquire)) {
+
+                while (node->locked.load(memory_order::acquire))
                     arch::s390x::cpu::processor::cpu_relax();
-                }
+            } else {
+                while (m_val.load(memory_order::relaxed) & _Q_LOCKED_MASK)
+                    arch::s390x::cpu::processor::cpu_relax();
             }
 
-            // We are now at the head of the queue.
-            // Wait for both LOCKED and PENDING to be clear.
-            while (true) {
-                v = m_val.load(memory_order::relaxed);
-                if (!(v & _Q_LOCKED_MASK)) break;
-                arch::s390x::cpu::processor::cpu_relax();
+            u32 expected_solo = my_tail;
+            if (m_val.compare_exchange_strong(
+                    expected_solo, _Q_LOCKED_VAL,
+                    memory_order::acquire, memory_order::relaxed)) {
+                pcp.lock_depth--;
+                return;
             }
 
-            // Take the lock.
-            // If we are the only one in the queue, we can just clear the tail.
-            if (m_val.load(memory_order::relaxed) == encoded_tail) {
-                u32 expected = encoded_tail;
-                if (m_val.compare_exchange_strong(expected, _Q_LOCKED_VAL, memory_order::acquire, memory_order::relaxed)) {
-                    goto release_node;
-                }
-            }
-
-            // Others are behind us. Take lock but keep tail.
             (void)m_val.fetch_or(_Q_LOCKED_VAL, memory_order::acquire);
 
-            // Wait for our 'next' pointer to be set by the successor.
-            while (!node->next.load(memory_order::relaxed)) {
+            mcs::mcs_node* next_node;
+            while (!((next_node = node->next.load(memory_order::relaxed))))
                 arch::s390x::cpu::processor::cpu_relax();
-            }
 
-            // Signal the successor.
-            node->next.load(memory_order::acquire)->locked.store(0, memory_order::release);
+            next_node->locked.store(0, memory_order::release);
 
-        release_node:
-            cpu_data->lock_depth--;
+            pcp.lock_depth--;
         }
     };
 
-} // namespace zxfoundation::locking
+} // namespace zxfoundation::locking::qspinlock
 
 } // end export

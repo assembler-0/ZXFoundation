@@ -8,6 +8,7 @@ import lib.string_view;
 import lib.span;
 import lib.concepts;
 import lib.string;
+import lib.type_traits;
 
 export {
 
@@ -201,31 +202,84 @@ namespace lib::format {
         format_context ctx{buf};
         usize arg_idx = 0;
 
-        auto format_arg = [&]<typename T>(const T& val) {
-            formatter<unqualified<T>>{}.format(ctx, val);
+        auto write_hex = [&](u64 val, bool prefix, usize width, bool pad_zero) {
+            if (prefix) { ctx.write('0'); ctx.write('x'); }
+            char tmp[16];
+            const char* hc = "0123456789abcdef";
+            usize i = 0;
+            if (val == 0) tmp[i++] = '0';
+            else { auto v = val; while (v) { tmp[i++] = hc[v & 0xf]; v >>= 4; } }
+            if (width > i) for (usize p = 0; p < width - i; ++p) ctx.write(pad_zero ? '0' : ' ');
+            while (i > 0) ctx.write(tmp[--i]);
         };
 
-        auto dispatch_arg = [&](usize index) {
+        auto write_dec = [&](u64 val, usize width, bool pad_zero) {
+            char tmp[21]; usize i = 0;
+            if (val == 0) tmp[i++] = '0';
+            else { auto v = val; while (v) { tmp[i++] = '0' + (v % 10); v /= 10; } }
+            if (width > i) for (usize p = 0; p < width - i; ++p) ctx.write(pad_zero ? '0' : ' ');
+            while (i > 0) ctx.write(tmp[--i]);
+        };
+
+        // Dispatch one argument by index, with an optional format spec string.
+        auto dispatch = [&](usize index, string_view spec) {
+            // Parse spec: optional '#', optional width, optional type char (x/d/s)
+            bool alt = false; bool pad_zero = false; usize width = 0; char type_ch = 'd';
+            usize si = 0;
+            if (si < spec.size() && spec[si] == '#') { alt = true; ++si; }
+            if (si < spec.size() && spec[si] == '0') { pad_zero = true; ++si; }
+            while (si < spec.size() && spec[si] >= '0' && spec[si] <= '9')
+                width = width * 10 + static_cast<usize>(spec[si++] - '0');
+            if (si < spec.size()) type_ch = spec[si];
+
             usize i = 0;
-            (void)((i++ == index ? (format_arg(args), true) : false) || ...);
+            auto do_arg = [&]<typename T>(const T& val) {
+                if (i++ != index) return;
+                if (type_ch == 'x' || type_ch == 'X') {
+                    u64 v = 0;
+                    if constexpr (is_integral<unqualified<T>>) v = static_cast<u64>(val);
+                    else if constexpr (is_pointer<unqualified<T>>)
+                        v = reinterpret_cast<u64>(val);
+                    write_hex(v, alt, width, pad_zero);
+                } else if (type_ch == 's') {
+                    if constexpr (is_same<unqualified<T>, string_view>)
+                        ctx.write(val);
+                    else if constexpr (is_same<unqualified<T>, const char*>)
+                        ctx.write(val ? string_view(val) : "(null)");
+                    else
+                        formatter<unqualified<T>>{}.format(ctx, val);
+                } else {
+                    if constexpr (is_same<unqualified<T>, char>) {
+                        ctx.write(val);
+                    } else if constexpr (is_integral<unqualified<T>>) {
+                        if constexpr (is_signed<unqualified<T>>) {
+                            if (val < 0) { ctx.write('-'); write_dec(static_cast<u64>(-val), width, pad_zero); return; }
+                        }
+                        write_dec(static_cast<u64>(val), width, pad_zero);
+                    } else {
+                        formatter<unqualified<T>>{}.format(ctx, val);
+                    }
+                }
+            };
+            (do_arg(args), ...);
         };
 
         for (usize i = 0; i < fmt.size(); ++i) {
-            if (fmt[i] == '{' && i + 1 < fmt.size() && fmt[i+1] == '}') {
-                dispatch_arg(arg_idx++);
-                i++; // skip '}'
-            } else {
-                ctx.write(fmt[i]);
-            }
+            if (fmt[i] != '{') { ctx.write(fmt[i]); continue; }
+            // Find closing '}'
+            usize j = i + 1;
+            while (j < fmt.size() && fmt[j] != '}') ++j;
+            if (j >= fmt.size()) { ctx.write(fmt[i]); continue; }
+
+            string_view inner = fmt.substr(i + 1, j - i - 1);
+            // Strip leading ':'
+            string_view spec = inner.size() > 0 && inner[0] == ':' ? inner.substr(1) : string_view{};
+            dispatch(arg_idx++, spec);
+            i = j; // skip past '}'
         }
 
-        // Null-terminate if possible
-        if (ctx.offset < buf.size()) {
-            buf[ctx.offset] = '\0';
-        } else if (buf.size() > 0) {
-            buf[buf.size() - 1] = '\0';
-        }
-
+        if (ctx.offset < buf.size()) buf[ctx.offset] = '\0';
+        else if (buf.size() > 0) buf[buf.size() - 1] = '\0';
         return ctx.offset;
     }
 

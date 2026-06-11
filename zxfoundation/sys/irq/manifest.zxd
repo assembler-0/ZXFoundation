@@ -1,4 +1,3 @@
 !files : !compile_group -> [auto] {
-    entry.S
-    trap.cxxm
+    irqdesc.cxxm
 }

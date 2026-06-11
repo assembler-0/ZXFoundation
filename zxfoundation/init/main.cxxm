@@ -1,24 +1,30 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file main.cxxm
-/// @brief kernel main entry point
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/init/main.cxxm
+/// @brief Kernel main entry point
 
 export module zxfoundation.init.main;
 import zxfoundation.base.types;
 import zxfoundation.sys.time;
 import zxfoundation.sys.printk;
 import zxfoundation.base.config;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sys.syschk;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.psw;
+import arch.s390x.cpu.smp;
 import drivers.console.diag;
+import lib.error;
 
 export {
 
 namespace zxfoundation::init {
 
-    arch::s390x::init::zxfl::protocol protocol;
+    arch::s390x::init::zxfl::protocol boot_protocol;
 
 } // namespace zxfoundation::init
 
@@ -27,16 +33,17 @@ namespace zxfoundation::init {
 using zxfoundation::sys::printk::pinfo;
 
 extern "C" [[noreturn]] auto zxfoundation_global_initialize(
-     [[maybe_unused]] const arch::s390x::init::zxfl::protocol* protocol
+    const arch::s390x::init::zxfl::protocol* protocol
 ) noexcept -> void {
     if (!protocol) [[unlikely]]
         arch::s390x::cpu::psw::load_disabled_wait_psw();
-    zxfoundation::init::protocol = *protocol;
 
+    zxfoundation::init::boot_protocol = *protocol;
+
+    arch::s390x::cpu::lowcore::init_bsp(*protocol);
     arch::s390x::cpu::percpu::init_bsp();
-    arch::s390x::cpu::lowcore::init_bsp();
-    arch::s390x::cpu::lowcore::get_current()->kernel_stack = protocol->kernel_stack_top;
 
+    zxfoundation::sys::syschk::syschk_init(*protocol);
     zxfoundation::sys::time::initialize(protocol->tod_boot);
 
     zxfoundation::sys::printk::initialize();
@@ -44,14 +51,21 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     pinfo("sys: ZXFoundation (TM) {} - copyright (c) {} assembler-0 all rights reserved.\n",
         zxfoundation::base::config::CONFIG_ZX_RELEASE,
-        zxfoundation::base::config::CONFIG_ZX_COPYRIGHT_DATE
-    );
+        zxfoundation::base::config::CONFIG_ZX_COPYRIGHT_DATE);
 
     pinfo("sys: built on {} - {} with {}\n",
         zxfoundation::base::config::CONFIG_ZX_BUILD_DT_COMPILER,
         zxfoundation::base::config::CONFIG_ZX_BUILD_PLATFORM,
-        zxfoundation::base::config::CONFIG_ZX_COMPILER_ID
-    );
+        zxfoundation::base::config::CONFIG_ZX_COMPILER_ID);
+
+    zxfoundation::memory::pmm::init(*protocol);
+    zxfoundation::memory::pmm::reserve(protocol->lowcore_phys, 1);
+
+
+    zxfoundation::sys::irq::irq_subsystem_init();
+
+    arch::s390x::cpu::smp::init_bsp();
+    arch::s390x::cpu::smp::init_aps(*protocol);
 
     while (true)
         arch::s390x::cpu::processor::cpu_relax();

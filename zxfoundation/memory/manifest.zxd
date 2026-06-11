@@ -1,4 +1,6 @@
 !files : !compile_group -> [auto] {
     hhdm_types.cxxm
     hhdm.cxxm
+    pmm_types.cxxm
+    pmm.cxxm
 }

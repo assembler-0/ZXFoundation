@@ -1,0 +1,27 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file linksym.cxxm
+/// @brief linker script-exported symbols
+
+export module zxfoundation.base.linksym;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::base::linksym {
+
+    extern "C" {
+
+    extern u8 __rodata_start[];
+    extern u8 __rodata_end[];
+    extern u8 __data_start[];
+    extern u8 __data_end[];
+    extern u8 __bss_start[];
+    extern u8 __bss_end[];
+    extern u8 __zx_vma_start[];
+    extern u8 __zx_vma_end[];
+    
+    }
+
+}
+
+}

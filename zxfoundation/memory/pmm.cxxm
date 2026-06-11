@@ -1,0 +1,265 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/pmm.cxxm
+/// @brief Physical Memory Manager.
+
+export module zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.sched.irql;
+import zxfoundation.sys.transaction;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.base.types;
+import zxfoundation.cap.uoms;
+import zxfoundation.cap.cap_types;
+import zxfoundation.base.linksym;
+import zxfoundation.sys.syschk;
+import lib.util;
+import lib.error;
+import lib.expected;
+import lib.bitmap;
+import lib.string;
+import lib.array;
+import lib.algorithm;
+import arch.s390x.init.zxfl.protocol;
+import arch.s390x.cpu.lowcore;
+
+namespace zxfoundation::memory::pmm::_internal {
+
+    struct free_node { u64 next_phys{0}; u64 prev_phys{0}; };
+
+    struct buddy_zone {
+        u64 heads[MAX_ORDER + 1]{};
+        u64 counts[MAX_ORDER + 1]{};
+
+        auto push(u32 ord, u64 phys) noexcept -> void {
+            auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(phys));
+            n->next_phys = heads[ord];
+            n->prev_phys = 0;
+            if (heads[ord])
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(heads[ord]))->prev_phys = phys;
+            heads[ord] = phys;
+            ++counts[ord];
+        }
+        auto pop(u32 ord) noexcept -> u64 {
+            const u64 p = heads[ord];
+            if (!p) return 0;
+            auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(p));
+            heads[ord] = n->next_phys;
+            if (n->next_phys)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->next_phys))->prev_phys = 0;
+            --counts[ord];
+            return p;
+        }
+        auto remove(u32 ord, u64 phys) noexcept -> void {
+            auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(phys));
+            if (n->prev_phys)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->prev_phys))->next_phys = n->next_phys;
+            else
+                heads[ord] = n->next_phys;
+            if (n->next_phys)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->next_phys))->prev_phys = n->prev_phys;
+            --counts[ord];
+        }
+    };
+
+    static lib::static_bitmap<MAX_FRAMES> g_bitmap{};
+    static buddy_zone                     g_zones[static_cast<u32>(zone::count)]{};
+    static u64                            g_free_pages{0};
+    static u64                            g_total_pages{0};
+    static bool                           g_initialized{false};
+    static locking::qspinlock::qspinlock g_lock{};
+
+    constexpr auto zone_of(u64 phys) noexcept -> zone {
+        return phys < (2ULL << 30) ? zone::dma31 : zone::normal;
+    }
+
+    // Lock must be held by caller.
+    auto alloc_locked(u32 order, zone z) noexcept -> u64 {
+        auto& bz = g_zones[static_cast<u32>(z)];
+        for (u32 ord = order; ord <= MAX_ORDER; ++ord) {
+            const u64 phys = bz.pop(ord);
+            if (!phys) continue;
+            for (u32 s = ord; s > order; --s)
+                bz.push(s - 1, phys + (PAGE_SIZE << (s - 1)));
+            for (u64 i = 0; i < (1ULL << order); ++i)
+                g_bitmap.set_relaxed((phys >> 12) + i);
+            g_free_pages -= (1ULL << order);
+            return phys;
+        }
+        return 0;
+    }
+
+    // Lock must be held by caller.
+    auto free_locked(u64 phys, u32 order, zone z) noexcept -> void {
+        for (u64 i = 0; i < (1ULL << order); ++i)
+            g_bitmap.clear_relaxed((phys >> 12) + i);
+        g_free_pages += (1ULL << order);
+        auto& bz = g_zones[static_cast<u32>(z)];
+        for (u32 ord = order; ord < MAX_ORDER; ++ord) {
+            const u64 buddy = phys ^ (PAGE_SIZE << ord);
+            if (zone_of(buddy) != z || g_bitmap.test(buddy >> 12)) break;
+            bz.remove(ord, buddy);
+            phys = (phys < buddy) ? phys : buddy;
+        }
+        bz.push(order, phys);
+    }
+
+} // namespace zxfoundation::memory::pmm::_internal
+
+export {
+
+namespace zxfoundation::memory::pmm {
+
+    /// @brief Initialize PMM from the ZXFL boot protocol.  BSP calls once.
+    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {
+        using namespace _internal;
+        if (g_initialized) return;
+
+        const u64 bss_end_phys  = hhdm::virt_to_phys(reinterpret_cast<u64>(base::linksym::__bss_end));
+        const u64 reserve_start = proto.kernel_phys_start;
+        const u64 reserve_end   = lib::max(
+            lib::max(proto.kernel_phys_end, bss_end_phys),
+            proto.pgtbl_pool_end);
+
+        const auto* map = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
+            proto.mem_map_addr);
+
+        for (u32 i = 0; i < proto.mem_map_count; ++i) {
+            if (map[i].type != arch::s390x::init::zxfl::ZXFL_MEM_USABLE) continue;
+            u64 cur = (map[i].base + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+            const u64 end = (map[i].base + map[i].length) & ~(PAGE_SIZE - 1);
+            while (cur < end) {
+                // Jump over the reserved range in one step.
+                if (cur >= reserve_start && cur < reserve_end) {
+                    cur = (reserve_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+                    continue;
+                }
+                u32 ord = MAX_ORDER;
+                while (ord > 0 && ((cur & ((PAGE_SIZE << ord) - 1)) || cur + (PAGE_SIZE << ord) > end))
+                    --ord;
+                // Don't let a block straddle into the reserved range.
+                while (ord > 0 && cur < reserve_start && cur + (PAGE_SIZE << ord) > reserve_start)
+                    --ord;
+                const zone z = zone_of(cur);
+                g_zones[static_cast<u32>(z)].push(ord, cur);
+                g_free_pages  += 1ULL << ord;
+                g_total_pages += 1ULL << ord;
+                cur += PAGE_SIZE << ord;
+            }
+        }
+        g_initialized = true;
+    }
+
+    /// @brief Mark a loader-provided region as reserved (never re-allocated).
+    auto reserve(u64 phys, u32 order) noexcept -> void {
+        using namespace _internal;
+        const locking::irq_lock_guard guard{g_lock};
+        const zone z = zone_of(phys);
+        const u64 end = phys + (PAGE_SIZE << order);
+        for (u64 i = 0; i < (1ULL << order); ++i)
+            g_bitmap.set_relaxed((phys >> 12) + i);
+        auto& bz = g_zones[static_cast<u32>(z)];
+        for (u32 ord = 0; ord <= MAX_ORDER; ++ord) {
+            u64 cur = bz.heads[ord];
+            while (cur) {
+                auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(cur));
+                const u64 nxt = n->next_phys;
+                if (cur >= phys && cur < end) {
+                    bz.remove(ord, cur);
+                    g_free_pages -= 1ULL << ord;
+                }
+                cur = nxt;
+            }
+        }
+    }
+
+    constexpr u32 TXN_MAX = 16;
+
+    class transaction : public zxfoundation::transaction<transaction> {
+        friend class zxfoundation::transaction<transaction>;
+
+        struct entry { u64 phys{}; u32 order{}; zone z{}; };
+        lib::array<entry, TXN_MAX> m_slots{};
+        u32 m_count{0};
+
+        auto on_rollback() noexcept -> void {
+            using namespace _internal;
+            const locking::irq_lock_guard guard{g_lock};
+            for (u32 i = 0; i < m_count; ++i)
+                free_locked(m_slots[i].phys, m_slots[i].order, m_slots[i].z);
+        }
+
+    public:
+        transaction()                      noexcept = default;
+        transaction(const transaction&)             = delete;
+        auto operator=(const transaction&)          = delete;
+
+        [[nodiscard]] auto alloc(u32 order, zone z) noexcept
+            -> lib::expected<u64, lib::kernel_error> {
+            using namespace _internal;
+            if (committed() || m_count >= TXN_MAX)
+                return lib::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+            const auto lvl = sched::current_irql();
+            if (lvl >= sched::irql::dirql)
+                sys::syschk::syschk_fatal(
+                    lib::kernel_error::from_memory(lib::memory_error::irql_violation),
+                    "pmm: irql violation (IRQL_NOT_LESS_OR_EQUAL)"
+                );
+            if (lvl >= sched::irql::dispatch && order > 0)
+                sys::syschk::syschk_fatal(
+                    lib::kernel_error::from_memory(lib::memory_error::irql_violation),
+                    "pmm: irql violation (IRQL_NOT_LESS_OR_EQUAL)"
+                );
+            const locking::irq_lock_guard guard{g_lock};
+            const u64 phys = alloc_locked(order, z);
+            if (!phys)
+                return lib::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::zone_exhausted));
+            m_slots[m_count++] = { phys, order, z };
+            return phys;
+        }
+
+        [[nodiscard]] auto phys(u32 i) const noexcept -> u64 {
+            return (i < m_count) ? m_slots[i].phys : 0;
+        }
+        [[nodiscard]] auto count() const noexcept -> u32 { return m_count; }
+
+        /// @brief Commit and produce a ready phys_object + capability for slot i.
+        /// Zeros the page and transitions to ready state in one step.
+        /// @note  commit() must be called before mint().
+        template <purpose P, rights R = rights::all>
+        [[nodiscard]] auto mint(u32 i) noexcept
+            -> lib::expected<cap::capability<cap::tag_phys_region, R>, lib::kernel_error> {
+            if (!committed() || i >= m_count)
+                return lib::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::capability_invalid));
+            const auto& e = m_slots[i];
+            phys_object_fresh obj{ e.phys, e.order, P, e.z };
+            auto ready = lib::move(obj).make_ready();
+            return ready.mint<R>();
+        }
+    };
+
+    [[nodiscard]] auto alloc(u32 order, zone z) noexcept
+        -> lib::expected<u64, lib::kernel_error> {
+        transaction txn;
+        auto r = txn.alloc(order, z);
+        if (!r) return r;
+        txn.commit();
+        return r;
+    }
+
+    auto free(u64 phys, u32 order, zone z) noexcept -> void {
+        using namespace _internal;
+        const locking::irq_lock_guard guard{g_lock};
+        free_locked(phys, order, z);
+    }
+
+    [[nodiscard]] auto free_page_count()  noexcept -> u64 { return _internal::g_free_pages; }
+    [[nodiscard]] auto total_page_count() noexcept -> u64 { return _internal::g_total_pages; }
+
+} // namespace zxfoundation::memory::pmm
+
+} // end export

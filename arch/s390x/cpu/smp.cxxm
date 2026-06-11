@@ -1,40 +1,141 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file smp.cxxm
-/// @brief smp startup and helpers
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/smp.cxxm
+/// @brief SMP CPU bringup and IPI dispatch.
 
 export module arch.s390x.cpu.smp;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
-import zxfoundation.base.types;
+import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.percpu_types;
+import arch.s390x.cpu.sigp;
+import arch.s390x.cpu.sigp_types;
+import arch.s390x.cpu.psw;
+import arch.s390x.cpu.irq_frame;
+import arch.s390x.lib.atomic;
+import arch.s390x.init.zxfl.protocol;
+import arch.s390x.cpu.smp_types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.expected;
 import lib.error;
+import lib.string;
+
+// AP online counter — written by each AP in ap_startup, polled by BSP.
+static arch::s390x::lib::atomic::atomic<u32> g_ap_online{0};
 
 extern "C" {
-
-    auto ap_entry() -> void;
-    auto ap_dat_on() -> void;
+auto ap_entry() -> void;
+auto ap_dat_on() -> void;
 
     [[noreturn]] auto ap_startup() -> void {
+        // Enable IPI reception on this AP.
+        arch::s390x::cpu::processor::ctl_set_bit<0>(13); // SIGP emergency signal
+        arch::s390x::cpu::processor::ctl_set_bit<0>(14); // SIGP external call
+        (void)g_ap_online.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
         while (true)
             arch::s390x::cpu::processor::cpu_relax();
     }
+}
 
-} // extern "C"
+// IPI handler — registered with irqdesc at smp_init().
+static auto handle_ipi([[maybe_unused]] u16 irq,
+                       [[maybe_unused]] arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+                       [[maybe_unused]] void* data) noexcept -> void {
+    auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+    const u64 bits = __atomic_exchange_n(&pcp.ec_bits, 0ULL, __ATOMIC_SEQ_CST);
+    if (bits & arch::s390x::cpu::smp::EC_HALT_BIT)
+        arch::s390x::cpu::psw::load_disabled_wait_psw();
+}
 
 export {
 
 namespace arch::s390x::cpu::smp {
 
-    /// @brief Return the logical CPU ID (0-based, dense) for the executing CPU.
-    auto cpu_id() noexcept -> u16 {
-        const u16 id = *reinterpret_cast<const u16*>(zxfoundation::memory::hhdm::phys_to_virt(processor::get_prefix()) + lowcore::LC_CPU_ID_OFFSET);
-        if (id >= static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS))
-            return 0;
-        return id;
+    /// @brief Register IPI handlers and enable IPI reception on BSP.
+    auto init_bsp() noexcept -> void {
+        (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, handle_ipi, nullptr, 0);
+        (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   handle_ipi, nullptr, 0);
+        processor::ctl_set_bit<0>(13);
+        processor::ctl_set_bit<0>(14);
     }
 
-}
+    /// @brief Bring up all stopped APs from the boot protocol.
+    auto init_aps(const init::zxfl::protocol& proto) noexcept
+        -> ::lib::expected<u32, ::lib::kernel_error> {
+        using namespace zxfoundation::memory::pmm;
+        using namespace zxfoundation::memory;
+
+        if (!(proto.flags & init::zxfl::ZXFL_FLAG_SMP) || proto.cpu_count <= 1)
+            return 0U;
+
+        const u64 ap_entry_phys =
+            hhdm::virt_to_phys(reinterpret_cast<u64>(ap_entry));
+        const u64 kernel_asce = lowcore::get_current()->kernel_asce;
+        u64 cr0; processor::ctl_store<0, 0>(cr0);
+
+        u32 started = 0;
+
+        for (u32 i = 0; i < proto.cpu_count; ++i) {
+            const auto& ci = proto.cpu_map[i];
+            if (ci.cpu_addr == proto.bsp_cpu_addr) continue;
+            if (ci.state != init::zxfl::ZXFL_CPU_STOPPED) continue;
+
+            const u16 new_cpu_id = static_cast<u16>(i);
+
+            // Allocate lowcore (8 KB) + 3 stacks (16 KB each) atomically.
+            pmm::transaction txn;
+            auto lc_r    = txn.alloc(1, zone::dma31);
+            auto stk_r   = txn.alloc(2, zone::dma31);
+            auto async_r = txn.alloc(2, zone::dma31);
+            auto mcck_r  = txn.alloc(2, zone::dma31);
+            if (!lc_r || !stk_r || !async_r || !mcck_r) continue;
+            txn.commit();
+
+            const u64 lc_phys   = *lc_r;
+            const u64 stk_top   = *stk_r   + (PAGE_SIZE << 2);
+            const u64 async_top = *async_r  + (PAGE_SIZE << 2);
+            const u64 mcck_top  = *mcck_r   + (PAGE_SIZE << 2);
+
+            ::lib::memset(reinterpret_cast<void*>(hhdm::phys_to_virt(lc_phys)), 0, 8192);
+
+            auto* lc = reinterpret_cast<lowcore::zx_lowcore*>(hhdm::phys_to_virt(lc_phys));
+
+            lowcore::init_ap(*lc, lowcore::ap_init_params{
+                .phys_lc       = lc_phys,
+                .ap_entry_phys = ap_entry_phys,
+                .kernel_asce   = kernel_asce,
+                .ap_cr0        = cr0,
+                .ap_stack_phys = stk_top,
+                .cpu_id        = new_cpu_id,
+                .cpu_addr      = ci.cpu_addr,
+            });
+
+            lc->kernel_stack = hhdm::phys_to_virt(stk_top);
+            lc->async_stack  = hhdm::phys_to_virt(async_top);
+            lc->mcck_stack   = hhdm::phys_to_virt(mcck_top);
+
+            percpu::init_ap(*lc);
+            lowcore::register_cpu_lowcore(new_cpu_id, lc_phys);
+
+            u32 status{0};
+            sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_INITIAL_CPU_RESET, 0, status);
+            sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_SET_PREFIX,
+                            static_cast<u32>(lc_phys), status);
+            sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_RESTART, 0, status);
+            ++started;
+        }
+
+        while (g_ap_online.load(arch::s390x::lib::atomic::memory_order::seq_cst) < started)
+            processor::cpu_relax();
+
+        return started;
+    }
+
+} // namespace arch::s390x::cpu::smp
 
 } // end export

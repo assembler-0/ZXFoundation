@@ -2,4 +2,7 @@
     printk_types.cxxm
     printk.cxxm
     time.cxxm
+    transaction.cxxm
+    syschk_types.cxxm
+    syschk.cxxm
 }

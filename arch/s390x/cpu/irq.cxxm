@@ -1,66 +1,63 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file irq.cxxm
-/// @brief irq types and helpers
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/irq.cxxm
+/// @brief z/Architecture interrupt-mask control.
+///
+/// PSW byte 0 masking instructions:
+///   STNSM src, imm8 — store byte 0, then AND with imm8 (disable bits).
+///   STOSM dst, imm8 — store byte 0, then OR  with imm8 (enable bits).
+///   SSM   src       — load byte 0 from memory (restore arbitrary state).
+///
+/// irq_save_disable/irq_restore contract:
+///   Save via EPSW (full 64-bit mask word).  Restore via SSM using only byte 0
+///   extracted from the saved word — SSM is the only instruction that can
+///   unconditionally restore a "disabled" state; STOSM can only set bits.
 
 export module arch.s390x.cpu.irq;
+import arch.s390x.cpu.psw_types;
 import zxfoundation.base.types;
 import lib.bit;
 
 export {
 
 namespace arch::s390x::cpu::irq {
-    
-    auto save_flags() -> irqflags {
-        u32 hi, lo;
-        __asm__ volatile (
-            "epsw %[hi], %[lo]\n"
-            : [hi] "=d" (hi), [lo] "=d" (lo)
-            :
-            : "cc"
-        );
-        return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
-    }
 
-    auto irq_disable() -> void {
+    [[nodiscard]] auto irq_save_disable() noexcept -> irqflags {
+        psw::epsw_words w;
         u8 dummy;
         __asm__ volatile (
-            "stnsm  %0, 0xFC\n"
-            : "=Q" (dummy)
-            :
-            : "memory"
+            "epsw  %[hi], %[lo]\n\t"
+            "stnsm %[dummy], 0xFC\n\t"
+            : [hi] "=d"(w.hi), [lo] "=d"(w.lo), [dummy] "=Q"(dummy)
+            :: "memory", "cc"
         );
+        return lib::bit_cast<irqflags>(w);
     }
 
-    auto irq_enable() -> void {
+    /// @brief Restore PSW byte 0 from a saved irqflags.
+    /// PSW byte 0 = bits 0-7 of the mask word = hi_word >> 24.
+    auto irq_restore(const irqflags flags) noexcept -> void {
+        const auto w   = lib::bit_cast<psw::epsw_words>(flags);
+        const u8 byte0 = static_cast<u8>(w.hi >> 24);
+        __asm__ volatile ("ssm %[m]\n\t" :: [m] "Q"(byte0) : "memory");
+    }
+
+    auto irq_disable() noexcept -> void {
         u8 dummy;
-        __asm__ volatile (
-            "stosm  %0, 0x03\n"
-            : "=Q" (dummy)
-            :
-            : "memory"
-        );
+        __asm__ volatile ("stnsm %[d], 0xFC\n\t" : [d] "=Q"(dummy) :: "memory");
     }
 
-    auto irq_restore(irqflags flags) -> void {
-        const u8 irq_mask = static_cast<u8>(lib::bit_extract_msb(flags, 6, 7));
+    auto irq_enable() noexcept -> void {
         u8 dummy;
-        switch (irq_mask) {
-            case 0x03U: {
-                __asm__ volatile ("stosm %0, 0x03\n" : "=Q" (dummy) :: "memory");
-                break;
-            }
-            case 0x02U: {
-                __asm__ volatile ("stosm %0, 0x02\n" : "=Q" (dummy) :: "memory");
-                break;
-            }
-            case 0x01U: {
-                __asm__ volatile ("stosm %0, 0x01\n" : "=Q" (dummy) :: "memory");
-                break;
-            }
-            default: break;
-        }
+        __asm__ volatile ("stosm %[d], 0x03\n\t" : [d] "=Q"(dummy) :: "memory");
     }
 
-}
+    [[nodiscard]] auto irqs_enabled() noexcept -> bool {
+        psw::epsw_words w{};
+        __asm__ volatile ("epsw %[hi], %[lo]\n\t"
+            : [hi] "=d"(w.hi), [lo] "=d"(w.lo) :: "cc");
+        return (w.hi & 0x03000000U) != 0;
+    }
 
-}
+} // namespace arch::s390x::cpu::irq
+
+} // end export

@@ -12,6 +12,8 @@
     sigp_types.cxxm
     sigp.cxxm
     smp.cxxm
+    smp_types.cxxm
+    ipi.cxxm
     stfle_types.cxxm
     stfle.cxxm
     stsi_types.cxxm

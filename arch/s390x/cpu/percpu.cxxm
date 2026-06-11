@@ -1,30 +1,75 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file percpu.cxxm
-/// @brief s390x per-CPU data structures
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/percpu.cxxm
+/// @brief Per-CPU data initialization.
 
 export module arch.s390x.cpu.percpu;
+import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.processor;
+import zxfoundation.memory.hhdm;
+import zxfoundation.base.config;
 import zxfoundation.base.types;
-import lib.string;
 
 export {
 
 namespace arch::s390x::cpu::percpu {
 
-    auto init_bsp() -> void {
-        lowcore::zx_lowcore* lc = lowcore::get_current();
+    /// @brief Finish BSP per-CPU initialization.
+    ///
+    /// @note  lowcore::init_bsp() sets the core fields (cpu_id, cpu_addr,
+    ///        prefix_phys, kernel_stack, lock_depth, preempt_count).
+    ///        This function initializes the remaining fields (RCU, IPI, PMM).
+    ///        Call after lowcore::init_bsp() returns.
+    auto init_bsp() noexcept -> void {
+        s390x_percpu_data& pcp = lowcore::this_cpu_percpu();
 
-        ::lib::memset(&lc->percpu, 0, sizeof(lc->percpu));
+        pcp.rcu_gp_seq         = 0;
+        pcp.rcu_qs_seq         = 0;
+        pcp.in_rcu_read_side   = 0;
 
-        const uint16_t cpu_addr = processor::cpu_addr();
-        lc->percpu.prefix_base = 0;
-        lc->percpu.cpu_id      = 0;
-        lc->percpu.cpu_addr    = cpu_addr;
-        lc->percpu.lock_depth  = 0;
+        pcp.ipi_pending_count  = 0;
 
-        lowcore::__percpu_lowcore_area_raw[0] = lc;
+        for (u32 z = 0; z < PERCPU_ZONE_MAX; ++z)
+            pcp.pcp_list[z] = 0;
+
+        pcp.softirq_pending = 0;
+    }
+
+    /// @brief Finish AP per-CPU initialization.
+    ///
+    /// @param lc  HHDM-mapped pointer to the AP's lowcore.
+    ///
+    /// @note  Called from smp::bring_up_ap() AFTER lowcore::init_ap() has set
+    ///        the core fields.  Zeroes the remaining fields that lowcore::init_ap()
+    ///        does not touch.
+    auto init_ap(lowcore::zx_lowcore& lc) noexcept -> void {
+        s390x_percpu_data& pcp = lc.percpu;
+
+        pcp.rcu_gp_seq        = 0;
+        pcp.rcu_qs_seq        = 0;
+        pcp.in_rcu_read_side  = 0;
+
+        pcp.ipi_pending_count = 0;
+
+        pcp.softirq_pending   = 0;
+        pcp.current_task      = 0;
+        pcp.user_asce         = 0;
+
+        for (u32 z = 0; z < PERCPU_ZONE_MAX; ++z)
+            pcp.pcp_list[z] = 0;
+    }
+
+    /// @brief Return a reference to the current CPU's per-CPU block.
+    [[nodiscard]] inline auto this_cpu() noexcept -> s390x_percpu_data& {
+        return lowcore::this_cpu_percpu();
+    }
+
+    /// @brief get current cpu id
+    [[nodiscard]] inline auto cpu_id() noexcept -> u16 {
+        const u16 id = *reinterpret_cast<const volatile u16*>(
+            zxfoundation::memory::hhdm::phys_to_virt(lowcore::LC_CPU_ID_OFFSET));
+        return (id < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) ? id : 0;
     }
 
 } // namespace arch::s390x::cpu::percpu

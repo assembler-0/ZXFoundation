@@ -1,0 +1,45 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/transaction.cxxm
+/// @brief Generic kernel transaction base (CRTP).
+///
+/// Enforces the commit/rollback contract for all subsystem transactions.
+/// Derived types implement on_rollback() and get commit() for free.
+///
+/// Usage:
+///   class my_txn : public zxfoundation::transaction<my_txn> {
+///       friend class transaction<my_txn>;
+///       auto on_rollback() noexcept -> void { /* free tentative resources */ }
+///   };
+
+export module zxfoundation.sys.transaction;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation {
+
+    template <typename Derived>
+    class transaction {
+        bool m_committed{false};
+
+    protected:
+        ~transaction() noexcept {
+            if (!m_committed)
+                static_cast<Derived*>(this)->on_rollback();
+        }
+
+    public:
+        transaction()                            noexcept = default;
+        transaction(const transaction&)                   = delete;
+        auto operator=(const transaction&)                = delete;
+        transaction(transaction&&)               noexcept = default;
+
+        /// @brief Commit — disarms the rollback on destruction.
+        auto commit() noexcept -> void { m_committed = true; }
+
+        [[nodiscard]] auto committed() const noexcept -> bool { return m_committed; }
+    };
+
+} // namespace zxfoundation
+
+} // end export

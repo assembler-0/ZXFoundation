@@ -1,115 +1,171 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file lowcore.cxxm
-/// @brief z/Architecture lowcore definitions
+/// @file arch/s390x/cpu/lowcore.cxxm
+/// @brief Lowcore (prefix area) management: access, initialization, and AP setup.
+///
+/// HHDM access: the prefix register maps physical 0x0 → this CPU's lowcore.
+/// DAT on:  get_current() = hhdm(0x0)     — zero instructions overhead.
+/// DAT off: get_current_phys() = (zx_lowcore*)(0x0)
 
 export module arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.psw_types;
+import arch.s390x.cpu.psw;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.processor_types;
+import arch.s390x.lib.atomic;
 import zxfoundation.memory.hhdm;
-import zxfoundation.memory.hhdm_types;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import arch.s390x.init.zxfl.protocol;
 
-alignas(16) static u8 boot_async_stack[4096];
-alignas(16) static u8 boot_mcck_stack[4096];
+alignas(16) static u8 s_boot_async_stack[arch::s390x::cpu::processor::S390X_ASYNC_STACK_SIZE];
+alignas(16) static u8 s_boot_mcck_stack[arch::s390x::cpu::processor::S390X_MCCK_STACK_SIZE];
+alignas(16) static u8 s_boot_nodat_stack[arch::s390x::cpu::processor::S390X_NODAT_STACK_SIZE];
+alignas(16) static u8 s_boot_restart_stack[arch::s390x::cpu::processor::S390X_STACK_SIZE];
 
 extern "C" {
-
-auto trap_pgm_entry(void) -> void;
-auto trap_ext_entry(void) -> void;
-auto trap_io_entry(void) -> void;
-auto trap_mcck_entry(void) -> void;
-
+    auto trap_pgm_entry()  -> void;
+    auto trap_ext_entry()  -> void;
+    auto trap_io_entry()   -> void;
+    auto trap_mcck_entry() -> void;
+    auto ap_dat_on()       -> void;
 }
 
 export {
 
 namespace arch::s390x::cpu::lowcore {
 
-    zx_lowcore* __percpu_lowcore_area_raw[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS];
+    using atomic_ptr = lib::atomic::atomic<u64>;
 
-    /// @name Lowcore access
-    /// @{
+    /// @brief Physical addresses of each CPU's lowcore page, indexed by logical CPU ID.
+    /// Written with release, read with acquire to pair with the SIGP RESTART barrier.
+    atomic_ptr __percpu_lowcore_phys[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
-    /// @brief Get the current CPU's lowcore (prefix area) via HHDM.
-    /// @note Uses STPX instruction for O(1) location-agnostic access.
-    auto get_current() noexcept -> zx_lowcore* {
-        const u32 prefix = processor::get_prefix();
-        return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(prefix));
+    [[nodiscard]] inline auto get_current() noexcept -> zx_lowcore* {
+        return reinterpret_cast<zx_lowcore*>(
+            zxfoundation::memory::hhdm::phys_to_virt(0ULL));
     }
 
-    /// @brief Get the lowcore for a specific CPU.
-    /// @param cpu CPU logical index.
-    /// @return Pointer to the CPU's lowcore, or nullptr if invalid.
-    auto get_cpu(const u8 cpu) noexcept -> zx_lowcore* {
-        if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
+    [[nodiscard]] inline auto get_current_phys() noexcept -> zx_lowcore* {
+        return nullptr;
+    }
+
+    [[nodiscard]] auto get_for_cpu(const u16 cpu_id) noexcept -> zx_lowcore* {
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]]
             return nullptr;
-        return __percpu_lowcore_area_raw[cpu];
+        const u64 phys = __percpu_lowcore_phys[cpu_id].load(
+            lib::atomic::memory_order::acquire);
+        if (phys == 0) [[unlikely]]
+            return nullptr;
+        return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(phys));
     }
 
-    /// @}
-
-    /// @brief Write the restart new PSW into a lowcore for AP bringup.
-    /// @param lc         AP lowcore (HHDM-mapped pointer).
-    /// @param entry_phys Physical address of ap_entry.
-    auto set_restart_psw(zx_lowcore& lc, u64 entry_phys) noexcept -> void {
-        lc.restart_psw.mask = psw::PSW_MASK_KERNEL;
-        lc.restart_psw.addr = entry_phys;
+    auto register_cpu_lowcore(const u16 cpu_id, const u64 phys_lc) noexcept -> void {
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]]
+            return;
+        __percpu_lowcore_phys[cpu_id].store(
+            phys_lc, lib::atomic::memory_order::release);
     }
 
-    /// @brief Store the kernel ASCE into an AP's lowcore so ap_entry can load it.
-    /// @param lc   AP lowcore (HHDM-mapped pointer).
-    /// @param asce Kernel ASCE value (from CR1 on the BSP after mmu_init()).
-    auto set_kernel_asce(zx_lowcore& lc, uint64_t asce) noexcept -> void {
-        lc.kernel_asce = asce;
-    }
-
-    /// @brief Get current CPU's per-CPU data.
-    /// @return Reference to current CPU's per-CPU data.
-    inline auto this_cpu_percpu_data() noexcept -> percpu::s390x_percpu_data& {
+    [[nodiscard]] inline auto this_cpu_percpu() noexcept -> percpu::s390x_percpu_data& {
         return get_current()->percpu;
     }
 
-    /// @brief Get CPU per-CPU data.
-    /// @return Reference to specific CPU's per-CPU data.
-    inline auto cpu_percpu_data(const u8 cpu) noexcept -> percpu::s390x_percpu_data& {
-        return get_cpu(cpu)->percpu;
+    [[nodiscard]] auto cpu_percpu(const u16 cpu_id) noexcept -> percpu::s390x_percpu_data* {
+        zx_lowcore* lc = get_for_cpu(cpu_id);
+        return lc ? &lc->percpu : nullptr;
     }
 
-    /// @brief Install the four interrupt handler new PSWs into any lowcore.
-    auto install_handler_psws(zx_lowcore& lc) -> void {
-        lc.program_new_psw.mask  = psw::PSW_MASK_KERNEL_DAT;
-        lc.program_new_psw.addr  = reinterpret_cast<uintptr_t>(trap_pgm_entry);
-
-        lc.external_new_psw.mask = psw::PSW_MASK_KERNEL_DAT;
-        lc.external_new_psw.addr = reinterpret_cast<uintptr_t>(trap_ext_entry);
-
-        lc.io_new_psw.mask       = psw::PSW_MASK_KERNEL_DAT;
-        lc.io_new_psw.addr       = reinterpret_cast<uintptr_t>(trap_io_entry);
-
-        lc.mcck_new_psw.mask     = psw::PSW_MASK_KERNEL_DAT;
-        lc.mcck_new_psw.addr     = reinterpret_cast<uintptr_t>(trap_mcck_entry);
-
-        // TODO: syscall — SVC handler not yet implemented; disabled-wait is safe.
-        lc.svc_new_psw.mask      = psw::PSW_MASK_DISABLED_WAIT;
-        lc.svc_new_psw.addr      = 0x000000000DEAD1C0ULL;
+    auto install_handler_psws(zx_lowcore& lc) noexcept -> void {
+        lc.program_new_psw  = psw::make_handler_psw(reinterpret_cast<u64>(trap_pgm_entry));
+        lc.external_new_psw = psw::make_handler_psw(reinterpret_cast<u64>(trap_ext_entry));
+        lc.io_new_psw       = psw::make_handler_psw(reinterpret_cast<u64>(trap_io_entry));
+        lc.mcck_new_psw     = psw::make_handler_psw(reinterpret_cast<u64>(trap_mcck_entry));
+        lc.svc_new_psw      = psw::zx_psw{ .mask = psw::PSW_MASK_DISABLED_WAIT,
+                                            .addr = 0x0000000000DEAD1CULL };
     }
 
-    /// @brief Initialize the current (BSP) lowcore.
-    auto init_bsp() -> void {
-        zx_lowcore *lc = get_current();
+    /// @brief Initialize the BSP lowcore.  Must be called once after HHDM is active.
+    auto init_bsp(const init::zxfl::protocol& proto) noexcept -> void {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        const u32 bsp_prefix_phys = processor::get_prefix();
+#pragma GCC diagnostic pop
 
-        lc->async_stack = reinterpret_cast<uptr>(&boot_async_stack[4096]);
-        lc->mcck_stack  = reinterpret_cast<uptr>(&boot_mcck_stack[4096]);
+        register_cpu_lowcore(0, static_cast<u64>(bsp_prefix_phys));
+
+        zx_lowcore* lc = get_current();
+
+        lc->async_stack   = reinterpret_cast<u64>(s_boot_async_stack   + sizeof(s_boot_async_stack));
+        lc->mcck_stack    = reinterpret_cast<u64>(s_boot_mcck_stack    + sizeof(s_boot_mcck_stack));
+        lc->nodat_stack   = reinterpret_cast<u64>(s_boot_nodat_stack   + sizeof(s_boot_nodat_stack));
+        lc->restart_stack = reinterpret_cast<u64>(s_boot_restart_stack + sizeof(s_boot_restart_stack));
+        lc->kernel_stack  = proto.kernel_stack_top;
+        lc->kernel_asce   = proto.cr1_snapshot;
+        lc->user_asce     = 0ULL;
+        lc->ap_cr0        = proto.cr0_snapshot;
+        lc->ap_cr13       = proto.cr13_snapshot;
 
         install_handler_psws(*lc);
 
-        lc->restart_psw.mask = psw::PSW_MASK_DISABLED_WAIT;
-        lc->restart_psw.addr = psw::PSW_STD_HALT_ADDR;
+        lc->restart_psw   = psw::zx_psw{ .mask = psw::PSW_MASK_DISABLED_WAIT,
+                                          .addr = psw::PSW_STD_HALT_ADDR };
+
+        lc->percpu.prefix_phys  = static_cast<u64>(bsp_prefix_phys);
+        lc->percpu.cpu_id       = 0;
+        lc->percpu.cpu_addr     = processor::cpu_addr();
+        lc->percpu.kernel_stack = proto.kernel_stack_top;
+        lc->percpu.lock_depth   = 0;
+        lc->percpu.preempt_count = 0;
+        lc->percpu.irq_nesting  = 0;
+
+        lc->stack_canary  = processor::stck() ^ 0xC0FFEE00FACADE42ULL;
+        lc->cpu_nr        = 0;
+        lc->current_task  = 0;
+        lc->preempt_count = 0;
     }
 
-}
+    /// @brief Parameters for AP lowcore setup.
+    struct ap_init_params {
+        u64 phys_lc{};        ///< Physical address of the AP's 8 KB lowcore page.
+        u64 ap_entry_phys{};  ///< Physical address of ap_entry (DAT-off restart target).
+        u64 kernel_asce{};    ///< Kernel ASCE (CR1) to load before enabling DAT.
+        u64 ap_cr0{};         ///< CR0 snapshot to restore on AP.
+        u64 ap_stack_phys{};  ///< Physical top of AP's initial stack (for LC_RESTART_STACK).
+        u16 cpu_id{};         ///< Logical CPU ID assigned to this AP.
+        u16 cpu_addr{};       ///< Hardware CPU address (from SIGP/STAP).
+    };
 
-}
+    /// @brief Prepare an AP lowcore for SIGP RESTART.
+    /// @param lc   HHDM-mapped pointer to the AP's lowcore page.
+    /// @param p    AP initialization parameters.
+    auto init_ap(zx_lowcore& lc, const ap_init_params& p) noexcept -> void {
+        lc.restart_psw   = psw::make_ap_restart_psw(p.ap_entry_phys);
+
+        lc.ap_cr0        = p.ap_cr0;
+        lc.ap_cr13       = p.kernel_asce;
+        lc.kernel_asce   = p.kernel_asce;
+
+        lc.restart_stack = p.ap_stack_phys;
+
+        lc.return_psw    = psw::zx_psw{ .mask = psw::PSW_MASK_KERNEL_DAT,
+                                         .addr = reinterpret_cast<u64>(ap_dat_on) };
+
+        install_handler_psws(lc);
+
+        lc.percpu.prefix_phys   = p.phys_lc;
+        lc.percpu.cpu_id        = p.cpu_id;
+        lc.percpu.cpu_addr      = p.cpu_addr;
+        lc.percpu.ap_stack_phys = p.ap_stack_phys;
+        lc.percpu.lock_depth    = 0;
+        lc.percpu.preempt_count = 0;
+        lc.percpu.irq_nesting   = 0;
+
+        lc.stack_canary = processor::stck() ^ 0xC0FFEE00FACADE42ULL ^ static_cast<u64>(p.cpu_id);
+        lc.cpu_nr       = static_cast<u32>(p.cpu_id);
+    }
+
+} // namespace arch::s390x::cpu::lowcore
+
+} // end export

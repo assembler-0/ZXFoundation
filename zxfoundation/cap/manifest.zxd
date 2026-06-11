@@ -1,4 +1,4 @@
 !files : !compile_group -> [auto] {
-    entry.S
-    trap.cxxm
+    cap_types.cxxm
+    uoms.cxxm
 }

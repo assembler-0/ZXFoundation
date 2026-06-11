@@ -1,0 +1,176 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/syschk.cxxm
+/// @brief Last-resort global system teardown (system check).
+
+export module zxfoundation.sys.syschk;
+import zxfoundation.sys.syschk_types;
+import zxfoundation.sys.printk;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.psw;
+import arch.s390x.cpu.psw_types;
+import arch.s390x.cpu.ipi;
+import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
+import arch.s390x.init.zxfl.protocol;
+import arch.s390x.lib.atomic;
+import lib.error;
+import lib.string_view;
+import lib.string;
+
+namespace _internal {
+    using namespace zxfoundation::sys::syschk;
+    using namespace arch::s390x::lib::atomic;
+
+    /// @brief Atomic flag: set to 1 by the first CPU to call system_check.
+    ///        All subsequent callers see it set and go directly to disabled-wait
+    ///        without touching the crash record.
+    static atomic<u32> g_halting{0};
+
+    /// @brief Snapshot of the boot-protocol CPU map pointer, saved by syschk_init.
+    ///        Null until @ref syschk_init is called.
+    static const arch::s390x::init::zxfl::cpu_info* g_cpu_map{nullptr};
+
+    /// @brief Number of CPUs in @ref g_cpu_map.
+    static u32 g_cpu_count{0};
+
+    /// @brief Hardware CPU address of the BSP — used to skip self when halting APs.
+    static u16 g_bsp_cpu_addr{0};
+
+} // namespace _internal
+
+export {
+
+namespace zxfoundation::sys::syschk {
+
+    /// @brief Initialize the system-check subsystem.
+    ///
+    /// Must be called once during @c zxfoundation_global_initialize, after the
+    /// boot protocol has been copied into @c zxfoundation::init::boot_protocol
+    /// and before any subsystem that may call @ref system_check is brought up.
+    ///
+    /// @param[in] proto  The ZXFL boot protocol.
+    ///
+    /// @note  @ref system_check is safe to call even before @ref syschk_init
+    ///        (e.g., during very early lowcore setup).  In that case the SMP
+    ///        halt loop is simply skipped because @c g_cpu_map is null.
+    auto syschk_init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {
+        _internal::g_cpu_map       = proto.cpu_map;
+        _internal::g_cpu_count     = proto.cpu_count;
+        _internal::g_bsp_cpu_addr  = proto.bsp_cpu_addr;
+    }
+
+    /// @brief Halt the entire system and record a kernel error.
+    /// @param[in] err   The @ref lib::kernel_error that triggered this check.
+    ///                  Its @c category and @c code are stored verbatim in the
+    ///                  crash record — no translation occurs.
+    /// @param[in] sev   Severity annotation.  Affects the log level used and the
+    ///                  @c severity byte of the crash record.  All severity levels
+    ///                  currently result in an unconditional halt.
+    /// @param[in] msg   Human-readable reason string.  Truncated to
+    ///                  @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    /// @warning  Safe from any IRQL, including MCCK (dirql).
+    [[noreturn]] auto system_check(
+        lib::kernel_error   err,
+        syschk_severity     sev,
+        lib::string_view    msg
+    ) noexcept -> void {
+
+        (void)arch::s390x::cpu::irq::irq_save_disable();
+
+        u32 expected = 0;
+        if (!_internal::g_halting.compare_exchange_strong(
+                expected, 1U,
+                arch::s390x::lib::atomic::memory_order::seq_cst,
+                arch::s390x::lib::atomic::memory_order::relaxed)) [[unlikely]] {
+            arch::s390x::cpu::psw::load_disabled_wait_psw();
+        }
+
+        auto* lc  = arch::s390x::cpu::lowcore::get_current_phys();
+        auto* rec = reinterpret_cast<zx_crash_record*>(
+            reinterpret_cast<u8*>(lc) + ZX_CRASH_RECORD_OFFSET
+        );
+
+        rec->magic        = ZX_CRASH_RECORD_MAGIC;
+        rec->severity     = static_cast<u8>(sev);
+        rec->err_category = static_cast<u8>(err.category);
+        rec->err_code     = err.code;
+        rec->cpu_id       = arch::s390x::cpu::percpu::cpu_id();
+
+        // Capture current PSW (EPSW; addr is always 0 — PoP SA22-7832 §7.9.4).
+        const auto current_psw = arch::s390x::cpu::psw::extract_psw();
+        rec->psw_mask = current_psw.mask;
+        rec->psw_addr = current_psw.addr;
+
+        // Write the message — strncpy guarantees NUL termination.
+        lib::strncpy(rec->msg, msg.data(), ZX_CRASH_MSG_LEN);
+
+        printk::pemerg(
+            "syschk [{}] (cat={} code={:#x}): {}\n",
+            severity_name(sev),
+            static_cast<u32>(err.category),
+            err.code,
+            msg
+        );
+
+        if (_internal::g_cpu_map) {
+            const u16 self_hw_addr = arch::s390x::cpu::processor::cpu_addr();
+            for (u32 i = 0; i < _internal::g_cpu_count; ++i) {
+                const auto& ci = _internal::g_cpu_map[i];
+                if (ci.cpu_addr == self_hw_addr) [[unlikely]]
+                    continue;
+                arch::s390x::cpu::ipi::send_halt_ipi(static_cast<u16>(i));
+            }
+        }
+
+        arch::s390x::cpu::psw::load_disabled_wait_psw();
+    }
+
+    /// @brief Issue a fatal system check.
+    ///
+    /// @param[in] err  The @ref lib::kernel_error that triggered this check.
+    /// @param[in] msg  Human-readable reason string.
+    [[noreturn]] inline auto syschk_fatal(
+        lib::kernel_error err,
+        lib::string_view  msg
+    ) noexcept -> void {
+        system_check(err, syschk_severity::fatal, msg);
+    }
+
+    /// @brief Issue a critical system check.
+    ///
+    /// @param[in] err  The @ref lib::kernel_error that triggered this check.
+    /// @param[in] msg  Human-readable reason string.
+    [[noreturn]] inline auto syschk_critical(
+        lib::kernel_error err,
+        lib::string_view  msg
+    ) noexcept -> void {
+        system_check(err, syschk_severity::critical, msg);
+    }
+
+    /// @brief Issue a warning-level system check.
+    /// @note  Currently still halts; reserved for future non-halting warnings.
+    /// @param[in] err  The @ref lib::kernel_error that triggered this check.
+    /// @param[in] msg  Human-readable reason string.
+    [[noreturn]] inline auto syschk_warning(
+        lib::kernel_error err,
+        lib::string_view  msg
+    ) noexcept -> void {
+        system_check(err, syschk_severity::warning, msg);
+    }
+
+    /// @brief Halt with a fatal core invariant error if @p condition is false.
+    /// @param[in] condition  Expression that must be @c true.
+    /// @param[in] msg        Message emitted on failure.
+    /// @note  Use @c static_assert for compile-time invariants instead.
+    inline auto zx_assert(bool condition, lib::string_view msg) noexcept -> void {
+        if (!condition) [[unlikely]]
+            syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::code::unknown), msg);
+    }
+
+} // namespace zxfoundation::sys::syschk
+
+} // end export

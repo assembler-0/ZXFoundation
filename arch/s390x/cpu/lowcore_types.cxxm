@@ -1,171 +1,224 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file lowcore_types.cxxm
-/// @brief z/Architecture lowcore definitions
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/lowcore_types.cxxm
+/// @brief z/Architecture 8 KB prefix (lowcore) layout.
 
 export module arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.psw_types;
 import arch.s390x.cpu.percpu_types;
+import zxfoundation.sys.syschk_types;
 import zxfoundation.base.types;
 
 export {
 
 namespace arch::s390x::cpu::lowcore {
 
-    constexpr auto LOWCORE_SIZE     = 0x2000UL;
+    constexpr usize LOWCORE_SIZE = 0x2000UL; ///< 8 KiB per z/Architecture PoP.
 
-    /// @name Named lowcore field offsets.
-    /// @{
-    constexpr auto LC_RESTART_STACK = 0x0360UL; ///< < zx_lowcore_t::restart_stack
-    constexpr auto LC_MCCK_STACK    = 0x0368UL; ///< < zx_lowcore_t::mcck_stack
-    constexpr auto LC_KERNEL_ASCE   = 0x0388UL; ///< < zx_lowcore_t::kernel_asce
-    constexpr auto LC_RETURN_PSW    = 0x0290UL; ///< < zx_lowcore_t::return_psw
-    constexpr auto LC_KERNEL_STACK  = 0x0348UL; ///< < zx_lowcore_t::kernel_stack
-    constexpr auto LC_ASYNC_STACK   = 0x0350UL; ///< < zx_lowcore_t::async_stack
-    constexpr auto LC_AP_CR0        = 0x0330UL; ///< < zx_lowcore_t::ap_cr0
-    constexpr auto LC_AP_CR13       = 0x0338UL; ///< < zx_lowcore_t::ap_cr13
+    constexpr u64 LC_EXT_OLD_PSW    = 0x0130UL; ///< zx_lowcore::external_old_psw
+    constexpr u64 LC_SVC_OLD_PSW    = 0x0140UL; ///< zx_lowcore::svc_old_psw
+    constexpr u64 LC_PGM_OLD_PSW    = 0x0150UL; ///< zx_lowcore::program_old_psw
+    constexpr u64 LC_MCCK_OLD_PSW   = 0x0160UL; ///< zx_lowcore::mcck_old_psw
+    constexpr u64 LC_IO_OLD_PSW     = 0x0170UL; ///< zx_lowcore::io_old_psw
 
-    constexpr auto LC_EXT_OLD_PSW   = 0x0130UL;
-    constexpr auto LC_SVC_OLD_PSW   = 0x0140UL;
-    constexpr auto LC_PGM_OLD_PSW   = 0x0150UL;
-    constexpr auto LC_MCCK_OLD_PSW  = 0x0160UL;
-    constexpr auto LC_IO_OLD_PSW    = 0x0170UL;
+    constexpr u64 LC_RETURN_PSW     = 0x0290UL; ///< zx_lowcore::return_psw
+    constexpr u64 LC_KERNEL_STACK   = 0x0348UL; ///< zx_lowcore::kernel_stack
+    constexpr u64 LC_ASYNC_STACK    = 0x0350UL; ///< zx_lowcore::async_stack
+    constexpr u64 LC_NODAT_STACK    = 0x0358UL; ///< zx_lowcore::nodat_stack
+    constexpr u64 LC_RESTART_STACK  = 0x0360UL; ///< zx_lowcore::restart_stack
+    constexpr u64 LC_MCCK_STACK     = 0x0368UL; ///< zx_lowcore::mcck_stack
+    constexpr u64 LC_AP_CR0         = 0x0330UL; ///< zx_lowcore::ap_cr0  (software-defined)
+    constexpr u64 LC_AP_CR13        = 0x0338UL; ///< zx_lowcore::ap_cr13 (software-defined)
+    constexpr u64 LC_KERNEL_ASCE    = 0x0388UL; ///< zx_lowcore::kernel_asce
 
-    constexpr auto LC_PERCPU_OFFSET = 0x0400UL;
-    constexpr auto LC_CPU_ID_OFFSET = 0x0408UL;
-    /// @}
+    constexpr u64 LC_PERCPU_OFFSET  = 0x0400UL; ///< zx_lowcore::percpu
+    constexpr u64 LC_CPU_ID_OFFSET  = 0x0408UL; ///< percpu::cpu_id
+    constexpr u64 LC_IRQ_NESTING    = 0x0430UL; ///< percpu::irq_nesting — used by entry.S
 
+    /// @brief z/Architecture 8 KB prefix (lowcore) structure.
     struct alignas(8192) zx_lowcore {
-        u8     pad_0x0000[0x0014 - 0x0000]{};
-        u32    ipl_parmblock_ptr{};
-        u8     pad_0x0018[0x0080 - 0x0018]{};
+        u8     pad_0x0000[0x0014 - 0x0000]{};    /* 0x0000 */
+        u32    ipl_parmblock_ptr{};               /* 0x0014 */
+        u8     pad_0x0018[0x0080 - 0x0018]{};    /* 0x0018 */
 
-        u32    ext_params{};
-        u16    ext_cpu_addr{};
-        u16    ext_int_code{};
-        u16    svc_ilc{};
-        u16    svc_code{};
-        u16    pgm_ilc{};
-        u16    pgm_code{};
-        u32    data_exc_code{};
-        u16    mon_class_num{};
-        u16    per_perc_atmid{};
-        u64    per_address{};
-        u8     exc_access_id{};
-        u8     per_access_id{};
-        u8     op_access_id{};
-        u8     ar_access_id{};
-        u8     pad_0x00a4[0x00a8 - 0x00a4]{};
-        u64    trans_exc_code{};
-        u64    monitor_code{};
-        u16    subchannel_id{};
-        u16    subchannel_nr{};
-        u32    io_int_parm{};
-        u32    io_int_word{};
-        u8     pad_0x00c4[0x00c8 - 0x00c4]{};
-        u32    stfl_fac_list{};
-        u8     pad_0x00cc[0x00e8 - 0x00cc]{};
-        u64    mcck_interruption_code{};
-        u8     pad_0x00f0[0x00f4 - 0x00f0]{};
-        u32    external_damage_code{};
-        u64    failing_storage_address{};
-        u8     pad_0x0100[0x0110 - 0x0100]{};
-        u64    breaking_event_addr{};
-        u8     pad_0x0118[0x0120 - 0x0118]{};
+        u32    ext_params{};                      /* 0x0080 */
+        u16    ext_cpu_addr{};                    /* 0x0084 */
+        u16    ext_int_code{};                    /* 0x0086 */
 
-        psw::zx_psw    restart_old_psw{};
-        psw::zx_psw    external_old_psw{};
-        psw::zx_psw    svc_old_psw{};
-        psw::zx_psw    program_old_psw{};
-        psw::zx_psw    mcck_old_psw{};
-        psw::zx_psw    io_old_psw{};
-        u8     pad_0x0180[0x01a0 - 0x0180]{};
+        u16    svc_ilc{};                         /* 0x0088 */
+        u16    svc_code{};                        /* 0x008a */
+        u16    pgm_ilc{};                         /* 0x008c */
+        u16    pgm_code{};                        /* 0x008e */
+        u32    data_exc_code{};                   /* 0x0090 */
+        u16    mon_class_num{};                   /* 0x0094 */
+        u16    per_perc_atmid{};                  /* 0x0096 */
+        u64    per_address{};                     /* 0x0098 */
+        u8     exc_access_id{};                   /* 0x00a0 */
+        u8     per_access_id{};                   /* 0x00a1 */
+        u8     op_access_id{};                    /* 0x00a2 */
+        u8     ar_access_id{};                    /* 0x00a3 */
+        u8     pad_0x00a4[0x00a8 - 0x00a4]{};    /* 0x00a4 */
+        u64    trans_exc_code{};                  /* 0x00a8 */
+        u64    monitor_code{};                    /* 0x00b0 */
+        u16    subchannel_id{};                   /* 0x00b8 */
+        u16    subchannel_nr{};                   /* 0x00ba */
+        u32    io_int_parm{};                     /* 0x00bc */
+        u32    io_int_word{};                     /* 0x00c0 */
+        u8     pad_0x00c4[0x00c8 - 0x00c4]{};    /* 0x00c4 */
+        u32    stfl_fac_list{};                   /* 0x00c8 */
+        u8     pad_0x00cc[0x00e8 - 0x00cc]{};    /* 0x00cc */
+        u64    mcck_interruption_code{};          /* 0x00e8 */
+        u8     pad_0x00f0[0x00f4 - 0x00f0]{};    /* 0x00f0 */
+        u32    external_damage_code{};            /* 0x00f4 */
+        u64    failing_storage_address{};         /* 0x00f8 */
+        u8     pad_0x0100[0x0110 - 0x0100]{};    /* 0x0100 */
+        u64    breaking_event_addr{};             /* 0x0110 */
+        u8     pad_0x0118[0x0120 - 0x0118]{};    /* 0x0118 */
 
-        psw::zx_psw    restart_psw{};
-        psw::zx_psw    external_new_psw{};
-        psw::zx_psw    svc_new_psw{};
-        psw::zx_psw    program_new_psw{};
-        psw::zx_psw    mcck_new_psw{};
-        psw::zx_psw    io_new_psw{};
+        psw::zx_psw  restart_old_psw{};          /* 0x0120 */
+        psw::zx_psw  external_old_psw{};         /* 0x0130  LC_EXT_OLD_PSW  */
+        psw::zx_psw  svc_old_psw{};              /* 0x0140  LC_SVC_OLD_PSW  */
+        psw::zx_psw  program_old_psw{};          /* 0x0150  LC_PGM_OLD_PSW  */
+        psw::zx_psw  mcck_old_psw{};             /* 0x0160  LC_MCCK_OLD_PSW */
+        psw::zx_psw  io_old_psw{};               /* 0x0170  LC_IO_OLD_PSW   */
+        u8     pad_0x0180[0x01a0 - 0x0180]{};    /* 0x0180 */
 
+        psw::zx_psw  restart_psw{};              /* 0x01a0  PSW_LC_RESTART  */
+        psw::zx_psw  external_new_psw{};         /* 0x01b0  PSW_LC_EXTERNAL */
+        psw::zx_psw  svc_new_psw{};              /* 0x01c0  PSW_LC_SVC      */
+        psw::zx_psw  program_new_psw{};          /* 0x01d0  PSW_LC_PROGRAM  */
+        psw::zx_psw  mcck_new_psw{};             /* 0x01e0  PSW_LC_MCCK     */
+        psw::zx_psw  io_new_psw{};               /* 0x01f0  PSW_LC_IO       */
 
-        u64    save_area_sync[8]{};
-        u64    stack_canary{};
-        u8     pad_0x0248[0x0280 - 0x0248]{};
-        u64    save_area_restart[1]{};
-        u64    pcpu{};
+        u64    save_area_sync[8]{};               /* 0x0200 */
 
-        psw::zx_psw    return_psw{};
-        psw::zx_psw    return_mcck_psw{};
+        u64    stack_canary{};                    /* 0x0240 */
+        u8     pad_0x0248[0x0280 - 0x0248]{};    /* 0x0248 */
 
-        u64    last_break{};
+        u64    save_area_restart[1]{};            /* 0x0280 */
+        u64    pcpu{};                            /* 0x0288 */
 
-        u64    sys_enter_timer{};
-        u64    mcck_enter_timer{};
-        u64    exit_timer{};
-        u64    user_timer{};
-        u64    guest_timer{};
-        u64    system_timer{};
-        u64    hardirq_timer{};
-        u64    softirq_timer{};
-        u64    steal_timer{};
-        u64    avg_steal_timer{};
-        u64    last_update_timer{};
-        u64    last_update_clock{};
-        u64    int_clock{};
-        u8     pad_0x0320[0x0328 - 0x0320]{};
-        u64    clock_comparator{};
-        u64    ap_cr0{};
-        u64    ap_cr13{};
+        psw::zx_psw  return_psw{};               /* 0x0290  LC_RETURN_PSW   */
+        psw::zx_psw  return_mcck_psw{};          /* 0x02a0 */
+        u64    last_break{};                      /* 0x02b0 */
 
-        u64    current_task{};
-        u64    kernel_stack{};
+        u64    sys_enter_timer{};                 /* 0x02b8 */
+        u64    mcck_enter_timer{};                /* 0x02c0 */
+        u64    exit_timer{};                      /* 0x02c8 */
+        u64    user_timer{};                      /* 0x02d0 */
+        u64    guest_timer{};                     /* 0x02d8 */
+        u64    system_timer{};                    /* 0x02e0 */
+        u64    hardirq_timer{};                   /* 0x02e8 */
+        u64    softirq_timer{};                   /* 0x02f0 */
+        u64    steal_timer{};                     /* 0x02f8 */
+        u64    avg_steal_timer{};                 /* 0x0300 */
+        u64    last_update_timer{};               /* 0x0308 */
+        u64    last_update_clock{};               /* 0x0310 */
+        u64    int_clock{};                       /* 0x0318 */
+        u8     pad_0x0320[0x0328 - 0x0320]{};    /* 0x0320 */
+        u64    clock_comparator{};                /* 0x0328 */
 
-        u64    async_stack{};
-        u64    nodat_stack{};
-        u64    restart_stack{};
-        u64    mcck_stack{};
+        u64    ap_cr0{};                          /* 0x0330  LC_AP_CR0  */
+        u64    ap_cr13{};                         /* 0x0338  LC_AP_CR13 */
 
-        u64    restart_fn{};
-        u64    restart_data{};
-        u32    restart_source{};
-        u32    restart_flags{};
+        u64    current_task{};                    /* 0x0340 */
+        u64    kernel_stack{};                    /* 0x0348  LC_KERNEL_STACK  */
 
-        u64    kernel_asce{};
-        u64    user_asce{};
-        u32    lpp{};
-        u32    current_pid{};
+        u64    async_stack{};                     /* 0x0350  LC_ASYNC_STACK   */
+        u64    nodat_stack{};                     /* 0x0358  LC_NODAT_STACK   */
+        u64    restart_stack{};                   /* 0x0360  LC_RESTART_STACK */
+        u64    mcck_stack{};                      /* 0x0368  LC_MCCK_STACK    */
 
-        u32    cpu_nr{};
-        u32    softirq_pending{};
-        i32     preempt_count{};
-        u32    spinlock_lockval{};
-        u32    spinlock_index{};
-        u8     pad_0x03b4[0x0400 - 0x03b4]{};
+        u64    restart_fn{};                      /* 0x0370 */
+        u64    restart_data{};                    /* 0x0378 */
+        u32    restart_source{};                  /* 0x0380 */
+        u32    restart_flags{};                   /* 0x0384 */
 
-        percpu::s390x_percpu_data percpu{};
+        u64    kernel_asce{};                     /* 0x0388  LC_KERNEL_ASCE   */
+        u64    user_asce{};                       /* 0x0390 */
+
+        u32    lpp{};                             /* 0x0398 */
+        u32    current_pid{};                     /* 0x039c */
+
+        u32    cpu_nr{};                          /* 0x03a0 */
+        u32    softirq_pending{};                 /* 0x03a4 */
+        i32    preempt_count{};                   /* 0x03a8 */
+        u32    spinlock_lockval{};                /* 0x03ac */
+        u32    spinlock_index{};                  /* 0x03b0 */
+        u8     pad_0x03b4[0x03b8 - 0x03b4]{};    /* 0x03b4 */
+
+        u64    percpu_offset{};                   /* 0x03b8 */
+        u8     pad_0x03c0[0x0400 - 0x03c0]{};    /* 0x03c0 */
+
+        percpu::s390x_percpu_data  percpu{};      /* 0x0400 */
 
         u8     pad_percpu_end[0x1200 - (0x0400 + sizeof(percpu::s390x_percpu_data))]{};
 
-        u64    floating_pt_save_area[16]{};
-        u64    gpregs_save_area[16]{};
-        psw::zx_psw    psw_save_area{};
-        u8     pad_0x1310[0x1318 - 0x1310]{};
-        u32    prefixreg_save_area{};
-        u32    fpt_creg_save_area{};
-        u8     pad_0x1320[0x1324 - 0x1320]{};
-        u32    tod_progreg_save_area{};
-        u32    cpu_timer_save_area[2]{};
-        u32    clock_comp_save_area[2]{};
-        u64    last_break_save_area{};
-        u32    access_regs_save_area[16]{};
-        u64    cregs_save_area[16]{};
-        u8     pad_0x1400[0x1800 - 0x1400]{};
+        u64    floating_pt_save_area[16]{};       /* 0x1200 */
+        u64    gpregs_save_area[16]{};            /* 0x1280 */
+        psw::zx_psw  psw_save_area{};             /* 0x1300 */
+        u8     pad_0x1310[0x1318 - 0x1310]{};    /* 0x1310 */
+        u32    prefixreg_save_area{};             /* 0x1318 */
+        u32    fpt_creg_save_area{};              /* 0x131c */
+        u8     pad_0x1320[0x1324 - 0x1320]{};    /* 0x1320 */
+        u32    tod_progreg_save_area{};           /* 0x1324 */
+        u32    cpu_timer_save_area[2]{};          /* 0x1328 */
+        u32    clock_comp_save_area[2]{};         /* 0x1330 */
+        u64    last_break_save_area{};            /* 0x1338 */
+        u32    access_regs_save_area[16]{};       /* 0x1340 */
+        u64    cregs_save_area[16]{};             /* 0x1380 */
+        zxfoundation::sys::syschk::zx_crash_record crash_record{}; /* 0x1400 */
+        u8     pad_0x1400_rest[0x1800 - 0x1400 - sizeof(zxfoundation::sys::syschk::zx_crash_record)]{}; /* after crash_record */
 
-        u64    pgm_tdb[32]{};
-        u8     pad_0x1900[0x2000 - 0x1900]{};
+        u64    pgm_tdb[32]{};                     /* 0x1800 */
+        u8     pad_0x1900[0x2000 - 0x1900]{};    /* 0x1900 */
     };
-    static_assert(sizeof(zx_lowcore) == LOWCORE_SIZE, "zx_lowcore is not 8192 bytes");
 
-}
+    static_assert(sizeof(zx_lowcore) == LOWCORE_SIZE,
+        "zx_lowcore must be exactly 8192 bytes");
 
-}
+    static_assert(__builtin_offsetof(zx_lowcore, external_old_psw) == LC_EXT_OLD_PSW,
+        "LC_EXT_OLD_PSW mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, svc_old_psw) == LC_SVC_OLD_PSW,
+        "LC_SVC_OLD_PSW mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, program_old_psw) == LC_PGM_OLD_PSW,
+        "LC_PGM_OLD_PSW mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, mcck_old_psw) == LC_MCCK_OLD_PSW,
+        "LC_MCCK_OLD_PSW mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, io_old_psw) == LC_IO_OLD_PSW,
+        "LC_IO_OLD_PSW mismatch");
+
+    static_assert(__builtin_offsetof(zx_lowcore, return_psw) == LC_RETURN_PSW,
+        "LC_RETURN_PSW mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, kernel_stack) == LC_KERNEL_STACK,
+        "LC_KERNEL_STACK mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, async_stack) == LC_ASYNC_STACK,
+        "LC_ASYNC_STACK mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, nodat_stack) == LC_NODAT_STACK,
+        "LC_NODAT_STACK mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, restart_stack) == LC_RESTART_STACK,
+        "LC_RESTART_STACK mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, mcck_stack) == LC_MCCK_STACK,
+        "LC_MCCK_STACK mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, ap_cr0) == LC_AP_CR0,
+        "LC_AP_CR0 mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, ap_cr13) == LC_AP_CR13,
+        "LC_AP_CR13 mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, kernel_asce) == LC_KERNEL_ASCE,
+        "LC_KERNEL_ASCE mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, percpu) == LC_PERCPU_OFFSET,
+        "LC_PERCPU_OFFSET mismatch");
+
+    static_assert(
+        __builtin_offsetof(zx_lowcore, percpu) +
+        __builtin_offsetof(percpu::s390x_percpu_data, cpu_id) == LC_CPU_ID_OFFSET,
+        "LC_CPU_ID_OFFSET does not match actual cpu_id field offset in zx_lowcore; "
+        "update LC_CPU_ID_OFFSET to match");
+
+    static_assert(
+        __builtin_offsetof(zx_lowcore, percpu) +
+        __builtin_offsetof(percpu::s390x_percpu_data, irq_nesting) == LC_IRQ_NESTING,
+        "LC_IRQ_NESTING does not match irq_nesting field; update LC_IRQ_NESTING");
+
+} // namespace arch::s390x::cpu::lowcore
+
+} // end export

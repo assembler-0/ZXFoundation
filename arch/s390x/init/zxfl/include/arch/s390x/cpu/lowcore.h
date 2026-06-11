@@ -12,6 +12,8 @@
 /// @brief Named lowcore field offsets for use in assembly (.S) files.
 ///        These MUST stay in sync with the C struct layout below.
 ///        Verified by the _Static_assert at the bottom of this file.
+#define LC_ASYNC_STACK      0x0350UL    ///< zx_lowcore_t::async_stack
+#define LC_NODAT_STACK      0x0358UL    ///< zx_lowcore_t::nodat_stack
 #define LC_RESTART_STACK    0x0360UL    ///< zx_lowcore_t::restart_stack
 #define LC_MCCK_STACK       0x0368UL    ///< zx_lowcore_t::mcck_stack
 #define LC_KERNEL_ASCE      0x0388UL    ///< zx_lowcore_t::kernel_asce

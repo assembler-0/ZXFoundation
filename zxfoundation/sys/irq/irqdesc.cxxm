@@ -1,0 +1,130 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/irq/irqdesc.cxxm
+/// @brief Generic IRQ descriptor table backed by the UOMS capability system.
+
+export module zxfoundation.sys.irq.irqdesc;
+import zxfoundation.cap.cap_types;
+import zxfoundation.cap.uoms;
+import arch.s390x.cpu.irq_frame;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.base.types;
+import lib.expected;
+import lib.error;
+
+export {
+
+namespace zxfoundation::sys::irq {
+
+    constexpr u16 IRQ_NR_MAX    = 0x0400;
+    constexpr u16 IRQ_BASE_PGM  = 0x0000;
+    constexpr u16 IRQ_BASE_EXT  = 0x0100;
+    constexpr u16 IRQ_BASE_IO   = 0x0200;
+    constexpr u16 IRQ_BASE_MCCK = 0x0300;
+
+    constexpr u32 IRQF_SHARED   = 1U << 0;
+    constexpr u32 IRQF_DISABLED = 1U << 1;
+
+    using handler_fn = void(*)(u16 irq,
+                               arch::s390x::cpu::irq::arch_s390x_irq_frame*,
+                               void* data) noexcept;
+
+    /// @brief IRQ descriptor — kernel_object<tag_irq_line> backed.
+    struct irq_desc : cap::kernel_object<cap::tag_irq_line> {
+        handler_fn  handler{nullptr};
+        void*       data{nullptr};
+        u32         flags{0};
+        u32         count{0};   ///< Dispatch count (hot-path increment).
+        u16         irq_nr{0};
+        locking::qspinlock::qspinlock lock{};
+    };
+
+}
+
+}
+
+namespace zxfoundation::sys::irq {
+
+    namespace _internal {
+        static irq_desc g_table[IRQ_NR_MAX]{};
+        static bool     g_initialized{false};
+    }
+
+}
+export {
+
+namespace zxfoundation::sys::irq {
+
+    /// @brief Initialize the IRQ descriptor table.  Call once at boot.
+    auto irq_subsystem_init() noexcept -> void {
+        using namespace _internal;
+        if (g_initialized) return;
+        for (u16 i = 0; i < IRQ_NR_MAX; ++i)
+            g_table[i].irq_nr = i;
+        g_initialized = true;
+    }
+
+    /// @brief Register a handler and return a capability token.
+    /// @param irq     IRQ number (0–IRQ_NR_MAX-1).
+    /// @param handler Handler function.
+    /// @param data    Opaque data passed to the handler.
+    /// @param flags   IRQF_* flags.
+    [[nodiscard]] auto irq_register(u16 irq, handler_fn handler, void* data, u32 flags) noexcept
+        -> lib::expected<cap::capability<cap::tag_irq_line, cap::rights::write | cap::rights::destroy>,
+                         lib::kernel_error>
+    {
+        using namespace _internal;
+        if (irq >= IRQ_NR_MAX || !handler)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+
+        irq_desc& desc = g_table[irq];
+        const locking::irq_lock_guard guard{desc.lock};
+
+        if (desc.handler && !(flags & IRQF_SHARED))
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+
+        desc.handler = handler;
+        desc.data    = data;
+        desc.flags   = flags;
+
+        return desc.mint<cap::rights::write | cap::rights::destroy>();
+    }
+
+    /// @brief Unregister the handler for an IRQ.
+    auto irq_unregister(u16 irq) noexcept -> void {
+        using namespace _internal;
+        if (irq >= IRQ_NR_MAX) return;
+        irq_desc& desc = g_table[irq];
+        const locking::irq_lock_guard guard{desc.lock};
+        desc.handler = nullptr;
+        desc.data    = nullptr;
+        desc.flags   = 0;
+    }
+
+    /// @brief Dispatch an IRQ — called from C interrupt handlers.
+    auto irq_dispatch(u16 irq, arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+        using namespace _internal;
+        if (irq >= IRQ_NR_MAX) [[unlikely]] return;
+        irq_desc& desc = g_table[irq];
+        // Read handler under lock, then call outside to minimize lock hold time.
+        handler_fn h; void* d;
+        {
+            const locking::irq_lock_guard guard{desc.lock};
+            h = desc.handler; d = desc.data;
+        }
+        desc.count++;
+        if (h) h(irq, frame, d);
+    }
+
+    [[nodiscard]] auto irq_get_desc(u16 irq) noexcept -> irq_desc* {
+        using namespace _internal;
+        return (irq < IRQ_NR_MAX) ? &g_table[irq] : nullptr;
+    }
+
+} // namespace zxfoundation::sys::irq
+
+} // end export

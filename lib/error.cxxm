@@ -59,6 +59,11 @@ namespace lib {
             region_overlap      = 4,  ///< Memory regions overlap illegally.
             hhdm_init_failed    = 5,  ///< High-Half Direct Map initialization failed.
             page_fault          = 6,  ///< Page fault occurred.
+            irql_violation      = 7,  ///< Allocation attempted at elevated IRQL where it is forbidden.
+            transaction_aborted = 8,  ///< Transaction rolled back; no resources were committed.
+            capability_invalid  = 9,  ///< Capability token is null, revoked, or wrong purpose.
+            purpose_mismatch    = 10, ///< Capability purpose does not match the requested use.
+            zone_exhausted      = 11, ///< All pages in the target zone are allocated.
         };
     }
 

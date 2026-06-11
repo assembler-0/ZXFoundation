@@ -1,148 +1,183 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file processor.cxxm
-/// @brief Architecture-specific processor API.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/processor.cxxm
+/// @brief z/Architecture CPU instruction wrappers and hardware utilities.
+///
+/// This module exposes thin wrappers around individual z/Architecture
+/// instructions.  Each function is a direct mapping to one or a small
+/// sequence of hardware instructions with no policy logic.
 
 export module arch.s390x.cpu.processor;
 import zxfoundation.base.types;
-import zxfoundation.memory.hhdm;
-import zxfoundation.base.config;
-import arch.s390x.cpu.lowcore_types;
-import lib.util;
+import arch.s390x.cpu.processor_types;
 import lib.bit;
 
 export {
 
 namespace arch::s390x::cpu::processor {
 
-    /// @brief Issue the DIAG 8 instruction with a 64-bit buffer address.
-    auto diag8(const char *addr, u64 len) noexcept -> void {
+    /// @brief Compiler-only memory barrier.
+    inline auto barrier() noexcept -> void {
+        __asm__ volatile ("" ::: "memory");
+    }
+
+    /// @brief Spin-loop hint — call inside every busy-wait loop.
+    inline auto cpu_relax() noexcept -> void {
+        barrier();
+    }
+
+    /// @brief Yield the virtual CPU timeslice to the hypervisor (if running under one).
+    inline auto smp_yield() noexcept -> void {
+        cpu_relax();
+    }
+
+    /// @brief Store Clock (STCK) — stores the 64-bit TOD clock value.
+    /// @return 64-bit TOD clock value.
+    /// @note   STCK sets CC=1 if the clock is non-operational.  We ignore CC here;
+    ///         callers that need error handling should use stckf() with a facility check.
+    inline auto stck() noexcept -> u64 {
+        u64 tod;
+        __asm__ volatile ("stck %0" : "=Q" (tod) :: "cc", "memory");
+        return tod;
+    }
+
+    /// @brief Store Clock Fast (STCKF) — stores the 64-bit TOD clock faster.
+    /// @return 64-bit TOD clock value.
+    /// @note   Requires STFLE facility bit 25.  Caller must verify availability.
+    inline auto stckf() noexcept -> u64 {
+        u64 tod;
+        __asm__ volatile ("stckf %0" : "=Q" (tod) :: "cc", "memory");
+        return tod;
+    }
+
+    /// @brief Store Clock Extended (STCKE) — stores 128-bit TOD clock + epoch index.
+    /// @return 128-bit extended TOD value.
+    inline auto stcke() noexcept -> u128 {
+        u128 tod;
+        __asm__ volatile ("stcke %0" : "=Q" (tod) :: "cc", "memory");
+        return tod;
+    }
+
+    /// @brief Store Prefix (STPX) — returns the physical address in the Prefix Register.
+    /// @return Physical base address of the current CPU's lowcore.
+    [[deprecated("STPX is expensive — use lowcore::get_current() on the hot path")]]
+    auto get_prefix() noexcept -> u32 {
+        u32 prefix;
+        __asm__ volatile ("stpx %0" : "=m" (prefix));
+        return prefix;
+    }
+
+    /// @brief Set Prefix (SPX) — loads a new value into the Prefix Register.
+    /// @param prefix  New physical base address (must be 4 KB aligned).
+    auto set_prefix(const u32 prefix) noexcept -> void {
+        __asm__ volatile ("spx %0" :: "m" (prefix) : "memory");
+    }
+
+    /// @brief Store CPU Address (STAP) — returns the hardware CPU address.
+    /// @return The hardware CPU address used with SIGP instructions.
+    auto cpu_addr() noexcept -> u16 {
+        u16 addr;
+        __asm__ volatile ("stap %0" : "=m" (addr));
+        return addr;
+    }
+
+    /// @brief Set Storage Key (SSKE) — set the storage key for a 4 KB frame.
+    /// @param paddr  Physical address of the frame (4 KB aligned).
+    /// @param key    Storage key: bits 0–3 = access-control bits,
+    ///               bit 4 = fetch protection, bit 5 = reference, bit 6 = change.
+    auto set_storage_key(const u64 paddr, const u8 key) noexcept -> void {
+        __asm__ volatile (
+            "sske %[key], %[paddr]\n\t"
+            :
+            : [key]   "d" (static_cast<u64>(key)),
+              [paddr] "a" (paddr)
+            : "memory"
+        );
+    }
+
+    /// @brief Perform Frame Management Function (PFMF).
+    /// @param op1   Operand 1: contains the key, FC, and control bits.
+    /// @param phys  Physical address of the frame to manage.
+    auto pfmf(const u64 op1, const u64 phys) noexcept -> void {
+        __asm__ volatile (
+            "pfmf %[op1], %[addr]\n\t"
+            :
+            : [op1]  "d" (op1),
+              [addr] "a" (phys)
+            : "memory"
+        );
+    }
+
+    /// @brief Issue DIAG 8 (Diagnose 8) with a 64-bit buffer address.
+    /// @param addr  Buffer address (virtual, must be accessible).
+    /// @param len   Buffer length in bytes.
+    /// @note  Used for Hercules console output (DIAG 0x008).
+    auto diag8(const char* addr, const u64 len) noexcept -> void {
         register u64 r2 __asm__("2") = reinterpret_cast<uptr>(addr);
         register u64 r3 __asm__("3") = len;
-        __asm__ __volatile__ (
-            "diag %[r2], %[r3], 8\n"
+        __asm__ volatile (
+            "diag %[r2], %[r3], 8\n\t"
             :
             : [r2] "d" (r2), [r3] "d" (r3)
             : "memory"
         );
     }
 
-    /// @brief Store Clock (STCK) - stores the 64-bit TOD clock.
-    inline auto stck() noexcept -> u64 {
-        u64 tod;
-        __asm__ volatile("stck %0" : "=Q" (tod) : : "cc", "memory");
-        return tod;
-    }
-
-    /// @brief Store Clock Fast (STCKF) - stores the 64-bit TOD clock faster if facility 25 is present.
-    inline auto stckf() noexcept -> u64 {
-        u64 tod;
-        __asm__ volatile("stckf %0" : "=Q" (tod) : : "cc", "memory");
-        return tod;
-    }
-
-    /// @brief Store Clock Extended (STCKE) - stores the 128-bit TOD clock + epoch index.
-    inline auto stcke() noexcept -> u128 {
-        u128 tod;
-        __asm__ volatile("stcke %0" : "=Q" (tod) : : "cc", "memory");
-        return tod;
-    }
-
-    /// @brief Compiler memory barrier.
-    /// @note Prevents compiler reordering; does NOT emit hardware fence.
-    inline auto barrier() noexcept -> void {
-        __asm__ volatile("" ::: "memory");
-    }
-
-    /// @brief Generic spin-loop hint. Use inside every busy-wait loop.
-    inline auto cpu_relax() noexcept -> void {
-        barrier();
-    }
-
-    /// @brief Yield the virtual CPU timeslice to the hypervisor.
-    auto smp_yield() noexcept -> void {
-        cpu_relax();
-    }
-
-    /// @brief Set the Storage Key for a 4KB physical block.
-    /// @param paddr  Physical address (must be 4KB aligned).
-    /// @param key    Storage key: bits 0-3 = ACC, bit 4 = F, bit 5 = R, bit 6 = C.
-    auto set_storage_key(u64 paddr, u8 key) noexcept -> void {
-        __asm__ volatile (
-            "sske %[key], %[paddr]\n"
-            : : [key] "d" (static_cast<u64>(key)), [paddr] "a" (paddr) : "memory"
-        );
-    }
-
-    /// @brief Perform Frame Management Function.
-    auto pfmf(u64 op1, u64 phys) noexcept -> void {
-        __asm__ volatile (
-            "pfmf %[op1], %[addr]\n"
-            : : [op1] "d" (op1), [addr] "a" (phys) : "memory"
-        );
-    }
-
-
-    /// @brief stap — returns the hardware CPU address (used for SIGP, not as a logical ID).
-    auto cpu_addr() noexcept -> unsigned short {
-        unsigned short cpu_address;
-        __asm__ volatile("stap %0" : "=m" (cpu_address));
-        return cpu_address;
-    }
-
-    auto get_prefix() noexcept -> u32 {
-        u32 prefix;
-        __asm__ volatile("stpx %0" : "=m" (prefix));
-        return prefix;
-    }
-
-    auto set_prefix(u32 prefix) noexcept -> void {
-        __asm__ volatile("spx %0" : : "m" (prefix) : "memory");
-    }
-
-    /// @brief Stores control registers into an array or variable.
-    /// @tparam Low The starting control register index (0-15)
-    /// @tparam High The ending control register index (0-15)
+    /// @brief Store control registers [Low..High] into a storage area (STCTG).
+    /// @tparam Low   Starting control register index (0–15).
+    /// @tparam High  Ending control register index (0–15), must be ≥ Low.
+    /// @tparam T     Storage type; sizeof(T) must cover (High-Low+1) × 8 bytes.
+    /// @param  storage  Output buffer to receive the register values.
     template <u32 Low, u32 High, typename T>
-        requires (Low <= 15 && High <= 15 && sizeof(T) >= ((High - Low + 1) * 8))
+        requires (Low <= 15 && High <= 15 && Low <= High &&
+                  sizeof(T) >= (High - Low + 1) * 8)
     auto ctl_store(T& storage) noexcept -> void {
-        __asm__ volatile(
-            "    stctg  %1, %2, %0\n"
+        __asm__ volatile (
+            "stctg %1, %2, %0\n\t"
             : "=Q" (storage)
-            : "i" (Low), "i" (High)
+            : "i"  (Low), "i" (High)
             : "memory"
         );
     }
 
-    /// @brief Loads control registers from an array or variable.
-    /// @tparam Low The starting control register index (0-15)
-    /// @tparam High The ending control register index (0-15)
+    /// @brief Load control registers [Low..High] from a storage area (LCTLG).
+    /// @tparam Low   Starting control register index (0–15).
+    /// @tparam High  Ending control register index (0–15), must be ≥ Low.
+    /// @tparam T     Storage type; sizeof(T) must cover (High-Low+1) × 8 bytes.
+    /// @param  storage  Input buffer containing the new register values.
     template <u32 Low, u32 High, typename T>
-        requires (Low <= 15 && High <= 15 && sizeof(T) >= ((High - Low + 1) * 8))
+        requires (Low <= 15 && High <= 15 && Low <= High &&
+                  sizeof(T) >= (High - Low + 1) * 8)
     auto ctl_load(const T& storage) noexcept -> void {
-        __asm__ volatile(
-            "    lctlg  %1, %2, %0\n"
+        __asm__ volatile (
+            "lctlg %1, %2, %0\n\t"
             :
-            : "Q" (storage), "i" (Low), "i" (High)
+            : "Q"  (storage), "i" (Low), "i" (High)
             : "memory"
         );
     }
 
-    template <u32 ControlReg>
-    auto ctl_set_bit(u32 bit) noexcept -> void {
-        static_assert(ControlReg <= 15, "s390x only has control registers 0-15");
+    /// @brief Set a single bit (IBM MSB numbering) in a control register.
+    /// @tparam Reg  Control register index (0–15).
+    /// @param  bit  Bit number in IBM MSB-0 notation (bit 0 = MSB of the 64-bit register).
+    template <u32 Reg>
+    auto ctl_set_bit(const u32 bit) noexcept -> void {
+        static_assert(Reg <= 15, "s390x has only control registers 0–15");
         u64 reg;
-        ctl_store<ControlReg, ControlReg>(reg);
+        ctl_store<Reg, Reg>(reg);
         ::lib::bit_set_msb(reg, bit);
-        ctl_load<ControlReg, ControlReg>(reg);
+        ctl_load<Reg, Reg>(reg);
     }
 
-    template <u32 ControlReg>
-    auto ctl_clear_bit(u32 bit) noexcept -> void {
-        static_assert(ControlReg <= 15, "s390x only has control registers 0-15");
+    /// @brief Clear a single bit (IBM MSB numbering) in a control register.
+    /// @tparam Reg  Control register index (0–15).
+    /// @param  bit  Bit number in IBM MSB-0 notation.
+    template <u32 Reg>
+    auto ctl_clear_bit(const u32 bit) noexcept -> void {
+        static_assert(Reg <= 15, "s390x has only control registers 0–15");
         u64 reg;
-        ctl_store<ControlReg, ControlReg>(reg);
+        ctl_store<Reg, Reg>(reg);
         ::lib::bit_clear_msb(reg, bit);
-        ctl_load<ControlReg, ControlReg>(reg);
+        ctl_load<Reg, Reg>(reg);
     }
 
 } // namespace arch::s390x::cpu::processor

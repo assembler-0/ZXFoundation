@@ -1,6 +1,6 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file irq_frame.cxxm
-/// @brief irq frame for s390x
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/irq_frame.cxxm
+/// @brief z/Architecture interrupt/trap frame layout.
 
 export module arch.s390x.cpu.irq_frame;
 import zxfoundation.base.types;
@@ -9,31 +9,44 @@ export {
 
 namespace arch::s390x::cpu::irq {
 
-    /// Frame field offsets — used by entry.S to store/load without C structs.
-    constexpr auto IRQ_FRAME_GPRS     = 0x00U;
-    constexpr auto IRQ_FRAME_PSW_MASK = 0x80U;
-    constexpr auto IRQ_FRAME_PSW_ADDR = 0x88U;
-    /// Total frame size: 16 GPRs (128) + PSW mask (8) + PSW addr (8) = 144 = 0x90.
-    constexpr auto IRQ_FRAME_SIZE     = 0x90U;
+    /// @brief Offset of the GPR save area within the frame.
+    constexpr u32 IRQ_FRAME_GPRS      = 0x00U;
 
-    /// @brief Interrupt frame saved by entry.S on every trap/interrupt.
-    struct alignas(8) [[gnu::packed]] arch_s390x_irq_frame {
-        u64 gprs[16];  ///< General-purpose registers r0–r15 at interrupt time.
-        u64 psw_mask;  ///< Old PSW mask word (hardware-saved in lowcore).
-        u64 psw_addr;  ///< Old PSW instruction address (hardware-saved in lowcore).
+    /// @brief Offset of the saved old PSW mask word within the frame.
+    constexpr u32 IRQ_FRAME_PSW_MASK  = 0x80U; ///< = 16 GPRs × 8 bytes = 128 = 0x80.
+
+    /// @brief Offset of the saved old PSW instruction address within the frame.
+    constexpr u32 IRQ_FRAME_PSW_ADDR  = 0x88U; ///< = IRQ_FRAME_PSW_MASK + 8.
+
+    /// @brief Total size of the interrupt frame in bytes.
+    /// 16 GPRs (128 bytes) + PSW mask (8 bytes) + PSW addr (8 bytes) = 144 = 0x90.
+    constexpr u32 IRQ_FRAME_SIZE      = 0x90U;
+
+    /// @brief Interrupt frame saved by entry.S on every trap or interrupt.
+    struct [[gnu::packed]] alignas(8) arch_s390x_irq_frame {
+        u64 gprs[16]{};   ///< General-purpose registers r0–r15 at interrupt time.
+        u64 psw_mask{};   ///< Old PSW mask word (hardware-saved in lowcore, copied here).
+        u64 psw_addr{};   ///< Old PSW instruction address (hardware-saved, copied here).
     };
 
-    static_assert(sizeof(arch_s390x_irq_frame) == IRQ_FRAME_SIZE, "zx_irq_frame_t must be 144 bytes");
+    static_assert(sizeof(arch_s390x_irq_frame) == IRQ_FRAME_SIZE,
+        "arch_s390x_irq_frame size must be IRQ_FRAME_SIZE (0x90 = 144 bytes)");
+    static_assert(__builtin_offsetof(arch_s390x_irq_frame, psw_mask) == IRQ_FRAME_PSW_MASK,
+        "IRQ_FRAME_PSW_MASK offset mismatch");
+    static_assert(__builtin_offsetof(arch_s390x_irq_frame, psw_addr) == IRQ_FRAME_PSW_ADDR,
+        "IRQ_FRAME_PSW_ADDR offset mismatch");
 
     /// @brief Interrupt class tag — identifies which lowcore new-PSW slot fired.
+    /// @note  Passed to the unified C dispatcher so it can route to the correct
+    ///        subsystem handler.
     enum arch_s390x_irq_class : u8 {
-        ZX_IRQ_CLASS_PGM  = 0,  ///< Program check (0x01D0).
-        ZX_IRQ_CLASS_EXT  = 1,  ///< External interrupt (0x01B0).
-        ZX_IRQ_CLASS_IO   = 2,  ///< I/O interrupt (0x01F0).
-        ZX_IRQ_CLASS_MCCK = 3,  ///< Machine check (0x01E0).
-        ZX_IRQ_CLASS_SVC  = 4,  ///< Supervisor call (0x01C0).
+        ZX_IRQ_CLASS_PGM  = 0, ///< Program check (0x01D0).
+        ZX_IRQ_CLASS_EXT  = 1, ///< External interrupt (0x01B0).
+        ZX_IRQ_CLASS_IO   = 2, ///< I/O interrupt (0x01F0).
+        ZX_IRQ_CLASS_MCCK = 3, ///< Machine check (0x01E0).
+        ZX_IRQ_CLASS_SVC  = 4, ///< Supervisor call (0x01C0).
     };
 
-}
+} // namespace arch::s390x::cpu::irq
 
 } // end export

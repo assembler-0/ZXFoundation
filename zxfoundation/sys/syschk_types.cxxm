@@ -1,0 +1,60 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/syschk_types.cxxm
+/// @brief System-check crash record layout.
+
+export module zxfoundation.sys.syschk_types;
+import zxfoundation.base.types;
+import lib.error;
+
+export {
+
+namespace zxfoundation::sys::syschk {
+
+    /// @brief Severity annotation for a system-check event.
+    enum class syschk_severity : u8 {
+        warning  = 0x0U, ///< Non-fatal annotation; execution may theoretically continue.
+        critical = 0x1U, ///< Severe kernel invariant violation.
+        fatal    = 0x2U, ///< Unrecoverable condition; halt is unconditional.
+    };
+
+    /// @brief Return a short ASCII label for a severity level.
+    /// @param s  Severity to label.
+    /// @return   Statically allocated NUL-terminated string.
+    [[nodiscard]] constexpr auto severity_name(syschk_severity s) noexcept -> const char* {
+        switch (s) {
+            case syschk_severity::fatal:    return "fatal";
+            case syschk_severity::critical: return "critical";
+            case syschk_severity::warning:  return "warning";
+            default:                        return "unknown";
+        }
+    }
+
+    /// @brief Maximum length (bytes) of the crash message field, NUL included.
+    constexpr u32 ZX_CRASH_MSG_LEN = 128U;
+
+    /// @brief Magic value that marks an initialized @ref zx_crash_record.
+    ///        ASCII: "ZXCRUNCH".
+    constexpr u64 ZX_CRASH_RECORD_MAGIC = 0x5A584352554E4348ULL;
+
+    /// @brief Byte offset of the crash record within the lowcore prefix page.
+    constexpr u32 ZX_CRASH_RECORD_OFFSET = 0x1400U;
+
+    /// @brief Crash record written into the BSP lowcore on every @ref system_check call.
+    struct [[gnu::packed]] zx_crash_record {
+        u64  magic{};                 ///< ZX_CRASH_RECORD_MAGIC when record is valid.
+        u8   severity{};              ///< Raw @ref syschk_severity value.
+        u8   err_category{};          ///< @ref lib::error_category value of the triggering error.
+        u32  err_code{};              ///< Per-category error code.
+        u16  cpu_id{};                ///< Logical CPU ID of the reporting processor.
+        u8   _pad[4]{};               ///< Reserved; must be zero.
+        u64  psw_mask{};              ///< PSW mask word at time of check.
+        u64  psw_addr{};              ///< PSW instruction address at time of check.
+        char msg[ZX_CRASH_MSG_LEN]{}; ///< NUL-terminated human-readable reason string.
+    };
+
+    static_assert(sizeof(zx_crash_record) <= 256U,
+        "zx_crash_record must fit within the 256-byte budget at ZX_CRASH_RECORD_OFFSET");
+
+} // namespace zxfoundation::sys::syschk
+
+} // end export

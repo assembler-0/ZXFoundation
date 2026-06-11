@@ -1,6 +1,6 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file processor.cxxm
-/// @brief Architecture-specific processor API.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/processor_types.cxxm
+/// @brief s390x processor hardware constants.
 
 export module arch.s390x.cpu.processor_types;
 import zxfoundation.base.types;
@@ -9,7 +9,23 @@ export {
 
 namespace arch::s390x::cpu::processor {
 
+    /// @brief IBM z-series L1/L2 cache line size in bytes.
     constexpr usize S390X_CACHE_LINE_SIZE = 256;
+
+    /// @brief ABI-mandated minimum stack frame size for z/Architecture (SA22-7832 §6.2).
+    constexpr usize S390X_STACK_FRAME_SIZE = 160;
+
+    /// @brief Per-CPU stack size for the kernel stack and each interrupt stack.
+    constexpr usize S390X_STACK_SIZE = 0x4000; // 16 KiB
+
+    /// @brief Per-CPU machine-check stack size.
+    constexpr usize S390X_MCCK_STACK_SIZE = 0x4000; // 16 KiB
+
+    /// @brief Per-CPU async (interrupt) stack size.
+    constexpr usize S390X_ASYNC_STACK_SIZE = 0x4000; // 16 KiB
+
+    /// @brief Per-CPU no-DAT (nodat) stack size.
+    constexpr usize S390X_NODAT_STACK_SIZE = 0x2000; // 8 KiB
 
 } // namespace arch::s390x::cpu::processor
 

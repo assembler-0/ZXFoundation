@@ -9,6 +9,9 @@ export {
 
 namespace zxfoundation::locking::mcs {
 
+    /// @brief Maximum MCS spinlock nesting depth.
+    constexpr auto MCS_MAX_LOCK_DEPTH = 4U;
+
     /// @brief MCS node for queued spinlocks.
     struct mcs_node {
         arch::s390x::lib::atomic::atomic<mcs_node*> next{nullptr};

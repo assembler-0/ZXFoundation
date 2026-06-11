@@ -1,0 +1,21 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file smp_types.cxxm
+/// @brief smp types
+
+export module arch.s390x.cpu.smp_types;
+import zxfoundation.base.types;
+import zxfoundation.sys.irq.irqdesc;
+
+export {
+
+namespace arch::s390x::cpu::smp {
+
+    // 0x1201 and 0x1202 both fold to IRQ_BASE_EXT + 0x01 / 0x02 after the & 0xFF in trap.cxxm.
+    constexpr u16 IPI_IRQ_EMERGENCY = static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + 0x01);
+    constexpr u16 IPI_IRQ_EXTCALL   = static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + 0x02);
+
+    constexpr u64 EC_HALT_BIT = 1ULL << 1;
+
+} // namespace arch::s390x::cpu::smp
+
+} // end export

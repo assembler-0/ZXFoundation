@@ -1,0 +1,95 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/pmm_types.cxxm
+/// @brief Physical memory manager type definitions.
+
+export module zxfoundation.memory.pmm_types;
+import zxfoundation.base.types;
+import zxfoundation.cap.cap_types;
+import zxfoundation.cap.uoms;
+import zxfoundation.memory.hhdm;
+import lib.util;
+
+export {
+
+namespace zxfoundation::memory::pmm {
+
+    using cap::object_state;
+    using cap::rights;
+
+    constexpr u32 PAGE_SIZE   = 4096;
+    constexpr u32 MAX_ORDER   = 12;
+    constexpr u64 MAX_PHYS_GB = 512ULL;
+    constexpr u64 MAX_FRAMES  = (MAX_PHYS_GB << 30) >> 12;
+
+    /// @brief Physical zone — determines address range constraints.
+    enum class zone : u8 {
+        dma31  = 0, ///< [0, 2 GB): lowcores, AP stacks, CCW buffers.
+        normal = 1, ///< [2 GB, ∞): page tables, heap, object pools.
+        count  = 2,
+    };
+
+    /// @brief Semantic purpose of a physical allocation.
+    enum class purpose : u8 {
+        generic    = 0,
+        lowcore    = 1, ///< 8 KB AP/BSP prefix area; 8 KB aligned; zone::dma31.
+        stack      = 2,
+        page_table = 3,
+        device_dma = 4,
+        heap       = 5,
+    };
+
+    struct phys_range {
+        u64 base{};
+        u64 size{};
+        [[nodiscard]] constexpr auto end()         const noexcept -> u64 { return base + size; }
+        [[nodiscard]] constexpr auto frame_base()  const noexcept -> u64 { return base >> 12; }
+        [[nodiscard]] constexpr auto frame_count() const noexcept -> u64 { return size >> 12; }
+    };
+
+    template <purpose P> constexpr zone purpose_zone     = zone::normal;
+    template <>          constexpr zone purpose_zone<purpose::lowcore>    = zone::dma31;
+    template <>          constexpr zone purpose_zone<purpose::stack>      = zone::dma31;
+    template <>          constexpr zone purpose_zone<purpose::device_dma> = zone::dma31;
+
+    template <purpose P> constexpr u64 purpose_align     = 4096ULL;
+    template <>          constexpr u64 purpose_align<purpose::lowcore>    = 8192ULL;
+
+    template <object_state State = object_state::fresh>
+    class phys_object : public cap::kernel_object<cap::tag_phys_region, State> {
+    public:
+        u64     phys_base{0};
+        u32     order{0};
+        purpose use{purpose::generic};
+        zone    mem_zone{zone::normal};
+
+        phys_object() noexcept = default;
+        phys_object(u64 base, u32 ord, purpose p, zone z) noexcept
+            : phys_base(base), order(ord), use(p), mem_zone(z) {}
+
+        [[nodiscard]] auto page_count() const noexcept -> u64 { return 1ULL << order; }
+        [[nodiscard]] auto size_bytes() const noexcept -> u64 { return page_count() << 12; }
+        [[nodiscard]] auto virt()       const noexcept -> void* {
+            return reinterpret_cast<void*>(hhdm::phys_to_virt(phys_base));
+        }
+
+        [[nodiscard]] auto make_ready() && noexcept -> phys_object<object_state::ready> {
+            phys_object<object_state::ready> next;
+            next.phys_base = phys_base;
+            next.order     = order;
+            next.use       = use;
+            next.mem_zone  = mem_zone;
+            phys_base      = 0;
+            return next;
+        }
+    };
+
+    using phys_object_fresh = phys_object<object_state::fresh>;
+    using phys_object_ready = phys_object<object_state::ready>;
+
+    using phys_cap_rw     = cap::capability<cap::tag_phys_region, rights::read | rights::write>;
+    using phys_cap_manage = cap::capability<cap::tag_phys_region, rights::all>;
+    using phys_cap_ro     = cap::capability<cap::tag_phys_region, rights::read>;
+
+} // namespace zxfoundation::memory::pmm
+
+} // end export

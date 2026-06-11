@@ -1,55 +1,50 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file psw.cxxm
-/// @brief PSW (Program Status Word) operations.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/psw.cxxm
+/// @brief z/Architecture PSW operations.
 
 export module arch.s390x.cpu.psw;
 import arch.s390x.cpu.psw_types;
 import zxfoundation.base.types;
+import lib.bit;
 
 export {
 
 namespace arch::s390x::cpu::psw {
 
-    /// @brief Write a PSW pair directly to a physical lowcore offset.
-    /// @param lc_offset  Lowcore offset (PSW_LC_* constant).
-    /// @param mask       PSW mask word.
-    /// @param addr       PSW instruction address.
-    auto set_psw_raw(u64 lc_offset, u64 mask, u64 addr) noexcept -> void {
-        __asm__ volatile (
-            "stg %[mask], 0(%[off])\n"
-            "stg %[addr], 8(%[off])\n"
-            :
-            : [mask] "r" (mask),
-              [addr] "r" (addr),
-              [off]  "r" (lc_offset)
-            : "memory"
-        );
+    /// @brief Extract the current PSW mask via EPSW. addr is unavailable; set to 0.
+    [[nodiscard]] auto extract_psw() noexcept -> zx_psw {
+        epsw_words w;
+        __asm__ volatile ("epsw %[hi], %[lo]"
+            : [hi] "=d"(w.hi), [lo] "=d"(w.lo) :: "cc");
+        return zx_psw{.mask = lib::bit_cast<u64>(w), .addr = 0ULL};
     }
 
-    /// @brief Extract the current PSW via EPSW.
-    /// @return zx_psw_t with mask populated; addr is not available from EPSW and is set to 0.
-    auto extract_psw() noexcept -> zx_psw {
-        u32 hi, lo;
-        __asm__ volatile("epsw %[hi], %[lo]" : [hi] "=d"(hi), [lo] "=d"(lo) :: "cc");
-        return zx_psw {
-            .mask = (static_cast<u64>(hi) << 32) | static_cast<u64>(lo),
-            .addr = 0
-        };
-    }
-
-    /// @brief Load a PSW via LPSWE.
     [[noreturn]] auto load_psw(const zx_psw& psw) noexcept -> void {
-        __asm__ volatile("lpswe %0" :: "Q"(psw) : "memory");
+        __asm__ volatile ("lpswe %0" :: "Q"(psw) : "memory", "cc");
         __builtin_unreachable();
     }
 
-    /// @brief Enter the disabled wait state.
     [[noreturn]] auto load_disabled_wait_psw() noexcept -> void {
-        alignas(8) static constexpr zx_psw halt_psw = {
-            .mask = PSW_MASK_DISABLED_WAIT,
-            .addr = PSW_STD_HALT_ADDR,
+        alignas(8) static constexpr zx_psw halt = {
+            .mask = PSW_MASK_DISABLED_WAIT, .addr = PSW_STD_HALT_ADDR
         };
-        load_psw(halt_psw);
+        load_psw(halt);
+    }
+
+    auto write_psw_to_lowcore(u64 lc_offset, u64 mask, u64 addr) noexcept -> void {
+        __asm__ volatile (
+            "stg %[mask], 0(%[off])\n\t"
+            "stg %[addr], 8(%[off])\n\t"
+            :: [mask] "r"(mask), [addr] "r"(addr), [off] "a"(lc_offset) : "memory"
+        );
+    }
+
+    [[nodiscard]] constexpr auto make_handler_psw(u64 entry_virt) noexcept -> zx_psw {
+        return zx_psw{.mask = PSW_MASK_KERNEL_DAT, .addr = entry_virt};
+    }
+
+    [[nodiscard]] constexpr auto make_ap_restart_psw(u64 entry_phys) noexcept -> zx_psw {
+        return zx_psw{.mask = PSW_MASK_KERNEL, .addr = entry_phys};
     }
 
 } // namespace arch::s390x::cpu::psw
