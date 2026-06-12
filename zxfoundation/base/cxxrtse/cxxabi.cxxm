@@ -1,0 +1,165 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file cxxabi.cxxm
+/// @brief minimal cxxabi implementation
+
+export module zxfoundation.base.cxxrtse.cxxabi;
+import zxfoundation.sys.syschk;
+import zxfoundation.locking.qspinlock;
+import lib.error;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.psw;
+
+namespace {
+
+constexpr unsigned long CXA_ATEXIT_MAX = 256;
+
+struct AtExitEntry {
+    void (*destructor)(void*);
+    void* obj;
+    void* dso;
+};
+
+AtExitEntry g_atexit_table[CXA_ATEXIT_MAX];
+unsigned long g_atexit_count = 0;
+
+zxfoundation::locking::qspinlock::qspinlock g_atexit_lock{};
+auto atexit_lock() noexcept -> void {
+    g_atexit_lock.lock();
+}
+
+auto atexit_unlock() noexcept -> void{
+    g_atexit_lock.unlock();
+}
+
+} // anonymous namespace
+
+extern "C" {
+
+auto __cxa_atexit(void (*destructor)(void*), void* obj, void* dso) -> int{
+    if (!destructor) return 0;
+    atexit_lock();
+    if (g_atexit_count >= CXA_ATEXIT_MAX) {
+        atexit_unlock();
+        arch::s390x::cpu::psw::load_disabled_wait_psw();
+    }
+    g_atexit_table[g_atexit_count++] = { destructor, obj, dso };
+    atexit_unlock();
+    return 0;
+}
+
+auto __cxa_finalize(void* dso) -> void {
+    const unsigned long snap = __atomic_load_n(&g_atexit_count, __ATOMIC_ACQUIRE);
+    for (long i = static_cast<long>(snap) - 1; i >= 0; --i) {
+        AtExitEntry& e = g_atexit_table[i];
+        if (!e.destructor) continue;
+        if (dso && e.dso != dso) continue;
+        void (*fn)(void*) = e.destructor;
+        void* obj = e.obj;
+        atexit_lock();
+        e.destructor = nullptr;
+        atexit_unlock();
+        fn(obj);
+    }
+}
+
+static constexpr unsigned long long GUARD_INITIALIZED  = 1ULL << 0;
+static constexpr unsigned long long GUARD_IN_PROGRESS  = 1ULL << 1;
+
+auto __cxa_guard_acquire(unsigned long long* g) -> int {
+    if (__atomic_load_n(g, __ATOMIC_ACQUIRE) & GUARD_INITIALIZED) return 0;
+
+    unsigned long long expected = 0;
+    if (__atomic_compare_exchange_n(g, &expected,
+                                    GUARD_IN_PROGRESS,
+                                    false,
+                                    __ATOMIC_ACQUIRE,
+                                    __ATOMIC_RELAXED)) {
+        return 1; // We won — caller must initialize.
+    }
+
+    while (!(__atomic_load_n(g, __ATOMIC_ACQUIRE) & GUARD_INITIALIZED))
+        ;
+    return 0;
+}
+
+auto __cxa_guard_release(unsigned long long* g) -> void {
+    __atomic_store_n(g, GUARD_INITIALIZED, __ATOMIC_RELEASE);
+}
+
+auto __cxa_guard_abort(unsigned long long* g) -> void {
+    __atomic_store_n(g, 0ULL, __ATOMIC_RELEASE);
+}
+
+[[noreturn]] auto __cxa_pure_virtual() -> void {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_pure_virtual(): call to pure virtual function. "
+        "Object is being used before its derived constructor completed "
+        "or the vtable is corrupt."
+    );
+}
+
+[[noreturn]] auto __cxa_deleted_virtual() -> void {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_deleted_virtual(): call to explicitly deleted virtual function. "
+        "The vtable is corrupt or an invalid base pointer was used."
+    );
+}
+
+[[noreturn]] auto __cxa_bad_typeid() -> void {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_bad_typeid(): typeid applied to a null pointer. "
+        "A pre-compiled object file likely contains RTTI usage."
+    );
+}
+
+[[noreturn]] auto __cxa_throw(void *, void *, void (*)(void *)) -> void {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_throw(3): C++ exception thrown in a no-exception kernel context. "
+        "A pre-compiled object file likely "
+        "contains exception-throwing code that is incompatible with FoundationKit."
+    );
+}
+
+[[noreturn]] auto __cxa_rethrow() -> void {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_rethrow(): rethrow attempted in a no-exception context. "
+    );
+}
+
+auto __cxa_begin_catch(void*) -> void* {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_begin_catch(): catch block entered in a no-exception context."
+    );
+}
+
+auto __cxa_end_catch() -> void {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_end_catch(): end-catch reached in a no-exception context."
+    );
+}
+
+auto __cxa_allocate_exception(unsigned long) -> void* {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_allocate_exception(): exception object allocation attempted "
+        "in a no-exception context."
+    );
+}
+
+auto __cxa_free_exception(void*) -> void* {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
+        "cxxabi: __cxa_free_exception(): exception object deallocation attempted "
+        "in a no-exception context."
+    );
+}
+
+
+} // extern "C"

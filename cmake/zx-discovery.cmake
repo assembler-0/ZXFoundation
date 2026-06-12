@@ -1,6 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # cmake/zx-discovery.cmake — Manifest-based source discovery DSL (Refactored)
 
+function(_zx_parse_compiler_options INPUT_LINE OUTPUT_LIST)
+    # Match !compiler_id:id(opts) OR any token that doesn't have spaces
+    string(REGEX MATCHALL "(!compiler_id:[a-zA-Z0-9_]+\\([^\\)]+\\)|[^ ]+)" _PARTS "${INPUT_LINE}")
+    
+    set(_RESULT "")
+    foreach(PART ${_PARTS})
+        if(PART MATCHES "^!compiler_id:([a-zA-Z0-9_]+)\\((.+)\\)$")
+            set(CID "${CMAKE_MATCH_1}")
+            set(COPTS "${CMAKE_MATCH_2}")
+            if(CID STREQUAL "${COMPILER_ID}")
+                string(REPLACE " " ";" _COPTS_LIST "${COPTS}")
+                list(APPEND _RESULT ${_COPTS_LIST})
+            endif()
+        else()
+            list(APPEND _RESULT "${PART}")
+        endif()
+    endforeach()
+    set(${OUTPUT_LIST} "${_RESULT}" PARENT_SCOPE)
+endfunction()
+
 function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
     message(STATUS "zx_discovery: scanning for manifests in ${ROOT_DIR}")
 
@@ -112,7 +132,8 @@ function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
                 list(APPEND GLOBAL_DEFINES ${LINE})
 
             elseif(SECTION STREQUAL "OPTIONS")
-                list(APPEND GLOBAL_OPTIONS ${LINE})
+                _zx_parse_compiler_options("${LINE}" _PARSED_OPTIONS)
+                list(APPEND GLOBAL_OPTIONS ${_PARSED_OPTIONS})
 
             elseif(SECTION STREQUAL "FILES")
                 set(FILE_NAME "")
@@ -121,7 +142,7 @@ function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
                 # Regex for: filename !compile_options -> [ flags ]
                 if(LINE MATCHES "^([^ ]+)[ ]+!compile_options[ ]*->[ ]*\\[(.+)\\]")
                     set(FILE_NAME "${CMAKE_MATCH_1}")
-                    set(FILE_FLAGS "${CMAKE_MATCH_2}")
+                    _zx_parse_compiler_options("${CMAKE_MATCH_2}" FILE_FLAGS)
                 else()
                     set(FILE_NAME "${LINE}")
                 endif()

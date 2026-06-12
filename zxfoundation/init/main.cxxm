@@ -10,6 +10,7 @@ import zxfoundation.base.config;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.scoms.scoms;
 import zxfoundation.sys.syschk;
 import zxfoundation.memory.hhdm;
 import arch.s390x.init.zxfl.protocol;
@@ -165,14 +166,16 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
         zxfoundation::base::config::CONFIG_ZX_RELEASE,
         zxfoundation::base::config::CONFIG_ZX_COPYRIGHT_DATE);
 
-    pinfo("sys: built on {} - {} with {}\n",
+    pinfo("sys: built on {} - {} with {}. build no #{} \n",
         zxfoundation::base::config::CONFIG_ZX_BUILD_DT_COMPILER,
         zxfoundation::base::config::CONFIG_ZX_BUILD_PLATFORM,
-        zxfoundation::base::config::CONFIG_ZX_COMPILER_ID);
+        zxfoundation::base::config::CONFIG_ZX_COMPILER_ID,
+        zxfoundation::base::config::CONFIG_ZX_BUILD_NUMBER);
 
     zxfoundation::memory::pmm::init(*protocol);
     zxfoundation::memory::pmm::reserve(protocol->lowcore_phys, 1);
 
+    zxfoundation::scoms::init();
     zxfoundation::sys::irq::irq_subsystem_init();
 
     arch::s390x::cpu::smp::init_bsp();

@@ -1,0 +1,24 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/zxallsyms_types.cxxm
+/// @brief Public types for the global kernel symbol table.
+
+export module zxfoundation.sys.zxallsyms_types;
+import zxfoundation.base.types;
+import lib.string_view;
+
+export {
+
+namespace zxfoundation::sys::zxallsyms {
+
+    /// @brief A resolved kernel symbol entry.
+    struct sym_info {
+        /// @brief Virtual address of the symbol.
+        u64 address;
+        /// @brief Demangled name, pointing into the read-only name pool.
+        /// @warning Lifetime is that of the static pool — never free this pointer.
+        const char* name;
+    };
+
+} // namespace zxfoundation::sys::zxallsyms
+
+} // end export

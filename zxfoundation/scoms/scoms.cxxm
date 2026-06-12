@@ -1,0 +1,214 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/scoms/scoms.cxxm
+/// @brief Scalable Object Management System (SCOMS).
+
+export module zxfoundation.scoms.scoms;
+import zxfoundation.base.object;
+import zxfoundation.base.types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace zxfoundation::scoms {
+    using base::lifecycle_state;
+    using base::object_tag;
+
+    /// @brief Atomic per-type object counters.
+    struct object_stats {
+        arch::s390x::lib::atomic::atomic<u64> total_created{0};  ///< Cumulative allocations.
+        arch::s390x::lib::atomic::atomic<u64> live{0};           ///< Currently live objects.
+        arch::s390x::lib::atomic::atomic<u64> peak{0};           ///< Highest observed live count.
+
+        /// @brief Record one object construction.
+        auto on_construct() noexcept -> void {
+            using namespace arch::s390x::lib::atomic;
+            (void)total_created.fetch_add(1, memory_order::relaxed);
+            const u64 now = live.fetch_add(1, memory_order::relaxed) + 1;
+            u64 cur = peak.load(memory_order::relaxed);
+            while (cur < now && !peak.compare_exchange_weak(
+                       cur, now, memory_order::relaxed, memory_order::relaxed))
+                ;
+        }
+
+        /// @brief Record one object destruction.
+        auto on_destruct() noexcept -> void {
+            (void)live.fetch_sub(1, arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+
+        [[nodiscard]] auto snap_total()   const noexcept -> u64 {
+            return total_created.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+        [[nodiscard]] auto snap_live()    const noexcept -> u64 {
+            return live.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+        [[nodiscard]] auto snap_peak()    const noexcept -> u64 {
+            return peak.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+    };
+
+    /// @brief Opaque kernel-internal object identifier.
+    ///
+    /// A scoms_handle is a u64 composed of:
+    ///   bits [63:48]  — type discriminator (index into a static tag table)
+    ///   bits [47:0]   — object index within its type's pool
+    ///
+    /// Handles are not capability tokens: they carry no access rights and are
+    /// not validated on every dereference inside the kernel.  Validation is the
+    /// responsibility of the executive layer (syscall boundary).
+    ///
+    /// @note  A null handle has value 0.  Type discriminator 0 is reserved.
+    enum class scoms_handle : u64 { null = 0 };
+
+    constexpr auto make_handle(u16 type_disc, u64 index) noexcept -> scoms_handle {
+        return static_cast<scoms_handle>(
+            (static_cast<u64>(type_disc) << 48) | (index & 0x0000'FFFF'FFFF'FFFFULL));
+    }
+    constexpr auto handle_type(scoms_handle h) noexcept -> u16 {
+        return static_cast<u16>(static_cast<u64>(h) >> 48);
+    }
+    constexpr auto handle_index(scoms_handle h) noexcept -> u64 {
+        return static_cast<u64>(h) & 0x0000'FFFF'FFFF'FFFFULL;
+    }
+    constexpr auto handle_valid(scoms_handle h) noexcept -> bool {
+        return h != scoms_handle::null;
+    }
+
+    /// @brief Maximum number of distinct object types SCOMS tracks.
+    constexpr u16 SCOMS_MAX_TYPES = 64;
+
+    /// @brief Per-type descriptor registered with SCOMS.
+    struct type_descriptor {
+        const char*  name{nullptr};   ///< Human-readable type name for diagnostics.
+        u32          object_size{0};  ///< sizeof the concrete object type.
+        u32          object_align{0}; ///< alignof the concrete object type.
+        object_stats stats{};
+
+        [[nodiscard]] auto registered() const noexcept -> bool { return name != nullptr; }
+    };
+}
+
+} // end export
+
+namespace zxfoundation::scoms::_internal {
+    /// @brief Flat type table; index == type discriminator.
+    /// Index 0 is reserved (null handle sentinel).
+    static type_descriptor g_types[SCOMS_MAX_TYPES]{};
+    static locking::qspinlock::qspinlock g_reg_lock{};
+    static u16 g_next_disc{1};
+    static bool g_initialized{false};
+}
+
+export {
+
+namespace zxfoundation::scoms {
+
+    /// @brief Initialize SCOMS.  Call once during kernel init before any
+    ///        object type is registered.
+    auto init() noexcept -> void {
+        using namespace _internal;
+        if (g_initialized) return;
+        g_next_disc   = 1;
+        g_initialized = true;
+    }
+
+    /// @brief Register an object type and obtain its type discriminator.
+    ///
+    /// @param[in]  name    Human-readable name (must be a string literal; not copied).
+    /// @param[in]  size    sizeof the object.
+    /// @param[in]  align   alignof the object.
+    /// @return  Type discriminator in [1, SCOMS_MAX_TYPES), or 0 on failure
+    ///          (registry full).
+    ///
+    /// @note  Registration is expected at boot time under a single CPU; the
+    ///        lock is held for correctness in case of late registration.
+    [[nodiscard]] auto scoms_register_type(
+        const char* name,
+        u32         size,
+        u32         align
+    ) noexcept -> u16 {
+        using namespace _internal;
+        const locking::lock_guard guard{g_reg_lock};
+        if (g_next_disc >= SCOMS_MAX_TYPES) return 0;
+        const u16 disc = g_next_disc++;
+        g_types[disc].name         = name;
+        g_types[disc].object_size  = size;
+        g_types[disc].object_align = align;
+        return disc;
+    }
+
+    /// @brief Look up a type descriptor by discriminator.
+    ///
+    /// @param[in]  disc  Type discriminator returned by scoms_register_type().
+    /// @return  Pointer to the descriptor, or nullptr if disc is out of range
+    ///          or unregistered.
+    [[nodiscard]] auto scoms_type_descriptor(u16 disc) noexcept -> type_descriptor* {
+        using namespace _internal;
+        if (disc == 0 || disc >= SCOMS_MAX_TYPES) return nullptr;
+        return g_types[disc].registered() ? &g_types[disc] : nullptr;
+    }
+
+    /// @brief RAII helper: notifies SCOMS stats on construction/destruction
+    ///        of a kernel_object<Tag, State>.
+    ///
+    /// Embed one of these inside any kernel_object-derived type to
+    /// automatically keep SCOMS statistics accurate.
+    ///
+    /// @tparam Tag  Must satisfy object_tag.
+    template <object_tag Tag>
+    class scoms_tracker {
+        u16 m_disc{0};
+
+    public:
+        scoms_tracker() noexcept = default; ///< No-op tracker (disc=0, stats not updated).
+
+        explicit scoms_tracker(u16 disc) noexcept : m_disc(disc) {
+            if (auto* d = scoms_type_descriptor(m_disc)) d->stats.on_construct();
+        }
+
+        ~scoms_tracker() noexcept {
+            if (auto* d = scoms_type_descriptor(m_disc)) d->stats.on_destruct();
+        }
+
+        scoms_tracker(const scoms_tracker&)            = delete;
+        auto operator=(const scoms_tracker&)           = delete;
+        scoms_tracker(scoms_tracker&& o) noexcept : m_disc(o.m_disc) { o.m_disc = 0; }
+        auto operator=(scoms_tracker&& o) noexcept -> scoms_tracker& {
+            if (this != &o) { m_disc = o.m_disc; o.m_disc = 0; }
+            return *this;
+        }
+    };
+
+    /// @brief Declare a SCOMS type at file scope.
+    ///
+    /// Usage:
+    ///   inline constexpr scoms_type_info<tag_phys_region, phys_object_ready>
+    ///       g_phys_region_type{ "phys_region" };
+    ///
+    /// The discriminator is assigned the first time disc() is called (lazy
+    /// one-time registration).  This avoids static initialization ordering
+    /// issues: scoms_init() must be called before disc() is first invoked.
+    template <object_tag Tag, typename Obj>
+    class scoms_type_info {
+        const char* m_name;
+        mutable u16 m_disc{0};
+
+    public:
+        explicit constexpr scoms_type_info(const char* name) noexcept : m_name(name) {}
+
+        /// @brief Return the type discriminator, registering on first call.
+        [[nodiscard]] auto disc() const noexcept -> u16 {
+            if (m_disc == 0) [[unlikely]]
+                m_disc = scoms_register_type(m_name, sizeof(Obj), alignof(Obj));
+            return m_disc;
+        }
+
+        [[nodiscard]] auto make_tracker() const noexcept -> scoms_tracker<Tag> {
+            return scoms_tracker<Tag>{ disc() };
+        }
+    };
+
+} // namespace zxfoundation::scoms
+
+} // end export

@@ -72,7 +72,7 @@ namespace arch::s390x::init::zxfl {
     };
 
     /// @brief System identification — populated from STSI (EBCDIC converted to ASCII by loader).
-    struct sysinfo {
+    struct systeminfo {
         char manufacturer[16]{};
         char type[4]{};
         char model[16]{};
@@ -143,7 +143,7 @@ namespace arch::s390x::init::zxfl {
         u16 bsp_cpu_addr{};
         u16 _pad7{};
 
-        sysinfo sysinfo;
+        systeminfo sysinfo;
 
         u64 tod_boot{};
 

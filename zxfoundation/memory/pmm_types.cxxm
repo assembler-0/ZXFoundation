@@ -4,8 +4,7 @@
 
 export module zxfoundation.memory.pmm_types;
 import zxfoundation.base.types;
-import zxfoundation.cap.cap_types;
-import zxfoundation.cap.uoms;
+import zxfoundation.base.object;
 import zxfoundation.memory.hhdm;
 import lib.util;
 
@@ -13,82 +12,137 @@ export {
 
 namespace zxfoundation::memory::pmm {
 
-    using cap::object_state;
-    using cap::rights;
+    using base::lifecycle_state;
+    using base::kernel_object;
+    using base::tag_phys_region;
 
-    constexpr u32 PAGE_SIZE   = 4096;
-    constexpr u32 MAX_ORDER   = 12;
+    constexpr u32 PAGE_SHIFT = 12;
+    constexpr u32 PAGE_SIZE  = 1U << PAGE_SHIFT;   ///< 4 KiB
+    constexpr u32 MAX_ORDER  = 10;                  ///< Largest block: 2^10 pages = 4 MiB
     constexpr u64 MAX_PHYS_GB = 512ULL;
-    constexpr u64 MAX_FRAMES  = (MAX_PHYS_GB << 30) >> 12;
+    constexpr u64 MAX_FRAMES  = (MAX_PHYS_GB << 30) >> PAGE_SHIFT;
 
-    /// @brief Physical zone — determines address range constraints.
+    /// z/Architecture CCW/CDA 31-bit addressing constraint.
+    constexpr u64 ZONE_DMA_LIMIT = 2ULL << 30;
+
+    /// @brief Physical address zone.
     enum class zone : u8 {
-        dma31  = 0, ///< [0, 2 GB): lowcores, AP stacks, CCW buffers.
-        normal = 1, ///< [2 GB, ∞): page tables, heap, object pools.
+        dma31  = 0, ///< [0, 2 GiB): lowcores, AP stacks, CCW channel programs.
+        normal = 1, ///< [2 GiB, ∞): page tables, heap, kernel objects.
         count  = 2,
     };
 
-    /// @brief Semantic purpose of a physical allocation.
+    /// @brief Replaces GFP_ZERO.
+    enum class page_init : u8 {
+        uninitialized = 0,
+        zeroed        = 1,
+    };
+
+    /// @brief Semantic purpose; stored in frame_desc for reverse-lookup.
     enum class purpose : u8 {
         generic    = 0,
-        lowcore    = 1, ///< 8 KB AP/BSP prefix area; 8 KB aligned; zone::dma31.
+        lowcore    = 1, ///< 8 KiB prefix area; 8 KiB aligned; zone::dma31.
         stack      = 2,
         page_table = 3,
         device_dma = 4,
         heap       = 5,
+        slab       = 6, ///< Slab cache backing pages.
+        frame_desc = 7, ///< The frame_desc table itself.
     };
 
-    struct phys_range {
-        u64 base{};
-        u64 size{};
-        [[nodiscard]] constexpr auto end()         const noexcept -> u64 { return base + size; }
-        [[nodiscard]] constexpr auto frame_base()  const noexcept -> u64 { return base >> 12; }
-        [[nodiscard]] constexpr auto frame_count() const noexcept -> u64 { return size >> 12; }
+    template <purpose P> constexpr zone purpose_zone = zone::normal;
+    template <> constexpr zone purpose_zone<purpose::lowcore>    = zone::dma31;
+    template <> constexpr zone purpose_zone<purpose::stack>      = zone::dma31;
+    template <> constexpr zone purpose_zone<purpose::device_dma> = zone::dma31;
+
+    template <purpose P> constexpr u64 purpose_align = PAGE_SIZE;
+    template <> constexpr u64 purpose_align<purpose::lowcore> = 8192ULL;
+
+    /// @brief Which subsystem currently owns a physical frame.
+    enum class frame_owner : u8 {
+        none       = 0, ///< Frame not present / never initialized.
+        reserved   = 1, ///< Firmware / kernel image / lowcore — permanently off-limits.
+        buddy      = 2, ///< In the buddy free list (pmm-owned).
+        slab       = 3, ///< Backing a slab_cache.
+        vmm        = 4, ///< Backing a kernel virtual mapping (VMM).
+        page_table = 5, ///< A page table frame.
+        stack      = 6, ///< Kernel stack.
+        device     = 7, ///< DMA / device buffer.
     };
 
-    template <purpose P> constexpr zone purpose_zone     = zone::normal;
-    template <>          constexpr zone purpose_zone<purpose::lowcore>    = zone::dma31;
-    template <>          constexpr zone purpose_zone<purpose::stack>      = zone::dma31;
-    template <>          constexpr zone purpose_zone<purpose::device_dma> = zone::dma31;
+    /// @brief Per-frame status flags.
+    enum frame_flags : u8 {
+        ff_none    = 0,
+        ff_suspect = 1U << 0, ///< MCCK corrected error; still usable.
+        ff_offline = 1U << 1, ///< MCCK uncorrected; permanently removed.
+        ff_zeroed  = 1U << 2, ///< Contents are known-zero (set by page_init::zeroed path).
+        ff_shared  = 1U << 3, ///< refcount > 1 (future CoW / file cache).
+    };
 
-    template <purpose P> constexpr u64 purpose_align     = 4096ULL;
-    template <>          constexpr u64 purpose_align<purpose::lowcore>    = 8192ULL;
+    /// @brief 8-byte per-physical-frame metadata record.
+    struct frame_desc {
+        u8  order_owner{0}; ///< packed: [7:4]=order, [3:0]=frame_owner
+        u8  flags{0};       ///< frame_flags bitmask
+        u16 refcount{0};    ///< 0 for kernel-exclusive frames; >0 when ff_shared
+        u32 _pad{0};        ///< reserved — NUMA node, storage key (future)
 
-    template <object_state State = object_state::fresh>
-    class phys_object : public cap::kernel_object<cap::tag_phys_region, State> {
+        [[nodiscard]] constexpr auto order() const noexcept -> u8 {
+            return static_cast<u8>(order_owner >> 4);
+        }
+        [[nodiscard]] constexpr auto owner() const noexcept -> frame_owner {
+            return static_cast<frame_owner>(order_owner & 0x0FU);
+        }
+        constexpr auto set_order(u8 o) noexcept -> void {
+            order_owner = static_cast<u8>((o << 4) | (order_owner & 0x0FU));
+        }
+        constexpr auto set_owner(frame_owner ow) noexcept -> void {
+            order_owner = static_cast<u8>((order_owner & 0xF0U) | static_cast<u8>(ow));
+        }
+        /// @brief Initialize all fields atomically in one assignment.
+        constexpr auto set(u8 o, frame_owner ow, u8 fl = ff_none) noexcept -> void {
+            order_owner = static_cast<u8>((o << 4) | static_cast<u8>(ow));
+            flags       = fl;
+            refcount    = 0;
+            _pad        = 0;
+        }
+    };
+
+    static_assert(sizeof(frame_desc) == 8, "frame_desc must be exactly 8 bytes");
+
+    /// @brief Move-only, typestate-tracked physical memory allocation.
+    template <lifecycle_state State = lifecycle_state::fresh>
+    class folio : public kernel_object<tag_phys_region, State> {
     public:
         u64     phys_base{0};
         u32     order{0};
         purpose use{purpose::generic};
         zone    mem_zone{zone::normal};
 
-        phys_object() noexcept = default;
-        phys_object(u64 base, u32 ord, purpose p, zone z) noexcept
+        folio() noexcept = default;
+        folio(u64 base, u32 ord, purpose p, zone z) noexcept
             : phys_base(base), order(ord), use(p), mem_zone(z) {}
 
         [[nodiscard]] auto page_count() const noexcept -> u64 { return 1ULL << order; }
-        [[nodiscard]] auto size_bytes() const noexcept -> u64 { return page_count() << 12; }
+        [[nodiscard]] auto size_bytes() const noexcept -> u64 { return page_count() << PAGE_SHIFT; }
+        [[nodiscard]] auto pfn()        const noexcept -> u64 { return phys_base >> PAGE_SHIFT; }
         [[nodiscard]] auto virt()       const noexcept -> void* {
             return reinterpret_cast<void*>(hhdm::phys_to_virt(phys_base));
         }
+        [[nodiscard]] explicit operator bool() const noexcept { return phys_base != 0; }
 
-        [[nodiscard]] auto make_ready() && noexcept -> phys_object<object_state::ready> {
-            phys_object<object_state::ready> next;
-            next.phys_base = phys_base;
-            next.order     = order;
-            next.use       = use;
-            next.mem_zone  = mem_zone;
-            phys_base      = 0;
-            return next;
+        /// @brief Advance fresh → ready, consuming this folio.
+        /// @note  Only available on fresh folios (requires clause).
+        [[nodiscard]] auto make_ready() && noexcept -> folio<lifecycle_state::ready>
+            requires (State == lifecycle_state::fresh)
+        {
+            folio<lifecycle_state::ready> r{ phys_base, order, use, mem_zone };
+            phys_base = 0;
+            return r;
         }
     };
 
-    using phys_object_fresh = phys_object<object_state::fresh>;
-    using phys_object_ready = phys_object<object_state::ready>;
-
-    using phys_cap_rw     = cap::capability<cap::tag_phys_region, rights::read | rights::write>;
-    using phys_cap_manage = cap::capability<cap::tag_phys_region, rights::all>;
-    using phys_cap_ro     = cap::capability<cap::tag_phys_region, rights::read>;
+    using folio_fresh = folio<lifecycle_state::fresh>;
+    using folio_ready = folio<lifecycle_state::ready>;
 
 } // namespace zxfoundation::memory::pmm
 

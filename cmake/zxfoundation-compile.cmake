@@ -5,26 +5,21 @@ set(zxfoundation_LINKER_SCRIPT
         CACHE STRING "zxfoundation linker script")
 
 include(cmake/zxfl-compile.cmake)
+if (ZXALLSYMS_GEN AND ZX_NM AND ZX_CXXFILT)
+    include(cmake/zxfoundation-zxallsyms-compile.cmake)
+endif()
 
 add_executable(core.zxfoundation.nucleus)
 
-if (ZX_SOURCES_64)
-    target_sources(core.zxfoundation.nucleus PRIVATE ${ZX_SOURCES_64})
-endif()
+target_sources(core.zxfoundation.nucleus PRIVATE ${ZX_SOURCES_64})
 
-if (ZX_SOURCES_MODULES_64)
-    target_sources(core.zxfoundation.nucleus
-        PUBLIC
-        FILE_SET CXX_MODULES
-        TYPE CXX_MODULES
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${ZX_SOURCES_MODULES_64}
-    )
-endif()
-
-if (NOT ZX_SOURCES_64 OR NOT ZX_SOURCES_MODULES_64)
-    message(FATAL_ERROR "zxfoundation::build: no sources found for nucleus target (should not be possible)")
-endif()
+target_sources(core.zxfoundation.nucleus
+    PUBLIC
+    FILE_SET CXX_MODULES
+    TYPE CXX_MODULES
+    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+    FILES ${ZX_SOURCES_MODULES_64}
+)
 
 target_compile_options(core.zxfoundation.nucleus PRIVATE
     -ffreestanding
@@ -43,29 +38,23 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -mno-vx
     -fno-exceptions
     -fno-rtti
-    -Wno-pch-date-time
-    -Wno-c99-extensions
+    -nostdlib
+    -nostdinc
     -march=${MARCH_MODE}
     -mtune=${MARCH_MODE}
     -m64
 )
 
-if (COMPILER_ID STREQUAL "clang")
+if (CONFIG_SSP)
     target_compile_options(core.zxfoundation.nucleus PRIVATE
-        --target=${COMMON_TARGET_TRIPLE}
-        -Wno-gnu-statement-expression-from-macro-expansion
-        -Wno-gnu-pointer-arith
-        -Wno-gnu-zero-variadic-macro-arguments
-        -Wno-c2y-extensions
+        -fstack-protector-all
     )
 endif()
 
-if (COMPILER_ID STREQUAL "gcc")
+if (COMPILER_ID STREQUAL "clang")
     target_compile_options(core.zxfoundation.nucleus PRIVATE
-        -static-libgcc
-        -Wno-array-bounds
-        -fno-delete-null-pointer-checks
-        -mzarch
+        -nostdlib++
+        --target=${COMMON_TARGET_TRIPLE}
     )
 endif()
 
@@ -94,12 +83,6 @@ target_link_options(core.zxfoundation.nucleus PRIVATE
     -m${TARGET_EMULATION_MODE}
 )
 
-if (COMPILER_ID STREQUAL "gcc")
-    target_link_options(core.zxfoundation.nucleus PRIVATE
-        --no-warn-rwx-segments
-    )
-endif()
-
 if (ZXSIGN)
     add_dependencies(core.zxfoundation.nucleus tools)
 
@@ -109,5 +92,14 @@ if (ZXSIGN)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "zxfoundation::build: signing kernel segments (zxsign)"
         VERBATIM
+    )
+endif()
+
+if (ZXALLSYMS_GEN AND ZX_NM AND ZX_CXXFILT)
+    add_dependencies(core.zxfoundation.nucleus zxallsyms_data)
+
+    set_source_files_properties(
+        ${ZXALLSYMS_DATA}
+        PROPERTIES GENERATED TRUE
     )
 endif()

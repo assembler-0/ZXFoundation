@@ -1,4 +1,3 @@
 !files : !compile_group -> [auto] {
-    cap_types.cxxm
-    uoms.cxxm
+    scoms.cxxm
 }

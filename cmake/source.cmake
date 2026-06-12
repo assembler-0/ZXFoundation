@@ -6,7 +6,19 @@ set(ZX_MANIFEST_LIST "")
 
 zx_discover_nucleus(ZX_SOURCES_64 ZX_SOURCES_MODULES_64 ZX_MANIFEST_LIST "${CMAKE_CURRENT_SOURCE_DIR}")
 
+list(REMOVE_ITEM ZX_SOURCES_64
+    "${CMAKE_SOURCE_DIR}/zxfoundation/sys/zxallsyms_stub.cxx"
+)
+
 include_directories(SYSTEM
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+set(ZX_SOURCES_64_NO_STUB ${ZX_SOURCES_64})
+list(APPEND ZX_SOURCES_64_NO_STUB ${ZX_SOURCES_MODULES_64})
+list(APPEND ZX_SOURCES_64 "${CMAKE_BINARY_DIR}/zxallsyms_data.cxx")
+
+if (NOT ZX_SOURCES_64 OR NOT ZX_SOURCES_MODULES_64 OR NOT ZX_SOURCES_64_NO_STUB)
+    message(FATAL_ERROR "zxfoundation::build: no sources found for nucleus target (should not be possible)")
+endif()

@@ -1,0 +1,23 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file ssp.cxxm
+/// @brief ssp support library
+
+export module zxfoundation.base.cxxrtse.ssp;
+import zxfoundation.base.types;
+import zxfoundation.sys.syschk;
+import lib.error;
+
+extern "C" {
+
+    constexpr u64 STACK_CANARY_VALUE = 0xDEADBEEFCAFEBABEUL;
+    uint64_t __stack_chk_guard = STACK_CANARY_VALUE;
+
+    [[noreturn]] void __stack_chk_fail(void) {
+        zxfoundation::sys::syschk::syschk_fatal(
+            lib::kernel_error::from_memory(lib::memory_error::code::ssp_check_fail),
+            "cxxrtse: stack smashing detected"
+        );
+    }
+
+}
+

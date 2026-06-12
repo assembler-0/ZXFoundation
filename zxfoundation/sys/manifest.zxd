@@ -5,4 +5,7 @@
     transaction.cxxm
     syschk_types.cxxm
     syschk.cxxm
+    zxallsyms_types.cxxm
+    zxallsyms.cxxm
+    zxallsyms_stub.cxx
 }

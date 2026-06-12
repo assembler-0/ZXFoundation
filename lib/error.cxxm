@@ -64,6 +64,7 @@ namespace lib {
             capability_invalid  = 9,  ///< Capability token is null, revoked, or wrong purpose.
             purpose_mismatch    = 10, ///< Capability purpose does not match the requested use.
             zone_exhausted      = 11, ///< All pages in the target zone are allocated.
+            ssp_check_fail      = 13, ///< SSP check fail (stack smashing detected).
         };
     }
 
@@ -118,7 +119,10 @@ namespace lib {
             invalid_arg     = 1,  ///< Invalid argument passed to function.
             not_supported   = 2,  ///< Operation not supported.
             not_implemented = 3,  ///< Feature not yet implemented.
-            unknown         = 5,  ///< Unknown error.
+            internal_error  = 4,  ///< Internal error (C++ ABI for example)
+            not_found       = 5,  ///< Requested item does not exist in the table.
+            unknown         = 6,  ///< Unknown error.
+            out_of_range    = 7,  ///< Index or address is outside valid bounds.
         };
     }
 

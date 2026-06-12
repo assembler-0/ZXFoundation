@@ -7,6 +7,7 @@
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/panic.h>
+#include <zxfoundation/zxconfig.h>
 
 #define STAGE2_LOAD_ADDR    0x20000UL
 #define STAGE2_FILENAME     "CORE.ZXFOUNDATIONLOADER01.SYS"
@@ -30,7 +31,7 @@
 /// @param schid Subchannel ID from lowcore 0xB8.
 [[noreturn]] void zxfl00_entry(uint32_t schid) {
     diag_setup();
-    print("zxfl00: ZXFoundationLoader (TM) 26h1 - Copyright (c) 2026 assembler-0. Licensed under the Apache License, Version 2.0.\n");
+    print("zxfl00: ZXFoundationLoader (TM) " CONFIG_ZX_RELEASE " - Copyright (c) " CONFIG_ZX_COPYRIGHT_DATE " assembler-0. Licensed under the Apache License, Version 2.0.\n");
     print("zxfl00: core.zxfoundationloader00.sys initializing\n");
 
     dscb1_extent_t ext;

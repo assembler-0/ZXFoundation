@@ -77,27 +77,12 @@ if (COMPILER_ID STREQUAL "clang")
     )
 endif()
 
-if (COMPILER_ID STREQUAL "gcc")
-    target_compile_options(zxfl_stage1.elf PRIVATE
-        -static-libgcc
-        -Wno-array-bounds
-        -fno-delete-null-pointer-checks
-        -mzarch
-    )
-endif()
-
 set(STAGE1_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/stage1.ld")
 set_target_properties(zxfl_stage1.elf PROPERTIES LINK_DEPENDS "${STAGE1_LINKER_SCRIPT}")
 target_link_options(zxfl_stage1.elf PRIVATE
     -T ${STAGE1_LINKER_SCRIPT}
     ${ZXFL_COMMON_LINK_FLAGS}
 )
-
-if (COMPILER_ID STREQUAL "gcc")
-    target_link_options(zxfl_stage1.elf PRIVATE
-        --no-warn-rwx-segments
-    )
-endif()
 
 # ---------------------------------------------------------------------------
 # Stage 2: 64-bit Loader (core.zxfoundationloader01.sys)
@@ -121,27 +106,12 @@ if (COMPILER_ID STREQUAL "clang")
     )
 endif()
 
-if (COMPILER_ID STREQUAL "gcc")
-    target_compile_options(zxfl_stage2.elf PRIVATE
-        -static-libgcc
-        -Wno-array-bounds
-        -fno-delete-null-pointer-checks
-        -mzarch
-    )
-endif()
-
 set(STAGE2_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/stage2.ld")
 set_target_properties(zxfl_stage2.elf PROPERTIES LINK_DEPENDS "${STAGE2_LINKER_SCRIPT}")
 target_link_options(zxfl_stage2.elf PRIVATE
     -T ${STAGE2_LINKER_SCRIPT}
     ${ZXFL_COMMON_LINK_FLAGS}
 )
-
-if (COMPILER_ID STREQUAL "gcc")
-    target_link_options(zxfl_stage2.elf PRIVATE
-        --no-warn-rwx-segments
-    )
-endif()
 
 if (CMAKE_OBJCOPY AND BIN2REC)
     add_dependencies(zxfl_stage1.elf tools)

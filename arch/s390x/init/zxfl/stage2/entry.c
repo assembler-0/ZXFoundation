@@ -103,7 +103,7 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
     uint32_t num_nodes = 1;
     if (s_proto.flags & ZXFL_FLAG_SMP) {
         for (uint32_t i = 0; i < s_proto.cpu_count; i++) {
-            if (s_proto.cpu_map[i].numa_node + 1 > num_nodes) {
+            if ((uint32_t)(s_proto.cpu_map[i].numa_node + 1) > num_nodes) {
                 num_nodes = s_proto.cpu_map[i].numa_node + 1;
             }
         }
@@ -320,7 +320,7 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
             uint32_t num_nodes = 1;
             if (s_proto.flags & ZXFL_FLAG_SMP) {
                 for (uint32_t i = 0; i < s_proto.cpu_count; i++) {
-                    if (s_proto.cpu_map[i].numa_node + 1 > num_nodes) {
+                    if ((uint32_t)(s_proto.cpu_map[i].numa_node + 1) > num_nodes) {
                         num_nodes = s_proto.cpu_map[i].numa_node + 1;
                     }
                 }

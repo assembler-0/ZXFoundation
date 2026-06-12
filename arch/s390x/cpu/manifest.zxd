@@ -16,6 +16,6 @@
     ipi.cxxm
     stfle_types.cxxm
     stfle.cxxm
-    stsi_types.cxxm
+    stsi_types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) ]
     stsi.cxxm
 }

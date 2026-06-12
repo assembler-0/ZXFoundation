@@ -1,0 +1,113 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/zxallsyms.cxxm
+/// @brief Global kernel symbol table — address/name lookup over a static
+///        read-only table generated at link time by zxallsyms_gen.
+
+export module zxfoundation.sys.zxallsyms;
+import zxfoundation.base.types;
+import zxfoundation.sys.zxallsyms_types;
+import lib.string_view;
+import lib.expected;
+import lib.error;
+import lib.concepts;
+
+extern "C" {
+    extern const u64  zxallsyms_addrs[];   ///< Sorted ascending virtual addresses.
+    extern const u32  zxallsyms_offsets[]; ///< Byte offset into zxallsyms_names[].
+    extern const char zxallsyms_names[];   ///< Flat NUL-terminated name pool.
+    extern const u32  zxallsyms_count;     ///< Total number of symbols.
+}
+
+export {
+
+namespace zxfoundation::sys::zxallsyms {
+
+    /// @brief Look up the symbol whose range contains @p addr.
+    /// @param[in] addr  Virtual address to resolve.
+    /// @return sym_info on success.
+    /// @return kernel_error::from_generic(generic_error::not_found) if @p addr
+    ///         is below the first symbol or the table is empty.
+    [[nodiscard]] auto lookup_by_addr(const u64 addr)
+        noexcept -> lib::expected<sym_info, lib::kernel_error> {
+        const u32 count = zxallsyms_count;
+        if (count == 0) [[unlikely]]
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+
+        u32 lo = 0;
+        u32 hi = count;
+        while (lo + 1 < hi) {
+            const u32 mid = lo + (hi - lo) / 2u;
+            if (zxallsyms_addrs[mid] <= addr)
+                lo = mid;
+            else
+                hi = mid;
+        }
+
+        if (zxallsyms_addrs[lo] > addr)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+
+        return sym_info {
+            .address = zxallsyms_addrs[lo],
+            .name    = &zxallsyms_names[zxallsyms_offsets[lo]],
+        };
+    }
+
+    /// @brief Look up the first symbol whose demangled name equals @p name.
+    /// @param[in] name  Demangled symbol name to search for.
+    /// @return sym_info on success.
+    /// @return kernel_error::from_generic(generic_error::not_found) if no
+    ///         symbol with that name exists.
+    [[nodiscard]] auto lookup_by_name(const lib::string_view name)
+        noexcept -> lib::expected<sym_info, lib::kernel_error> {
+        if (name.empty()) [[unlikely]]
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        const u32 count = zxallsyms_count;
+        for (u32 i = 0; i < count; ++i) {
+            const char* entry_ptr = &zxallsyms_names[zxallsyms_offsets[i]];
+            if (name == lib::string_view{entry_ptr}) {
+                return sym_info{
+                    .address = zxallsyms_addrs[i],
+                    .name    = entry_ptr,
+                };
+            }
+        }
+
+        return lib::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::not_found));
+    }
+
+    /// @brief Invoke @p fn for every symbol in address order.
+    ///
+    /// @tparam    Fn   Callable with signature compatible with
+    ///                 @c void(const sym_info&).
+    /// @param[in] fn   The callable to invoke per symbol.
+    /// @note   Iteration stops early if @p fn returns false (boolean-testable).
+    /// @note   Fully SMP-safe: the underlying data is const and in .rodata.
+    template <typename Fn>
+    auto for_each(Fn&& fn) noexcept -> void {
+        const u32 count = zxallsyms_count;
+        for (u32 i = 0; i < count; ++i) {
+            const sym_info info{
+                .address = zxallsyms_addrs[i],
+                .name    = &zxallsyms_names[zxallsyms_offsets[i]],
+            };
+            if constexpr (requires { { fn(info) } -> lib::same_as<bool>; }) {
+                if (!fn(info)) return;
+            } else {
+                fn(info);
+            }
+        }
+    }
+
+    /// @brief Return the total number of symbols in the table.
+    [[nodiscard]] auto count() noexcept -> u32 {
+        return zxallsyms_count;
+    }
+
+} // namespace zxfoundation::sys::zxallsyms
+
+} // end export

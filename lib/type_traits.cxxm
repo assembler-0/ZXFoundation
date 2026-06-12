@@ -17,8 +17,14 @@ namespace lib {
     template <typename T>
     using remove_reference_t = remove_reference<T>::type;
 
-    template <typename t> concept is_l_value_reference = __is_lvalue_reference(t);
-    template <typename t> concept is_r_value_reference = __is_rvalue_reference(t);
+    template <typename T> struct is_lvalue_reference_impl      { static constexpr bool value = false; };
+    template <typename T> struct is_lvalue_reference_impl<T&>  { static constexpr bool value = true; };
+
+    template <typename T> struct is_rvalue_reference_impl      { static constexpr bool value = false; };
+    template <typename T> struct is_rvalue_reference_impl<T&&> { static constexpr bool value = true; };
+
+    template <typename t> concept is_l_value_reference = is_lvalue_reference_impl<t>::value;
+    template <typename t> concept is_r_value_reference = is_rvalue_reference_impl<t>::value;
     template <typename t> concept is_reference         = is_l_value_reference<t> || is_r_value_reference<t>;
 
     /// @brief Conditional type selection for atomic storage.

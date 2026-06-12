@@ -1,0 +1,65 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/base/object.cxxm
+/// @brief Kernel object typestate primitives.
+
+export module zxfoundation.base.object;
+import zxfoundation.base.types;
+import lib.concepts;
+
+export {
+
+namespace zxfoundation::base {
+
+    /// @brief Lifecycle states for managed kernel objects.
+    enum class lifecycle_state : u8 {
+        fresh     = 0, ///< Allocated, fields not yet initialized.
+        ready     = 1, ///< Fully initialized and usable.
+        suspended = 2, ///< Temporarily inactive (e.g. thread blocked on wait).
+        dying     = 3, ///< Teardown in progress; no new references permitted.
+    };
+
+    /// @brief Type tags for kernel object discrimination.
+    /// Used by SCOMS to maintain per-type statistics and slab caches.
+    struct tag_phys_region  {};  ///< Physical memory region (PMM output).
+    struct tag_virt_region  {};  ///< Virtual address space region (VMM output).
+    struct tag_thread       {};  ///< Schedulable execution context.
+    struct tag_process      {};  ///< Address space + handle namespace.
+    struct tag_irq_line     {};  ///< Hardware interrupt line descriptor.
+    struct tag_device_ch    {};  ///< CCW subchannel / QDIO queue.
+    struct tag_ipc_port     {};  ///< Synchronous message port.
+    struct tag_timer        {};  ///< Kernel timer object.
+
+    /// @brief Compile-time discriminator: T is a valid kernel object tag.
+    template <typename T>
+    concept object_tag = lib::is_empty<T>;
+
+    /// @brief Zero-overhead typestate carrier for all managed kernel resources.
+    /// @tparam Tag    Identifies the resource class; must satisfy object_tag.
+    /// @tparam State  Current lifecycle state; the type changes on transition.
+    template <object_tag Tag, lifecycle_state State = lifecycle_state::fresh>
+    class kernel_object {
+    public:
+        using tag_type                              = Tag;
+        static constexpr lifecycle_state state     = State;
+
+        kernel_object()  noexcept = default;
+        ~kernel_object() noexcept = default;
+
+        kernel_object(const kernel_object&)                    = delete;
+        auto operator=(const kernel_object&)                   = delete;
+        kernel_object(kernel_object&&)                noexcept = default;
+        auto operator=(kernel_object&&) noexcept -> kernel_object& = default;
+
+        /// @brief Advance to NewState, consuming this instance.
+        /// @tparam NewState  Target lifecycle state; must differ from State.
+        /// @return  A new kernel_object in NewState.
+        template <lifecycle_state NewState>
+            requires (NewState != State)
+        [[nodiscard]] auto transition() && noexcept -> kernel_object<Tag, NewState> {
+            return kernel_object<Tag, NewState>{};
+        }
+    };
+
+} // namespace zxfoundation::base
+
+} // end export

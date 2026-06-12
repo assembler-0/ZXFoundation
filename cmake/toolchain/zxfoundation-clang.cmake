@@ -20,6 +20,8 @@ set(CMAKE_LINKER ld.lld)
 set(CMAKE_AR llvm-ar)
 set(CMAKE_RANLIB llvm-ranlib)
 set(CMAKE_OBJCOPY llvm-objcopy)
+set(ZX_NM llvm-nm)
+set(ZX_CXXFILT llvm-cxxfilt)
 set(ZX_HOST_CC clang)
 
 set(COMPILER_ID "clang")

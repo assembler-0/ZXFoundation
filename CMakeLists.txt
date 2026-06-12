@@ -5,7 +5,7 @@
 #
 # @file CMakeLists.txt
 # @brief Kernel build configuration
-# @copyright (C) 2025-2026 assembler-0
+# copyright (C) 2025-2026 assembler-0
 # ============================================================================
 
 cmake_minimum_required(VERSION 3.30)

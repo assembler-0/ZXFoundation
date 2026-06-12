@@ -1,0 +1,9 @@
+!if CONFIG_SSP {
+    !files : !compile_group -> [auto] {
+        ssp.cxxm
+    }
+}
+
+!files : !compile_group -> [auto] {
+    cxxabi.cxxm
+}

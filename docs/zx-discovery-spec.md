@@ -28,8 +28,10 @@ Sets file-level compiler flags for all subsequent files in the manifest.
 !options {
     -mbackchain
     -msoft-float
+    !compiler_id:gcc(-Wno-error)
 }
 ```
+* **Compiler-Specific Options**: You can conditionally apply options based on the compiler ID using `!compiler_id:<id>(<flags>)`. The `<id>` is matched against the `COMPILER_ID` variable (e.g., `gcc`, `clang`).
 
 ### 2.3 `!files : !compile_group -> [type] { ... }`
 Defines a set of source files and their compilation strategy.
