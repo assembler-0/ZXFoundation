@@ -13,6 +13,7 @@
 ///   unconditionally restore a "disabled" state; STOSM can only set bits.
 
 export module arch.s390x.cpu.irq;
+import arch.s390x.cpu.irq_types;
 import arch.s390x.cpu.psw_types;
 import zxfoundation.base.types;
 import lib.bit;

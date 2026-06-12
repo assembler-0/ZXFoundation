@@ -5,6 +5,8 @@
 export module zxfoundation.base.object;
 import zxfoundation.base.types;
 import lib.concepts;
+import lib.format;
+import lib.string_view;
 
 export {
 
@@ -60,6 +62,57 @@ namespace zxfoundation::base {
         }
     };
 
+    /// @brief Primary template — undefined; triggers a clear linker error for
+    ///        any tag that lacks a specialization.
+    template <object_tag T>
+    struct tag_name;
+
+    template <> struct tag_name<tag_phys_region> { static constexpr lib::string_view value = "phys_region"; };
+    template <> struct tag_name<tag_virt_region>  { static constexpr lib::string_view value = "virt_region";  };
+    template <> struct tag_name<tag_thread>       { static constexpr lib::string_view value = "thread";       };
+    template <> struct tag_name<tag_process>      { static constexpr lib::string_view value = "process";      };
+    template <> struct tag_name<tag_irq_line>     { static constexpr lib::string_view value = "irq_line";     };
+    template <> struct tag_name<tag_device_ch>    { static constexpr lib::string_view value = "device_ch";    };
+    template <> struct tag_name<tag_ipc_port>     { static constexpr lib::string_view value = "ipc_port";     };
+    template <> struct tag_name<tag_timer>        { static constexpr lib::string_view value = "timer";        };
+
+    /// @brief Return the ASCII name of a lifecycle_state value.
+    /// @param[in] s  State to name.
+    /// @return       Statically allocated string; never null.
+    [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept -> lib::string_view {
+        switch (s) {
+            case lifecycle_state::fresh:     return "fresh";
+            case lifecycle_state::ready:     return "ready";
+            case lifecycle_state::suspended: return "suspended";
+            case lifecycle_state::dying:     return "dying";
+            default:                         return "unknown";
+        }
+    }
+
 } // namespace zxfoundation::base
+
+} // end export
+
+export {
+
+    /// @brief Formatter for zxfoundation::base::kernel_object<Tag, State>.
+    /// @tparam Tag    Object tag type; must have a @ref zxfoundation::base::tag_name specialization.
+    /// @tparam State  Lifecycle state encoded as a template non-type parameter.
+    template <zxfoundation::base::object_tag Tag, zxfoundation::base::lifecycle_state State>
+    struct lib::format::formatter<zxfoundation::base::kernel_object<Tag, State>> {
+        /// @brief Format the kernel_object into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Object to format (unused — all info is in the type).
+        auto format(
+            format_context& ctx,
+            [[maybe_unused]] const zxfoundation::base::kernel_object<Tag, State>& val
+        ) const noexcept -> void {
+            ctx.write("kernel_object<tag(");
+            ctx.write(zxfoundation::base::tag_name<Tag>::value);
+            ctx.write("), state(");
+            ctx.write(zxfoundation::base::lifecycle_state_name(State));
+            ctx.write(")>");
+        }
+    };
 
 } // end export

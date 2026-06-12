@@ -1,0 +1,16 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file irq_types.cxxm
+/// @brief irq types
+
+export module arch.s390x.cpu.irq_types;
+import zxfoundation.base.types;
+
+export {
+
+using irqflags = u64;
+
+namespace arch::s390x::cpu::irq {
+
+}
+
+}

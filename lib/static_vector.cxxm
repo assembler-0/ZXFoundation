@@ -1,0 +1,201 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/static_vector.cxxm
+/// @brief Fixed-capacity growable array with inline storage — no heap.
+
+export module lib.static_vector;
+import zxfoundation.base.types;
+import lib.concepts;
+import lib.type_traits;
+import lib.util;
+import lib.placementnew;
+import lib.expected;
+import lib.error;
+import lib.format;
+import lib.span;
+
+export {
+
+namespace lib {
+
+    /// @brief A contiguous sequence of up to @p N elements stored entirely
+    /// @tparam T  Element type.
+    /// @tparam N  Maximum number of elements.
+    template <typename T, usize N>
+    class static_vector {
+        alignas(T) u8 m_storage[sizeof(T) * N]{};
+        usize m_size{0};
+
+        [[nodiscard]] auto slot(usize i) noexcept -> T* {
+            return reinterpret_cast<T*>(m_storage) + i;
+        }
+
+        [[nodiscard]] auto slot(usize i) const noexcept -> const T* {
+            return reinterpret_cast<const T*>(m_storage) + i;
+        }
+
+    public:
+        using value_type = T;
+        using size_type = usize;
+        using reference = T&;
+        using const_reference = const T&;
+        using pointer = T*;
+        using const_pointer = const T*;
+        using iterator = T*;
+        using const_iterator = const T*;
+
+        static constexpr usize capacity_v = N;
+
+        /// @brief Default constructor — empty vector.
+        constexpr static_vector() noexcept = default;
+
+        /// @brief Destructor — destroys all live elements.
+        ~static_vector() noexcept {
+            clear();
+        }
+
+        /// @brief Copy constructor.
+        static_vector(const static_vector& o)
+            requires is_copy_constructible<T>
+            : m_size(0) {
+            for (usize i = 0; i < o.m_size; ++i)
+                new(slot(m_size++)) T(*o.slot(i));
+        }
+
+        /// @brief Move constructor.
+        static_vector(static_vector&& o)
+            requires is_move_constructible<T>
+            : m_size(0) {
+            for (usize i = 0; i < o.m_size; ++i)
+                new(slot(m_size++)) T(lib::move(*o.slot(i)));
+            o.clear();
+        }
+
+        auto operator=(const static_vector& o) noexcept -> static_vector&
+            requires is_copy_constructible<T> {
+            if (this != &o) {
+                clear();
+                for (usize i = 0; i < o.m_size; ++i) new(slot(m_size++)) T(*o.slot(i));
+            }
+            return *this;
+        }
+
+        auto operator=(static_vector&& o) noexcept -> static_vector&
+            requires is_move_constructible<T> {
+            if (this != &o) {
+                clear();
+                for (usize i = 0; i < o.m_size; ++i) new(slot(m_size++)) T(lib::move(*o.slot(i)));
+                o.clear();
+            }
+            return *this;
+        }
+
+        /// @brief Number of live elements.
+        [[nodiscard]] constexpr auto size() const noexcept -> usize { return m_size; }
+        /// @brief Maximum number of elements.
+        [[nodiscard]] constexpr auto capacity() const noexcept -> usize { return N; }
+        /// @brief True when size() == 0.
+        [[nodiscard]] constexpr auto empty() const noexcept -> bool { return m_size == 0; }
+        /// @brief True when size() == capacity().
+        [[nodiscard]] constexpr auto full() const noexcept -> bool { return m_size == N; }
+
+        [[nodiscard]] auto operator[](usize i) noexcept -> T& { return *slot(i); }
+        [[nodiscard]] auto operator[](usize i) const noexcept -> const T& { return *slot(i); }
+
+        [[nodiscard]] auto front() noexcept -> T& { return *slot(0); }
+        [[nodiscard]] auto front() const noexcept -> const T& { return *slot(0); }
+        [[nodiscard]] auto back() noexcept -> T& { return *slot(m_size - 1); }
+        [[nodiscard]] auto back() const noexcept -> const T& { return *slot(m_size - 1); }
+
+        [[nodiscard]] auto data() noexcept -> T* { return slot(0); }
+        [[nodiscard]] auto data() const noexcept -> const T* { return slot(0); }
+
+        [[nodiscard]] auto begin() noexcept -> iterator { return slot(0); }
+        [[nodiscard]] auto end() noexcept -> iterator { return slot(m_size); }
+        [[nodiscard]] auto begin() const noexcept -> const_iterator { return slot(0); }
+        [[nodiscard]] auto end() const noexcept -> const_iterator { return slot(m_size); }
+
+        /// @brief Non-owning view over the live elements.
+        [[nodiscard]] auto as_span() noexcept -> lib::span<T> {
+            return {slot(0), m_size};
+        }
+
+        [[nodiscard]] auto as_span() const noexcept -> lib::span<const T> {
+            return {slot(0), m_size};
+        }
+
+        /// @brief Append a copy of @p val.
+        /// @return expected<void, kernel_error>: err(generic::out_of_range) when full.
+        auto push_back(const T& val) noexcept -> expected<void, kernel_error> {
+            if (m_size == N) [[unlikely]]
+                return unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            new(slot(m_size++)) T(val);
+            return {};
+        }
+
+        /// @brief Append by moving @p val.
+        auto push_back(T&& val) noexcept -> expected<void, kernel_error> {
+            if (m_size == N) [[unlikely]]
+                return unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            new(slot(m_size++)) T(lib::move(val));
+            return {};
+        }
+
+        /// @brief Construct element in-place at the end.
+        template <typename... Args>
+        auto emplace_back(Args&&... args) noexcept -> expected<T*, kernel_error> {
+            if (m_size == N) [[unlikely]]
+                return unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            T* p = slot(m_size++);
+            new(p) T(lib::forward<Args>(args)...);
+            return p;
+        }
+
+        /// @brief Remove and destroy the last element.
+        /// @note  No-op if empty.
+        auto pop_back() noexcept -> void {
+            if (m_size == 0) return;
+            slot(--m_size)->~T();
+        }
+
+        /// @brief Destroy all elements; size becomes 0.
+        auto clear() noexcept -> void {
+            for (usize i = m_size; i > 0;)
+                slot(--i)->~T();
+            m_size = 0;
+        }
+
+        /// @brief Unchecked push — caller guarantees !full().
+        /// @warning Undefined behavior if full().
+        auto push_back_unchecked(const T& val) noexcept -> void {
+            new(slot(m_size++)) T(val);
+        }
+
+        auto push_back_unchecked(T&& val) noexcept -> void {
+            new(slot(m_size++)) T(lib::move(val));
+        }
+    };
+
+} // namespace lib
+
+} // end export
+
+export {
+
+    /// @brief Formatter for lib::static_vector<T, N>.
+    template <typename T, usize N>
+    struct lib::format::formatter<lib::static_vector<T, N>> {
+        auto format(format_context& ctx, const static_vector<T, N>& v) const noexcept -> void {
+            ctx.write("static_vector<array([");
+            for (usize i = 0; i < v.size(); ++i) {
+                if (i) ctx.write(", ");
+                formatter<unqualified<T>>{}.format(ctx, v[i]);
+            }
+            ctx.write("]), size(");
+            formatter<usize>{}.format(ctx, v.size());
+            ctx.write('/');
+            formatter<usize>{}.format(ctx, N);
+            ctx.write(")>");
+        }
+    };
+
+} // end export

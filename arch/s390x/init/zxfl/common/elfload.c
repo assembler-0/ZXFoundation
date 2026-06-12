@@ -201,7 +201,7 @@ int zxfl_load_elf64(uint32_t schid,
     *out_entry = entry_phys + CONFIG_KERNEL_VIRT_OFFSET;
 
     proto->lock_phys        = lock_phys;
-    proto->cksum_table_phys = cksum_phys;
+    proto->cksum_table = cksum_phys;
 
     print("zxvl: inspecting nucleus\n");
     {

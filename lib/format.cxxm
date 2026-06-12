@@ -103,6 +103,24 @@ namespace lib::format {
         }
     };
 
+    /// @brief Formatter for lib::span<T, Extent>.
+    template <typename T, usize Extent>
+    struct formatter<span<T, Extent>> {
+        /// @brief Format the span into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Span to format.
+        auto format(format_context& ctx, const span<T, Extent>& val) const noexcept -> void {
+            ctx.write("span<array([");
+            for (usize i = 0; i < val.size(); ++i) {
+                if (i) ctx.write(", ");
+                formatter<unqualified<T>>{}.format(ctx, val[i]);
+            }
+            ctx.write("]), size(");
+            formatter<unqualified<T>>{}.format(ctx, val.size());
+            ctx.write(")>");
+        }
+    };
+
     /// @brief Integer with padding options.
     struct dec {
         u64 value;

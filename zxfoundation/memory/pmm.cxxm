@@ -18,6 +18,7 @@ import lib.expected;
 import lib.string;
 import lib.array;
 import lib.algorithm;
+import lib.static_vector;
 import arch.s390x.init.zxfl.protocol;
 
 namespace zxfoundation::memory::pmm::_internal {
@@ -271,28 +272,32 @@ namespace zxfoundation::memory::pmm {
             if (pfn_end > g_max_pfn) g_max_pfn = pfn_end;
         }
 
-        resv_entry resv[MAX_RESERVATIONS]{};
-        u32 nresv = 0;
+        lib::static_vector<resv_entry, MAX_RESERVATIONS> resv{};
+        auto push_resv = [&](resv_entry e) noexcept { resv.push_back_unchecked(e); };
 
-        resv[nresv++] = align_resv({ 0, 1ULL << 20 });
+        push_resv(align_resv({ 0, 1ULL << 20 }));
 
         const u64 bss_phys = hhdm::virt_to_phys(
             reinterpret_cast<u64>(base::linksym::__bss_end));
-        resv[nresv++] = align_resv({
+        push_resv(align_resv({
             proto.kernel_phys_start,
             lib::max(lib::max(proto.kernel_phys_end, bss_phys), proto.pgtbl_pool_end)
-        });
+        }));
 
         if (proto.pgtbl_pool_end > proto.kernel_phys_end)
-            resv[nresv++] = align_resv({ proto.kernel_phys_end, proto.pgtbl_pool_end });
+            push_resv(align_resv({ proto.kernel_phys_end, proto.pgtbl_pool_end }));
 
-        sort_merge_reservations(resv, nresv);
+        {
+            u32 n = static_cast<u32>(resv.size());
+            sort_merge_reservations(resv.data(), n);
+            while (resv.size() > n) resv.pop_back();
+        }
 
         const u64 table_bytes = g_max_pfn * sizeof(frame_desc);
         const u64 table_pages = (table_bytes + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
         u64 table_phys = 0;
-        for (u32 i = 0; i < nresv; ++i)
+        for (usize i = 0; i < resv.size(); ++i)
             if (resv[i].end > table_phys) table_phys = resv[i].end;
         table_phys = (table_phys + PAGE_SIZE - 1) & ~static_cast<u64>(PAGE_SIZE - 1);
 
@@ -300,8 +305,12 @@ namespace zxfoundation::memory::pmm {
 
         lib::memset(g_frame_table, 0, table_pages << PAGE_SHIFT);
 
-        resv[nresv++] = align_resv({ table_phys, table_phys + (table_pages << PAGE_SHIFT) });
-        sort_merge_reservations(resv, nresv);
+        push_resv(align_resv({ table_phys, table_phys + (table_pages << PAGE_SHIFT) }));
+        {
+            u32 n = static_cast<u32>(resv.size());
+            sort_merge_reservations(resv.data(), n);
+            while (resv.size() > n) resv.pop_back();
+        }
 
         for (u32 i = 0; i < proto.mem_map_count; ++i) {
             if (map[i].type != arch::s390x::init::zxfl::ZXFL_MEM_USABLE) continue;
@@ -313,7 +322,7 @@ namespace zxfoundation::memory::pmm {
             u64 cur = region_start;
 
             while (cur < region_end) {
-                const u64 skip_to = resv_skip_end(cur, resv, nresv);
+                const u64 skip_to = resv_skip_end(cur, resv.data(), static_cast<u32>(resv.size()));
                 if (skip_to) {
                     const u64 resv_end = lib::min(skip_to, region_end);
                     for (u64 p = cur; p < resv_end; p += PAGE_SIZE)
@@ -322,7 +331,7 @@ namespace zxfoundation::memory::pmm {
                     continue;
                 }
 
-                const u64 run_end = next_resv_start(cur, region_end, resv, nresv);
+                const u64 run_end = next_resv_start(cur, region_end, resv.data(), static_cast<u32>(resv.size()));
 
                 u64 run = cur;
                 while (run < run_end) {

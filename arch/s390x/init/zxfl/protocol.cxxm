@@ -155,7 +155,7 @@ namespace arch::s390x::init::zxfl {
             u64  size_bytes{};
         } modules[16];
 
-        u64 cksum_table_phys{};
+        u64 cksum_table{};
 
         /// @brief HHDM virtual address of the structural lock segment (converted by mmu.c).
         u64 lock_phys{};
@@ -164,8 +164,8 @@ namespace arch::s390x::init::zxfl {
     /// @brief Verify that the C++ protocol struct is layout-compatible with the C struct.
     static_assert(sizeof(protocol) == 2864U,
         "protocol size mismatch vs zxfl_boot_protocol_t — ABI broken");
-    static_assert(__builtin_offsetof(protocol, cksum_table_phys) == 2848U,
-        "cksum_table_phys offset mismatch vs zxfl_boot_protocol_t");
+    static_assert(__builtin_offsetof(protocol, cksum_table) == 2848U,
+        "cksum_table offset mismatch vs zxfl_boot_protocol_t");
     static_assert(__builtin_offsetof(protocol, stfle_fac) == 112U,
         "stfle_fac offset mismatch — STFLE_MAX_DWORDS changed?");
     static_assert(__builtin_offsetof(protocol, cpu_map) == 440U,

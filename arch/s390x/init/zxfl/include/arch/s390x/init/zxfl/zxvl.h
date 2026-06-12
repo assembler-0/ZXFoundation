@@ -71,9 +71,9 @@ void zxfl_system_detect(zxfl_boot_protocol_t *proto);
 ///        Called by stage-2 after zxfl_load_elf64() succeeds, before the
 ///        handshake stub is invoked.  Panics on any mismatch.
 ///
-/// @param cksum_table_phys  Physical address of the zxvl_checksum_table_t,
+/// @param cksum_table  Physical address of the zxvl_checksum_table_t,
 ///                          as populated by zxfl_load_elf64() via p_flags scan.
-void zxvl_verify_nucleus_checksums(uint64_t cksum_table_phys);
+void zxvl_verify_nucleus_checksums(uint64_t cksum_table);
 
 /// @brief Build timestamp
 #define _ZX_CH2(s, i)   ((uint32_t)((s)[i] - '0') * 10U + (uint32_t)((s)[i+1] - '0'))

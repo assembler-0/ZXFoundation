@@ -373,7 +373,7 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
                         ZXVL_COMPUTE_TOKEN(s_proto.stfle_fac[0], schid), s_recs_per_trk, s_heads_per_cyl) < 0)
         panic("zxfl01: load error");
 
-    zxvl_verify_nucleus_checksums(s_proto.cksum_table_phys);
+    zxvl_verify_nucleus_checksums(s_proto.cksum_table);
     print("zxfl01: nucleus verified\n");
 
     s_proto.kernel_phys_start = load_base;

@@ -16,8 +16,11 @@
     queue.cxxm
     ring_buffer.cxxm
     span.cxxm
+    static_vector.cxxm
     string_view.cxxm
     string.cxxm
     type_traits.cxxm
     util.cxxm
+    variant.cxxm !compile_options -> [ !compiler_id:clang(-Wno-unused-parameter) ]
+    source_location.cxxm
 }

@@ -47,6 +47,15 @@ namespace lib {
     template<typename T>
     inline constexpr bool is_void_v = is_void<T>;
 
+    /// @brief Select the type at index I in a parameter pack.
+    template <usize I, typename T, typename... Ts>
+    struct type_at_index_impl { using type = type_at_index_impl<I - 1, Ts...>::type; };
+    template <typename T, typename... Ts>
+    struct type_at_index_impl<0, T, Ts...> { using type = T; };
+
+    template <usize I, typename... Ts>
+    using type_at_index = type_at_index_impl<I, Ts...>::type;
+
 } // namespace lib
 
 } // end export

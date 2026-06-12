@@ -6,23 +6,56 @@ export module zxfoundation.base.types;
 
 export {
 
-using i8  = signed char;
-using u8  = unsigned char;
+    // ZXFoundation types
 
-using i16 = short;
-using u16 = unsigned short;
+using i8  = __INT8_TYPE__;
+using u8  = __UINT8_TYPE__;
 
-using i32 = int;
-using u32 = unsigned int;
+using i16 = __INT16_TYPE__;
+using u16 = __UINT16_TYPE__;
 
-using i64 = long long;
-using u64 = unsigned long long;
+using i32 = __INT32_TYPE__;
+using u32 = __UINT32_TYPE__;
+
+using i64 = __INT64_TYPE__;
+using u64 = __UINT64_TYPE__;
 
 using i128 = __int128;
 using u128 = unsigned __int128;
 
 using f32 = float;
 using f64 = double;
+
+using i8least = __INT_LEAST8_TYPE__;
+using i16least = __INT_LEAST16_TYPE__;
+using i32least = __INT_LEAST32_TYPE__;
+using i64least = __INT_LEAST64_TYPE__;
+
+using i8fast = __INT_FAST8_TYPE__;
+using i16fast = __INT_FAST16_TYPE__;
+using i32fast = __INT_FAST32_TYPE__;
+using i64fast = __INT_FAST64_TYPE__;
+
+using u8least = __UINT_LEAST8_TYPE__;
+using u16least = __UINT_LEAST16_TYPE__;
+using u32least = __UINT_LEAST32_TYPE__;
+using u64least = __UINT_LEAST64_TYPE__;
+
+using u8fast = __UINT_FAST8_TYPE__;
+using u16fast = __UINT_FAST16_TYPE__;
+using u32fast = __UINT_FAST32_TYPE__;
+using u64fast = __UINT_FAST64_TYPE__;
+
+using imax = __INTMAX_TYPE__;
+using umax = __UINTMAX_TYPE__;
+
+using usize  = u64;
+using isize  = i64;
+
+using uptr   = __UINTPTR_TYPE__;
+using iptr   = __INTPTR_TYPE__;
+
+    // C-compatible types
 
 using int8_t    = i8;
 using uint8_t   = u8;
@@ -42,12 +75,33 @@ using uint128_t = u128;
 using float32_t = f32;
 using float64_t = f64;
 
-using uintptr_t = u64;
+using int_least8_t = i8least;
+using int_least16_t = i16least;
+using int_least32_t = i32least;
+using int_least64_t = i64least;
 
-using usize  = u64;
-using isize  = i64;
-using uptr   = u64;
-using iptr   = i64;
+using int_fast8_t = i8fast;
+using int_fast16_t = i16fast;
+using int_fast32_t = i32fast;
+using int_fast64_t = i64fast;
+
+using uint_least8_t = u8least;
+using uint_least16_t = u16least;
+using uint_least32_t = u32least;
+using uint_least64_t = u64least;
+
+using uint_fast8_t = u8fast;
+using uint_fast16_t = u16fast;
+using uint_fast32_t = u32fast;
+using uint_fast64_t = u64fast;
+
+using intmax_t = imax;
+using uintmax_t = umax;
+
+using uintptr_t = uptr;
+using intptr_t = iptr;
+
+    // misc.
 
 using byte   = u8;
 using word   = u16;
@@ -55,8 +109,6 @@ using dword  = u32;
 using qword  = u64;
 
 using uuid_t = unsigned char[16];
-
-using irqflags = u64;
 
 using nullptr_t = decltype(nullptr);
 

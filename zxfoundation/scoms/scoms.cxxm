@@ -8,6 +8,7 @@ import zxfoundation.base.types;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 import arch.s390x.lib.atomic;
+import lib.static_vector;
 
 export {
 
@@ -92,11 +93,9 @@ namespace zxfoundation::scoms {
 } // end export
 
 namespace zxfoundation::scoms::_internal {
-    /// @brief Flat type table; index == type discriminator.
-    /// Index 0 is reserved (null handle sentinel).
-    static type_descriptor g_types[SCOMS_MAX_TYPES]{};
+    // Index 0 is the null-handle sentinel — pre-populate with an empty entry.
+    static lib::static_vector<type_descriptor, SCOMS_MAX_TYPES> g_types{};
     static locking::qspinlock::qspinlock g_reg_lock{};
-    static u16 g_next_disc{1};
     static bool g_initialized{false};
 }
 
@@ -109,7 +108,7 @@ namespace zxfoundation::scoms {
     auto init() noexcept -> void {
         using namespace _internal;
         if (g_initialized) return;
-        g_next_disc   = 1;
+        (void)g_types.emplace_back(); // slot 0 — null-handle sentinel
         g_initialized = true;
     }
 
@@ -120,9 +119,6 @@ namespace zxfoundation::scoms {
     /// @param[in]  align   alignof the object.
     /// @return  Type discriminator in [1, SCOMS_MAX_TYPES), or 0 on failure
     ///          (registry full).
-    ///
-    /// @note  Registration is expected at boot time under a single CPU; the
-    ///        lock is held for correctness in case of late registration.
     [[nodiscard]] auto scoms_register_type(
         const char* name,
         u32         size,
@@ -130,22 +126,20 @@ namespace zxfoundation::scoms {
     ) noexcept -> u16 {
         using namespace _internal;
         const locking::lock_guard guard{g_reg_lock};
-        if (g_next_disc >= SCOMS_MAX_TYPES) return 0;
-        const u16 disc = g_next_disc++;
-        g_types[disc].name         = name;
-        g_types[disc].object_size  = size;
-        g_types[disc].object_align = align;
+        if (g_types.full()) return 0;
+        const u16 disc = static_cast<u16>(g_types.size());
+        auto r = g_types.emplace_back();
+        if (!r.has_value()) [[unlikely]] return 0;
+        r.value()->name         = name;
+        r.value()->object_size  = size;
+        r.value()->object_align = align;
         return disc;
     }
 
     /// @brief Look up a type descriptor by discriminator.
-    ///
-    /// @param[in]  disc  Type discriminator returned by scoms_register_type().
-    /// @return  Pointer to the descriptor, or nullptr if disc is out of range
-    ///          or unregistered.
     [[nodiscard]] auto scoms_type_descriptor(u16 disc) noexcept -> type_descriptor* {
         using namespace _internal;
-        if (disc == 0 || disc >= SCOMS_MAX_TYPES) return nullptr;
+        if (disc == 0 || disc >= g_types.size()) return nullptr;
         return g_types[disc].registered() ? &g_types[disc] : nullptr;
     }
 

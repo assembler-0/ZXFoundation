@@ -1,0 +1,284 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/variant.cxxm
+/// @brief Type-safe discriminated union — freestanding C++23.
+
+export module lib.variant;
+import zxfoundation.base.types;
+import lib.type_traits;
+import lib.concepts;
+import lib.util;
+import lib.placementnew;
+import lib.expected;
+import lib.error;
+import lib.format;
+
+export {
+
+namespace lib {
+
+    /// @brief Sentinel: returned by variant_index_of when T is not in the pack.
+    inline constexpr usize variant_npos = static_cast<usize>(-1);
+
+    namespace _variant_detail {
+        /// @brief Compute the index of T in the pack Ts..., or variant_npos.
+        template <typename T, typename... Ts>
+        constexpr auto index_of() noexcept -> usize {
+            usize i = 0;
+            bool found = false;
+            ((found ? (void)++i : (void)(found = same_as<T, Ts> ? true : (++i, false))), ...);
+            return found ? i : variant_npos;
+        }
+
+        /// @brief Max sizeof across all types.
+        template <typename... Ts>
+        constexpr usize max_size = 0;
+        template <typename T, typename... Ts>
+        constexpr usize max_size<T, Ts...> = sizeof(T) > max_size<Ts...> ? sizeof(T) : max_size<Ts...>;
+
+        /// @brief Max alignof across all types.
+        template <typename... Ts>
+        constexpr usize max_align = 1;
+        template <typename T, typename... Ts>
+        constexpr usize max_align<T, Ts...> = alignof(T) > max_align<Ts...> ? alignof(T) : max_align<Ts...>;
+
+        /// @brief Destroy the active alternative at index @p idx.
+        template <usize I, typename... Ts>
+        auto destroy_at(usize idx, void* storage) noexcept -> void {
+            // Base case: nothing to do.
+        }
+
+        template <usize I, typename T, typename... Rest>
+        auto destroy_at(usize idx, void* storage) noexcept -> void {
+            if (idx == I) reinterpret_cast<T*>(storage)->~T();
+            else destroy_at<I + 1, Rest...>(idx, storage);
+        }
+
+        /// @brief Copy-construct the alternative at index @p idx from @p src into @p dst.
+        template <usize I, typename... Ts>
+        auto copy_at(usize idx, void* dst, const void* src) noexcept -> void {}
+
+        template <usize I, typename T, typename... Rest>
+        auto copy_at(usize idx, void* dst, const void* src) noexcept -> void {
+            if (idx == I) new(dst) T(*static_cast<const T*>(src));
+            else copy_at<I + 1, Rest...>(idx, dst, src);
+        }
+
+        /// @brief Move-construct the alternative at index @p idx from @p src into @p dst.
+        template <usize I, typename... Ts>
+        auto move_at(usize idx, void* dst, void* src) noexcept -> void {}
+
+        template <usize I, typename T, typename... Rest>
+        auto move_at(usize idx, void* dst, void* src) noexcept -> void {
+            if (idx == I) new(dst) T(lib::move(*static_cast<T*>(src)));
+            else move_at<I + 1, Rest...>(idx, dst, src);
+        }
+
+        /// @brief Call visitor with the active alternative.
+        template <usize I, typename Visitor, typename... Ts>
+        auto visit_at(usize idx, Visitor&& vis, void* storage) noexcept -> void {}
+
+        template <usize I, typename Visitor, typename T, typename... Rest>
+        auto visit_at(usize idx, Visitor&& vis, void* storage) noexcept -> void {
+            if (idx == I) vis(*static_cast<T*>(storage));
+            else visit_at<I + 1, Visitor, Rest...>(idx, lib::forward<Visitor>(vis), storage);
+        }
+
+        template <usize I, typename Visitor, typename... Ts>
+        auto visit_at_const(usize idx, Visitor&& vis, const void* storage) noexcept -> void {}
+
+        template <usize I, typename Visitor, typename T, typename... Rest>
+        auto visit_at_const(usize idx, Visitor&& vis, const void* storage) noexcept -> void {
+            if (idx == I) vis(*static_cast<const T*>(storage));
+            else visit_at_const<I + 1, Visitor, Rest...>(idx, lib::forward<Visitor>(vis), storage);
+        }
+    } // namespace _variant_detail
+
+    /// @brief Type-safe discriminated union over the types @p Ts.
+    ///
+    /// @tparam Ts  At least one alternative type.  Duplicates are permitted
+    ///             but access will always resolve to the first matching index.
+    template <typename... Ts>
+        requires (sizeof...(Ts) > 0)
+    class variant {
+        static constexpr usize storage_size = _variant_detail::max_size<Ts...>;
+        static constexpr usize storage_align = _variant_detail::max_align<Ts...>;
+
+        alignas(storage_align) u8 m_storage[storage_size];
+        usize m_index{0};
+
+        auto destroy() noexcept -> void {
+            _variant_detail::destroy_at<0, Ts...>(m_index, m_storage);
+        }
+
+    public:
+        /// @brief Default-constructs the first alternative.
+        variant() noexcept {
+            using T0 = type_at_index<0, Ts...>;
+            new(m_storage) T0{};
+            m_index = 0;
+        }
+
+        /// @brief Construct from a value of type T (must be in Ts).
+        template <typename T>
+            requires (_variant_detail::index_of<unqualified<T>, Ts...>() != variant_npos)
+        variant(T&& val) noexcept {
+            constexpr usize idx = _variant_detail::index_of<unqualified<T>, Ts...>();
+            new(m_storage) unqualified<T>(lib::forward<T>(val));
+            m_index = idx;
+        }
+
+        /// @brief Copy constructor.
+        variant(const variant& o) noexcept : m_index(o.m_index) {
+            _variant_detail::copy_at<0, Ts...>(m_index, m_storage, o.m_storage);
+        }
+
+        /// @brief Move constructor.
+        variant(variant&& o) noexcept : m_index(o.m_index) {
+            _variant_detail::move_at<0, Ts...>(m_index, m_storage, o.m_storage);
+        }
+
+        ~variant() noexcept { destroy(); }
+
+        auto operator=(const variant& o) noexcept -> variant& {
+            if (this != &o) {
+                destroy();
+                m_index = o.m_index;
+                _variant_detail::copy_at<0, Ts...>(m_index, m_storage, o.m_storage);
+            }
+            return *this;
+        }
+
+        auto operator=(variant&& o) noexcept -> variant& {
+            if (this != &o) {
+                destroy();
+                m_index = o.m_index;
+                _variant_detail::move_at<0, Ts...>(m_index, m_storage, o.m_storage);
+            }
+            return *this;
+        }
+
+        /// @brief Assign from a value of type T.
+        template <typename T>
+            requires (_variant_detail::index_of<unqualified<T>, Ts...>() != variant_npos)
+        auto operator=(T&& val) noexcept -> variant& {
+            destroy();
+            constexpr usize idx = _variant_detail::index_of<unqualified<T>, Ts...>();
+            new(m_storage) unqualified<T>(lib::forward<T>(val));
+            m_index = idx;
+            return *this;
+        }
+
+        /// @brief Index of the currently active alternative.
+        [[nodiscard]] auto index() const noexcept -> usize { return m_index; }
+
+        /// @brief True when the active alternative is T.
+        template <typename T>
+        [[nodiscard]] auto holds() const noexcept -> bool {
+            constexpr usize idx = _variant_detail::index_of<T, Ts...>();
+            return idx != variant_npos && m_index == idx;
+        }
+
+        /// @brief Return a pointer to the active T, or nullptr if T is not active.
+        template <typename T>
+        [[nodiscard]] auto get_if() noexcept -> T* {
+            if (!holds<T>()) return nullptr;
+            return reinterpret_cast<T*>(m_storage);
+        }
+
+        template <typename T>
+        [[nodiscard]] auto get_if() const noexcept -> const T* {
+            if (!holds<T>()) return nullptr;
+            return reinterpret_cast<const T*>(m_storage);
+        }
+
+        /// @brief Return expected<T&, kernel_error>: err when T is not active.
+        template <typename T>
+        [[nodiscard]] auto get() noexcept -> expected<T*, kernel_error> {
+            if (!holds<T>()) [[unlikely]]
+                return unexpected(kernel_error::from_generic(generic_error::invalid_arg));
+            return reinterpret_cast<T*>(m_storage);
+        }
+
+        template <typename T>
+        [[nodiscard]] auto get() const noexcept -> expected<const T*, kernel_error> {
+            if (!holds<T>()) [[unlikely]]
+                return unexpected(kernel_error::from_generic(generic_error::invalid_arg));
+            return reinterpret_cast<const T*>(m_storage);
+        }
+
+        /// @brief Call @p visitor with the active alternative (mutable).
+        ///
+        /// @param[in] visitor  Any callable accepting each alternative type.
+        ///                     Must handle all types in Ts.
+        template <typename Visitor>
+        auto visit(Visitor&& visitor) noexcept -> void {
+            _variant_detail::visit_at<0, Visitor, Ts...>(
+                m_index, lib::forward<Visitor>(visitor), m_storage);
+        }
+
+        /// @brief Call @p visitor with the active alternative (const).
+        template <typename Visitor>
+        auto visit(Visitor&& visitor) const noexcept -> void {
+            _variant_detail::visit_at_const<0, Visitor, Ts...>(
+                m_index, lib::forward<Visitor>(visitor), m_storage);
+        }
+
+        /// @brief Destroy the current alternative and construct T in-place.
+        template <typename T, typename... Args>
+            requires (_variant_detail::index_of<T, Ts...>() != variant_npos)
+        auto emplace(Args&&... args) noexcept -> T& {
+            destroy();
+            constexpr usize idx = _variant_detail::index_of<T, Ts...>();
+            T* p = new(m_storage) T(lib::forward<Args>(args)...);
+            m_index = idx;
+            return *p;
+        }
+    };
+
+    /// @brief Free-function visit — matches std::visit call convention.
+    template <typename Visitor, typename... Ts>
+    auto visit(Visitor&& vis, variant<Ts...>& v) noexcept -> void {
+        v.visit(lib::forward<Visitor>(vis));
+    }
+
+    template <typename Visitor, typename... Ts>
+    auto visit(Visitor&& vis, const variant<Ts...>& v) noexcept -> void {
+        v.visit(lib::forward<Visitor>(vis));
+    }
+
+    template <typename T, typename... Ts>
+    [[nodiscard]] auto holds_alternative(const variant<Ts...>& v) noexcept -> bool {
+        return v.template holds<T>();
+    }
+
+    template <typename T, typename... Ts>
+    [[nodiscard]] auto get_if(variant<Ts...>& v) noexcept -> T* {
+        return v.template get_if<T>();
+    }
+
+    template <typename T, typename... Ts>
+    [[nodiscard]] auto get_if(const variant<Ts...>& v) noexcept -> const T* {
+        return v.template get_if<T>();
+    }
+
+} // namespace lib
+
+} // end export
+
+export {
+
+    /// @brief Formatter for lib::variant<Ts...>.
+    template <typename... Ts>
+    struct lib::format::formatter<lib::variant<Ts...>> {
+        auto format(format_context& ctx, const variant<Ts...>& v) const noexcept -> void {
+            ctx.write("variant<index(");
+            formatter<usize>{}.format(ctx, v.index());
+            ctx.write("): ");
+            v.visit([&ctx]<typename T0>(const T0& val) {
+                formatter<unqualified<T0>>{}.format(ctx, val);
+            });
+            ctx.write('>');
+        }
+    }; // namespace lib::format
+
+} // end export

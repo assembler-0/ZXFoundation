@@ -26,7 +26,7 @@ namespace zxfoundation::base::config {
     constexpr auto CONFIG_ZX_MAX_CPUS          = 128U;
 
     /// @brief build number
-    constexpr auto CONFIG_ZX_BUILD_NUMBER         = "@ZXFoundation_Build@";
+    constexpr auto CONFIG_ZX_BUILD_NUMBER      = "@ZXFoundation_Build@";
 
 }
 

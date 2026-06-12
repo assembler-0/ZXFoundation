@@ -20,6 +20,11 @@ import arch.s390x.lib.atomic;
 import lib.error;
 import lib.string_view;
 import lib.string;
+import lib.source_location;
+import lib.format;
+import lib.span;
+
+using zxfoundation::sys::printk::pemerg;
 
 namespace _internal {
     using namespace zxfoundation::sys::syschk;
@@ -64,19 +69,23 @@ namespace zxfoundation::sys::syschk {
     }
 
     /// @brief Halt the entire system and record a kernel error.
-    /// @param[in] err   The @ref lib::kernel_error that triggered this check.
-    ///                  Its @c category and @c code are stored verbatim in the
-    ///                  crash record — no translation occurs.
-    /// @param[in] sev   Severity annotation.  Affects the log level used and the
-    ///                  @c severity byte of the crash record.  All severity levels
-    ///                  currently result in an unconditional halt.
-    /// @param[in] msg   Human-readable reason string.  Truncated to
-    ///                  @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    ///
+    /// @param[in] err      The @ref lib::kernel_error that triggered this check.
+    ///                     Its @c category and @c code are stored verbatim in the
+    ///                     crash record — no translation occurs.
+    /// @param[in] sev      Severity annotation.  Affects the log level used and the
+    ///                     @c severity byte of the crash record.  All severity levels
+    ///                     currently result in an unconditional halt.
+    /// @param[in] msg      Human-readable reason string.  Truncated to
+    ///                     @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    /// @param[in] location Source location of the call site.
+    ///
     /// @warning  Safe from any IRQL, including MCCK (dirql).
     [[noreturn]] auto system_check(
-        lib::kernel_error   err,
-        syschk_severity     sev,
-        lib::string_view    msg
+        lib::kernel_error    err,
+        syschk_severity      sev,
+        lib::string_view     msg,
+        lib::source_location location
     ) noexcept -> void {
 
         (void)arch::s390x::cpu::irq::irq_save_disable();
@@ -89,10 +98,10 @@ namespace zxfoundation::sys::syschk {
             arch::s390x::cpu::psw::load_disabled_wait_psw();
         }
 
-        auto* lc  = arch::s390x::cpu::lowcore::get_current_phys();
+        // The physical lowcore IS at address 0x0 — that is architecturally correct.
+        // Using nullptr + offset is UB in C++; compute via uptr arithmetic instead.
         auto* rec = reinterpret_cast<zx_crash_record*>(
-            reinterpret_cast<u8*>(lc) + ZX_CRASH_RECORD_OFFSET
-        );
+            static_cast<uptr>(ZX_CRASH_RECORD_OFFSET));
 
         rec->magic        = ZX_CRASH_RECORD_MAGIC;
         rec->severity     = static_cast<u8>(sev);
@@ -108,13 +117,13 @@ namespace zxfoundation::sys::syschk {
         // Write the message — strncpy guarantees NUL termination.
         lib::strncpy(rec->msg, msg.data(), ZX_CRASH_MSG_LEN);
 
-        printk::pemerg(
-            "syschk [{}]:[category={} code={:#x}]: {}\n",
+        pemerg(
+            "syschk: [class={} category={}]\n",
             severity_name(sev),
-            static_cast<u32>(err.category),
-            err.code,
-            msg
+            err
         );
+
+        pemerg("syschk: {}: {}\n", location.function_name(), msg);
 
         if (_internal::g_cpu_map) {
             const u16 self_hw_addr = arch::s390x::cpu::processor::cpu_addr();
@@ -129,46 +138,63 @@ namespace zxfoundation::sys::syschk {
         arch::s390x::cpu::psw::load_disabled_wait_psw();
     }
 
-    /// @brief Issue a fatal system check.
+    /// @brief Issue a fatal system check with a formatted message.
     ///
-    /// @param[in] err  The @ref lib::kernel_error that triggered this check.
-    /// @param[in] msg  Human-readable reason string.
-    [[noreturn]] inline auto syschk_fatal(
-        lib::kernel_error err,
-        lib::string_view  msg
-    ) noexcept -> void {
-        system_check(err, syschk_severity::fatal, msg);
-    }
-
-    /// @brief Issue a critical system check.
+    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    ///                  Implicitly constructed from a string literal; the
+    ///                  source_location is captured at the call site.
+    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
     ///
-    /// @param[in] err  The @ref lib::kernel_error that triggered this check.
-    /// @param[in] msg  Human-readable reason string.
-    [[noreturn]] inline auto syschk_critical(
+    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1
+    ///        bytes.  No allocation occurs — the buffer is stack-local.
+    ///
+    /// @warning  Safe from any IRQL.
+    template <typename... Args>
+    [[noreturn]] auto syschk_fatal(
         lib::kernel_error err,
-        lib::string_view  msg
+        fmt_loc           fl,
+        Args&&...         args
     ) noexcept -> void {
-        system_check(err, syschk_severity::critical, msg);
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(lib::span(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::fatal, lib::string_view(buf), fl.loc);
     }
 
-    /// @brief Issue a warning-level system check.
-    /// @note  Currently still halts; reserved for future non-halting warnings.
-    /// @param[in] err  The @ref lib::kernel_error that triggered this check.
-    /// @param[in] msg  Human-readable reason string.
-    [[noreturn]] inline auto syschk_warning(
+    /// @brief Issue a critical system check with a formatted message.
+    ///
+    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
+    ///
+    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    template <typename... Args>
+    [[noreturn]] auto syschk_critical(
         lib::kernel_error err,
-        lib::string_view  msg
+        fmt_loc           fl,
+        Args&&...         args
     ) noexcept -> void {
-        system_check(err, syschk_severity::warning, msg);
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::critical, lib::string_view(buf), fl.loc);
     }
 
-    /// @brief Halt with a fatal core invariant error if @p condition is false.
-    /// @param[in] condition  Expression that must be @c true.
-    /// @param[in] msg        Message emitted on failure.
-    /// @note  Use @c static_assert for compile-time invariants instead.
-    inline auto zx_assert(bool condition, lib::string_view msg) noexcept -> void {
-        if (!condition) [[unlikely]]
-            syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::code::unknown), msg);
+    /// @brief Issue a warning-level system check with a formatted message.
+    ///
+    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
+    ///
+    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    template <typename... Args>
+    [[noreturn]] auto syschk_warning(
+        lib::kernel_error err,
+        fmt_loc           fl,
+        Args&&...         args
+    ) noexcept -> void {
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::warning, lib::string_view(buf), fl.loc);
     }
 
 } // namespace zxfoundation::sys::syschk

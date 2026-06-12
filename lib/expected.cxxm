@@ -8,6 +8,7 @@ import lib.type_traits;
 import lib.util;
 import lib.concepts;
 import lib.placementnew;
+import lib.format;
 
 export {
 
@@ -618,5 +619,53 @@ namespace lib {
     };
 
 } // namespace lib
+
+} // end export
+
+export {
+
+namespace lib::format {
+
+    /// @brief Formatter for lib::expected<T, E>.
+    ///
+    /// Produces @c "ok(val)" when a value is present, @c "err(e)" on error.
+    /// Both inner values are formatted via their own @c formatter<T>
+    /// specializations, so @c expected<kernel_error, kernel_error> produces
+    /// fully human-readable output automatically.
+    template <typename T, typename E>
+    struct formatter<expected<T, E>> {
+        /// @brief Format the expected into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Expected to format.
+        auto format(format_context& ctx, const expected<T, E>& val) const noexcept -> void {
+            if (val.has_value()) {
+                ctx.write("expected<ok(");
+                formatter<unqualified<T>>{}.format(ctx, val.value());
+                ctx.write(")>");
+            } else {
+                ctx.write("expected<err(");
+                formatter<unqualified<E>>{}.format(ctx, val.error());
+                ctx.write(")>");
+            }
+        }
+    };
+
+    template <typename E>
+    struct formatter<expected<void, E>> {
+        /// @brief Format the void-expected into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Expected to format.
+        auto format(format_context& ctx, const expected<void, E>& val) const noexcept -> void {
+            if (val.has_value()) {
+                ctx.write("expected<ok(void)>");
+            } else {
+                ctx.write("expected<err(");
+                formatter<unqualified<E>>{}.format(ctx, val.error());
+                ctx.write(")>");
+            }
+        }
+    };
+
+} // namespace lib::format
 
 } // end export

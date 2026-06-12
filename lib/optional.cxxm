@@ -10,6 +10,7 @@ import lib.placementnew;
 import lib.expected;
 import lib.error;
 import lib.compare;
+import lib.format;
 
 export {
 
@@ -316,5 +317,26 @@ namespace lib {
     }
 
 } // namespace lib
+
+} // end export
+
+export {
+
+    /// @brief Formatter for lib::optional<T>.
+    template <typename T>
+    struct lib::format::formatter<lib::optional<T>> {
+        /// @brief Format the optional into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Optional to format.
+        auto format(format_context& ctx, const optional<T>& val) const noexcept -> void {
+            if (val.has_value()) {
+                ctx.write("optional<value(");
+                formatter<unqualified<T>>{}.format(ctx, *val);
+                ctx.write(")>");
+            } else {
+                ctx.write("optional<none()>");
+            }
+        }
+    }; // namespace lib::format
 
 } // end export

@@ -201,7 +201,7 @@ typedef struct {
     } modules[ZXFL_MAX_MODULES];
 
     // ---- DYNAMIC SEGMENT ADDRESSES (discovered by p_flags scan) ----
-    uint64_t cksum_table_phys;  ///< Physical address of zxvl_checksum_table_t
+    uint64_t cksum_table;  ///< Physical address of zxvl_checksum_table_t
     uint64_t lock_phys;         ///< Physical address of .zxfl_lock segment
 
 } zxfl_boot_protocol_t;

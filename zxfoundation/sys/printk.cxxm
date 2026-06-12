@@ -15,29 +15,23 @@ import lib.format;
 import lib.util;
 import lib.ring_buffer;
 import lib.algorithm;
+import lib.static_vector;
 
 namespace _internal {
     using namespace zxfoundation::sys::printk;
 
-    /// @brief Maximum number of registered backends.
-    static constexpr usize MAX_BACKENDS = 4;
-    
-    /// @brief Capacity of the circular log buffer (128 KB).
-    /// @note Must be a power of two for lib::ring_buffer.
+    static constexpr usize MAX_BACKENDS    = 4;
     static constexpr usize LOG_BUFFER_SIZE = 128 * 1024;
 
-    /// @brief Global state for the logging system.
     struct printk_state {
         zxfoundation::locking::qspinlock::qspinlock lock;
-        printk_backend backends[MAX_BACKENDS]{};
-        usize backend_count{0};
+        lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
         log_level min_level{log_level::EMERG};
         lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
     };
 
     printk_state g_state;
 
-    /// @brief Map log levels to their display tags.
     static constexpr char level_tags[] = "XACENWID";
 
 } // namespace _internal
@@ -55,14 +49,12 @@ namespace zxfoundation::sys::printk {
     /// @param[in] backend Reference to the backend structure (must be persistent).
     auto register_backend(const printk_backend& backend) noexcept -> void {
         if (!backend.emit) return;
-
         locking::irq_lock_guard guard(_internal::g_state.lock);
-        if (_internal::g_state.backend_count < _internal::MAX_BACKENDS) {
-            if (backend.init) backend.init();
-            auto& b = _internal::g_state.backends[_internal::g_state.backend_count++];
-            b = backend;
-            b.active = true;
-        }
+        if (_internal::g_state.backends.full()) return;
+        if (backend.init) backend.init();
+        auto b = backend;
+        b.active = true;
+        (void)_internal::g_state.backends.push_back(b);
     }
 
     /// @brief Set the global minimum log level.
@@ -150,7 +142,7 @@ namespace zxfoundation::sys::printk {
             }
         }
 
-        for (usize i = 0; i < _internal::g_state.backend_count; ++i) {
+        for (usize i = 0; i < _internal::g_state.backends.size(); ++i) {
             if (const auto b = _internal::g_state.backends[i]; b.active) {
                 b.emit(final_msg);
             }

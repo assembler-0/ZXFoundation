@@ -18,11 +18,11 @@
 ///        Special segments are discovered by p_flags fingerprint:
 ///          ZXVL_PFLAGS_HS   — handshake stub (p_paddr stored as load_base)
 ///          ZXVL_PFLAGS_LOCK — structural lock (p_paddr → proto->lock_phys)
-///          ZXVL_PFLAGS_CKSUM — checksum table (p_paddr → proto->cksum_table_phys)
+///          ZXVL_PFLAGS_CKSUM — checksum table (p_paddr → proto->cksum_table)
 ///
 /// @param schid         Subchannel ID of the IPL device
 /// @param ds            Full extent list of the nucleus dataset
-/// @param proto         Boot protocol; lock_phys and cksum_table_phys are populated
+/// @param proto         Boot protocol; lock_phys and cksum_table are populated
 /// @param out_entry     Receives the ELF entry point (e_entry)
 /// @param out_load_base Receives the lowest p_paddr across all PT_LOAD segments
 /// @param out_load_size Receives the total span (max_end - min_base)

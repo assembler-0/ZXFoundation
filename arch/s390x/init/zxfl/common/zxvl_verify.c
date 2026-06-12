@@ -13,9 +13,9 @@
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/sha256.h>
 
-void zxvl_verify_nucleus_checksums(uint64_t cksum_table_phys) {
+void zxvl_verify_nucleus_checksums(uint64_t cksum_table) {
     const zxvl_checksum_table_t *tbl =
-        (const zxvl_checksum_table_t *)(uintptr_t)cksum_table_phys;
+        (const zxvl_checksum_table_t *)(uintptr_t)cksum_table;
 
     if (tbl->magic != ZXVL_CKSUM_MAGIC)
         panic("zxvl: nucleus checksum table absent");

@@ -49,8 +49,7 @@ static auto handle_ipi(
     [[maybe_unused]] void* data
 ) noexcept -> void {
     auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-    auto& ec  = *reinterpret_cast<arch::s390x::lib::atomic::atomic<u64>*>(&pcp.ec_bits);
-    const u64 bits = ec.exchange(0, arch::s390x::lib::atomic::memory_order::seq_cst);
+    const u64 bits = pcp.ec_bits.exchange(0, arch::s390x::lib::atomic::memory_order::seq_cst);
     if (bits & arch::s390x::cpu::smp::EC_HALT_BIT)
         arch::s390x::cpu::psw::load_disabled_wait_psw();
 }

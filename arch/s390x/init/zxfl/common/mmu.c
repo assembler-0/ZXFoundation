@@ -223,8 +223,8 @@ static uint64_t *alloc_page_table(void) {
     proto->kernel_stack_top = hhdm_phys_to_virt(proto->kernel_stack_top);
     proto->mem_map_addr     = hhdm_phys_to_virt(proto->mem_map_addr);
     proto->cmdline_addr     = hhdm_phys_to_virt(proto->cmdline_addr);
-    if (proto->cksum_table_phys)
-        proto->cksum_table_phys = hhdm_phys_to_virt(proto->cksum_table_phys);
+    if (proto->cksum_table)
+        proto->cksum_table = hhdm_phys_to_virt(proto->cksum_table);
 
     uint64_t v_proto = hhdm_phys_to_virt(boot_proto);
     uint64_t v_stack = proto->kernel_stack_top;

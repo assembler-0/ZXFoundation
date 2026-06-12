@@ -1,10 +1,12 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/syschk_types.cxxm
-/// @brief System-check crash record layout.
+/// @brief System-check crash record layout and formatting helpers.
 
 export module zxfoundation.sys.syschk_types;
 import zxfoundation.base.types;
 import lib.error;
+import lib.source_location;
+import lib.string_view;
 
 export {
 
@@ -18,8 +20,8 @@ namespace zxfoundation::sys::syschk {
     };
 
     /// @brief Return a short ASCII label for a severity level.
-    /// @param s  Severity to label.
-    /// @return   Statically allocated NUL-terminated string.
+    /// @param[in] s  Severity to label.
+    /// @return       Statically allocated NUL-terminated string.
     [[nodiscard]] constexpr auto severity_name(syschk_severity s) noexcept -> const char* {
         switch (s) {
             case syschk_severity::fatal:    return "fatal";
@@ -54,6 +56,33 @@ namespace zxfoundation::sys::syschk {
 
     static_assert(sizeof(zx_crash_record) <= 256U,
         "zx_crash_record must fit within the 256-byte budget at ZX_CRASH_RECORD_OFFSET");
+
+    /// @brief Bundle carrying a format-string and its call-site source location.
+    struct fmt_loc {
+        lib::string_view     fmt;  ///< The format string.
+        lib::source_location loc;  ///< Call-site source location.
+
+        /// @brief Construct from a NUL-terminated string literal.
+        /// @param[in] f    Format string literal.
+        /// @param[in] l    Automatically deduced call-site source location.
+        template <usize N>
+        consteval fmt_loc(
+            const char (&f)[N],
+            lib::source_location l = lib::source_location::current()
+        ) noexcept
+            : fmt(f, N - 1), loc(l) {}
+
+        /// @brief Construct from a lib::string_view (for programmatic use).
+        /// @param[in] sv   Format string as string_view.
+        /// @param[in] l    Automatically deduced call-site source location.
+        /// @warning        Using a runtime string_view loses the call-site
+        ///                 guarantee; l defaults to the caller's site.
+        consteval fmt_loc(
+            lib::string_view sv,
+            lib::source_location l = lib::source_location::current()
+        ) noexcept
+            : fmt(sv), loc(l) {}
+    };
 
 } // namespace zxfoundation::sys::syschk
 

@@ -24,6 +24,10 @@ import crypto.sha256;
 import drivers.console.diag;
 import lib.span;
 import lib.error;
+import lib.expected;
+import lib.optional;
+import lib.pair;
+import lib.source_location;
 
 using zxfoundation::sys::printk::pinfo;
 
@@ -64,36 +68,34 @@ namespace _internal {
     /// @brief Validate the loader-written stack frame canary at kernel_stack_top.
     /// @param[in] boot  Kernel-side copy of the ZXFL boot protocol.
     static auto validate_stack_frame(const arch::s390x::init::zxfl::protocol& boot) -> void {
-        if (!boot.kernel_stack_top) [[unlikely]]
-            goto bad;
+        auto bad = [&] [[noreturn]] -> void {
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::checksum_mismatch),
+                "sys: stack frame corruption - unauthorized loader"
+            );
+        };
 
-        {
-            const auto* frame = reinterpret_cast<const uint64_t*>(boot.kernel_stack_top);
-            if (frame[0] != arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_A)
-                goto bad;
-            const uint64_t expected_b =
-                arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_B ^ boot.binding_token;
-            if (frame[1] == expected_b)
-                return;
-        }
-    bad:
-        syschk_fatal(
-            lib::kernel_error::from_init(lib::init_error::code::checksum_mismatch),
-            "sys: stack frame corruption - unauthorized loader"
-        );
+        if (!boot.kernel_stack_top) [[unlikely]] bad();
+
+        const auto* frame = reinterpret_cast<const uint64_t*>(boot.kernel_stack_top);
+        if (frame[0] != arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_A) bad();
+
+        const uint64_t expected_b =
+            arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_B ^ boot.binding_token;
+        if (frame[1] != expected_b) bad();
     }
 
     /// @brief Re-verify all kernel segment checksums from the HHDM-mapped image.
     /// @param[in] boot  Kernel-side copy of the ZXFL boot protocol.
     static auto verify_kernel_checksums(const arch::s390x::init::zxfl::protocol& boot) -> void {
-        if (!boot.cksum_table_phys) [[unlikely]]
+        if (!boot.cksum_table) [[unlikely]]
             syschk_fatal(
                 lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
                 "sys: no kernel checksum table — unauthorized loader"
             );
 
         const auto* tbl = reinterpret_cast<const arch::s390x::init::zxvl::checksum_table*>(
-            boot.cksum_table_phys);
+            boot.cksum_table);
 
         if (tbl->magic != arch::s390x::init::zxvl::ZXVL_CKSUM_MAGIC)
             syschk_fatal(

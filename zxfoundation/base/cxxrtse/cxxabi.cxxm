@@ -3,15 +3,17 @@
 /// @brief minimal cxxabi implementation
 
 export module zxfoundation.base.cxxrtse.cxxabi;
+import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.locking.qspinlock;
 import lib.error;
+import lib.static_vector;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
 
 namespace {
 
-constexpr unsigned long CXA_ATEXIT_MAX = 256;
+constexpr usize CXA_ATEXIT_MAX = 256;
 
 struct AtExitEntry {
     void (*destructor)(void*);
@@ -19,46 +21,37 @@ struct AtExitEntry {
     void* dso;
 };
 
-AtExitEntry g_atexit_table[CXA_ATEXIT_MAX];
-unsigned long g_atexit_count = 0;
+lib::static_vector<AtExitEntry, CXA_ATEXIT_MAX> g_atexit_table{};
 
 zxfoundation::locking::qspinlock::qspinlock g_atexit_lock{};
-auto atexit_lock() noexcept -> void {
-    g_atexit_lock.lock();
-}
-
-auto atexit_unlock() noexcept -> void{
-    g_atexit_lock.unlock();
-}
+auto atexit_lock()   noexcept -> void { g_atexit_lock.lock(); }
+auto atexit_unlock() noexcept -> void { g_atexit_lock.unlock(); }
 
 } // anonymous namespace
 
 extern "C" {
 
-auto __cxa_atexit(void (*destructor)(void*), void* obj, void* dso) -> int{
+auto __cxa_atexit(void (*destructor)(void*), void* obj, void* dso) -> int {
     if (!destructor) return 0;
     atexit_lock();
-    if (g_atexit_count >= CXA_ATEXIT_MAX) {
-        atexit_unlock();
-        arch::s390x::cpu::psw::load_disabled_wait_psw();
-    }
-    g_atexit_table[g_atexit_count++] = { destructor, obj, dso };
+    const bool ok = g_atexit_table.push_back({ destructor, obj, dso }).has_value();
     atexit_unlock();
+    if (!ok) [[unlikely]] arch::s390x::cpu::psw::load_disabled_wait_psw();
     return 0;
 }
 
 auto __cxa_finalize(void* dso) -> void {
-    const unsigned long snap = __atomic_load_n(&g_atexit_count, __ATOMIC_ACQUIRE);
+    atexit_lock();
+    const usize snap = g_atexit_table.size();
+    atexit_unlock();
+
     for (long i = static_cast<long>(snap) - 1; i >= 0; --i) {
-        AtExitEntry& e = g_atexit_table[i];
-        if (!e.destructor) continue;
-        if (dso && e.dso != dso) continue;
-        void (*fn)(void*) = e.destructor;
-        void* obj = e.obj;
         atexit_lock();
-        e.destructor = nullptr;
+        AtExitEntry e = g_atexit_table[static_cast<usize>(i)];
+        if (!e.destructor || (dso && e.dso != dso)) { atexit_unlock(); continue; }
+        g_atexit_table[static_cast<usize>(i)].destructor = nullptr;
         atexit_unlock();
-        fn(obj);
+        e.destructor(e.obj);
     }
 }
 

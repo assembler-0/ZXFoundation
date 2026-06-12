@@ -22,4 +22,4 @@
 #define CONFIG_ZX_MAX_CPUS           128U
 
 /// @brief build number
-#define CONFIG_ZX_BUILD_NUMBER     "5"
+#define CONFIG_ZX_BUILD_NUMBER     "24"

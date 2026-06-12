@@ -7,6 +7,7 @@ import zxfoundation.base.types;
 import lib.util;
 import lib.concepts;
 import lib.compare;
+import lib.format;
 
 export {
 
@@ -126,5 +127,24 @@ namespace lib {
     /// @}
 
 } // namespace lib
+
+} // end export
+
+export {
+
+    /// @brief Formatter for lib::pair<T1, T2>.
+    template <typename T1, typename T2>
+    struct lib::format::formatter<lib::pair<T1, T2>> {
+        /// @brief Format the pair into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Pair to format.
+        auto format(format_context& ctx, const pair<T1, T2>& val) const noexcept -> void {
+            ctx.write("pair<first(");
+            formatter<unqualified<T1>>{}.format(ctx, val.first);
+            ctx.write("), second(");
+            formatter<unqualified<T2>>{}.format(ctx, val.second);
+            ctx.write(")>");
+        }
+    }; // namespace lib::format
 
 } // end export

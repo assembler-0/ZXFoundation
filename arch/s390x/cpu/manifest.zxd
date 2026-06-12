@@ -1,5 +1,6 @@
 !files : !compile_group -> [auto] {
     irq_frame.cxxm
+    irq_types.cxxm
     irq.cxxm
     lowcore_types.cxxm
     lowcore.cxxm

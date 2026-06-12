@@ -3,9 +3,10 @@
 /// @brief locking concepts and RAII guards
 
 export module zxfoundation.locking.lock;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq_types;
 import lib.concepts;
 import lib.optional;
-import zxfoundation.base.types;
 
 export {
 

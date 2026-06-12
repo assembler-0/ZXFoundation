@@ -3,9 +3,9 @@
 /// @brief concepts
 
 export module lib.concepts;
-import zxfoundation.base.types;
 import lib.type_traits;
 import lib.util;
+import zxfoundation.base.types;
 
 export {
 

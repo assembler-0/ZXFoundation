@@ -8,6 +8,7 @@ import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.sigp;
 import arch.s390x.cpu.sigp_types;
 import arch.s390x.cpu.smp_types;
+import arch.s390x.lib.atomic;
 import zxfoundation.base.types;
 
 export {
@@ -22,7 +23,7 @@ namespace arch::s390x::cpu::ipi {
         percpu::s390x_percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
         if (!pcp) [[unlikely]] return;
 
-        __atomic_fetch_or(&pcp->ec_bits, smp::EC_HALT_BIT, __ATOMIC_SEQ_CST);
+        (void)pcp->ec_bits.fetch_or(smp::EC_HALT_BIT, lib::atomic::memory_order::seq_cst);
 
         u32 status{0};
         sigp::sigp_busy(pcp->cpu_addr,

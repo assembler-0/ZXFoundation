@@ -10,6 +10,7 @@ import arch.s390x.cpu.psw;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.irq;
+import arch.s390x.cpu.irq_types;
 import arch.s390x.lib.atomic;
 import lib.bit;
 

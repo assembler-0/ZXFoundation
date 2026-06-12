@@ -3,9 +3,9 @@
 /// @brief C++23 STL-compatible span implementation
 
 export module lib.span;
-import zxfoundation.base.types;
 import lib.concepts;
 import lib.type_traits;
+import zxfoundation.base.types;
 
 export {
 

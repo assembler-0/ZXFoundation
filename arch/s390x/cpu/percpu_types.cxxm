@@ -31,7 +31,9 @@ namespace arch::s390x::cpu::percpu {
         u32     softirq_pending{};     ///< Bitmask of pending deferred softirqs.
         u32     irq_nesting{};         ///< IRQ nesting depth (0 = not in IRQ handler).
         u32     lock_depth{};          ///< Current qspinlock MCS node allocation depth.
-        u64     ec_bits{};             ///< Bitmask of pending IPI actions (ec_schedule, etc).
+        /// @brief Pending IPI action bitmask (EC_HALT_BIT, ec_schedule, etc.).
+        /// Declared atomic<u64> — smp.cxxm exchanges this without a cast.
+        arch::s390x::lib::atomic::atomic<u64> ec_bits{};
 
         zxfoundation::locking::mcs::mcs_node qnodes[zxfoundation::locking::mcs::MCS_MAX_LOCK_DEPTH]{};
 
