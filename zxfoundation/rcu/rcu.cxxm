@@ -1,0 +1,265 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/rcu/rcu.cxxm
+/// @brief Read-Copy-Update — non-preemptive SMP implementation.
+///
+/// ── Model ─────────────────────────────────────────────────────────────
+///
+///   Non-preemptive SMP RCU, analogous to Linux TREE_RCU for
+///   CONFIG_PREEMPT_NONE kernels.
+///
+///   Quiescent state: a CPU is in a QS when in_rcu_read_side == 0
+///   AND not executing inside rcu_read_lock().  Every tick (10ms)
+///   is an opportunity to report a QS.
+///
+///   Grace period:
+///     g_gp_seq even  → no GP in progress.
+///     g_gp_seq odd   → GP in progress; wait for all CPUs' QS.
+///     Completing:    store gp_seq+1 (even) once all CPUs reported QS.
+///
+///   Callbacks: per-CPU pending list under preempt_disable.
+///   Drain: per-CPU on each tick, up to RCU_MAX_DRAIN_PER_TICK.
+///
+/// ── TU-local exposure constraint ──────────────────────────────────────
+///
+///   C++20 modules disallow exported inline functions from referencing
+///   TU-local entities (statics with internal linkage).  All exported
+///   API functions are therefore NOT inline — they are out-of-line
+///   definitions whose bodies are compiled into the module's TU.
+///   Only the read-side rcu_read_guard constructor/destructor are
+///   inline because they call the exported (non-TU-local) rcu_read_lock
+///   and rcu_read_unlock, which are themselves non-inline.
+
+export module zxfoundation.rcu.rcu;
+import zxfoundation.rcu.rcu_types;
+import zxfoundation.sched.context;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
+import arch.s390x.cpu.percpu_types;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.processor;
+import arch.s390x.lib.atomic;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+
+// ── Module-internal state (TU-local; NOT exported) ────────────────────────
+
+namespace zxfoundation::rcu::_internal {
+
+    using memory_order = arch::s390x::lib::atomic::memory_order;
+    using atomic_u64   = arch::s390x::lib::atomic::atomic<u64>;
+    using atomic_u32   = arch::s390x::lib::atomic::atomic<u32>;
+
+    static atomic_u64 g_gp_seq{0};    ///< GP sequence counter. Even=idle, odd=active.
+    static atomic_u32 g_gp_lock{0};   ///< BSP-side GP state lock.
+    static atomic_u64 g_qs_bits[2]{{0}, {0}}; ///< Per-CPU QS bitmask (128 CPUs).
+    static bool       g_initialized{false};
+
+    auto gp_lock_acquire() noexcept -> void {
+        u32 expected = 0;
+        while (!g_gp_lock.compare_exchange_weak(
+            expected, 1U, memory_order::acquire, memory_order::relaxed))
+        {
+            expected = 0;
+            arch::s390x::cpu::processor::cpu_relax();
+        }
+    }
+
+    auto gp_lock_release() noexcept -> void {
+        g_gp_lock.store(0U, memory_order::release);
+    }
+
+    auto record_qs(u32 cpu_id) noexcept -> void {
+        const u32 word = cpu_id >> 6U;
+        const u32 bit  = cpu_id & 63U;
+        if (word < 2)
+            (void)g_qs_bits[word].fetch_or(1ULL << bit, memory_order::release);
+    }
+
+    auto all_qs_reported() noexcept -> bool {
+        constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
+        for (u32 i = 0; i < max_cpus; ++i) {
+            if (!arch::s390x::cpu::lowcore::get_for_cpu(static_cast<u16>(i))) continue;
+            const u32 word = i >> 6U;
+            const u32 bit  = i & 63U;
+            if (!(g_qs_bits[word].load(memory_order::acquire) & (1ULL << bit)))
+                return false;
+        }
+        return true;
+    }
+
+    auto drain_callbacks(
+        arch::s390x::cpu::percpu::s390x_percpu_data& pcp,
+        gp_seq_t completed_gp
+    ) noexcept -> void {
+        if (!pcp.rcu_pending_cbs) return;
+        if (!gp_seq_after(completed_gp, pcp.rcu_pending_gp - 1U)) return;
+        u32 drained = 0;
+        while (pcp.rcu_pending_cbs && drained < RCU_MAX_DRAIN_PER_TICK) {
+            auto* head = static_cast<rcu_head*>(pcp.rcu_pending_cbs);
+            pcp.rcu_pending_cbs = head->next;
+            if (pcp.rcu_pending_count > 0U) --pcp.rcu_pending_count;
+            ++drained;
+            if (head->func) head->func(head);
+        }
+    }
+
+} // namespace zxfoundation::rcu::_internal
+
+export {
+
+namespace zxfoundation::rcu {
+
+    auto rcu_init() noexcept -> void {
+        using namespace _internal;
+        if (g_initialized) return;
+        g_gp_seq.store(0U, memory_order::relaxed);
+        g_qs_bits[0].store(0U, memory_order::relaxed);
+        g_qs_bits[1].store(0U, memory_order::relaxed);
+        g_initialized = true;
+    }
+
+    /// @brief Enter an RCU read-side critical section.
+    auto rcu_read_lock() noexcept -> void {
+        sched::context::preempt_disable();
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        ++pcp.in_rcu_read_side;
+        arch::s390x::cpu::processor::barrier();
+    }
+
+    /// @brief Exit an RCU read-side critical section.
+    auto rcu_read_unlock() noexcept -> void {
+        using namespace _internal;
+        arch::s390x::cpu::processor::barrier();
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        if (pcp.in_rcu_read_side > 0) --pcp.in_rcu_read_side;
+        sched::context::preempt_enable();
+        if (pcp.in_rcu_read_side == 0U) {
+            const gp_seq_t seq = g_gp_seq.load(memory_order::acquire);
+            if (gp_in_progress(seq))
+                record_qs(pcp.cpu_id);
+        }
+    }
+
+    /// @brief RAII RCU read-side guard (inline OK — calls exported non-TU-local functions).
+    class rcu_read_guard {
+    public:
+        rcu_read_guard()  noexcept { rcu_read_lock();   }
+        ~rcu_read_guard() noexcept { rcu_read_unlock(); }
+        rcu_read_guard(const rcu_read_guard&)  = delete;
+        auto operator=(const rcu_read_guard&)  = delete;
+    };
+
+    /// @brief Load a RCU-protected pointer with acquire semantics.
+    template<typename T>
+    [[nodiscard]] auto rcu_dereference(T* const& ptr) noexcept -> T* {
+        arch::s390x::cpu::processor::barrier();
+        T* v;
+        __atomic_load(&ptr, &v,
+            static_cast<int>(arch::s390x::lib::atomic::memory_order::acquire));
+        return v;
+    }
+
+    /// @brief Publish a pointer with release semantics.
+    template<typename T>
+    auto rcu_assign_pointer(T*& ptr, T* v) noexcept -> void {
+        __atomic_store(&ptr, &v,
+            static_cast<int>(arch::s390x::lib::atomic::memory_order::release));
+    }
+
+    /// @brief Enqueue a deferred callback after the next grace period.
+    auto call_rcu(rcu_head* head, void(*func)(rcu_head*) noexcept) noexcept -> void {
+        using namespace _internal;
+        head->func = func;
+        head->next = nullptr;
+
+        sched::context::preempt_disable();
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+
+        const gp_seq_t cur_seq   = g_gp_seq.load(memory_order::acquire);
+        const gp_seq_t mature_at = cur_seq + 2U;
+        if (pcp.rcu_pending_gp < mature_at)
+            pcp.rcu_pending_gp = mature_at;
+
+        head->next = static_cast<rcu_head*>(pcp.rcu_pending_cbs);
+        pcp.rcu_pending_cbs = head;
+        ++pcp.rcu_pending_count;
+
+        sched::context::preempt_enable();
+    }
+
+    /// @brief Block until all pre-existing RCU readers complete.
+    auto synchronize_rcu() noexcept -> void {
+        using namespace _internal;
+        gp_lock_acquire();
+        gp_seq_t seq = g_gp_seq.load(memory_order::acquire);
+        if (!gp_in_progress(seq)) {
+            g_qs_bits[0].store(0U, memory_order::relaxed);
+            g_qs_bits[1].store(0U, memory_order::relaxed);
+            g_gp_seq.store(seq + 1U, memory_order::release);
+            seq = seq + 1U;
+        }
+        gp_lock_release();
+
+        const gp_seq_t target = seq + 1U;
+        while (!gp_seq_after(g_gp_seq.load(memory_order::acquire), target - 1U))
+            arch::s390x::cpu::processor::cpu_relax();
+    }
+
+    /// @brief Wait until all enqueued call_rcu callbacks have fired.
+    auto rcu_barrier() noexcept -> void {
+        constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
+        for (u32 i = 0; i < max_cpus; ++i) {
+            auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(static_cast<u16>(i));
+            if (!lc) continue;
+            while (lc->percpu.rcu_pending_count > 0U)
+                arch::s390x::cpu::processor::cpu_relax();
+        }
+    }
+
+    /// @brief Per-CPU RCU tick: report QS, manage GPs, drain callbacks.
+    auto rcu_tick() noexcept -> void {
+        using namespace _internal;
+        if (!g_initialized) return;
+
+        auto& pcp         = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        const u32 cpu_id  = pcp.cpu_id;
+
+        const gp_seq_t cur_gp = g_gp_seq.load(memory_order::acquire);
+        if (gp_in_progress(cur_gp) && pcp.in_rcu_read_side == 0U)
+            record_qs(cpu_id);
+
+        if (cpu_id == 0U) {
+            gp_lock_acquire();
+            const gp_seq_t gp = g_gp_seq.load(memory_order::relaxed);
+            if (gp_in_progress(gp)) {
+                if (all_qs_reported()) {
+                    g_gp_seq.store(gp + 1U, memory_order::release);
+                    g_qs_bits[0].store(0U, memory_order::relaxed);
+                    g_qs_bits[1].store(0U, memory_order::relaxed);
+                }
+            } else {
+                constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
+                bool need_gp = false;
+                for (u32 i = 0; i < max_cpus && !need_gp; ++i) {
+                    auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(
+                        static_cast<u16>(i));
+                    if (lc && lc->percpu.rcu_pending_count > 0U)
+                        need_gp = true;
+                }
+                if (need_gp) {
+                    g_qs_bits[0].store(0U, memory_order::relaxed);
+                    g_qs_bits[1].store(0U, memory_order::relaxed);
+                    g_gp_seq.store(gp + 1U, memory_order::release);
+                }
+            }
+            gp_lock_release();
+        }
+
+        const gp_seq_t done_gp = g_gp_seq.load(memory_order::acquire);
+        if (!gp_in_progress(done_gp) && pcp.rcu_pending_cbs)
+            drain_callbacks(pcp, done_gp);
+    }
+
+} // namespace zxfoundation::rcu
+
+} // end export

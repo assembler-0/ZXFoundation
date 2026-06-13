@@ -61,7 +61,7 @@ namespace lib {
             region_overlap      = 4,  ///< Memory regions overlap illegally.
             hhdm_init_failed    = 5,  ///< High-Half Direct Map initialization failed.
             page_fault          = 6,  ///< Page fault occurred.
-            irql_not_less_or_equal = 7,  ///< Allocation attempted at elevated IRQL where it is forbidden.
+            invalid_irq_contex  = 7,  ///< Allocation attempted at elevated invalid ctx where it is forbidden.
             transaction_aborted = 8,  ///< Transaction rolled back; no resources were committed.
             capability_invalid  = 9,  ///< Capability token is null, revoked, or wrong purpose.
             purpose_mismatch    = 10, ///< Capability purpose does not match the requested use.
@@ -125,6 +125,7 @@ namespace lib {
             not_found       = 5,  ///< Requested item does not exist in the table.
             unknown         = 6,  ///< Unknown error.
             out_of_range    = 7,  ///< Index or address is outside valid bounds.
+            uninitialized   = 8,  ///< Uninitialized.
         };
     }
 
@@ -270,7 +271,7 @@ namespace lib {
                     case memory_error::region_overlap:      return "region_overlap";
                     case memory_error::hhdm_init_failed:    return "hhdm_init_failed";
                     case memory_error::page_fault:          return "page_fault";
-                    case memory_error::irql_not_less_or_equal: return "irql_not_less_or_equal";
+                    case memory_error::invalid_irq_contex:  return "invalid_irq_contex";
                     case memory_error::transaction_aborted: return "transaction_aborted";
                     case memory_error::capability_invalid:  return "capability_invalid";
                     case memory_error::purpose_mismatch:    return "purpose_mismatch";
@@ -332,6 +333,7 @@ namespace lib {
                     case generic_error::not_found:       return "not_found";
                     case generic_error::unknown:         return "unknown";
                     case generic_error::out_of_range:    return "out_of_range";
+                    case generic_error::uninitialized:   return "uninitialized";
                     default: return "?";
                 }
             default:

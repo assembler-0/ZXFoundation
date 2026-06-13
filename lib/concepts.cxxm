@@ -145,6 +145,10 @@ namespace lib {
         };
 
     template <typename t>
+    concept is_trivially_copyable = __is_trivially_copyable(t);
+
+
+    template <typename t>
     concept is_copy_assignable = assignable_from<t&, const t&>;
 
     template <typename t>

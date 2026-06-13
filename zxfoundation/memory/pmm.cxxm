@@ -5,7 +5,7 @@
 export module zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.sched.irql;
+import zxfoundation.sched.context;
 import zxfoundation.sys.transaction;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
@@ -504,15 +504,14 @@ namespace zxfoundation::memory::pmm {
                 return lib::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::out_of_memory));
 
-            const auto lvl = sched::current_irql();
-            if (lvl >= sched::irql::dirql)
+            if (sched::context::in_mcck())
                 sys::syschk::syschk_fatal(
-                    lib::kernel_error::from_memory(lib::memory_error::irql_not_less_or_equal),
-                    "pmm::transaction::alloc at DIRQL forbidden");
-            if (lvl >= sched::irql::dispatch && order > 0)
+                    lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                    "pmm::transaction::alloc forbidden in MCCK context");
+            if (sched::context::in_hardirq() && order > 0U)
                 sys::syschk::syschk_fatal(
-                    lib::kernel_error::from_memory(lib::memory_error::irql_not_less_or_equal),
-                    "pmm::transaction::alloc order > 0 at DISPATCH forbidden");
+                    lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                    "pmm::transaction::alloc order > 0 forbidden in hard-IRQ context");
 
             const u8 numa_hint =
                 arch::s390x::cpu::lowcore::this_cpu_percpu().drawer_id;
@@ -565,15 +564,14 @@ namespace zxfoundation::memory::pmm {
     ) noexcept -> lib::expected<folio_fresh, lib::kernel_error> {
         using namespace _internal;
 
-        const auto lvl = sched::current_irql();
-        if (lvl >= sched::irql::dirql)
+        if (sched::context::in_mcck())
             sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::irql_not_less_or_equal),
-                "pmm::alloc at DIRQL forbidden");
-        if (lvl >= sched::irql::dispatch && order > 0)
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::alloc forbidden in MCCK context");
+        if (sched::context::in_hardirq() && order > 0U)
             sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::irql_not_less_or_equal),
-                "pmm::alloc order>0 at DISPATCH forbidden");
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::alloc order>0 forbidden in hard-IRQ context");
 
         u64 phys      = 0;
         u8  numa_hint = 0;
@@ -633,7 +631,12 @@ namespace zxfoundation::memory::pmm {
         // Reset frame_desc so the frame shows as buddy-owned.
         desc_of(phys).set(static_cast<u8>(order), frame_owner::buddy, 0);
 
-        if (order <= PCP_MAX_ORDER && sched::current_irql() < sched::irql::dispatch) {
+        // Use PCP when not inside a hardware interrupt handler.
+        // In hard-IRQ / MCCK context the zone lock may be held by the
+        // interrupted thread; irq_save_disable inside pcp_push/pcp_drain is
+        // safe (it saves already-off state) but pcp_drain's zone-lock path
+        // is not.  Defer directly to the zone lock path instead.
+        if (order <= PCP_MAX_ORDER && !sched::context::in_interrupt()) {
             const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
             pcp_list& lst = arch::s390x::cpu::lowcore::this_cpu_percpu()
                                 .pcp.lists[static_cast<u32>(z)][order];

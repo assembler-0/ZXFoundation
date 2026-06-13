@@ -30,6 +30,8 @@ namespace zxfoundation::base {
     struct tag_device_ch    {};  ///< CCW subchannel / QDIO queue.
     struct tag_ipc_port     {};  ///< Synchronous message port.
     struct tag_timer        {};  ///< Kernel timer object.
+    struct tag_slub_cache   {};  ///< SLUB kmem_cache slab cache descriptor.
+    struct tag_console     {};  ///< Console/logging backend.
 
     /// @brief Compile-time discriminator: T is a valid kernel object tag.
     template <typename T>
@@ -51,15 +53,41 @@ namespace zxfoundation::base {
         auto operator=(const kernel_object&)                   = delete;
         kernel_object(kernel_object&&)                noexcept = default;
         auto operator=(kernel_object&&) noexcept -> kernel_object& = default;
+    };
 
-        /// @brief Advance to NewState, consuming this instance.
-        /// @tparam NewState  Target lifecycle state; must differ from State.
-        /// @return  A new kernel_object in NewState.
-        template <lifecycle_state NewState>
-            requires (NewState != State)
-        [[nodiscard]] auto transition() && noexcept -> kernel_object<Tag, NewState> {
-            return kernel_object<Tag, NewState>{};
-        }
+    // ── Typestate infrastructure ─────────────────────────────────────────
+
+    /// @brief Compile-time state constant for transition method dispatch.
+    ///
+    /// Usage in derived types:
+    ///   auto activate(state_tag<lifecycle_state::fresh>) && -> Foo<ready>;
+    template <lifecycle_state S>
+    struct state_tag {
+        static constexpr lifecycle_state value = S;
+    };
+
+    /// @brief Compile-time query: does this kernel_object have the given state?
+    template <lifecycle_state Query, object_tag Tag, lifecycle_state Actual>
+    [[nodiscard]] constexpr auto is_state(
+        [[maybe_unused]] const kernel_object<Tag, Actual>&
+    ) noexcept -> bool {
+        return Query == Actual;
+    }
+
+    /// @brief Concept: T is a kernel_object-derived type currently in state S.
+    template <typename T, lifecycle_state S>
+    concept in_state = (T::state == S);
+
+    /// @brief Concept: T is in state S or later (fresh < ready < suspended < dying).
+    template <typename T, lifecycle_state S>
+    concept state_at_least =
+        (static_cast<u8>(T::state) >= static_cast<u8>(S));
+
+    /// @brief Concept: T is a kernel_object-derived type with the given Tag.
+    template <typename T, typename Tag>
+    concept tagged_as = requires {
+        typename T::tag_type;
+        requires lib::same_as<typename T::tag_type, Tag>;
     };
 
     /// @brief Primary template — undefined; triggers a clear linker error for
@@ -67,7 +95,7 @@ namespace zxfoundation::base {
     template <object_tag T>
     struct tag_name;
 
-    template <> struct tag_name<tag_phys_region> { static constexpr lib::string_view value = "phys_region"; };
+    template <> struct tag_name<tag_phys_region>  { static constexpr lib::string_view value = "phys_region";  };
     template <> struct tag_name<tag_virt_region>  { static constexpr lib::string_view value = "virt_region";  };
     template <> struct tag_name<tag_thread>       { static constexpr lib::string_view value = "thread";       };
     template <> struct tag_name<tag_process>      { static constexpr lib::string_view value = "process";      };
@@ -75,10 +103,10 @@ namespace zxfoundation::base {
     template <> struct tag_name<tag_device_ch>    { static constexpr lib::string_view value = "device_ch";    };
     template <> struct tag_name<tag_ipc_port>     { static constexpr lib::string_view value = "ipc_port";     };
     template <> struct tag_name<tag_timer>        { static constexpr lib::string_view value = "timer";        };
+    template <> struct tag_name<tag_slub_cache>   { static constexpr lib::string_view value = "slub_cache";   };
+    template <> struct tag_name<tag_console>    { static constexpr lib::string_view value = "console";    };
 
     /// @brief Return the ASCII name of a lifecycle_state value.
-    /// @param[in] s  State to name.
-    /// @return       Statically allocated string; never null.
     [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept -> lib::string_view {
         switch (s) {
             case lifecycle_state::fresh:     return "fresh";
@@ -96,13 +124,8 @@ namespace zxfoundation::base {
 export {
 
     /// @brief Formatter for zxfoundation::base::kernel_object<Tag, State>.
-    /// @tparam Tag    Object tag type; must have a @ref zxfoundation::base::tag_name specialization.
-    /// @tparam State  Lifecycle state encoded as a template non-type parameter.
     template <zxfoundation::base::object_tag Tag, zxfoundation::base::lifecycle_state State>
     struct lib::format::formatter<zxfoundation::base::kernel_object<Tag, State>> {
-        /// @brief Format the kernel_object into ctx.
-        /// @param[in,out] ctx  Output context.
-        /// @param[in]     val  Object to format (unused — all info is in the type).
         auto format(
             format_context& ctx,
             [[maybe_unused]] const zxfoundation::base::kernel_object<Tag, State>& val

@@ -1,110 +1,94 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/scoms/scoms.cxxm
-/// @brief Scalable Object Management System (SCOMS).
+/// @brief SCOMS — Scalable Object Management System.
 
 export module zxfoundation.scoms.scoms;
+import zxfoundation.scoms.scoms_types;
 import zxfoundation.base.object;
 import zxfoundation.base.types;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 import arch.s390x.lib.atomic;
 import lib.static_vector;
+import lib.concepts;
+import zxfoundation.sys.printk;
+import lib.format;
 
-export {
-
-namespace zxfoundation::scoms {
-    using base::lifecycle_state;
-    using base::object_tag;
-
-    /// @brief Atomic per-type object counters.
-    struct object_stats {
-        arch::s390x::lib::atomic::atomic<u64> total_created{0};  ///< Cumulative allocations.
-        arch::s390x::lib::atomic::atomic<u64> live{0};           ///< Currently live objects.
-        arch::s390x::lib::atomic::atomic<u64> peak{0};           ///< Highest observed live count.
-
-        /// @brief Record one object construction.
-        auto on_construct() noexcept -> void {
-            using namespace arch::s390x::lib::atomic;
-            (void)total_created.fetch_add(1, memory_order::relaxed);
-            const u64 now = live.fetch_add(1, memory_order::relaxed) + 1;
-            u64 cur = peak.load(memory_order::relaxed);
-            while (cur < now && !peak.compare_exchange_weak(
-                       cur, now, memory_order::relaxed, memory_order::relaxed))
-                ;
-        }
-
-        /// @brief Record one object destruction.
-        auto on_destruct() noexcept -> void {
-            (void)live.fetch_sub(1, arch::s390x::lib::atomic::memory_order::relaxed);
-        }
-
-        [[nodiscard]] auto snap_total()   const noexcept -> u64 {
-            return total_created.load(arch::s390x::lib::atomic::memory_order::relaxed);
-        }
-        [[nodiscard]] auto snap_live()    const noexcept -> u64 {
-            return live.load(arch::s390x::lib::atomic::memory_order::relaxed);
-        }
-        [[nodiscard]] auto snap_peak()    const noexcept -> u64 {
-            return peak.load(arch::s390x::lib::atomic::memory_order::relaxed);
-        }
-    };
-
-    /// @brief Opaque kernel-internal object identifier.
-    ///
-    /// A scoms_handle is a u64 composed of:
-    ///   bits [63:48]  — type discriminator (index into a static tag table)
-    ///   bits [47:0]   — object index within its type's pool
-    ///
-    /// Handles are not capability tokens: they carry no access rights and are
-    /// not validated on every dereference inside the kernel.  Validation is the
-    /// responsibility of the executive layer (syscall boundary).
-    ///
-    /// @note  A null handle has value 0.  Type discriminator 0 is reserved.
-    enum class scoms_handle : u64 { null = 0 };
-
-    constexpr auto make_handle(u16 type_disc, u64 index) noexcept -> scoms_handle {
-        return static_cast<scoms_handle>(
-            (static_cast<u64>(type_disc) << 48) | (index & 0x0000'FFFF'FFFF'FFFFULL));
-    }
-    constexpr auto handle_type(scoms_handle h) noexcept -> u16 {
-        return static_cast<u16>(static_cast<u64>(h) >> 48);
-    }
-    constexpr auto handle_index(scoms_handle h) noexcept -> u64 {
-        return static_cast<u64>(h) & 0x0000'FFFF'FFFF'FFFFULL;
-    }
-    constexpr auto handle_valid(scoms_handle h) noexcept -> bool {
-        return h != scoms_handle::null;
-    }
-
-    /// @brief Maximum number of distinct object types SCOMS tracks.
-    constexpr u16 SCOMS_MAX_TYPES = 64;
-
-    /// @brief Per-type descriptor registered with SCOMS.
-    struct type_descriptor {
-        const char*  name{nullptr};   ///< Human-readable type name for diagnostics.
-        u32          object_size{0};  ///< sizeof the concrete object type.
-        u32          object_align{0}; ///< alignof the concrete object type.
-        object_stats stats{};
-
-        [[nodiscard]] auto registered() const noexcept -> bool { return name != nullptr; }
-    };
-}
-
-} // end export
-
+// ── Module-private state ──────────────────────────────────────────────────
 namespace zxfoundation::scoms::_internal {
-    // Index 0 is the null-handle sentinel — pre-populate with an empty entry.
+
+    /// @brief Type registry table.  Index 0 = null-handle sentinel.
     static lib::static_vector<type_descriptor, SCOMS_MAX_TYPES> g_types{};
-    static locking::qspinlock::qspinlock g_reg_lock{};
+
+    /// @brief Global lock for type registration (not per-object ops).
+    static locking::qspinlock::qspinlock g_type_lock{};
+
+    /// @brief Per-type locks for object list mutations.
+    /// Indexed by type_disc.  Separate from g_type_lock to avoid contention.
+    static locking::qspinlock::qspinlock g_type_locks[SCOMS_MAX_TYPES]{};
+
     static bool g_initialized{false};
-}
+
+    /// @brief Unlink a node from its per-type doubly-linked list.
+    /// @pre  g_type_locks[node.type_disc] held.
+    static auto list_remove(object_node& node) noexcept -> void {
+        auto* td = &g_types[node.type_disc];
+        if (node.type_prev)
+            node.type_prev->type_next = node.type_next;
+        else
+            td->list_head = node.type_next;
+
+        if (node.type_next)
+            node.type_next->type_prev = node.type_prev;
+        else
+            td->list_tail = node.type_prev;
+
+        node.type_next = nullptr;
+        node.type_prev = nullptr;
+    }
+
+    /// @brief Append a node to its per-type doubly-linked list.
+    /// @pre  g_type_locks[node.type_disc] held.
+    static auto list_append(object_node& node) noexcept -> void {
+        auto* td = &g_types[node.type_disc];
+        node.type_prev = td->list_tail;
+        node.type_next = nullptr;
+        if (td->list_tail)
+            td->list_tail->type_next = &node;
+        else
+            td->list_head = &node;
+        td->list_tail = &node;
+    }
+
+    /// @brief Unlink a child from its parent's child list.
+    /// @pre  Caller holds appropriate lock.
+    static auto child_unlink(object_node& child) noexcept -> void {
+        if (!child.parent) return;
+        auto* p = child.parent;
+
+        if (child.prev_sibling)
+            child.prev_sibling->next_sibling = child.next_sibling;
+        else
+            p->first_child = child.next_sibling;
+
+        if (child.next_sibling)
+            child.next_sibling->prev_sibling = child.prev_sibling;
+
+        child.parent       = nullptr;
+        child.next_sibling = nullptr;
+        child.prev_sibling = nullptr;
+    }
+
+} // namespace zxfoundation::scoms::_internal
 
 export {
 
 namespace zxfoundation::scoms {
 
-    /// @brief Initialize SCOMS.  Call once during kernel init before any
-    ///        object type is registered.
+    // ── Initialization ────────────────────────────────────────────────────
+
+    /// @brief Initialize SCOMS.  Call once during kernel init, after
+    ///        kmalloc_init() (so SCOMS can use slab memory if needed).
     auto init() noexcept -> void {
         using namespace _internal;
         if (g_initialized) return;
@@ -112,20 +96,21 @@ namespace zxfoundation::scoms {
         g_initialized = true;
     }
 
+    // ── Type Registration ─────────────────────────────────────────────────
+
     /// @brief Register an object type and obtain its type discriminator.
     ///
-    /// @param[in]  name    Human-readable name (must be a string literal; not copied).
-    /// @param[in]  size    sizeof the object.
-    /// @param[in]  align   alignof the object.
-    /// @return  Type discriminator in [1, SCOMS_MAX_TYPES), or 0 on failure
-    ///          (registry full).
-    [[nodiscard]] auto scoms_register_type(
+    /// @param[in]  name   Human-readable name (must be a string literal; not copied).
+    /// @param[in]  size   sizeof the object.
+    /// @param[in]  align  alignof the object.
+    /// @return Type discriminator in [1, SCOMS_MAX_TYPES), or 0 on failure.
+    [[nodiscard]] auto register_type(
         const char* name,
         u32         size,
         u32         align
     ) noexcept -> u16 {
         using namespace _internal;
-        const locking::lock_guard guard{g_reg_lock};
+        const locking::irq_lock_guard guard{g_type_lock};
         if (g_types.full()) return 0;
         const u16 disc = static_cast<u16>(g_types.size());
         auto r = g_types.emplace_back();
@@ -137,69 +122,300 @@ namespace zxfoundation::scoms {
     }
 
     /// @brief Look up a type descriptor by discriminator.
-    [[nodiscard]] auto scoms_type_descriptor(u16 disc) noexcept -> type_descriptor* {
+    [[nodiscard]] auto type_info(u16 disc) noexcept -> type_descriptor* {
         using namespace _internal;
         if (disc == 0 || disc >= g_types.size()) return nullptr;
         return g_types[disc].registered() ? &g_types[disc] : nullptr;
     }
 
-    /// @brief RAII helper: notifies SCOMS stats on construction/destruction
-    ///        of a kernel_object<Tag, State>.
+    /// @brief Return the number of registered types (excluding null sentinel).
+    [[nodiscard]] auto type_count() noexcept -> u16 {
+        using namespace _internal;
+        return g_types.size() > 0
+            ? static_cast<u16>(g_types.size() - 1)
+            : 0;
+    }
+
+    // ── Object Registration ───────────────────────────────────────────────
+
+    /// @brief Register a managed object with SCOMS.
     ///
-    /// Embed one of these inside any kernel_object-derived type to
-    /// automatically keep SCOMS statistics accurate.
+    /// Assigns a unique handle, adds the node to the per-type live-object
+    /// list, and bumps type statistics.
     ///
-    /// @tparam Tag  Must satisfy object_tag.
-    template <object_tag Tag>
-    class scoms_tracker {
-        u16 m_disc{0};
+    /// @param[in,out] node       The object's embedded object_node.
+    /// @param[in]     type_disc  Type discriminator from register_type().
+    /// @return The assigned handle, or scoms_handle::null on failure.
+    ///
+    /// @pre  node.handle == scoms_handle::null (not already registered).
+    /// @post node.handle is valid, node is in the per-type list.
+    [[nodiscard]] auto register_object(
+        object_node& node,
+        u16          type_disc
+    ) noexcept -> scoms_handle {
+        using namespace _internal;
+        if (type_disc == 0 || type_disc >= g_types.size()) return scoms_handle::null;
+        if (handle_valid(node.handle)) return node.handle; // already registered
 
-    public:
-        scoms_tracker() noexcept = default; ///< No-op tracker (disc=0, stats not updated).
+        auto& td = g_types[type_disc];
 
-        explicit scoms_tracker(u16 disc) noexcept : m_disc(disc) {
-            if (auto* d = scoms_type_descriptor(m_disc)) d->stats.on_construct();
+        // Generate a unique handle index (lock-free, monotonic).
+        const u64 idx = td.next_index.fetch_add(
+            1, arch::s390x::lib::atomic::memory_order::relaxed);
+        const scoms_handle h = make_handle(type_disc, idx);
+
+        node.handle    = h;
+        node.type_disc = type_disc;
+
+        // Link into per-type list under per-type lock.
+        {
+            const locking::irq_lock_guard guard{g_type_locks[type_disc]};
+            list_append(node);
         }
 
-        ~scoms_tracker() noexcept {
-            if (auto* d = scoms_type_descriptor(m_disc)) d->stats.on_destruct();
+        td.stats.on_register();
+        return h;
+    }
+
+    /// @brief Unregister a managed object from SCOMS.
+    ///
+    /// Removes the node from the per-type list, orphans it from any parent,
+    /// and clears its handle.  Does NOT cascade to children — the caller
+    /// must handle cascading teardown if needed.
+    ///
+    /// @param[in,out] node  The object's embedded object_node.
+    /// @pre  node.handle is valid (registered).
+    /// @post node.handle == scoms_handle::null, node is unlinked.
+    auto unregister_object(object_node& node) noexcept -> void {
+        using namespace _internal;
+        if (!handle_valid(node.handle)) return;
+
+        const u16 disc = node.type_disc;
+
+        // Orphan from parent + remove from per-type list under single lock.
+        {
+            const locking::irq_lock_guard guard{g_type_locks[disc]};
+            child_unlink(node);
+            list_remove(node);
         }
 
-        scoms_tracker(const scoms_tracker&)            = delete;
-        auto operator=(const scoms_tracker&)           = delete;
-        scoms_tracker(scoms_tracker&& o) noexcept : m_disc(o.m_disc) { o.m_disc = 0; }
-        auto operator=(scoms_tracker&& o) noexcept -> scoms_tracker& {
-            if (this != &o) { m_disc = o.m_disc; o.m_disc = 0; }
-            return *this;
-        }
-    };
+        if (disc > 0 && disc < g_types.size())
+            g_types[disc].stats.on_unregister();
 
-    /// @brief Declare a SCOMS type at file scope.
+        node.handle    = scoms_handle::null;
+        node.type_disc = 0;
+    }
+
+    // ── Reference Counting ────────────────────────────────────────────────
+
+    /// @brief Acquire a reference to a managed object.
+    /// @pre  node.refcount > 0 (object is alive).
+    auto ref(object_node& node) noexcept -> void {
+        (void)node.refcount.fetch_add(
+            1, arch::s390x::lib::atomic::memory_order::relaxed);
+    }
+
+    /// @brief Release a reference to a managed object.
+    /// @return true if this was the **last** reference (refcount hit 0).
+    ///         The caller is responsible for destroying the object.
+    [[nodiscard]] auto unref(object_node& node) noexcept -> bool {
+        const u32 prev = node.refcount.fetch_sub(
+            1, arch::s390x::lib::atomic::memory_order::acq_rel);
+        return prev == 1;
+    }
+
+    /// @brief Query the current reference count (advisory, racy).
+    [[nodiscard]] auto refcount(const object_node& node) noexcept -> u32 {
+        return node.refcount.load(
+            arch::s390x::lib::atomic::memory_order::relaxed);
+    }
+
+    // ── Object Graph ──────────────────────────────────────────────────────
+
+    /// @brief Adopt a child — establish a parent→child edge.
+    ///
+    /// Inserts `child` at the head of `parent.first_child`.
+    /// If child already has a parent, it is first orphaned.
+    ///
+    /// @param[in,out] parent  The owning object.
+    /// @param[in,out] child   The owned object.
+    /// @pre  Both parent and child are registered (valid handles).
+    auto adopt(object_node& parent, object_node& child) noexcept -> void {
+        using namespace _internal;
+        if (!handle_valid(parent.handle) || !handle_valid(child.handle)) return;
+
+        // Orphan from current parent if any, then re-parent.
+        // Use parent's type lock for the graph mutation.
+        const locking::irq_lock_guard guard{
+            g_type_locks[parent.type_disc]};
+
+        // Unlink from old parent if needed.
+        if (child.parent) child_unlink(child);
+
+        // Insert at head of parent's child list.
+        child.parent       = &parent;
+        child.next_sibling = parent.first_child;
+        child.prev_sibling = nullptr;
+        if (parent.first_child)
+            parent.first_child->prev_sibling = &child;
+        parent.first_child = &child;
+    }
+
+    /// @brief Orphan a child — detach from its parent.
+    ///
+    /// @param[in,out] child  The object to detach.
+    /// @pre  child is registered.
+    auto orphan(object_node& child) noexcept -> void {
+        using namespace _internal;
+        if (!child.parent) return;
+
+        // Use parent's type lock for consistency with adopt().
+        const locking::irq_lock_guard guard{
+            g_type_locks[child.parent->type_disc]};
+        child_unlink(child);
+    }
+
+    /// @brief Count the children of a node.
+    [[nodiscard]] auto child_count(const object_node& node) noexcept -> u32 {
+        u32 n = 0;
+        const object_node* c = node.first_child;
+        while (c) { ++n; c = c->next_sibling; }
+        return n;
+    }
+
+    // ── Enumeration ───────────────────────────────────────────────────────
+
+    /// @brief Invoke a callback for each live object of a given type.
+    ///
+    /// The callback receives a reference to the object_node.
+    /// The per-type lock is held for the duration — keep the callback fast.
+    ///
+    /// @tparam Fn   Callable: `void(object_node&)` or `bool(object_node&)`.
+    ///              Returning false stops iteration.
+    /// @param[in] type_disc  Type discriminator.
+    /// @param[in] fn         Callback.
+    template <typename Fn>
+    auto for_each(u16 type_disc, Fn&& fn) noexcept -> void {
+        using namespace _internal;
+        if (type_disc == 0 || type_disc >= g_types.size()) return;
+
+        const locking::irq_lock_guard guard{g_type_locks[type_disc]};
+        object_node* cur = g_types[type_disc].list_head;
+        while (cur) {
+            object_node* next = cur->type_next; // stash before callback
+            if constexpr (requires { { fn(*cur) } -> lib::same_as<bool>; }) {
+                if (!fn(*cur)) return;
+            } else {
+                fn(*cur);
+            }
+            cur = next;
+        }
+    }
+
+    /// @brief Walk all children of a node, invoking a callback for each.
+    ///
+    /// @tparam Fn   Callable: `void(object_node&)`.
+    /// @param[in] parent  The parent whose children to visit.
+    /// @param[in] fn      Callback.
+    template <typename Fn>
+    auto for_each_child(object_node& parent, Fn&& fn) noexcept -> void {
+        object_node* cur = parent.first_child;
+        while (cur) {
+            object_node* next = cur->next_sibling;
+            fn(*cur);
+            cur = next;
+        }
+    }
+
+    /// @brief Count the number of live registered objects of a given type.
+    [[nodiscard]] auto live_count(u16 type_disc) noexcept -> u64 {
+        using namespace _internal;
+        if (type_disc == 0 || type_disc >= g_types.size()) return 0;
+        return g_types[type_disc].stats.snap_live();
+    }
+
+    // ── Lookup ────────────────────────────────────────────────────────────
+
+    /// @brief Look up an object by handle.
+    ///
+    /// Performs a linear scan of the per-type list.  For hot-path lookup,
+    /// cache the pointer directly — this API is for diagnostics / rare ops.
+    ///
+    /// @param[in] h  The handle to look up.
+    /// @return Pointer to the object_node, or nullptr if not found.
+    [[nodiscard]] auto lookup(scoms_handle h) noexcept -> object_node* {
+        using namespace _internal;
+        if (!handle_valid(h)) return nullptr;
+
+        const u16 disc = handle_type(h);
+        if (disc == 0 || disc >= g_types.size()) return nullptr;
+
+        const locking::irq_lock_guard guard{g_type_locks[disc]};
+        object_node* cur = g_types[disc].list_head;
+        while (cur) {
+            if (cur->handle == h) return cur;
+            cur = cur->type_next;
+        }
+        return nullptr;
+    }
+
+    /// @brief Dump all SCOMS type statistics via printk (EMERG level).
+    auto dump_all() noexcept -> void {
+        using sys::printk::pinfo;
+        using namespace _internal;
+        pinfo("scoms: types registered: {}",
+            g_types.size() > 0 ? static_cast<u16>(g_types.size() - 1) : static_cast<u16>(0));
+
+        for (u16 i = 1; i < static_cast<u16>(g_types.size()); ++i) {
+            const auto& td = g_types[i];
+            if (!td.registered()) continue;
+
+            const u64 live    = td.stats.snap_live();
+            const u64 total   = td.stats.snap_total_created();
+            const u64 destroy = td.stats.snap_total_destroyed();
+            const u64 peak    = td.stats.snap_peak();
+
+            pinfo(
+                "scoms:   [{}] '{}' live={} total={} destroyed={} peak={}",
+                lib::format::dec{static_cast<u64>(i), 2, true},
+                td.name,
+                live, total, destroy, peak);
+        }
+    }
+
+    /// @brief Declare a SCOMS type at file scope for lazy registration.
     ///
     /// Usage:
-    ///   inline constexpr scoms_type_info<tag_phys_region, phys_object_ready>
-    ///       g_phys_region_type{ "phys_region" };
+    ///   static scoms_type_info<tag_irq_line, irq_desc>
+    ///       g_irq_type{ "irq_line" };
     ///
-    /// The discriminator is assigned the first time disc() is called (lazy
-    /// one-time registration).  This avoids static initialization ordering
-    /// issues: scoms_init() must be called before disc() is first invoked.
-    template <object_tag Tag, typename Obj>
+    /// The discriminator is assigned the first time disc() is called (lazy,
+    /// SMP-safe via atomic CAS).  scoms::init() must be called first.
+    template <base::object_tag Tag, typename Obj>
     class scoms_type_info {
         const char* m_name;
-        mutable u16 m_disc{0};
+        mutable arch::s390x::lib::atomic::atomic<u16> m_disc{0};
 
     public:
         explicit constexpr scoms_type_info(const char* name) noexcept : m_name(name) {}
 
         /// @brief Return the type discriminator, registering on first call.
         [[nodiscard]] auto disc() const noexcept -> u16 {
-            if (m_disc == 0) [[unlikely]]
-                m_disc = scoms_register_type(m_name, sizeof(Obj), alignof(Obj));
-            return m_disc;
+            u16 d = m_disc.load(arch::s390x::lib::atomic::memory_order::acquire);
+            if (d != 0) [[likely]] return d;
+            const u16 fresh = register_type(m_name, sizeof(Obj), alignof(Obj));
+            u16 expected = 0;
+            if (m_disc.compare_exchange_strong(
+                    expected, fresh,
+                    arch::s390x::lib::atomic::memory_order::release,
+                    arch::s390x::lib::atomic::memory_order::acquire))
+                return fresh;
+            return expected;
         }
 
-        [[nodiscard]] auto make_tracker() const noexcept -> scoms_tracker<Tag> {
-            return scoms_tracker<Tag>{ disc() };
+        /// @brief Register an object_node with this type.
+        [[nodiscard]] auto register_node(object_node& node) const noexcept -> scoms_handle {
+            return register_object(node, disc());
         }
     };
 

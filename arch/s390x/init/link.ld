@@ -21,15 +21,15 @@ SECTIONS {
     . = nucleus_vma_base;
     __zx_vma_start = .;
 
-    .text.handshake : ALIGN(8) {
+    .text.handshake : ALIGN(BYTE) {
         KEEP(*(.text.handshake))
     } :hs_seg
 
-    .text.entry : ALIGN(8) {
+    .text.entry : ALIGN(BYTE) {
         KEEP(*(.text.__zx_start_kernel64))
     } :entry_seg
 
-    .text : ALIGN(8) {
+    .text : ALIGN(BYTE) {
         *(.text .text.*)
     } :nucleus_text
 
@@ -55,6 +55,19 @@ SECTIONS {
 	    __dtors_end = .;
 	} :nucleus_ro
 
+    .init_array ALIGN(BYTE) :
+    {
+        PROVIDE_HIDDEN(__init_array_start = .);
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) .init_array))
+        PROVIDE_HIDDEN(__init_array_end   = .);
+    } :nucleus_ro
+
+    .fini_array ALIGN(BYTE) :
+    {
+        PROVIDE_HIDDEN(__fini_array_start = .);
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) .fini_array))
+        PROVIDE_HIDDEN(__fini_array_end   = .);
+    } :nucleus_ro
 
     .data : ALIGN(4096) {
         __data_start = .;

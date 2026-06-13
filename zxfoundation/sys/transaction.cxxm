@@ -5,13 +5,33 @@
 /// Enforces the commit/rollback contract for all subsystem transactions.
 /// Derived types implement on_rollback() and get commit() for free.
 ///
-/// Usage:
+/// ── Atomicity guarantee ──────────────────────────────────────────────────
+///
+///   m_committed is an atomic<bool> with release-store on commit() and
+///   acquire-load on committed().  This ensures that if the transaction
+///   object is published to another CPU (e.g., handed off across a lock
+///   boundary after commit), the reader on the remote CPU observes the
+///   committed state before it sees any side-effects of the committed work.
+///
+///   A plain bool would be a data race under the C++ memory model and could
+///   allow the remote CPU to observe an uncommitted transaction whose
+///   constituent allocations are already visible.
+///
+/// ── CRTP usage ───────────────────────────────────────────────────────────
+///
 ///   class my_txn : public zxfoundation::transaction<my_txn> {
 ///       friend class transaction<my_txn>;
 ///       auto on_rollback() noexcept -> void { /* free tentative resources */ }
 ///   };
+///
+///   {
+///       my_txn txn;
+///       // ... allocate resources into txn ...
+///       txn.commit();   // disarms on_rollback
+///   }   // on_rollback fires here if commit() was never called
 
 export module zxfoundation.sys.transaction;
+import arch.s390x.lib.atomic;
 import zxfoundation.base.types;
 
 export {
@@ -20,11 +40,18 @@ namespace zxfoundation {
 
     template <typename Derived>
     class transaction {
-        bool m_committed{false};
+        using atomic_bool   = arch::s390x::lib::atomic::atomic<bool>;
+        using memory_order  = arch::s390x::lib::atomic::memory_order;
+
+        atomic_bool m_committed{false};
 
     protected:
+        /// @brief Destructor: fires on_rollback() if commit() was never called.
+        ///
+        /// The acquire-load ensures that any CPU that observes the destruction
+        /// (e.g., via RAII on a stack) sees a consistent committed state.
         ~transaction() noexcept {
-            if (!m_committed)
+            if (!m_committed.load(memory_order::acquire))
                 static_cast<Derived*>(this)->on_rollback();
         }
 
@@ -34,10 +61,19 @@ namespace zxfoundation {
         auto operator=(const transaction&)                = delete;
         transaction(transaction&&)               noexcept = default;
 
-        /// @brief Commit — disarms the rollback on destruction.
-        auto commit() noexcept -> void { m_committed = true; }
+        /// @brief Commit — disarms the automatic rollback on destruction.
+        ///
+        /// The release-store pairs with the acquire-load in the destructor and
+        /// in committed(), establishing happens-before across CPU boundaries if
+        /// the transaction object is published after commit.
+        auto commit() noexcept -> void {
+            m_committed.store(true, memory_order::release);
+        }
 
-        [[nodiscard]] auto committed() const noexcept -> bool { return m_committed; }
+        /// @brief Return true if commit() has been called.
+        [[nodiscard]] auto committed() const noexcept -> bool {
+            return m_committed.load(memory_order::acquire);
+        }
     };
 
 } // namespace zxfoundation

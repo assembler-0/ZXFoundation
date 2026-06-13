@@ -1,0 +1,203 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/mmu/mmu_types.cxxm
+/// @brief MMU engine type definitions — level-parameterized DAT entries.
+///
+/// Every DAT translation level is a distinct C++ type.  Passing a
+/// segment-table entry where a region-3 entry is expected is a
+/// compile-time error — not a runtime corruption.
+
+export module arch.s390x.mmu.mmu_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::mmu {
+
+    /// @brief DAT translation levels for z/Architecture.
+    enum class dat_level : u8 {
+        region_1 = 0,   ///< Region-first table  — maps 8 PiB per entry.
+        region_2 = 1,   ///< Region-second table — maps 4 TiB per entry.
+        region_3 = 2,   ///< Region-third table  — maps 2 GiB per entry (EDAT-2 large).
+        segment  = 3,   ///< Segment table       — maps 1 MiB per entry (EDAT-1 large).
+        page     = 4,   ///< Page table          — maps 4 KiB per entry.
+    };
+
+    /// @brief Metafunction: child level of a given parent level.
+    template <dat_level Parent>
+        requires (Parent != dat_level::page)
+    inline constexpr dat_level child_of =
+        static_cast<dat_level>(static_cast<u8>(Parent) + 1U);
+
+    /// @brief Runtime next-level helper.
+    [[nodiscard]] constexpr auto next_level(dat_level lvl) noexcept -> dat_level {
+        return static_cast<dat_level>(static_cast<u8>(lvl) + 1U);
+    }
+
+    /// @brief Runtime level-at-depth helper.
+    [[nodiscard]] constexpr auto level_at_depth(
+        dat_level root, u32 depth
+    ) noexcept -> dat_level {
+        return static_cast<dat_level>(static_cast<u8>(root) + depth);
+    }
+
+    /// @brief Region/Segment Table Entry parameterized by level.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    struct rste {
+        u64 val{0};
+
+        constexpr rste() noexcept = default;
+        explicit constexpr rste(u64 v) noexcept : val(v) {}
+
+        [[nodiscard]] constexpr auto raw() const noexcept -> u64 { return val; }
+    };
+
+    /// @brief Page Table Entry — distinct type from rste<>.
+    struct pte {
+        u64 val{0};
+
+        constexpr pte() noexcept = default;
+        explicit constexpr pte(u64 v) noexcept : val(v) {}
+
+        [[nodiscard]] constexpr auto raw() const noexcept -> u64 { return val; }
+    };
+
+    /// @brief Typed handle to a DAT table at a specific level.
+    template <dat_level Level>
+    struct dat_table {
+        u64 origin_phys{0};
+
+        constexpr dat_table() noexcept = default;
+        explicit constexpr dat_table(u64 phys) noexcept : origin_phys(phys) {}
+
+        [[nodiscard]] constexpr auto valid() const noexcept -> bool {
+            return origin_phys != 0;
+        }
+        [[nodiscard]] constexpr explicit operator bool() const noexcept {
+            return valid();
+        }
+    };
+
+    /// @brief Typed Address Space Control Element.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    struct typed_asce {
+        u64 val{0};
+
+        constexpr typed_asce() noexcept = default;
+        explicit constexpr typed_asce(u64 v) noexcept : val(v) {}
+
+        [[nodiscard]] constexpr auto raw() const noexcept -> u64 { return val; }
+    };
+
+    /// @brief Page protection descriptor — distinct from raw u64.
+    struct page_prot {
+        u64 bits{0};
+
+        constexpr page_prot() noexcept = default;
+        explicit constexpr page_prot(u64 b) noexcept : bits(b) {}
+
+        [[nodiscard]] constexpr auto raw() const noexcept -> u64 { return bits; }
+
+        [[nodiscard]] constexpr auto operator|(page_prot o) const noexcept -> page_prot {
+            return page_prot(bits | o.bits);
+        }
+        [[nodiscard]] constexpr auto operator&(page_prot o) const noexcept -> page_prot {
+            return page_prot(bits & o.bits);
+        }
+    };
+
+    /// @brief Number of entries in a CRST (region/segment) table.
+    inline constexpr u32 CRST_ENTRIES = 2048U;
+
+    /// @brief Number of entries in a page table.
+    inline constexpr u32 PAGE_ENTRIES = 256U;
+
+    /// @brief Size of a CRST table in bytes (2048 x 8 = 16 KiB).
+    inline constexpr u64 CRST_TABLE_SIZE = CRST_ENTRIES * 8ULL;
+
+    /// @brief Size of a page table in bytes (256 x 8 = 2 KiB).
+    inline constexpr u64 PAGE_TABLE_SIZE = PAGE_ENTRIES * 8ULL;
+
+    /// @brief PMM order for CRST table allocation (16 KiB = 4 pages = order 2).
+    inline constexpr u32 CRST_ALLOC_ORDER = 2U;
+
+    /// @brief PMM order for PTE table allocation (4 KiB = 1 page = order 0).
+    /// @note  Hardware PTE table is 2 KiB; we allocate a full 4 KiB page.
+    inline constexpr u32 PTE_ALLOC_ORDER = 0U;
+
+    inline constexpr u32 REGION1_SHIFT = 53U;
+    inline constexpr u32 REGION2_SHIFT = 42U;
+    inline constexpr u32 REGION3_SHIFT = 31U;
+    inline constexpr u32 SEGMENT_SHIFT = 20U;
+    inline constexpr u32 PAGE_SHIFT    = 12U;
+
+    /// @brief VA index mask (11 bits for CRST, 8 bits for PTE).
+    inline constexpr u64 CRST_INDEX_MASK = 0x7FFULL;
+    inline constexpr u64 PTE_INDEX_MASK  = 0xFFULL;
+
+    inline constexpr u64 REGION1_SIZE = 1ULL << REGION1_SHIFT;
+    inline constexpr u64 REGION2_SIZE = 1ULL << REGION2_SHIFT;
+    inline constexpr u64 REGION3_SIZE = 1ULL << REGION3_SHIFT;
+    inline constexpr u64 SEGMENT_SIZE = 1ULL << SEGMENT_SHIFT;
+    inline constexpr u64 PAGE_SIZE_4K = 1ULL << PAGE_SHIFT;
+
+    /// @brief Extract the virtual-address index for a given DAT level.
+    template <dat_level Level>
+    [[nodiscard]] constexpr auto virt_index(u64 virt) noexcept -> u32 {
+        if constexpr (Level == dat_level::region_1)
+            return static_cast<u32>((virt >> REGION1_SHIFT) & CRST_INDEX_MASK);
+        else if constexpr (Level == dat_level::region_2)
+            return static_cast<u32>((virt >> REGION2_SHIFT) & CRST_INDEX_MASK);
+        else if constexpr (Level == dat_level::region_3)
+            return static_cast<u32>((virt >> REGION3_SHIFT) & CRST_INDEX_MASK);
+        else if constexpr (Level == dat_level::segment)
+            return static_cast<u32>((virt >> SEGMENT_SHIFT) & CRST_INDEX_MASK);
+        else
+            return static_cast<u32>((virt >> PAGE_SHIFT) & PTE_INDEX_MASK);
+    }
+
+    /// @brief Runtime index extraction (for internal walk loops).
+    [[nodiscard]] constexpr auto virt_index_rt(
+        dat_level lvl, u64 virt
+    ) noexcept -> u32 {
+        switch (lvl) {
+            case dat_level::region_1:
+                return static_cast<u32>((virt >> REGION1_SHIFT) & CRST_INDEX_MASK);
+            case dat_level::region_2:
+                return static_cast<u32>((virt >> REGION2_SHIFT) & CRST_INDEX_MASK);
+            case dat_level::region_3:
+                return static_cast<u32>((virt >> REGION3_SHIFT) & CRST_INDEX_MASK);
+            case dat_level::segment:
+                return static_cast<u32>((virt >> SEGMENT_SHIFT) & CRST_INDEX_MASK);
+            case dat_level::page:
+                return static_cast<u32>((virt >> PAGE_SHIFT) & PTE_INDEX_MASK);
+        }
+        __builtin_unreachable();
+    }
+
+    /// @brief Coverage size for a given level.
+    template <dat_level Level>
+    [[nodiscard]] constexpr auto level_size() noexcept -> u64 {
+        if constexpr (Level == dat_level::region_1) return REGION1_SIZE;
+        else if constexpr (Level == dat_level::region_2) return REGION2_SIZE;
+        else if constexpr (Level == dat_level::region_3) return REGION3_SIZE;
+        else if constexpr (Level == dat_level::segment) return SEGMENT_SIZE;
+        else return PAGE_SIZE_4K;
+    }
+
+    /// @brief Runtime coverage size.
+    [[nodiscard]] constexpr auto level_size_rt(dat_level lvl) noexcept -> u64 {
+        switch (lvl) {
+            case dat_level::region_1: return REGION1_SIZE;
+            case dat_level::region_2: return REGION2_SIZE;
+            case dat_level::region_3: return REGION3_SIZE;
+            case dat_level::segment:  return SEGMENT_SIZE;
+            case dat_level::page:     return PAGE_SIZE_4K;
+        }
+        __builtin_unreachable();
+    }
+
+} // namespace arch::s390x::mmu
+
+} // end export

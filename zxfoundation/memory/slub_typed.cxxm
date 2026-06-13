@@ -1,0 +1,155 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/slub_typed.cxxm
+/// @brief Type-safe SLUB facade and RAII ownership for kernel objects.
+
+export module zxfoundation.memory.slub_typed;
+import zxfoundation.memory.slub;
+import zxfoundation.memory.slub_types;
+import zxfoundation.base.types;
+import lib.expected;
+import lib.error;
+
+export {
+
+namespace zxfoundation::memory::slub {
+
+    // Forward declaration for typed_slab_cache<T>::make().
+    template<typename T> class slab_ptr;
+
+    // ── typed_slab_cache<T> ──────────────────────────────────────────────
+
+    /// @brief Type-safe handle to a kmem_cache.
+    template<typename T>
+    class typed_slab_cache {
+        kmem_cache_ref_ready impl_{};
+
+    public:
+        typed_slab_cache() noexcept = default;
+
+        /// @brief Wrap an existing (already-initialized) kmem_cache.
+        explicit typed_slab_cache(kmem_cache_ref_ready c) noexcept : impl_(c) {}
+
+        // Copyable: multiple handles may reference the same cache.
+        typed_slab_cache(const typed_slab_cache&) noexcept = default;
+        auto operator=(const typed_slab_cache&) noexcept -> typed_slab_cache& = default;
+
+        [[nodiscard]] auto valid()  const noexcept -> bool {
+            return static_cast<bool>(impl_);
+        }
+        [[nodiscard]] explicit operator bool() const noexcept { return valid(); }
+
+        /// @brief Underlying type-erased cache (for interop with C-style APIs).
+        [[nodiscard]] auto raw() const noexcept -> kmem_cache* { return impl_.raw(); }
+
+
+        /// @brief Allocate one uninitialized object of type T.
+        [[nodiscard]] auto alloc() noexcept -> lib::expected<T*, lib::kernel_error> {
+            if (!valid()) [[unlikely]]
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(
+                        lib::generic_error::code::uninitialized));
+            void* raw = kmem_alloc(*impl_);
+            if (!raw) [[unlikely]]
+                return lib::unexpected(
+                    lib::kernel_error::from_memory(
+                        lib::memory_error::code::out_of_memory));
+            return static_cast<T*>(raw);
+        }
+
+        /// @brief Free a raw T* back to the slab.
+        auto dealloc(T* obj) noexcept -> void {
+            if (obj && impl_) kmem_free(*impl_, static_cast<void*>(obj));
+        }
+
+        /// @brief Construct a T in a fresh slab slot and wrap it in slab_ptr.
+        template<typename... Args>
+        [[nodiscard]] auto make(Args&&... args) noexcept
+            -> lib::expected<slab_ptr<T>, lib::kernel_error>
+        {
+            auto result = alloc();
+            if (!result) return lib::unexpected(result.error());
+            T* obj = ::new(static_cast<void*>(*result)) T(
+                static_cast<Args&&>(args)...);
+            return slab_ptr<T>(obj, impl_.raw());
+        }
+
+        /// @brief Create a new kmem_cache sized for T and return a typed handle.
+        ///
+        /// @param[in]  name   Diagnostic name (must outlive the cache).
+        /// @param[in]  flags  slub_flags: typesafe_by_rcu, hwcache_align, etc.
+        [[nodiscard]] static auto create(
+            const char* name,
+            slub_flags  flags = slub_flags::none
+        ) noexcept -> lib::expected<typed_slab_cache<T>, lib::kernel_error>
+        {
+            auto result = kmem_cache_create(
+                name,
+                static_cast<u32>(sizeof(T)),
+                static_cast<u32>(alignof(T)),
+                flags);
+            if (!result) return lib::unexpected(result.error());
+            return typed_slab_cache<T>(*result);
+        }
+    };
+
+    /// @brief Move-only RAII owner of a slab-allocated T.
+    template<typename T>
+    class slab_ptr {
+        T*          obj_{nullptr};
+        kmem_cache* cache_{nullptr};   // stable: lives in g_cache_table[]
+
+        auto destroy() noexcept -> void {
+            if (obj_) {
+                obj_->~T();
+                if (cache_) kmem_free(*cache_, static_cast<void*>(obj_));
+                obj_   = nullptr;
+                cache_ = nullptr;
+            }
+        }
+
+    public:
+        slab_ptr() noexcept = default;
+
+        /// @brief Adopt an existing slab-allocated T.
+        /// @param obj    Pointer to the object (must have been placed via alloc()).
+        /// @param cache  The stable kmem_cache* it belongs to.
+        slab_ptr(T* obj, kmem_cache* cache) noexcept
+            : obj_(obj), cache_(cache) {}
+
+        ~slab_ptr() noexcept { destroy(); }
+
+        // Move-only.
+        slab_ptr(slab_ptr&& o) noexcept
+            : obj_(o.obj_), cache_(o.cache_)
+        { o.obj_ = nullptr; o.cache_ = nullptr; }
+
+        auto operator=(slab_ptr&& o) noexcept -> slab_ptr& {
+            if (this != &o) { destroy(); obj_ = o.obj_; cache_ = o.cache_;
+                              o.obj_ = nullptr; o.cache_ = nullptr; }
+            return *this;
+        }
+
+        slab_ptr(const slab_ptr&)                = delete;
+        auto operator=(const slab_ptr&) noexcept = delete;
+
+        // ── Accessors ───────────────────────────────────────────────────
+
+        [[nodiscard]] auto get()  const noexcept -> T*  { return obj_;  }
+        [[nodiscard]] auto operator->() const noexcept -> T* { return obj_;  }
+        [[nodiscard]] auto operator*()  const noexcept -> T& { return *obj_; }
+        [[nodiscard]] explicit operator bool() const noexcept { return obj_ != nullptr; }
+
+        /// @brief Release ownership without destroying the object.
+        ///
+        /// The caller takes responsibility for calling ~T() and kmem_free().
+        [[nodiscard]] auto release() noexcept -> T* {
+            T* p = obj_; obj_ = nullptr; cache_ = nullptr; return p;
+        }
+
+        /// @brief Destroy the object and free the slab slot immediately.
+        auto reset() noexcept -> void { destroy(); }
+    };
+
+} // namespace zxfoundation::memory::slub
+
+} // end export

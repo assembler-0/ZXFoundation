@@ -63,6 +63,14 @@ namespace lib::format {
         }
     };
 
+    /// @brief Formatter for booleans — prints "true" or "false".
+    template <>
+    struct formatter<bool> {
+        auto format(format_context& ctx, bool val) const noexcept -> void {
+            ctx.write(val ? "true" : "false");
+        }
+    };
+
     /// @brief Base formatter for integers.
     template <is_integral T>
     struct formatter<T> {

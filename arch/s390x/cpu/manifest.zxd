@@ -17,6 +17,8 @@
     ipi.cxxm
     stfle_types.cxxm
     stfle.cxxm
+    features.cxxm
     stsi_types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) ]
     stsi.cxxm
+    clkcomp.cxxm
 }

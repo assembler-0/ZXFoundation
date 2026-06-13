@@ -11,6 +11,11 @@ export {
 
 namespace lib {
 
+    /// @brief Align v up to the next multiple of alignment a (must be power of 2).
+    [[nodiscard]] constexpr auto align_up(u64 v, u64 a) noexcept -> u64 {
+        return (v + a - 1ULL) & ~(a - 1ULL);
+    }
+
     /// @brief Returns the smaller of two values.
     template <typename T>
     [[nodiscard]] constexpr auto min(const T& a, const T& b) noexcept -> const T& {

@@ -1,0 +1,59 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/rcu/rcu_types.cxxm
+/// @brief RCU type definitions — no heavy dependencies.
+///
+/// Intentionally minimal imports to avoid circular dependency with
+/// arch/s390x/cpu/percpu_types, which stores rcu_head* as void*.
+
+export module zxfoundation.rcu.rcu_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::rcu {
+
+    /// @brief Deferred-callback node embedded in the object to be freed.
+    ///
+    /// Embed one rcu_head in any structure that needs deferred RCU freeing.
+    /// Pass a pointer to the head and a callback function to call_rcu().
+    /// The callback receives the rcu_head pointer; use container_of semantics
+    /// (or a fixed offset) to recover the enclosing object.
+    ///
+    /// Layout must remain trivially constructible (no virtual dispatch,
+    /// no non-trivial ctor/dtor) so it can be embedded in slab_header and
+    /// other low-level structures that pre-date SLUB initialization.
+    struct rcu_head {
+        rcu_head* next{nullptr};                       ///< Intrusive list linkage (single-linked).
+        void (*func)(rcu_head* head) noexcept{nullptr}; ///< Callback invoked after grace period.
+    };
+    static_assert(sizeof(rcu_head) == 16);
+    static_assert(__builtin_offsetof(rcu_head, func) == 8);
+
+    /// @brief Grace-period sequence number type.
+    ///
+    /// Even value  — no grace period in progress; data is consistent.
+    /// Odd  value  — grace period in progress; readers may hold stale ptrs.
+    ///
+    /// Advancing from even → odd starts a new grace period.
+    /// Advancing from odd → even completes it.
+    ///
+    /// Callbacks queued during grace period N mature when gp_seq >= N + 1
+    /// (i.e., when the sequence number wraps back to even and exceeds N).
+    using gp_seq_t = u64;
+
+    /// @brief Return true if gp_seq a is "after" gp_seq b (modular arithmetic).
+    [[nodiscard]] constexpr auto gp_seq_after(gp_seq_t a, gp_seq_t b) noexcept -> bool {
+        return static_cast<i64>(a - b) > 0;
+    }
+
+    /// @brief Return true if a grace period is currently in progress.
+    [[nodiscard]] constexpr auto gp_in_progress(gp_seq_t seq) noexcept -> bool {
+        return (seq & 1U) != 0U;
+    }
+
+    /// @brief Maximum number of callbacks to drain per tick per CPU.
+    constexpr u32 RCU_MAX_DRAIN_PER_TICK = 64U;
+
+} // namespace zxfoundation::rcu
+
+} // end export

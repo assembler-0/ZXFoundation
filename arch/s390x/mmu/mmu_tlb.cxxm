@@ -1,0 +1,58 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/mmu/mmu_tlb.cxxm
+/// @brief TLB invalidation primitives for z/Architecture.
+export module arch.s390x.mmu.mmu_tlb;
+import arch.s390x.mmu.mmu_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::mmu {
+
+    /// @brief IDTE option: Purge TLB Of Address space.
+    inline constexpr u64 IDTE_PTOA = 0x0800ULL;
+
+    /// @brief PTLB — Purge TLB (local CPU only).
+    auto tlb_flush_local() noexcept -> void {
+        __asm__ volatile("ptlb" ::: "memory");
+    }
+
+    /// @brief IDTE — Invalidate DAT Table Entry (all CPUs, full ASCE flush).
+    /// @param[in] asce_val  The ASCE whose TLB entries should be purged.
+    auto tlb_flush_asce(u64 asce_val) noexcept -> void {
+        __asm__ volatile(
+            "   idte   0,%[opt],%[asce]"
+            :
+            : [opt]  "a" (IDTE_PTOA),
+              [asce] "a" (asce_val)
+            : "cc", "memory"
+        );
+    }
+
+    /// @brief Typed IDTE flush — compile-time level safety.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    auto tlb_flush_typed_asce(typed_asce<Level> asce) noexcept -> void {
+        tlb_flush_asce(asce.raw());
+    }
+
+    /// @brief IPTE — Invalidate Page Table Entry (all CPUs).
+    /// @param[in] pte_table_phys  Physical address of the page table
+    ///                            (lower 11 bits ignored by hardware).
+    /// @param[in] virt_addr       Virtual address whose TLB entry to purge
+    ///                            (bits [19:12] select the PTE within the table).
+    auto tlb_invalidate_pte(
+        u64 pte_table_phys, u64 virt_addr
+    ) noexcept -> void {
+        __asm__ volatile(
+            "   ipte   %[r1],%[r2]"
+            :
+            : [r1] "a" (pte_table_phys),
+              [r2] "a" (virt_addr)
+            : "cc", "memory"
+        );
+    }
+
+} // namespace arch::s390x::mmu
+
+} // end export

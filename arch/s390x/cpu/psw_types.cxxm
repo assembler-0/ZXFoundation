@@ -18,8 +18,10 @@ namespace arch::s390x::cpu::psw {
     /// @brief External interrupt enable bit — PoP §4.2, bit 7 of byte 0.
     constexpr u64 PSW_BIT_EXT        = 0x0100000000000000ULL;
 
-    /// @brief Machine-check interrupt enable bit — PoP §4.2, bit 13 of byte 1.
-    constexpr u64 PSW_BIT_MCCK       = 0x0008000000000000ULL;
+    /// @brief Machine-check interrupt enable bit — PoP §4.2, bit 13 of mask word.
+    /// IBM bit numbering: MSB = bit 0.  Bit 13 = 0x0004_0000_0000_0000.
+    /// Linux: PSW_MASK_MCHECK = 0x0004000000000000ULL.
+    constexpr u64 PSW_BIT_MCCK       = 0x0004000000000000ULL;
 
     /// @brief Wait state bit — PoP §4.2, bit 14 of byte 1.
     constexpr u64 PSW_BIT_WAIT       = 0x0002000000000000ULL;

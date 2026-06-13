@@ -1,0 +1,58 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/timer_types.cxxm
+/// @brief Kernel timer object type definitions.
+
+export module zxfoundation.sys.timer_types;
+import zxfoundation.base.types;
+import zxfoundation.base.object;
+import zxfoundation.scoms.scoms_types;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace zxfoundation::sys::timer {
+
+    using base::lifecycle_state;
+    using base::kernel_object;
+    using base::tag_timer;
+
+    /// @brief Timer callback signature.
+    ///
+    /// @param[in] data  Opaque context pointer.
+    using timer_fn = auto (*)(void* data) noexcept -> void;
+
+    /// @brief Timer mode.
+    enum class timer_mode : u8 {
+        oneshot  = 0,  ///< Fire once, then transition to dying.
+        periodic = 1,  ///< Re-arm after each expiry.
+    };
+
+    /// @brief Managed kernel timer object.
+    ///
+    /// Represents a scheduled callback that fires after a specified deadline.
+    /// Timers are kernel objects tracked by SCOMS for diagnostics and
+    /// lifecycle enforcement.
+    ///
+    /// @note  Timer wheel/heap infrastructure is not yet implemented.
+    ///        This type defines the interface; scheduling logic is Phase 4.
+    struct kernel_timer : kernel_object<tag_timer> {
+        timer_fn    callback{nullptr};       ///< Expiry callback.
+        void*       data{nullptr};           ///< Callback context.
+        u64         deadline_ns{0};          ///< Absolute deadline (monotonic ns).
+        u64         interval_ns{0};          ///< Re-arm interval (periodic only).
+        timer_mode  mode{timer_mode::oneshot};
+        bool        armed{false};            ///< true if in the timer queue.
+
+        scoms::object_node scoms_node;       ///< SCOMS registry node.
+
+        kernel_timer() noexcept = default;
+
+        kernel_timer(const kernel_timer&)            = delete;
+        auto operator=(const kernel_timer&)          = delete;
+        kernel_timer(kernel_timer&&)                 = delete;
+        auto operator=(kernel_timer&&)               = delete;
+    };
+
+} // namespace zxfoundation::sys::timer
+
+} // end export

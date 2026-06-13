@@ -1,0 +1,234 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/slub_types.cxxm
+/// @brief SLUB slab allocator type definitions.
+
+export module zxfoundation.memory.slub_types;
+import zxfoundation.base.types;
+import zxfoundation.base.object;
+import zxfoundation.base.config;
+import zxfoundation.rcu.rcu_types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.scoms.scoms_types;
+import arch.s390x.lib.atomic;
+import arch.s390x.cpu.processor_types;
+
+export {
+
+namespace zxfoundation::memory::slub {
+
+    using base::lifecycle_state;
+    using base::kernel_object;
+    using base::tag_slub_cache;
+    using arch::s390x::lib::atomic::atomic;
+    using arch::s390x::lib::atomic::memory_order;
+    using arch::s390x::cpu::processor::S390X_CACHE_LINE_SIZE;
+
+    /// @brief Maximum number of distinct kmem_caches (static table).
+    constexpr u32 SLUB_MAX_CACHES     = 64U;
+
+    /// @brief Maximum SLUB allocation size (larger goes directly to PMM).
+    constexpr u32 SLUB_MAX_SIZE       = 32768U;
+
+    /// @brief Maximum PMM order SLUB will use for slab pages.
+    ///
+    /// Minimum order required by each kmalloc size class:
+    ///   8..4096   → order 0 (4 KiB slab, many objects per slab)
+    ///   8192      → order 1 (8 KiB slab, ~0 objects if hdr aligned)
+    ///                 actually: hdr_end=8192, slab=8192 → need order 2
+    ///   16384     → order 2 (16 KiB)
+    ///   32768     → order 4 (64 KiB): hdr pads to 32768 alignment,
+    ///                 consuming the entire order-3 (32 KiB) slab.
+    ///                 order 4 gives 64 KiB, leaving 32 KiB for the object.
+    ///
+    /// Set to 5 (128 KiB) to provide headroom above the largest size class.
+    constexpr u32 SLUB_MAX_ORDER      = 5U;
+
+    /// @brief Maximum partial slabs kept on the node partial list per cache.
+    constexpr u32 SLUB_MIN_PARTIAL    = 5U;
+    constexpr u32 SLUB_MAX_PARTIAL    = 20U;
+
+    /// @brief Max objects on a CPU's partial list before spilling to node.
+    constexpr u32 SLUB_CPU_PARTIAL_DEFAULT = 13U;
+
+    // ── Flags ───────────────────────────────────────────────────────────
+
+    /// @brief Cache creation flags.
+    enum class slub_flags : u32 {
+        none               = 0,
+
+        /// @brief Defer slab-page freeing until an RCU grace period elapses.
+        typesafe_by_rcu    = 1U << 0,
+
+        /// @brief Align objects to hardware cache-line boundaries.
+        hwcache_align      = 1U << 1,
+
+        /// @brief Poison free objects with a known pattern (debug).
+        poison             = 1U << 2,
+
+        /// @brief Add red zones around objects (debug).
+        red_zone           = 1U << 3,
+
+        /// @brief Do not automatically shrink the cache under memory pressure.
+        no_reap            = 1U << 4,
+    };
+
+    constexpr auto operator|(slub_flags a, slub_flags b) noexcept -> slub_flags {
+        return static_cast<slub_flags>(
+            static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    constexpr auto operator&(slub_flags a, slub_flags b) noexcept -> slub_flags {
+        return static_cast<slub_flags>(
+            static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    constexpr auto operator!(slub_flags a) noexcept -> bool {
+        return static_cast<u32>(a) == 0U;
+    }
+
+
+    /// @brief Forward declaration: slab_header holds a back-pointer to its
+    /// owning kmem_cache.  kmem_cache is defined later in this module.
+    class kmem_cache;
+
+    /// @brief Metadata embedded at the physical start of each slab frame.
+    struct slab_header {
+        slab_header*   next{nullptr};             ///< Node partial list linkage.
+        slab_header*   prev{nullptr};
+        slab_header*   cpu_partial_next{nullptr}; ///< CPU partial list (singly-linked).
+        void*          freelist{nullptr};          ///< In-object freelist head (when parked).
+        kmem_cache*    cache{nullptr};             ///< Back-pointer to owning kmem_cache.
+        u64            phys{0};                    ///< Physical address of this slab frame.
+        u32            inuse{0};                   ///< Live allocated objects.
+        u32            objects{0};                 ///< Total objects in this slab.
+        u32            rcu_order{0};               ///< PMM order stashed for RCU deferred free.
+        u32            slab_order{0};              ///< PMM order of this slab (set once, never changes).
+        u8             frozen{0};                  ///< 1 = CPU-owned (frozen).
+        u8             node_id{0};                 ///< NUMA node (always 0).
+        u16            _pad{0};
+        rcu::rcu_head  rcu{};                      ///< For typesafe_by_rcu deferred free.
+    };
+    static_assert(sizeof(slab_header) <= 112, "slab_header must fit well within PAGE_SIZE");
+
+    /// @brief Per-NUMA-node slab state.
+    struct kmem_cache_node {
+        locking::qspinlock::qspinlock list_lock{};
+        slab_header*  partial{nullptr};       ///< Partially-filled slabs.
+        u32           nr_partial{0};          ///< Count of partial slabs.
+        u32           min_partial{SLUB_MIN_PARTIAL}; ///< Reclaim threshold.
+
+        atomic<u64>   total_slabs{0};         ///< Total slab pages allocated.
+        atomic<u64>   total_objects{0};       ///< Total objects (live + free) ever.
+    };
+
+    /// @brief Per-CPU hot allocation state.
+    struct alignas(64) kmem_cache_cpu {
+        void*         freelist{nullptr};    ///< Active slab's in-object freelist head.
+        slab_header*  slab{nullptr};        ///< Active slab (HHDM pointer).
+        slab_header*  partial{nullptr};     ///< CPU partial list head.
+        u32           partial_count{0};     ///< Objects in cpu_partial slabs.
+        u32           stat_fast_alloc{0};   ///< Fast-path alloc count (per-CPU, no atomics).
+        u32           stat_fast_free{0};    ///< Fast-path free count.
+        u32           _pad{0};
+    };
+    static_assert(sizeof(kmem_cache_cpu) == 64,
+        "kmem_cache_cpu must be exactly one cache line");
+
+    /// @brief SLUB slab cache descriptor.
+    class kmem_cache : public kernel_object<tag_slub_cache> {
+    public:
+        const char*  name{nullptr};
+        u32          object_size{0};
+        u32          size{0};
+        u32          align{0};
+        u32          fp_offset{0};
+        u32          order{0};
+        u32          objects_per_slab{0};
+        u32          cpu_partial{SLUB_CPU_PARTIAL_DEFAULT};
+        slub_flags   flags{slub_flags::none};
+        lifecycle_state state{lifecycle_state::fresh};
+
+        u64          random_seq{0};
+
+        atomic<u64>  stat_alloc_fast{0};
+        atomic<u64>  stat_alloc_slow{0};
+        atomic<u64>  stat_free_fast{0};
+        atomic<u64>  stat_free_slow{0};
+        atomic<u64>  stat_alloc_slab{0};
+        atomic<u64>  stat_free_slab{0};
+        atomic<i64>  live_objects{0};
+
+        kmem_cache_node node{};
+
+        kmem_cache_cpu cpu[base::config::CONFIG_ZX_MAX_CPUS]{};
+
+        scoms::object_node scoms_node;  ///< SCOMS registry node for this cache.
+
+        kmem_cache() noexcept = default;
+
+        kmem_cache(const kmem_cache&)                = delete;
+        auto operator=(const kmem_cache&)            = delete;
+        kmem_cache(kmem_cache&&)                     = delete;
+        auto operator=(kmem_cache&&)                 = delete;
+
+        /// @brief Activate: transition fresh → ready after full initialisation.
+        auto activate() noexcept -> void {
+            state = lifecycle_state::ready;
+        }
+
+        /// @brief Begin teardown: transition ready → dying.
+        auto begin_destroy() noexcept -> void {
+            state = lifecycle_state::dying;
+        }
+
+        /// @brief Return true if the cache is accepting allocations.
+        [[nodiscard]] auto ready() const noexcept -> bool {
+            return state == lifecycle_state::ready;
+        }
+    };
+
+    /// @brief Type-safe, zero-overhead reference to a kmem_cache in a known lifecycle state.
+    ///
+    /// This provides compile-time typestate enforcement for consumers of slab caches
+    /// without requiring the pinned, non-movable kmem_cache to change its layout.
+    ///
+    /// Only `kmem_cache_ref<lifecycle_state::ready>` permits allocation/free.
+    /// Construction of a ready-ref is gated through `kmem_cache_create()`
+    /// which activates the cache before returning.
+    template <lifecycle_state State>
+    class kmem_cache_ref {
+        kmem_cache* ptr_{nullptr};
+
+    public:
+        kmem_cache_ref() noexcept = default;
+        explicit kmem_cache_ref(kmem_cache* p) noexcept : ptr_(p) {}
+
+        kmem_cache_ref(const kmem_cache_ref&) noexcept = default;
+        auto operator=(const kmem_cache_ref&) noexcept -> kmem_cache_ref& = default;
+
+        [[nodiscard]] auto raw() const noexcept -> kmem_cache* { return ptr_; }
+        [[nodiscard]] auto operator->() const noexcept -> kmem_cache* { return ptr_; }
+        [[nodiscard]] auto operator*() const noexcept -> kmem_cache& { return *ptr_; }
+        [[nodiscard]] explicit operator bool() const noexcept { return ptr_ != nullptr; }
+
+        /// @brief Transition fresh -> ready. Only valid on fresh refs.
+        [[nodiscard]] auto activate() noexcept -> kmem_cache_ref<lifecycle_state::ready>
+            requires (State == lifecycle_state::fresh)
+        {
+            ptr_->activate();
+            return kmem_cache_ref<lifecycle_state::ready>{ptr_};
+        }
+
+        /// @brief Transition ready -> dying. Only valid on ready refs.
+        [[nodiscard]] auto begin_destroy() noexcept -> kmem_cache_ref<lifecycle_state::dying>
+            requires (State == lifecycle_state::ready)
+        {
+            ptr_->begin_destroy();
+            return kmem_cache_ref<lifecycle_state::dying>{ptr_};
+        }
+    };
+
+    using kmem_cache_ref_fresh = kmem_cache_ref<lifecycle_state::fresh>;
+    using kmem_cache_ref_ready = kmem_cache_ref<lifecycle_state::ready>;
+
+} // namespace zxfoundation::memory::slub
+
+} // end export

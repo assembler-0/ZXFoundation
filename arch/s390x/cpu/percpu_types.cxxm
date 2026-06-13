@@ -40,6 +40,21 @@ namespace arch::s390x::cpu::percpu {
         u8      in_rcu_read_side{};    ///< Non-zero if inside rcu_read_lock().
         u8      _pad1[7]{};            ///< Pad to u64 alignment.
 
+        /// @brief Per-CPU RCU callback pending list.
+        ///
+        /// Head of a singly-linked list of rcu_head objects waiting for
+        /// a grace period to complete before their callbacks are invoked.
+        /// Stored as void* to avoid a circular module import between
+        /// percpu_types and rcu_types; cast to rcu_head* at call sites.
+        ///
+        /// Protected by: single-CPU ownership (only written by the owning
+        /// CPU under preempt_disable).  Callbacks are drained by the
+        /// per-CPU tick handler when the pending grace period has elapsed.
+        void*   rcu_pending_cbs{nullptr};    ///< Head of pending rcu_head list (rcu_head*).
+        u64     rcu_pending_gp{0};           ///< Grace period at which pending_cbs mature.
+        u32     rcu_pending_count{0};        ///< Number of callbacks pending.
+        u32     _pad_rcu{};
+
         u32     ipi_pending_count{};   ///< Counter of pending IPI completion events.
         u32     _pad2{};
 

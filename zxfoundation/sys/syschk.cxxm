@@ -7,6 +7,7 @@ import zxfoundation.sys.syschk_types;
 import zxfoundation.sys.printk;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import zxfoundation.scoms.scoms;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.psw_types;
@@ -79,8 +80,6 @@ namespace zxfoundation::sys::syschk {
     /// @param[in] msg      Human-readable reason string.  Truncated to
     ///                     @ref ZX_CRASH_MSG_LEN - 1 bytes.
     /// @param[in] location Source location of the call site.
-    ///
-    /// @warning  Safe from any IRQL, including MCCK (dirql).
     [[noreturn]] auto system_check(
         lib::kernel_error    err,
         syschk_severity      sev,
@@ -124,6 +123,9 @@ namespace zxfoundation::sys::syschk {
         );
 
         pemerg("syschk: {}: {}\n", location.function_name(), msg);
+
+        // Dump SCOMS object registry for crash forensics.
+        scoms::dump_all();
 
         if (_internal::g_cpu_map) {
             const u16 self_hw_addr = arch::s390x::cpu::processor::cpu_addr();

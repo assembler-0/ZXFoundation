@@ -1,0 +1,252 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/context.cxxm
+/// @brief Execution context classification — Linux-style model for z/Architecture.
+
+export module zxfoundation.sched.context;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.psw;
+import zxfoundation.base.types;
+import lib.source_location;
+
+export {
+
+namespace zxfoundation::sched::context {
+
+    // ── Raw accessor ──────────────────────────────────────────────────────
+
+    /// @brief Return the raw hardware interrupt nesting depth.
+    ///
+    /// Incremented by entry.S on every interrupt entry (+1) and further
+    /// incremented by irq_dispatch based on interrupt class.  Reflects the
+    /// exact depth of interrupt frames on the current CPU's stack.
+    ///
+    /// Prefer the named predicates (in_interrupt, in_hardirq, in_mcck) over
+    /// comparing this value directly.
+    [[nodiscard]] inline auto nesting_depth() noexcept -> u32 {
+        return arch::s390x::cpu::lowcore::this_cpu_percpu().irq_nesting;
+    }
+
+    // ── Context predicates ────────────────────────────────────────────────
+
+    /// @brief Return true if EXT + IO interrupts are currently masked in the PSW.
+    ///
+    /// True in all of: hard-IRQ context, MCCK context, and software-masked
+    /// critical sections (spinlock holders with irq_save_disable active).
+    [[nodiscard]] inline auto irqs_disabled() noexcept -> bool {
+        return !arch::s390x::cpu::irq::irqs_enabled();
+    }
+
+    /// @brief Return true if currently executing inside any hardware interrupt
+    ///        handler frame (including the brief pre-dispatch window).
+    ///
+    /// Equivalent to Linux in_interrupt().
+    /// True whenever irq_nesting >= 1.
+    [[nodiscard]] inline auto in_interrupt() noexcept -> bool {
+        return nesting_depth() >= 1U;
+    }
+
+    /// @brief Return true if inside a hard-IRQ handler (EXT / IO / PGM).
+    ///
+    /// The steady-state irq_nesting during an EXT/IO/PGM handler is 2
+    /// (entry.S +1, irq_dispatch +1).  Nested interrupts push nesting higher;
+    /// this predicate remains true for the full nesting range.
+    ///
+    /// Equivalent to Linux in_irq().
+    [[nodiscard]] inline auto in_hardirq() noexcept -> bool {
+        return nesting_depth() >= 2U;
+    }
+
+    /// @brief Return true if inside a machine-check (MCCK) handler.
+    ///
+    /// Steady-state irq_nesting during MCCK is 3 (entry.S +1, irq_dispatch +2).
+    /// MCCK may nest over a hard-IRQ handler; this predicate is true for the
+    /// full range irq_nesting >= 3.
+    ///
+    /// No allocation, no locking, no sleeping are permitted in MCCK context.
+    [[nodiscard]] inline auto in_mcck() noexcept -> bool {
+        return nesting_depth() >= 3U;
+    }
+
+    /// @brief Return true if preemption is currently disabled.
+    ///
+    /// preempt_count > 0 means the scheduler must not switch away from the
+    /// current context even if a higher-priority task becomes runnable.
+    [[nodiscard]] inline auto preempt_disabled() noexcept -> bool {
+        return arch::s390x::cpu::lowcore::this_cpu_percpu().preempt_count > 0;
+    }
+
+    /// @brief Return true if the calling context may safely sleep.
+    ///
+    /// A context may sleep when ALL of the following hold:
+    ///   - Not in any hardware interrupt handler (irq_nesting == 0)
+    ///   - Not in an IRQ-disabled software section (PSW EXT+IO enabled)
+    ///   - Preemption is not disabled (preempt_count == 0)
+    ///   - Not inside an RCU read-side critical section
+    ///
+    /// The RCU condition enforces the quiescent-state guarantee: a quiescent
+    /// state (context switch) must not occur within rcu_read_lock / rcu_read_unlock.
+    ///
+    /// @note  This predicate is advisory.  It cannot prevent a context from
+    ///        actually blocking; it only detects the condition so that
+    ///        assert_can_sleep() can panic on misuse.
+    [[nodiscard]] inline auto can_sleep() noexcept -> bool {
+        const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        return pcp.irq_nesting    == 0U
+            && pcp.preempt_count  == 0
+            && !pcp.in_rcu_read_side
+            && arch::s390x::cpu::irq::irqs_enabled();
+    }
+
+    // ── Assertion primitives ──────────────────────────────────────────────
+    //
+    // Each assertion panics via disabled-wait PSW if the condition is not met.
+    // The source location is captured at the call site by the default argument;
+    // it is available in a debugger via the function's stack frame.
+    //
+    // We do NOT call syschk_fatal here: syschk imports arch/percpu modules
+    // and could trigger further context checks, risking re-entrancy.  A direct
+    // disabled-wait PSW is unconditionally safe from any execution context,
+    // including MCCK.
+
+    /// @brief Panic if EXT + IO are currently enabled in the PSW.
+    ///
+    /// Use before acquiring a spinlock directly (without irq_lock_guard) to
+    /// detect priority-inversion hazards: if an EXT interrupt fires while a
+    /// CPU is spinning and its handler also needs this lock, the system deadlocks.
+    inline auto assert_irqs_disabled(
+        lib::source_location loc = lib::source_location::current()
+    ) noexcept -> void {
+        if (!irqs_disabled()) [[unlikely]] {
+            (void)loc;
+            arch::s390x::cpu::psw::load_disabled_wait_psw();
+        }
+    }
+
+    /// @brief Panic if currently executing inside any hardware interrupt handler.
+    ///
+    /// Use to guard operations that must not run in interrupt context
+    /// (sleeping locks, page-fault handlers, scheduler entry points).
+    inline auto assert_not_in_interrupt(
+        lib::source_location loc = lib::source_location::current()
+    ) noexcept -> void {
+        if (in_interrupt()) [[unlikely]] {
+            (void)loc;
+            arch::s390x::cpu::psw::load_disabled_wait_psw();
+        }
+    }
+
+    /// @brief Panic if currently inside a hard-IRQ handler (EXT/IO/PGM).
+    ///
+    /// Use to guard subsystems that require at most "IRQ-disabled" context
+    /// but must reject full interrupt-handler context (e.g., order>0 PMM
+    /// allocations which need the zone lock).
+    inline auto assert_not_in_hardirq(
+        lib::source_location loc = lib::source_location::current()
+    ) noexcept -> void {
+        if (in_hardirq()) [[unlikely]] {
+            (void)loc;
+            arch::s390x::cpu::psw::load_disabled_wait_psw();
+        }
+    }
+
+    /// @brief Panic if the calling context may not sleep.
+    ///
+    /// Use to guard sleeping locks, blocking I/O entry points, and any
+    /// operation that requires a scheduler context switch.
+    inline auto assert_can_sleep(
+        lib::source_location loc = lib::source_location::current()
+    ) noexcept -> void {
+        if (!can_sleep()) [[unlikely]] {
+            (void)loc;
+            arch::s390x::cpu::psw::load_disabled_wait_psw();
+        }
+    }
+
+    // ── Preemption control ────────────────────────────────────────────────
+    //
+    // preempt_count is a signed 32-bit counter in s390x_percpu_data.
+    // Values > 0 suppress scheduler preemption.
+    // Values == 0 mean the CPU is preemptible (from a kernel-scheduling
+    // perspective; IRQ context is tracked separately via irq_nesting).
+    //
+    // Semantics match Linux exactly:
+    //   preempt_disable()   increments the count (disables preemption).
+    //   preempt_enable()    decrements the count.  If it reaches 0 and a
+    //                       reschedule was requested, the scheduler is
+    //                       invoked.  Until a scheduler exists the resched
+    //                       call is a no-op stub; the hook is wired.
+    //
+    // These primitives are safe to call from thread context only.
+    // They must NOT be called from interrupt handlers — use irq_save_disable
+    // for interrupt-handler mutual exclusion.
+
+    /// @brief Disable preemption on the current CPU.
+    ///
+    /// Increments preempt_count.  The call is a full compiler barrier
+    /// (the asm volatile prevents reordering across the count increment).
+    /// Hardware reordering is irrelevant: preempt_count is per-CPU and
+    /// only written by the owning CPU.
+    inline auto preempt_disable() noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        ++pcp.preempt_count;
+        /// Compiler barrier: no reads/writes may float above the increment.
+        __asm__ volatile ("" ::: "memory");
+    }
+
+    /// @brief Re-enable preemption on the current CPU.
+    ///
+    /// Decrements preempt_count.  If it reaches 0 and a reschedule was
+    /// requested while preemption was disabled, schedule() is invoked.
+    /// Currently a no-op stub until the scheduler is implemented; the
+    /// call site is wired so adding the scheduler requires no changes here.
+    inline auto preempt_enable() noexcept -> void {
+        __asm__ volatile ("" ::: "memory");
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        --pcp.preempt_count;
+        // Resched hook — wired but no-op until the scheduler exists.
+        // When the scheduler is added:
+        //   if (pcp.preempt_count == 0 && pcp.need_resched)
+        //       sched::schedule();
+    }
+
+    /// @brief Disable preemption without the resched check on re-enable.
+    ///
+    /// For use in paths that call preempt_disable/enable in tight loops
+    /// where the scheduler check overhead is undesirable on the fast path.
+    /// Use preempt_enable_no_resched() to pair with this.
+    inline auto preempt_disable_notrace() noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        ++pcp.preempt_count;
+        __asm__ volatile ("" ::: "memory");
+    }
+
+    /// @brief Re-enable preemption without triggering a reschedule check.
+    inline auto preempt_enable_no_resched() noexcept -> void {
+        __asm__ volatile ("" ::: "memory");
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        --pcp.preempt_count;
+    }
+
+    /// @brief RAII preemption guard.
+    ///
+    /// Disables preemption on construction; re-enables on destruction.
+    /// Use in preference to manual preempt_disable/enable pairs to
+    /// guarantee symmetry even if an early return is taken.
+    ///
+    /// @note  preempt_guard cannot be moved or copied.  Take it by value
+    ///        at the top of the scope that requires preemption to be off.
+    class preempt_guard {
+    public:
+        preempt_guard()  noexcept { preempt_disable(); }
+        ~preempt_guard() noexcept { preempt_enable();  }
+
+        preempt_guard(const preempt_guard&)            = delete;
+        auto operator=(const preempt_guard&)           = delete;
+        preempt_guard(preempt_guard&&)                 = delete;
+        auto operator=(preempt_guard&&)                = delete;
+    };
+
+} // namespace zxfoundation::sched::context
+
+} // end export

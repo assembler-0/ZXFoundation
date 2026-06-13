@@ -1,0 +1,146 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/scoms/scoms_types.cxxm
+/// @brief SCOMS type definitions — object node, handle, type descriptor.
+
+export module zxfoundation.scoms.scoms_types;
+import zxfoundation.base.types;
+import zxfoundation.base.object;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace zxfoundation::scoms {
+
+    using base::lifecycle_state;
+    using base::object_tag;
+
+    // ── Handle ──────────────────────────────────────────────────────────
+
+    /// @brief Opaque, unique kernel object identifier.
+    ///
+    /// Encoding: [ type_disc : 16 | generation : 48 ]
+    /// A null handle has value 0.  Type discriminator 0 is reserved.
+    enum class scoms_handle : u64 { null = 0 };
+
+    [[nodiscard]] constexpr auto make_handle(u16 type_disc, u64 index) noexcept -> scoms_handle {
+        return static_cast<scoms_handle>(
+            (static_cast<u64>(type_disc) << 48) | (index & 0x0000'FFFF'FFFF'FFFFULL));
+    }
+    [[nodiscard]] constexpr auto handle_type(scoms_handle h) noexcept -> u16 {
+        return static_cast<u16>(static_cast<u64>(h) >> 48);
+    }
+    [[nodiscard]] constexpr auto handle_index(scoms_handle h) noexcept -> u64 {
+        return static_cast<u64>(h) & 0x0000'FFFF'FFFF'FFFFULL;
+    }
+    [[nodiscard]] constexpr auto handle_valid(scoms_handle h) noexcept -> bool {
+        return h != scoms_handle::null;
+    }
+
+    // ── Object Node ─────────────────────────────────────────────────────
+
+    /// @brief Intrusive object graph node for SCOMS-managed kernel objects.
+    ///
+    /// Embed this in any kernel_object that participates in the SCOMS registry.
+    /// Provides:
+    ///   - Unique handle (assigned on registration)
+    ///   - Atomic reference counting
+    ///   - Parent/child/sibling graph edges (for ownership trees)
+    ///   - Per-type list linkage (for enumeration)
+    ///
+    /// @note  NOT for high-frequency value types (e.g. folio).
+    ///        Only for long-lived, relationship-heavy managed objects.
+    struct object_node {
+        // ── Identity ──
+        scoms_handle  handle{scoms_handle::null};  ///< Unique ID assigned by scoms_register.
+        u16           type_disc{0};                 ///< Type discriminator (index into type table).
+        u16           _pad0{0};
+        u32           _pad1{0};
+
+        // ── Reference counting ──
+        arch::s390x::lib::atomic::atomic<u32> refcount{1}; ///< Ref count. 1 = sole owner.
+        u32 _pad2{0};
+
+        // ── Object graph edges ──
+        object_node*  parent{nullptr};              ///< Owning object (null = root/unparented).
+        object_node*  first_child{nullptr};         ///< First child in ownership tree.
+        object_node*  next_sibling{nullptr};        ///< Next sibling under same parent.
+        object_node*  prev_sibling{nullptr};        ///< Prev sibling (doubly-linked for O(1) remove).
+
+        // ── Per-type registry list ──
+        object_node*  type_next{nullptr};           ///< Next in per-type live-object list.
+        object_node*  type_prev{nullptr};           ///< Prev in per-type live-object list.
+
+        // ── Non-copyable, non-movable (intrusive pointers) ──
+        object_node() noexcept = default;
+        object_node(const object_node&)            = delete;
+        auto operator=(const object_node&)         = delete;
+        object_node(object_node&&)                 = delete;
+        auto operator=(object_node&&)              = delete;
+    };
+
+    // ── Per-Type Statistics ──────────────────────────────────────────────
+
+    /// @brief Atomic per-type object counters.
+    struct object_stats {
+        arch::s390x::lib::atomic::atomic<u64> total_created{0};  ///< Cumulative.
+        arch::s390x::lib::atomic::atomic<u64> total_destroyed{0}; ///< Cumulative.
+        arch::s390x::lib::atomic::atomic<u64> live{0};           ///< Currently live.
+        arch::s390x::lib::atomic::atomic<u64> peak{0};           ///< Highest observed.
+
+        /// @brief Record one object registration.
+        auto on_register() noexcept -> void {
+            using arch::s390x::lib::atomic::memory_order;
+            (void)total_created.fetch_add(1, memory_order::relaxed);
+            const u64 now = live.fetch_add(1, memory_order::relaxed) + 1;
+            u64 cur = peak.load(memory_order::relaxed);
+            while (cur < now && !peak.compare_exchange_weak(
+                       cur, now, memory_order::relaxed, memory_order::relaxed))
+                ;
+        }
+
+        /// @brief Record one object unregistration.
+        auto on_unregister() noexcept -> void {
+            using arch::s390x::lib::atomic::memory_order;
+            (void)total_destroyed.fetch_add(1, memory_order::relaxed);
+            (void)live.fetch_sub(1, memory_order::relaxed);
+        }
+
+        [[nodiscard]] auto snap_total_created()   const noexcept -> u64 {
+            return total_created.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+        [[nodiscard]] auto snap_total_destroyed()  const noexcept -> u64 {
+            return total_destroyed.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+        [[nodiscard]] auto snap_live()    const noexcept -> u64 {
+            return live.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+        [[nodiscard]] auto snap_peak()    const noexcept -> u64 {
+            return peak.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        }
+    };
+
+    // ── Type Descriptor ─────────────────────────────────────────────────
+
+    /// @brief Maximum number of distinct object types SCOMS tracks.
+    constexpr u16 SCOMS_MAX_TYPES = 64;
+
+    /// @brief Per-type descriptor in the SCOMS type registry.
+    struct type_descriptor {
+        const char*    name{nullptr};       ///< Human-readable type name (string literal).
+        u32            object_size{0};      ///< sizeof the concrete object type.
+        u32            object_align{0};     ///< alignof the concrete object type.
+        object_stats   stats{};             ///< Atomic per-type counters.
+
+        // ── Per-type live-object list ──
+        object_node*   list_head{nullptr};  ///< Head of doubly-linked object list.
+        object_node*   list_tail{nullptr};  ///< Tail for O(1) append.
+
+        // ── Handle generation ──
+        arch::s390x::lib::atomic::atomic<u64> next_index{1}; ///< Monotonic handle index.
+
+        [[nodiscard]] auto registered() const noexcept -> bool { return name != nullptr; }
+    };
+
+} // namespace zxfoundation::scoms
+
+} // end export

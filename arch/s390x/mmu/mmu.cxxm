@@ -1,0 +1,843 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/mmu/mmu.cxxm
+/// @brief MMU engine — transactional, type-safe DAT table mapper.
+
+export module arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.mmu_const;
+import arch.s390x.mmu.mmu_tlb;
+import zxfoundation.base.types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.sys.transaction;
+import arch.s390x.cpu.features;
+import arch.s390x.cpu.psw;
+import lib.error;
+import lib.expected;
+import lib.util;
+
+// ── Module-internal state (NOT exported) ──────────────────────────────────
+
+namespace arch::s390x::mmu::_internal {
+
+    using namespace zxfoundation::memory;
+
+    static bool g_has_edat1{false};
+    static bool g_has_edat2{false};
+    static bool g_initialized{false};
+
+    // ── Table initialization ─────────────────────────────────────────
+
+    /// @brief Fill a freshly-allocated table with empty (invalid) entries.
+    auto init_table(dat_level lvl, u64 phys) noexcept -> void {
+        auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(phys));
+        if (lvl == dat_level::page) {
+            for (u32 i = 0; i < PAGE_ENTRIES; ++i)
+                table[i] = PTE_EMPTY;
+        } else {
+            const u64 empty = rste_empty_rt(lvl);
+            for (u32 i = 0; i < CRST_ENTRIES; ++i)
+                table[i] = empty;
+        }
+    }
+
+    // ── Allocation tracking for prepare-then-commit ──────────────────
+
+    /// @brief Record of one intermediate table allocated during a walk.
+    struct alloc_record {
+        u64 phys{0};
+        u32 order{0};
+    };
+
+    /// @brief Stack of allocations made during a single map_page walk.
+    ///        Maximum depth: 4 (R2, R3, Seg, PTE from an R1 root).
+    struct alloc_stack {
+        alloc_record entries[4]{};
+        u32 count{0};
+
+        auto push(u64 phys, u32 order) noexcept -> void {
+            if (count < 4U)
+                entries[count++] = {phys, order};
+        }
+
+        auto rollback() noexcept -> void {
+            for (u32 i = 0; i < count; ++i) {
+                pmm::folio_ready f{entries[i].phys, entries[i].order,
+                                   pmm::purpose::page_table, pmm::zone::normal};
+                pmm::free(::lib::move(f));
+            }
+            count = 0;
+        }
+    };
+
+    // ── Walk state for prepare-then-commit ───────────────────────────
+
+    /// @brief Per-level state captured during Phase 1.
+    struct level_state {
+        u64  table_phys{0};     ///< Physical address of the table at this level.
+        u32  index{0};          ///< Entry index within the table.
+        u64  alloc_phys{0};     ///< 0 if child existed; else newly allocated child phys.
+    };
+
+    // ── Core implementation: map a single 4 KiB page ─────────────────
+
+    /// @brief Map a single 4 KiB page using the two-phase protocol.
+    ///
+    /// Phase 1: walk + allocate (read-only side effects: none).
+    /// Phase 2: install entries (cannot fail).
+    ///
+    /// @return  On success, empty expected.
+    ///          On failure, kernel_error; NO side effects.
+    auto map_page_impl(
+        u64       root_phys,
+        dat_level root_level,
+        u64       virt,
+        u64       phys,
+        page_prot prot
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        // ── Phase 1: walk + allocate ────────────────────────────────
+        level_state states[4]{};
+        alloc_stack allocs{};
+        u32 depth = 0;
+        u64 current = root_phys;
+
+        for (auto lvl = root_level; lvl != dat_level::page;
+             lvl = next_level(lvl), ++depth) {
+            const u32 idx = virt_index_rt(lvl, virt);
+            states[depth].table_phys = current;
+            states[depth].index      = idx;
+            states[depth].alloc_phys = 0;
+
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u64 entry = table[idx];
+            const dat_level child_lvl = next_level(lvl);
+
+            if (rste_is_invalid(entry)) {
+                // Need to allocate the child table.
+                const u32 order = (child_lvl == dat_level::page)
+                    ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
+                auto result = pmm::alloc(
+                    order, pmm::zone::normal, pmm::purpose::page_table);
+                if (!result) [[unlikely]] {
+                    allocs.rollback();
+                    return ::lib::unexpected(result.error());
+                }
+                const u64 child_phys = result->phys_base;
+                init_table(child_lvl, child_phys);
+                allocs.push(child_phys, order);
+                states[depth].alloc_phys = child_phys;
+                current = child_phys;
+            } else {
+                // Segment large page blocks 4 KiB mapping beneath it.
+                if (lvl == dat_level::segment && seg_is_large(entry))
+                    [[unlikely]] {
+                    allocs.rollback();
+                    return ::lib::unexpected(::lib::kernel_error::from_memory(
+                        ::lib::memory_error::code::region_overlap));
+                }
+                // Region-3 large page blocks everything beneath it.
+                if (lvl == dat_level::region_3 && r3_is_large(entry))
+                    [[unlikely]] {
+                    allocs.rollback();
+                    return ::lib::unexpected(::lib::kernel_error::from_memory(
+                        ::lib::memory_error::code::region_overlap));
+                }
+                current = rste_origin(entry);
+            }
+        }
+
+        // Check PTE slot.
+        auto* pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+        const u32 pte_idx = virt_index_rt(dat_level::page, virt);
+        if (!pte_is_invalid(pte_table[pte_idx])) [[unlikely]] {
+            allocs.rollback();
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::region_overlap));
+        }
+
+        // ── Phase 2: install entries (cannot fail) ──────────────────
+        u64 walk = root_phys;
+        for (u32 i = 0; i < depth; ++i) {
+            if (states[i].alloc_phys != 0) {
+                auto* table = reinterpret_cast<u64*>(
+                    hhdm::phys_to_virt(states[i].table_phys));
+                const dat_level lvl = level_at_depth(root_level, i);
+                table[states[i].index] = rste_make_rt(lvl, states[i].alloc_phys);
+                walk = states[i].alloc_phys;
+            } else {
+                auto* table = reinterpret_cast<u64*>(
+                    hhdm::phys_to_virt(states[i].table_phys));
+                walk = rste_origin(table[states[i].index]);
+            }
+        }
+
+        // Install the PTE.
+        auto* final_pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(walk));
+        final_pte_table[virt_index_rt(dat_level::page, virt)] =
+            pte_make(phys, prot);
+
+        return {};
+    }
+
+    // ── Core implementation: unmap a single mapping ──────────────────
+
+    /// @brief Unmap whatever exists at @p virt (4 KiB, 1 MiB, or 2 GiB).
+    ///
+    /// @return  Size of the mapping removed (PAGE_SIZE_4K / SEGMENT_SIZE /
+    ///          REGION3_SIZE), or kernel_error if nothing was mapped.
+    auto unmap_at_impl(
+        u64       root_phys,
+        dat_level root_level,
+        u64       virt
+    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+        u64 current = root_phys;
+
+        for (auto lvl = root_level; lvl != dat_level::page;
+             lvl = next_level(lvl)) {
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u32 idx = virt_index_rt(lvl, virt);
+            const u64 entry = table[idx];
+
+            if (rste_is_invalid(entry))
+                return ::lib::unexpected(::lib::kernel_error::from_memory(
+                    ::lib::memory_error::code::invalid_address));
+
+            // Large page at segment level.
+            if (lvl == dat_level::segment && seg_is_large(entry)) {
+                table[idx] = rste_empty_rt(lvl);
+                return SEGMENT_SIZE;
+            }
+            // Large page at region-3 level.
+            if (lvl == dat_level::region_3 && r3_is_large(entry)) {
+                table[idx] = rste_empty_rt(lvl);
+                return REGION3_SIZE;
+            }
+            current = rste_origin(entry);
+        }
+
+        // At page table level.
+        auto* pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+        const u32 pte_idx = virt_index_rt(dat_level::page, virt);
+        if (pte_is_invalid(pte_table[pte_idx]))
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::invalid_address));
+
+        // IPTE: atomically invalidate PTE and flush TLB on all CPUs.
+        tlb_invalidate_pte(current, virt);
+        // Clear the entry fully.
+        pte_table[pte_idx] = PTE_EMPTY;
+        return PAGE_SIZE_4K;
+    }
+
+    // ── Core implementation: walk (virt → phys) ──────────────────────
+
+    auto walk_impl(
+        u64       root_phys,
+        dat_level root_level,
+        u64       virt
+    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+        u64 current = root_phys;
+
+        for (auto lvl = root_level; lvl != dat_level::page;
+             lvl = next_level(lvl)) {
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u32 idx = virt_index_rt(lvl, virt);
+            const u64 entry = table[idx];
+
+            if (rste_is_invalid(entry))
+                return ::lib::unexpected(::lib::kernel_error::from_memory(
+                    ::lib::memory_error::code::invalid_address));
+
+            // 1 MiB large page → resolve directly.
+            if (lvl == dat_level::segment && seg_is_large(entry)) {
+                const u64 base = entry & SEG_LARGE_ORIGIN;
+                return base | (virt & (SEGMENT_SIZE - 1));
+            }
+            // 2 GiB large page → resolve directly.
+            if (lvl == dat_level::region_3 && r3_is_large(entry)) {
+                const u64 base = entry & R3_LARGE_ORIGIN;
+                return base | (virt & (REGION3_SIZE - 1));
+            }
+            current = rste_origin(entry);
+        }
+
+        auto* pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+        const u32 pte_idx = virt_index_rt(dat_level::page, virt);
+        const u64 pte_val = pte_table[pte_idx];
+        if (pte_is_invalid(pte_val))
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::invalid_address));
+        return pte_frame(pte_val) | (virt & (PAGE_SIZE_4K - 1));
+    }
+
+    // ── Core implementation: protect ─────────────────────────────────
+
+    auto protect_impl(
+        u64       root_phys,
+        dat_level root_level,
+        u64       virt,
+        page_prot new_prot
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        u64 current = root_phys;
+
+        for (auto lvl = root_level; lvl != dat_level::page;
+             lvl = next_level(lvl)) {
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u32 idx = virt_index_rt(lvl, virt);
+            const u64 entry = table[idx];
+
+            if (rste_is_invalid(entry))
+                return ::lib::unexpected(::lib::kernel_error::from_memory(
+                    ::lib::memory_error::code::invalid_address));
+
+            // Large pages: re-protect in place.
+            if (lvl == dat_level::segment && seg_is_large(entry)) {
+                const u64 base = entry & SEG_LARGE_ORIGIN;
+                table[idx] = seg_large_make(base, new_prot);
+                tlb_flush_local();
+                return {};
+            }
+            if (lvl == dat_level::region_3 && r3_is_large(entry)) {
+                const u64 base = entry & R3_LARGE_ORIGIN;
+                table[idx] = r3_large_make(base, new_prot);
+                tlb_flush_local();
+                return {};
+            }
+            current = rste_origin(entry);
+        }
+
+        auto* pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+        const u32 pte_idx = virt_index_rt(dat_level::page, virt);
+        const u64 old_pte = pte_table[pte_idx];
+
+        if (pte_is_invalid(old_pte))
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::invalid_address));
+
+        const u64 frame = pte_frame(old_pte);
+
+        // IPTE: atomically invalidate + TLB flush.
+        tlb_invalidate_pte(current, virt);
+        // Re-install with new protection.
+        pte_table[pte_idx] = pte_make(frame, new_prot);
+        return {};
+    }
+
+    // ── Large page mapping helpers ───────────────────────────────────
+
+    /// @brief Map a 1 MiB large page (EDAT-1) via segment entry.
+    auto map_large_1m_impl(
+        u64       root_phys,
+        dat_level root_level,
+        u64       virt,
+        u64       phys,
+        page_prot prot
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        // Walk from root to segment level, allocating intermediates.
+        alloc_stack allocs{};
+        level_state states[3]{};   // At most 3 levels above segment (R1,R2,R3).
+        u32 depth = 0;
+        u64 current = root_phys;
+
+        for (auto lvl = root_level; lvl != dat_level::segment;
+             lvl = next_level(lvl), ++depth) {
+            const u32 idx = virt_index_rt(lvl, virt);
+            states[depth] = {current, idx, 0};
+
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u64 entry = table[idx];
+            const dat_level child_lvl = next_level(lvl);
+
+            if (rste_is_invalid(entry)) {
+                const u32 order = CRST_ALLOC_ORDER;
+                auto result = pmm::alloc(
+                    order, pmm::zone::normal, pmm::purpose::page_table);
+                if (!result) [[unlikely]] {
+                    allocs.rollback();
+                    return ::lib::unexpected(result.error());
+                }
+                const u64 child_phys = result->phys_base;
+                init_table(child_lvl, child_phys);
+                allocs.push(child_phys, order);
+                states[depth].alloc_phys = child_phys;
+                current = child_phys;
+            } else {
+                if (lvl == dat_level::region_3 && r3_is_large(entry))
+                    [[unlikely]] {
+                    allocs.rollback();
+                    return ::lib::unexpected(::lib::kernel_error::from_memory(
+                        ::lib::memory_error::code::region_overlap));
+                }
+                current = rste_origin(entry);
+            }
+        }
+
+        // Now current = segment table phys.  Check the segment entry.
+        auto* seg_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+        const u32 seg_idx = virt_index_rt(dat_level::segment, virt);
+        if (!rste_is_invalid(seg_table[seg_idx])) [[unlikely]] {
+            allocs.rollback();
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::region_overlap));
+        }
+
+        // ── Phase 2: install intermediates ──────────────────────────
+        u64 walk = root_phys;
+        for (u32 i = 0; i < depth; ++i) {
+            if (states[i].alloc_phys != 0) {
+                auto* table = reinterpret_cast<u64*>(
+                    hhdm::phys_to_virt(states[i].table_phys));
+                table[states[i].index] = rste_make_rt(
+                    level_at_depth(root_level, i), states[i].alloc_phys);
+                walk = states[i].alloc_phys;
+            } else {
+                auto* table = reinterpret_cast<u64*>(
+                    hhdm::phys_to_virt(states[i].table_phys));
+                walk = rste_origin(table[states[i].index]);
+            }
+        }
+
+        // Install the large segment entry.
+        auto* final_seg = reinterpret_cast<u64*>(hhdm::phys_to_virt(walk));
+        final_seg[virt_index_rt(dat_level::segment, virt)] =
+            seg_large_make(phys, prot);
+        return {};
+    }
+
+    /// @brief Map a 2 GiB large page (EDAT-2) via region-3 entry.
+    auto map_large_2g_impl(
+        u64       root_phys,
+        dat_level root_level,
+        u64       virt,
+        u64       phys,
+        page_prot prot
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        alloc_stack allocs{};
+        level_state states[2]{};   // At most R1,R2 above R3.
+        u32 depth = 0;
+        u64 current = root_phys;
+
+        for (auto lvl = root_level; lvl != dat_level::region_3;
+             lvl = next_level(lvl), ++depth) {
+            const u32 idx = virt_index_rt(lvl, virt);
+            states[depth] = {current, idx, 0};
+
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u64 entry = table[idx];
+            const dat_level child_lvl = next_level(lvl);
+
+            if (rste_is_invalid(entry)) {
+                auto result = pmm::alloc(
+                    CRST_ALLOC_ORDER, pmm::zone::normal, pmm::purpose::page_table);
+                if (!result) [[unlikely]] {
+                    allocs.rollback();
+                    return ::lib::unexpected(result.error());
+                }
+                const u64 child_phys = result->phys_base;
+                init_table(child_lvl, child_phys);
+                allocs.push(child_phys, CRST_ALLOC_ORDER);
+                states[depth].alloc_phys = child_phys;
+                current = child_phys;
+            } else {
+                current = rste_origin(entry);
+            }
+        }
+
+        // current = region-3 table phys.
+        auto* r3_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+        const u32 r3_idx = virt_index_rt(dat_level::region_3, virt);
+        if (!rste_is_invalid(r3_table[r3_idx])) [[unlikely]] {
+            allocs.rollback();
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::region_overlap));
+        }
+
+        // ── Phase 2: install ────────────────────────────────────────
+        u64 walk = root_phys;
+        for (u32 i = 0; i < depth; ++i) {
+            if (states[i].alloc_phys != 0) {
+                auto* table = reinterpret_cast<u64*>(
+                    hhdm::phys_to_virt(states[i].table_phys));
+                table[states[i].index] = rste_make_rt(
+                    level_at_depth(root_level, i), states[i].alloc_phys);
+                walk = states[i].alloc_phys;
+            } else {
+                auto* table = reinterpret_cast<u64*>(
+                    hhdm::phys_to_virt(states[i].table_phys));
+                walk = rste_origin(table[states[i].index]);
+            }
+        }
+
+        auto* final_r3 = reinterpret_cast<u64*>(hhdm::phys_to_virt(walk));
+        final_r3[virt_index_rt(dat_level::region_3, virt)] =
+            r3_large_make(phys, prot);
+        return {};
+    }
+
+} // namespace arch::s390x::mmu::_internal
+
+// ── Exported API ──────────────────────────────────────────────────────────
+
+export {
+
+namespace arch::s390x::mmu {
+
+    // ── Initialization ───────────────────────────────────────────────
+
+    /// @brief Initialize the MMU engine.  Must be called after PMM init
+    ///        and arch::s390x::cpu::features::init().
+    auto mmu_init() noexcept -> void {
+        using namespace _internal;
+        namespace features = arch::s390x::cpu::features;
+        if (g_initialized) return;
+        g_has_edat1 = features::has(features::facility::edat1);
+        g_has_edat2 = features::has(features::facility::edat2);
+        g_initialized = true;
+    }
+
+    /// @brief Query EDAT-1 (1 MiB large page) availability.
+    [[nodiscard]] auto has_edat1() noexcept -> bool {
+        return _internal::g_has_edat1;
+    }
+
+    /// @brief Query EDAT-2 (2 GiB large page) availability.
+    [[nodiscard]] auto has_edat2() noexcept -> bool {
+        return _internal::g_has_edat2;
+    }
+
+    // ── Table allocation ─────────────────────────────────────────────
+
+    /// @brief Allocate and initialize a CRST table for the given level.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    [[nodiscard]] auto crst_alloc() noexcept
+        -> ::lib::expected<dat_table<Level>, ::lib::kernel_error>
+    {
+        auto result = zxfoundation::memory::pmm::alloc(
+            CRST_ALLOC_ORDER,
+            zxfoundation::memory::pmm::zone::normal,
+            zxfoundation::memory::pmm::purpose::page_table);
+        if (!result) [[unlikely]]
+            return ::lib::unexpected(result.error());
+        const u64 phys = result->phys_base;
+        _internal::init_table(Level, phys);
+        return dat_table<Level>(phys);
+    }
+
+    /// @brief Allocate and initialize a page table.
+    [[nodiscard]] auto pte_table_alloc() noexcept
+        -> ::lib::expected<dat_table<dat_level::page>, ::lib::kernel_error>
+    {
+        auto result = zxfoundation::memory::pmm::alloc(
+            PTE_ALLOC_ORDER,
+            zxfoundation::memory::pmm::zone::normal,
+            zxfoundation::memory::pmm::purpose::page_table);
+        if (!result) [[unlikely]]
+            return ::lib::unexpected(result.error());
+        const u64 phys = result->phys_base;
+        _internal::init_table(dat_level::page, phys);
+        return dat_table<dat_level::page>(phys);
+    }
+
+    /// @brief Free a previously allocated table.
+    template <dat_level Level>
+    auto table_free(dat_table<Level> tbl) noexcept -> void {
+        if (!tbl.valid()) return;
+        constexpr u32 order = (Level == dat_level::page)
+            ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
+        zxfoundation::memory::pmm::folio_ready f{
+            tbl.origin_phys, order,
+            zxfoundation::memory::pmm::purpose::page_table,
+            zxfoundation::memory::pmm::zone::normal};
+        zxfoundation::memory::pmm::free(::lib::move(f));
+    }
+
+    // ── ASCE construction ────────────────────────────────────────────
+
+    /// @brief Build a typed ASCE for a kernel address space.
+    ///
+    /// The ASCE is constructed without the private-space, space-switch,
+    /// or storage-alteration bits — those are for user-mode ASCEs (future VMM).
+    template <dat_level Root>
+        requires (Root != dat_level::page)
+    [[nodiscard]] auto asce_build(dat_table<Root> root) noexcept -> typed_asce<Root> {
+        const u64 val = (root.origin_phys & ASCE_ORIGIN_MASK)
+                      | asce_type_code<Root>()
+                      | ASCE_LENGTH_MASK;
+        return typed_asce<Root>(val);
+    }
+
+    // ── Single-page operations (atomic, self-contained) ──────────────
+
+    /// @brief Map a single 4 KiB page.  Side-effect-free on failure.
+    ///
+    /// Allocates intermediate tables as needed.  If any allocation fails,
+    /// all are freed and the existing hierarchy is untouched.
+    /// On success, a defense-in-depth TLB flush is performed.
+    ///
+    /// @pre  Caller holds exclusive access to the root table.
+    template <dat_level Root>
+    [[nodiscard]] auto map_page(
+        dat_table<Root> root,
+        u64             virt,
+        u64             phys,
+        page_prot       prot
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        auto result = _internal::map_page_impl(
+            root.origin_phys, Root, virt, phys, prot);
+        // Defense-in-depth: flush even for new mappings.
+        // (s390x TLB never caches failed translations, so strictly
+        //  unnecessary, but we flush to guard against microcode errata.)
+        return result;
+    }
+
+    /// @brief Unmap a single page/large-page at @p virt.
+    ///
+    /// Issues IPTE for 4 KiB pages.  Clears the entry for large pages
+    /// and requires the caller to flush TLB externally (or use unmap_range).
+    ///
+    /// @return  Physical address of the unmapped frame, or kernel_error.
+    /// @pre     Caller holds exclusive access to the root table.
+    template <dat_level Root>
+    [[nodiscard]] auto unmap_page(
+        dat_table<Root> root,
+        u64             virt
+    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+        // First resolve the physical address (walk).
+        auto phys_result = _internal::walk_impl(
+            root.origin_phys, Root, virt);
+        if (!phys_result)
+            return ::lib::unexpected(phys_result.error());
+        const u64 old_phys = *phys_result;
+        // Now unmap.
+        auto size_result = _internal::unmap_at_impl(
+            root.origin_phys, Root, virt);
+        if (!size_result)
+            return ::lib::unexpected(size_result.error());
+        return old_phys;
+    }
+
+    /// @brief Walk the page tables to resolve virt → phys.
+    ///
+    /// Supports 4 KiB pages, 1 MiB large pages (EDAT-1), and
+    /// 2 GiB large pages (EDAT-2).
+    ///
+    /// @return  Physical address corresponding to @p virt, or kernel_error.
+    template <dat_level Root>
+    [[nodiscard]] auto walk(
+        dat_table<Root> root,
+        u64             virt
+    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+        return _internal::walk_impl(root.origin_phys, Root, virt);
+    }
+
+    /// @brief Change protection bits on an existing mapping.
+    ///
+    /// Uses IPTE to atomically invalidate + TLB flush, then re-installs
+    /// the entry with new protection.
+    ///
+    /// @pre  Caller holds exclusive access to the root table.
+    template <dat_level Root>
+    [[nodiscard]] auto protect(
+        dat_table<Root> root,
+        u64             virt,
+        page_prot       new_prot
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        return _internal::protect_impl(
+            root.origin_phys, Root, virt, new_prot);
+    }
+
+    // ── mmu_transaction ──────────────────────────────────────────────
+
+    /// @brief Transactional wrapper for batched MMU operations.
+    ///
+    /// Guarantees all-or-nothing semantics for map_range():
+    ///   - On commit:   single IDTE flush for the entire range.
+    ///   - On rollback: unmaps every page installed so far, then flushes.
+    ///
+    /// The transaction tracks the contiguous range [start, cursor) of
+    /// successfully mapped virtual addresses.  Rollback walks the range
+    /// and unmaps each entry, correctly handling mixed 4 KiB / 1 MiB / 2 GiB
+    /// mappings.
+    class mmu_transaction
+        : public zxfoundation::transaction<mmu_transaction> {
+        friend class zxfoundation::transaction<mmu_transaction>;
+
+        u64       root_phys_{0};
+        dat_level root_level_{dat_level::region_1};
+        u64       asce_val_{0};
+        u64       range_start_{0};
+        u64       range_cursor_{0};
+
+    public:
+        mmu_transaction() noexcept = default;
+
+        mmu_transaction(
+            u64       root_phys,
+            dat_level root_level,
+            u64       asce_val,
+            u64       range_start
+        ) noexcept
+            : root_phys_(root_phys)
+            , root_level_(root_level)
+            , asce_val_(asce_val)
+            , range_start_(range_start)
+            , range_cursor_(range_start)
+        {}
+
+        mmu_transaction(const mmu_transaction&)            = delete;
+        auto operator=(const mmu_transaction&)             = delete;
+
+        /// @brief Advance the cursor after a successful mapping.
+        auto advance(u64 bytes) noexcept -> void {
+            range_cursor_ += bytes;
+        }
+
+        /// @brief Commit the transaction and flush TLB.
+        ///
+        /// Issues a single IDTE for the entire address space, then
+        /// calls the base class commit() to disarm on_rollback.
+        auto commit_and_flush() noexcept -> void {
+            if (range_cursor_ > range_start_)
+                tlb_flush_asce(asce_val_);
+            this->commit();
+        }
+
+    private:
+        /// @brief Rollback: unmap all successfully-mapped entries, then flush.
+        ///
+        /// Called automatically by the base-class destructor if commit()
+        /// was never invoked.
+        auto on_rollback() noexcept -> void {
+            u64 va = range_start_;
+            while (va < range_cursor_) {
+                auto r = _internal::unmap_at_impl(
+                    root_phys_, root_level_, va);
+                if (r) {
+                    va += *r;
+                } else {
+                    va += PAGE_SIZE_4K;
+                }
+            }
+            if (range_cursor_ > range_start_)
+                tlb_flush_asce(asce_val_);
+        }
+    };
+
+    // ── Range operations (transactional) ─────────────────────────────
+
+    /// @brief Map a contiguous range [virt, virt+len) → [phys, phys+len).
+    ///
+    /// Uses 2 GiB large pages (EDAT-2) and 1 MiB large pages (EDAT-1)
+    /// where alignment and facility support allow.  Falls back to 4 KiB.
+    ///
+    /// The operation is transactional: if any sub-mapping fails, all
+    /// previously installed mappings in this call are rolled back.
+    ///
+    /// @return  Total bytes mapped on success, or kernel_error.
+    /// @pre     Caller holds exclusive access to the root table.
+    /// @pre     @p virt and @p phys are PAGE_SIZE_4K-aligned.
+    /// @pre     @p len is PAGE_SIZE_4K-aligned and > 0.
+    template <dat_level Root>
+    [[nodiscard]] auto map_range(
+        dat_table<Root> root,
+        u64             virt,
+        u64             phys,
+        u64             len,
+        page_prot       prot
+    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+        const u64 asce_val = asce_build(root).raw();
+        mmu_transaction txn(root.origin_phys, Root, asce_val, virt);
+
+        u64 va = virt;
+        u64 pa = phys;
+        u64 remaining = len;
+
+        while (remaining > 0) {
+            u64 step;
+
+            // Try 2 GiB large page (EDAT-2).
+            if (_internal::g_has_edat2
+                && remaining >= REGION3_SIZE
+                && (va & (REGION3_SIZE - 1)) == 0
+                && (pa & (REGION3_SIZE - 1)) == 0) {
+                auto r = _internal::map_large_2g_impl(
+                    root.origin_phys, Root, va, pa, prot);
+                if (!r)
+                    return ::lib::unexpected(r.error());
+                step = REGION3_SIZE;
+            }
+            // Try 1 MiB large page (EDAT-1).
+            else if (_internal::g_has_edat1
+                     && remaining >= SEGMENT_SIZE
+                     && (va & (SEGMENT_SIZE - 1)) == 0
+                     && (pa & (SEGMENT_SIZE - 1)) == 0) {
+                auto r = _internal::map_large_1m_impl(
+                    root.origin_phys, Root, va, pa, prot);
+                if (!r)
+                    return ::lib::unexpected(r.error());
+                step = SEGMENT_SIZE;
+            }
+            // Fall back to 4 KiB.
+            else {
+                auto r = _internal::map_page_impl(
+                    root.origin_phys, Root, va, pa, prot);
+                if (!r)
+                    return ::lib::unexpected(r.error());
+                step = PAGE_SIZE_4K;
+            }
+
+            txn.advance(step);
+            va        += step;
+            pa        += step;
+            remaining -= step;
+        }
+
+        txn.commit_and_flush();
+        return len;
+    }
+
+    /// @brief Unmap a contiguous range [virt, virt+len).
+    ///
+    /// Handles mixed 4 KiB / 1 MiB / 2 GiB mappings transparently.
+    /// Flushes TLB once via IDTE after all entries are cleared.
+    ///
+    /// @return  Total bytes unmapped, or kernel_error.
+    /// @pre     Caller holds exclusive access to the root table.
+    template <dat_level Root>
+    [[nodiscard]] auto unmap_range(
+        dat_table<Root> root,
+        u64             virt,
+        u64             len
+    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+        u64 va = virt;
+        u64 remaining = len;
+        u64 unmapped = 0;
+
+        while (remaining > 0) {
+            auto r = _internal::unmap_at_impl(
+                root.origin_phys, Root, va);
+            u64 step;
+            if (r) {
+                step = *r;
+                unmapped += step;
+            } else {
+                // Nothing mapped here — skip a page.
+                step = PAGE_SIZE_4K;
+            }
+            va        += step;
+            remaining  = (remaining >= step) ? remaining - step : 0;
+        }
+
+        // Single IDTE flush for the entire address space.
+        if (unmapped > 0) {
+            const u64 asce_val = asce_build(root).raw();
+            tlb_flush_asce(asce_val);
+        }
+        return unmapped;
+    }
+
+} // namespace arch::s390x::mmu
+
+} // end export

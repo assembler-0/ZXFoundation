@@ -1,10 +1,42 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/irq/irqdesc.cxxm
-/// @brief Generic IRQ descriptor table.
+/// @brief Generic IRQ descriptor table — dynamically allocated, pointer-sparse.
+///
+/// ── Design ───────────────────────────────────────────────────────────────
+///
+///   Static layout (BSS):
+///     irq_desc*  g_ptrs[IRQ_NR_MAX]   — 1024 × 8 B = 8 KB (was ~80 KB)
+///
+///   Dynamic layout (SLUB, injected):
+///     irq_desc objects allocated from a caller-provided slab cache.
+///     The allocator is injected via irq_slab_ops at irq_subsystem_init()
+///     time to break the module dependency cycle:
+///
+///       irqdesc → slub_typed → slub → syschk → trap → irqdesc  ← CYCLE
+///
+///     Breaking it: irqdesc does NOT import slub or slub_typed.
+///     main.cxxm (which sees both) creates the cache and injects it.
+///
+///   Typestate (runtime):
+///     g_ptrs[irq] == nullptr   → slot unallocated (fresh)
+///     g_ptrs[irq] != nullptr   → slot allocated; handler may be null (transient)
+///     handler != nullptr       → descriptor live (registered)
+///
+///   Locking order (always acquire in this order to prevent deadlock):
+///     g_table_lock → desc->lock
+///
+/// ── IRQL contract ────────────────────────────────────────────────────────
+///
+///   entry.S SAVE_FRAME increments pcp.irq_nesting by 1 before C stub.
+///   irq_dispatch() raises by an additional class-specific amount:
+///     EXT / IO / PGM : +1  → irq_nesting == 2  (in_hardirq)
+///     MCCK           : +2  → irq_nesting == 3  (in_mcck)
+///   On return the same amount is subtracted symmetrically.
 
 export module zxfoundation.sys.irq.irqdesc;
 import zxfoundation.base.object;
 import zxfoundation.base.types;
+import zxfoundation.scoms.scoms_types;
 import zxfoundation.scoms.scoms;
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
@@ -19,64 +51,109 @@ export {
 
 namespace zxfoundation::sys::irq {
 
-    constexpr u16 IRQ_NR_MAX    = 0x0400;
-    constexpr u16 IRQ_BASE_PGM  = 0x0000;
-    constexpr u16 IRQ_BASE_EXT  = 0x0100;
-    constexpr u16 IRQ_BASE_IO   = 0x0200;
-    constexpr u16 IRQ_BASE_MCCK = 0x0300;
+    /// ── IRQ vector space ─────────────────────────────────────────────────
+    constexpr u16 IRQ_NR_MAX    = 0x0400;   ///< Total vector slots (1024).
+    constexpr u16 IRQ_BASE_PGM  = 0x0000;   ///< Program-check vectors.
+    constexpr u16 IRQ_BASE_EXT  = 0x0100;   ///< External-interrupt vectors.
+    constexpr u16 IRQ_BASE_IO   = 0x0200;   ///< I/O interrupt vectors.
+    constexpr u16 IRQ_BASE_MCCK = 0x0300;   ///< Machine-check vectors.
 
-    constexpr u32 IRQF_SHARED   = 1U << 0;
-    constexpr u32 IRQF_DISABLED = 1U << 1;
+    constexpr u32 IRQF_SHARED   = 1U << 0;  ///< Allow multiple registrations.
+    constexpr u32 IRQF_DISABLED = 1U << 1;  ///< Handler runs with IRQs off.
 
-    using handler_fn = void(*)(u16 irq,
-                               arch::s390x::cpu::irq::arch_s390x_irq_frame*,
-                               void* data) noexcept;
+    using handler_fn = void(*)(
+        u16                                           irq,
+        arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+        void*                                         data) noexcept;
 
-    /// @brief Typestate-aware IRQ descriptor.
+    /// @brief IRQ descriptor — dynamically allocated per active vector.
     ///
-    /// State::fresh  → no handler; slot idle.
-    /// State::ready  → handler registered; slot dispatchable.
-    ///
-    /// The scoms_tracker drives per-type live/peak statistics.
-    /// The atomic count avoids a data race: dispatch increments it
-    /// outside the spinlock (hot path), so it must be atomic.
-    template <base::lifecycle_state State = base::lifecycle_state::fresh>
-    struct irq_desc : base::kernel_object<base::tag_irq_line, State> {
-        handler_fn  handler{nullptr};
-        void*       data{nullptr};
-        u32         flags{0};
-        u16         irq_nr{0};
-        arch::s390x::lib::atomic::atomic<u32> count{0}; ///< Dispatch count (SMP-safe).
-        locking::qspinlock::qspinlock         lock{};
-        scoms::scoms_tracker<base::tag_irq_line> tracker;
+    /// Non-copyable, non-movable (contains qspinlock + atomic<u32>).
+    struct irq_desc : base::kernel_object<base::tag_irq_line> {
+        handler_fn   handler{nullptr};  ///< Dispatch target; nullptr = unregistered.
+        void*        data{nullptr};     ///< Handler-private context.
+        u32          flags{0};          ///< IRQF_* bitmask.
+        u16          irq_nr{0};         ///< Vector number (mirrors g_ptrs index).
+
+        arch::s390x::lib::atomic::atomic<u32>    count{0}; ///< Dispatch count (relaxed).
+        locking::qspinlock::qspinlock            lock{};
+        scoms::object_node node;  ///< SCOMS registry node.
 
         irq_desc() noexcept = default;
 
-        /// @brief Construct with a SCOMS discriminator assigned.
-        explicit irq_desc(u16 disc) noexcept
-            : tracker(disc) {}
+        explicit irq_desc(u16 irq) noexcept
+            : irq_nr(irq) {}
+
+        [[nodiscard]] auto registered() const noexcept -> bool {
+            return handler != nullptr;
+        }
+
+        irq_desc(const irq_desc&)            = delete;
+        auto operator=(const irq_desc&)      = delete;
+        irq_desc(irq_desc&&)                 = delete;
+        auto operator=(irq_desc&&)           = delete;
     };
 
-    using irq_desc_fresh = irq_desc<base::lifecycle_state::fresh>;
-    using irq_desc_ready = irq_desc<base::lifecycle_state::ready>;
+    // ── Allocator injection ───────────────────────────────────────────────
+
+    /// @brief Slab allocator interface — injected at irq_subsystem_init().
+    ///
+    /// Decouples irqdesc.cxxm from the slub/slub_typed modules, breaking
+    /// the module import cycle:
+    ///   irqdesc → slub → syschk → trap → irqdesc
+    ///
+    /// main.cxxm imports both slub_typed and irqdesc, creates the cache,
+    /// and fills in this struct before calling irq_subsystem_init().
+    struct irq_slab_ops {
+        void*  cache{nullptr};                          ///< Opaque kmem_cache*.
+        void* (*alloc)(void* cache) noexcept = nullptr; ///< Allocate one slot.
+        void  (*free)(void* cache, void* p) noexcept = nullptr; ///< Free a slot.
+
+        [[nodiscard]] auto valid() const noexcept -> bool {
+            return cache != nullptr && alloc != nullptr && free != nullptr;
+        }
+    };
 
 } // namespace zxfoundation::sys::irq
 
 } // end export
 
+// ── Module-private implementation ─────────────────────────────────────────
 namespace zxfoundation::sys::irq::_internal {
 
-    /// @brief Module-local SCOMS type registration for tag_irq_line.
-    ///
-    /// Discriminator is resolved lazily on first call to disc() after
-    /// scoms_init() has run.  The registration uses irq_desc_fresh as
-    /// the representative type (both states have identical layout).
-    static scoms::scoms_type_info<base::tag_irq_line, irq_desc_fresh>
+    /// SCOMS type registration for irq_line objects.
+    static scoms::scoms_type_info<base::tag_irq_line, irq_desc>
         g_irq_line_type{ "irq_line" };
 
-    /// @brief The global IRQ descriptor table.
-    static irq_desc_fresh g_table[IRQ_NR_MAX]{};
-    static bool           g_initialized{false};
+    /// Sparse pointer table — 8 KB in BSS, nullptr = unallocated slot.
+    static irq_desc* g_ptrs[IRQ_NR_MAX]{};
+
+    /// Injected allocator (set by irq_subsystem_init).
+    static irq_slab_ops g_ops{};
+
+    /// Global table lock — protects g_ptrs[] pointer mutations.
+    static locking::qspinlock::qspinlock g_table_lock{};
+
+    static bool g_initialized{false};
+
+    /// Allocate + placement-new an irq_desc for slot @p irq.
+    /// @pre g_table_lock held, g_ptrs[irq] == nullptr.
+    [[nodiscard]] static auto irq_desc_alloc(u16 irq) noexcept -> irq_desc* {
+        void* slot = g_ops.alloc(g_ops.cache);
+        if (!slot) [[unlikely]] return nullptr;
+        auto* d = ::new(slot) irq_desc(irq);
+        (void)g_irq_line_type.register_node(d->node);
+        return d;
+    }
+
+    /// Explicit destructor + slab free.
+    /// @pre g_table_lock held.
+    static auto irq_desc_free(irq_desc* d) noexcept -> void {
+        if (!d) [[unlikely]] return;
+        scoms::unregister_object(d->node);
+        d->~irq_desc();
+        g_ops.free(g_ops.cache, static_cast<void*>(d));
+    }
 
 } // namespace zxfoundation::sys::irq::_internal
 
@@ -84,114 +161,137 @@ export {
 
 namespace zxfoundation::sys::irq {
 
-    /// @brief Initialize the IRQ subsystem.
-    ///
-    /// Assigns irq_nr to every descriptor slot and registers the irq_line
-    /// object type with SCOMS.  Must be called after scoms_init().
-    auto irq_subsystem_init() noexcept -> void {
-        using namespace _internal;
-        if (g_initialized) return;
-        // Touch g_irq_line_type to trigger SCOMS registration.
-        (void)g_irq_line_type.disc();
-        for (u16 i = 0; i < IRQ_NR_MAX; ++i) {
-            g_table[i].irq_nr = i;
-            g_table[i].tracker = scoms::scoms_tracker<base::tag_irq_line>{
-                g_irq_line_type.disc() };
-        }
-        g_initialized = true;
-    }
+    // ── Dispatch ─────────────────────────────────────────────────────────
 
-    /// @brief Register an IRQ handler.
-    ///
-    /// @param[in]  irq      IRQ vector number (0–IRQ_NR_MAX-1).
-    /// @param[in]  handler  Handler function pointer; must not be null.
-    /// @param[in]  data     Opaque pointer forwarded to the handler on dispatch.
-    /// @param[in]  flags    IRQF_* combination.
-    /// @return  IRQ number on success, kernel_error on failure.
-    [[nodiscard]] auto irq_register(
-        u16 irq, handler_fn handler, void* data, u32 flags
-    ) noexcept -> lib::expected<u16, lib::kernel_error> {
-        using namespace _internal;
-        if (irq >= IRQ_NR_MAX || !handler)
-            return lib::unexpected(lib::kernel_error::from_generic(
-                lib::generic_error::code::invalid_arg));
-
-        irq_desc_fresh& desc = g_table[irq];
-        const locking::irq_lock_guard guard{desc.lock};
-
-        if (desc.handler && !(flags & IRQF_SHARED))
-            return lib::unexpected(lib::kernel_error::from_generic(
-                lib::generic_error::code::invalid_arg));
-
-        desc.handler = handler;
-        desc.data    = data;
-        desc.flags   = flags;
-        // Slot is now logically ready — typestate is compile-time only,
-        // so no runtime field change needed.
-
-        return irq;
-    }
-
-    /// @brief Unregister the handler for an IRQ vector.
-    ///
-    /// @param[in]  irq  IRQ vector number.
-    auto irq_unregister(u16 irq) noexcept -> void {
-        using namespace _internal;
-        if (irq >= IRQ_NR_MAX) return;
-        irq_desc_fresh& desc = g_table[irq];
-        const locking::irq_lock_guard guard{desc.lock};
-        desc.handler = nullptr;
-        desc.data    = nullptr;
-        desc.flags   = 0;
-    }
-
-    /// @brief Dispatch an IRQ — called from C interrupt entry stubs.
-    ///
-    /// Increments percpu::irq_nesting on entry (raising effective IRQL)
-    /// and decrements it on exit.  The dispatch count is updated atomically
-    /// outside the spinlock to avoid extending the critical section on the
-    /// hot path.
-    ///
-    /// @param[in]  irq    IRQ vector number.
-    /// @param[in]  frame  Saved register frame from the interrupt entry stub.
+    /// @brief Dispatch an IRQ — called from C interrupt entry stubs (trap.cxxm).
     auto irq_dispatch(
-        u16 irq, arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
+        u16                                           irq,
+        arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+        arch::s390x::cpu::irq::arch_s390x_irq_class  cls
     ) noexcept -> void {
         using namespace _internal;
         if (irq >= IRQ_NR_MAX) [[unlikely]] return;
 
-        // Raise IRQL: signal we are inside an interrupt handler.
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        ++pcp.irq_nesting;
+        const u32 raise =
+            (cls == arch::s390x::cpu::irq::ZX_IRQ_CLASS_MCCK) ? 2U : 1U;
+        pcp.irq_nesting += raise;
 
-        irq_desc_fresh& desc = g_table[irq];
+        handler_fn h = nullptr;
+        void*      d = nullptr;
 
-        handler_fn h;
-        void*      d;
-        {
-            const locking::irq_lock_guard guard{desc.lock};
-            h = desc.handler;
-            d = desc.data;
+        irq_desc* desc = g_ptrs[irq];
+        if (desc) [[likely]] {
+            const locking::irq_lock_guard guard{desc->lock};
+            h = desc->handler;
+            d = desc->data;
+            (void)desc->count.fetch_add(1,
+                arch::s390x::lib::atomic::memory_order::relaxed);
         }
-
-        // Atomic increment outside the lock: count is hot-path read-mostly;
-        // relaxed is sufficient because we only need the increment to be
-        // atomic, not ordered with respect to handler execution.
-        (void)desc.count.fetch_add(1, arch::s390x::lib::atomic::memory_order::relaxed);
 
         if (h) [[likely]] h(irq, frame, d);
 
-        // Restore IRQL.
-        --pcp.irq_nesting;
+        pcp.irq_nesting -= raise;
     }
 
-    /// @brief Return a pointer to an IRQ descriptor by vector number.
-    ///
-    /// @param[in]  irq  IRQ vector number.
-    /// @return  Pointer to the descriptor, or nullptr if irq >= IRQ_NR_MAX.
-    [[nodiscard]] auto irq_get_desc(u16 irq) noexcept -> irq_desc_fresh* {
+    // ── Lookup ───────────────────────────────────────────────────────────
+
+    [[nodiscard]] auto irq_get_desc(u16 irq) noexcept -> irq_desc* {
         using namespace _internal;
-        return (irq < IRQ_NR_MAX) ? &g_table[irq] : nullptr;
+        if (!g_initialized || irq >= IRQ_NR_MAX) return nullptr;
+        return g_ptrs[irq];
+    }
+
+    // ── Registration ─────────────────────────────────────────────────────
+
+    /// @brief Register a handler for a vector.
+    ///
+    /// Allocates an irq_desc on first registration of a slot.
+    /// Subsequent registrations require IRQF_SHARED.
+    [[nodiscard]] auto irq_register(
+        u16        irq,
+        handler_fn handler,
+        void*      data  = nullptr,
+        u32        flags = 0
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        using namespace _internal;
+
+        if (!g_initialized)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        if (irq >= IRQ_NR_MAX || !handler)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+
+        const locking::irq_lock_guard table_guard{g_table_lock};
+
+        irq_desc* d = g_ptrs[irq];
+        if (!d) {
+            d = irq_desc_alloc(irq);
+            if (!d) [[unlikely]]
+                return lib::unexpected(
+                    lib::kernel_error::from_memory(
+                        lib::memory_error::out_of_memory));
+            g_ptrs[irq] = d;
+        }
+
+        // Per-desc lock nested under table lock — consistent order everywhere.
+        const locking::irq_lock_guard desc_guard{d->lock};
+
+        if (d->registered() && !(flags & IRQF_SHARED))
+            return lib::unexpected(
+                lib::kernel_error::from_locking(
+                    lib::locking_error::already_locked));
+
+        d->handler = handler;
+        d->data    = data;
+        d->flags   = flags;
+        d->irq_nr  = irq;
+        return {};
+    }
+
+    /// @brief Unregister the handler for a vector and free the descriptor.
+    ///
+    /// Clears handler under per-desc lock (makes dispatch a no-op),
+    /// then frees descriptor back to slab under table lock.
+    auto irq_unregister(u16 irq) noexcept -> void {
+        using namespace _internal;
+        if (!g_initialized || irq >= IRQ_NR_MAX) return;
+
+        const locking::irq_lock_guard table_guard{g_table_lock};
+        irq_desc* d = g_ptrs[irq];
+        if (!d) return;
+
+        {
+            const locking::irq_lock_guard desc_guard{d->lock};
+            d->handler = nullptr;
+            d->data    = nullptr;
+            d->flags   = 0;
+        }
+
+        // Now unreachable from dispatch: handler == nullptr.
+        g_ptrs[irq] = nullptr;
+        irq_desc_free(d);
+    }
+
+    // ── Initialization ────────────────────────────────────────────────────
+
+    /// @brief Initialize the IRQ subsystem with an injected slab allocator.
+    ///
+    /// Must be called after the slab cache for irq_desc has been created
+    /// by the caller (typically main.cxxm which imports both slub_typed and
+    /// irqdesc).  g_ptrs[] starts all-nullptr (BSS) — descriptors are
+    /// allocated lazily on the first irq_register() per slot.
+    ///
+    /// @param ops  Filled irq_slab_ops with cache pointer + alloc/free fns.
+    auto irq_subsystem_init_with_ops(const irq_slab_ops& ops) noexcept -> void {
+        using namespace _internal;
+        if (g_initialized) return;
+        if (!ops.valid()) [[unlikely]] {
+            __builtin_trap();  // TCB: missing allocator = hard fault
+        }
+        g_ops         = ops;
+        g_initialized = true;
     }
 
 } // namespace zxfoundation::sys::irq

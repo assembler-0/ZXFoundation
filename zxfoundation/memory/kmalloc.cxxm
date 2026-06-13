@@ -1,0 +1,128 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/kmalloc.cxxm
+/// @brief General-purpose kernel memory allocator — kmalloc / kfree.
+
+export module zxfoundation.memory.kmalloc;
+import zxfoundation.memory.slub;
+import zxfoundation.memory.slub_types;
+import zxfoundation.sys.syschk;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import lib.error;
+import lib.expected;
+
+namespace zxfoundation::memory::kmalloc::_internal {
+
+    /// @brief Number of size-class caches.
+    inline constexpr u32 KMALLOC_NUM_SIZES = 13U;
+
+    /// @brief Maximum single-allocation size via kmalloc.
+    inline constexpr u64 KMALLOC_MAX_SIZE  = 32768ULL;
+
+    /// @brief Size of each bucket (powers of two, starting at 8).
+    inline constexpr u64 g_sizes[KMALLOC_NUM_SIZES] = {
+        8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
+    };
+
+    static slub::kmem_cache_ref_ready g_caches[KMALLOC_NUM_SIZES]{};
+    static bool g_initialized{false};
+
+    /// @brief Names for each size-class cache (diagnostic use only).
+    inline constexpr const char* g_names[KMALLOC_NUM_SIZES] = {
+        "kmalloc-8",     "kmalloc-16",    "kmalloc-32",
+        "kmalloc-64",    "kmalloc-128",   "kmalloc-256",
+        "kmalloc-512",   "kmalloc-1024",  "kmalloc-2048",
+        "kmalloc-4096",  "kmalloc-8192",  "kmalloc-16384",
+        "kmalloc-32768",
+    };
+
+    /// @brief Return the bucket index for a requested size in O(1) time.
+    [[nodiscard]] constexpr auto bucket_for(u64 size) noexcept -> u32 {
+        if (size <= 8ULL) return 0U;
+        if (size > KMALLOC_MAX_SIZE) return KMALLOC_NUM_SIZES; // sentinel
+        const u32 log2_ceil = 64U - static_cast<u32>(__builtin_clzll(size - 1ULL));
+        return log2_ceil - 3U;  // bucket 0 ≡ 2^3 = 8
+    }
+
+} // namespace zxfoundation::memory::kmalloc::_internal
+
+export {
+
+namespace zxfoundation::memory::kmalloc {
+
+    /// @brief Create all size-class caches.
+    auto kmalloc_init() noexcept -> void {
+        using namespace _internal;
+        if (g_initialized) return;
+
+        for (u32 i = 0; i < KMALLOC_NUM_SIZES; ++i) {
+            auto result = slub::kmem_cache_create(
+                g_names[i],
+                static_cast<u32>(g_sizes[i]),
+                static_cast<u32>(g_sizes[i]),   // align = object size (power-of-two)
+                slub::slub_flags::none);
+            if (!result) [[unlikely]]
+                sys::syschk::syschk_fatal(
+                    result.error(),
+                    "kmalloc_init: failed to create {}",
+                    g_names[i]);
+            g_caches[i] = *result;
+        }
+
+        g_initialized = true;
+    }
+
+    /// @brief Allocate at least `size` bytes of kernel memory.
+    /// @param[in] size  Requested byte count.  Must be > 0 and <= KMALLOC_MAX_SIZE.
+    [[nodiscard]] auto kmalloc(u64 size) noexcept -> void* {
+        using namespace _internal;
+        if (!g_initialized || size == 0 || size > KMALLOC_MAX_SIZE)
+            [[unlikely]] return nullptr;
+
+        const u32 idx = bucket_for(size);
+        if (idx >= KMALLOC_NUM_SIZES || !g_caches[idx]) [[unlikely]] return nullptr;
+
+        return slub::kmem_alloc(*g_caches[idx]);
+    }
+
+    /// @brief Typed kmalloc: allocate sizeof(T), aligned to alignof(T).
+    template<typename T>
+    [[nodiscard]] auto kmalloc_t() noexcept -> T* {
+        return static_cast<T*>(kmalloc(sizeof(T)));
+    }
+
+    /// @brief Free a pointer previously returned by kmalloc().
+    auto kfree(void* ptr) noexcept -> void {
+        slub::kmem_free_raw(ptr);
+    }
+
+    /// @brief Typed kfree: calls T::~T() then frees the slab slot.
+    template<typename T>
+    auto kfree_t(T* ptr) noexcept -> void {
+        if (ptr) {
+            ptr->~T();
+            slub::kmem_free_raw(static_cast<void*>(ptr));
+        }
+    }
+
+    /// @brief Return the bucket index for a size, or KMALLOC_NUM_SIZES if too large.
+    [[nodiscard]] auto kmalloc_bucket(u64 size) noexcept -> u32 {
+        return _internal::bucket_for(size);
+    }
+
+    /// @brief Return the size of the Nth bucket, or 0 if out of range.
+    [[nodiscard]] auto kmalloc_bucket_size(u32 idx) noexcept -> u64 {
+        if (idx >= _internal::KMALLOC_NUM_SIZES) return 0;
+        return _internal::g_sizes[idx];
+    }
+
+    /// @brief Return the kmem_cache for the Nth bucket, or nullptr.
+    [[nodiscard]] auto kmalloc_cache(u32 idx) noexcept -> slub::kmem_cache_ref_ready {
+        using namespace _internal;
+        if (!g_initialized || idx >= KMALLOC_NUM_SIZES) return {};
+        return g_caches[idx];
+    }
+
+} // namespace zxfoundation::memory::kmalloc
+
+} // end export

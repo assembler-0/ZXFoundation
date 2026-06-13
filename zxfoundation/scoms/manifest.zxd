@@ -1,3 +1,4 @@
 !files : !compile_group -> [auto] {
+    scoms_types.cxxm
     scoms.cxxm
 }

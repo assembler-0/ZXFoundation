@@ -1,0 +1,648 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/slub.cxxm
+/// @brief SLUB slab allocator — full SMP-aware implementation.
+
+export module zxfoundation.memory.slub;
+import zxfoundation.memory.slub_types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.rcu.rcu;
+import zxfoundation.rcu.rcu_types;
+import zxfoundation.sched.context;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import zxfoundation.base.object;
+import zxfoundation.locking.lock;
+import zxfoundation.locking.qspinlock;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.processor;
+import arch.s390x.lib.atomic;
+import lib.error;
+import lib.expected;
+import lib.util;
+import lib.algorithm;
+import zxfoundation.scoms.scoms;
+
+namespace zxfoundation::memory::slub::_internal {
+
+    using namespace pmm;
+
+    /// @brief Static pool of kmem_cache objects.
+    ///
+    /// Using a static array avoids the bootstrap problem of needing SLUB
+    /// to allocate a kmem_cache.  All slots start in the fresh state.
+    static kmem_cache  g_cache_table[SLUB_MAX_CACHES]{};
+    static u32               g_cache_count{0};
+    static locking::qspinlock::qspinlock g_cache_table_lock{};
+    static bool              g_initialized{false};
+
+    /// SCOMS type info for kmem_cache objects.
+    static scoms::scoms_type_info<base::tag_slub_cache, kmem_cache>
+        g_cache_type{ "slub_cache" };
+
+    [[nodiscard]] inline auto encode_fp(
+        const kmem_cache& cache,
+        void* obj,
+        void* next
+    ) noexcept -> void* {
+        return reinterpret_cast<void*>(
+            reinterpret_cast<u64>(next)
+            ^ cache.random_seq
+            ^ reinterpret_cast<u64>(
+                static_cast<u8*>(obj) + cache.fp_offset));
+    }
+
+    [[nodiscard]] inline auto decode_fp(
+        const kmem_cache& cache,
+        void* obj,
+        void* stored
+    ) noexcept -> void* {
+        return reinterpret_cast<void*>(
+            reinterpret_cast<u64>(stored)
+            ^ cache.random_seq
+            ^ reinterpret_cast<u64>(
+                static_cast<u8*>(obj) + cache.fp_offset));
+    }
+
+    /// @brief Write the encoded next-pointer into a free object.
+    inline auto set_fp(
+        const kmem_cache& cache,
+        void* obj,
+        void* next
+    ) noexcept -> void {
+        void** slot = reinterpret_cast<void**>(
+            static_cast<u8*>(obj) + cache.fp_offset);
+        *slot = encode_fp(cache, obj, next);
+    }
+
+    /// @brief Read and decode the next-pointer from a free object.
+    [[nodiscard]] inline auto get_fp(
+        const kmem_cache& cache,
+        void* obj
+    ) noexcept -> void* {
+        void** slot = reinterpret_cast<void**>(
+            static_cast<u8*>(obj) + cache.fp_offset);
+        return decode_fp(cache, obj, *slot);
+    }
+
+    // ── Slab ↔ object translation ───────────────────────────────────────
+
+    /// @brief Recover the slab_header* for an object via its physical address.
+    ///
+    /// On allocation, we store the order in frame_desc::order (set by PMM).
+    /// The slab frame's physical base is phys masked by the slab size.
+    [[nodiscard]] inline auto slab_of(
+        const kmem_cache& cache,
+        void* obj
+    ) noexcept -> slab_header* {
+        const u64 phys    = hhdm::virt_to_phys(reinterpret_cast<u64>(obj));
+        const u64 slabmsk = ~((static_cast<u64>(PAGE_SIZE) << cache.order) - 1ULL);
+        const u64 sphys   = phys & slabmsk;
+        return reinterpret_cast<slab_header*>(hhdm::phys_to_virt(sphys));
+    }
+
+    /// @brief Compute the first object base address within a slab.
+    [[nodiscard]] inline auto first_object(
+        const kmem_cache& cache,
+        slab_header* sh
+    ) noexcept -> void* {
+        const u64 base     = reinterpret_cast<u64>(sh);
+        const u64 hdr_end  = base + sizeof(slab_header);
+        const u64 aligned  = lib::align_up(hdr_end, static_cast<u64>(cache.align));
+        return reinterpret_cast<void*>(aligned);
+    }
+
+    /// @brief RCU callback: free a slab page to PMM after grace period.
+    auto free_slab_rcu_cb(rcu::rcu_head* head) noexcept -> void {
+        const u64 rcu_off = __builtin_offsetof(slab_header, rcu);
+        auto* sh = reinterpret_cast<slab_header*>(
+            reinterpret_cast<u8*>(head) - rcu_off);
+        pmm::free({ sh->phys, sh->rcu_order, purpose::slab, zone::normal });
+    }
+
+    /// @brief Free a slab page: immediately or via RCU depending on flags.
+    auto free_slab(kmem_cache& cache, slab_header* sh) noexcept -> void {
+        (void)cache.stat_free_slab.fetch_add(1U, memory_order::relaxed);
+        (void)cache.node.total_slabs.fetch_sub(1U, memory_order::relaxed);
+        (void)cache.node.total_objects.fetch_sub(sh->objects, memory_order::relaxed);
+
+        const bool use_rcu = !!(cache.flags & slub_flags::typesafe_by_rcu);
+        if (use_rcu) [[unlikely]] {
+            sh->rcu_order = cache.order;
+            rcu::call_rcu(&sh->rcu, free_slab_rcu_cb);
+        } else {
+            pmm::free({ sh->phys, cache.order, purpose::slab, zone::normal });
+        }
+    }
+
+    /// @brief Allocate a new slab page from PMM and initialise it.
+    /// @return Pointer to the initialised slab_header, or nullptr on OOM.
+    [[nodiscard]] auto alloc_new_slab(kmem_cache& cache) noexcept -> slab_header* {
+        auto result = pmm::alloc(cache.order, zone::normal, purpose::slab);
+        if (!result) [[unlikely]] return nullptr;
+
+        folio_ready folio = static_cast<folio_fresh&&>(*result).make_ready();
+        const u64 phys    = folio.phys_base;
+        auto* sh = reinterpret_cast<slab_header*>(hhdm::phys_to_virt(phys));
+
+        sh->next             = nullptr;
+        sh->prev             = nullptr;
+        sh->cpu_partial_next = nullptr;
+        sh->phys             = phys;
+        sh->cache            = &cache;   // back-pointer: stable (lives in g_cache_table[])
+        sh->slab_order       = cache.order; // set once at alloc, used by kmem_free_raw fast path
+        sh->frozen           = 1;
+        sh->node_id          = 0;
+        sh->inuse            = 0;
+        sh->objects          = cache.objects_per_slab;
+        sh->rcu_order        = cache.order; // pre-initialised; overwritten in free_slab if RCU
+        sh->rcu              = {};
+        sh->_pad             = 0;
+
+        void* first = first_object(cache, sh);
+        void* obj   = first;
+        for (u32 i = 0; i < cache.objects_per_slab - 1U; ++i) {
+            void* next = static_cast<u8*>(obj) + cache.size;
+            set_fp(cache, obj, next);
+            obj = next;
+        }
+        set_fp(cache, obj, nullptr);
+        sh->freelist = first;
+
+        (void)cache.stat_alloc_slab.fetch_add(1U, memory_order::relaxed);
+        (void)cache.node.total_slabs.fetch_add(1U, memory_order::relaxed);
+        (void)cache.node.total_objects.fetch_add(sh->objects, memory_order::relaxed);
+
+        return sh;
+    }
+
+    /// @brief Remove a slab from the node partial list.
+    /// @pre  cache.node.list_lock is held (irq_lock_guard).
+    inline auto node_remove_partial(kmem_cache& cache, slab_header* sh) noexcept -> void {
+        if (sh->prev) sh->prev->next = sh->next;
+        else          cache.node.partial = sh->next;
+        if (sh->next) sh->next->prev = sh->prev;
+        sh->next = nullptr;
+        sh->prev = nullptr;
+        --cache.node.nr_partial;
+    }
+
+    /// @brief Add a slab to the node partial list (prepend).
+    /// @pre  cache.node.list_lock is held.
+    inline auto node_add_partial(kmem_cache& cache, slab_header* sh) noexcept -> void {
+        sh->next = cache.node.partial;
+        sh->prev = nullptr;
+        if (cache.node.partial) cache.node.partial->prev = sh;
+        cache.node.partial = sh;
+        ++cache.node.nr_partial;
+    }
+
+    /// @brief Activate a slab: freeze it and set as the CPU's active slab.
+    /// @pre  preempt_disable + irq_save_disable in effect.
+    inline auto activate_slab(
+        [[maybe_unused]] kmem_cache& cache,
+        kmem_cache_cpu&   cs,
+        slab_header*      sh
+    ) noexcept -> void {
+        sh->frozen  = 1;
+        cs.slab     = sh;
+        cs.freelist = sh->freelist;
+        sh->freelist = nullptr; // Now owned by cpu_slab.
+    }
+
+    // ── Slow paths ──────────────────────────────────────────────────────
+
+    [[nodiscard]] auto alloc_slow(kmem_cache& cache) noexcept -> void*;
+    auto free_slow(kmem_cache& cache, slab_header* sh, void* obj) noexcept -> void;
+
+    [[nodiscard]] auto alloc_slow(kmem_cache& cache) noexcept -> void* {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& cs  = cache.cpu[pcp.cpu_id];
+
+        // ── Tier 1: CPU partial list (no node lock) ─────────────────────
+        {
+            sched::context::preempt_disable();
+            const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+
+            if (cs.partial) {
+                slab_header* sh  = cs.partial;
+                cs.partial       = sh->cpu_partial_next;
+                sh->cpu_partial_next = nullptr;
+                cs.partial_count -= sh->objects - sh->inuse;
+                activate_slab(cache, cs, sh);
+                // Retry fast path inline.
+                void* obj = cs.freelist;
+                if (obj) {
+                    cs.freelist = get_fp(cache, obj);
+                    ++sh->inuse;
+                    arch::s390x::cpu::irq::irq_restore(flags);
+                    sched::context::preempt_enable();
+                    (void)cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
+                    (void)cache.live_objects.fetch_add(1, memory_order::relaxed);
+                    return obj;
+                }
+            }
+
+            arch::s390x::cpu::irq::irq_restore(flags);
+            sched::context::preempt_enable();
+        }
+
+        {
+            const locking::irq_lock_guard guard{cache.node.list_lock};
+
+            if (cache.node.partial) {
+                slab_header* sh = cache.node.partial;
+                node_remove_partial(cache, sh);
+                sh->frozen = 1;
+
+                const u32 bulk_limit = cache.cpu_partial;
+                u32       bulk_obj   = 0;
+
+                sched::context::preempt_disable();
+                const auto iflags = arch::s390x::cpu::irq::irq_save_disable();
+
+                activate_slab(cache, cs, sh);
+
+                while (cache.node.partial && bulk_obj < bulk_limit) {
+                    slab_header* extra = cache.node.partial;
+                    node_remove_partial(cache, extra);
+                    extra->frozen = 1;
+                    extra->cpu_partial_next = cs.partial;
+                    cs.partial = extra;
+                    cs.partial_count += extra->objects - extra->inuse;
+                    bulk_obj += extra->objects - extra->inuse;
+                }
+
+                void* obj = cs.freelist;
+                if (obj) {
+                    cs.freelist = get_fp(cache, obj);
+                    ++sh->inuse;
+                    arch::s390x::cpu::irq::irq_restore(iflags);
+                    sched::context::preempt_enable();
+                    (void)cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
+                    (void)cache.live_objects.fetch_add(1, memory_order::relaxed);
+                    return obj;
+                }
+                arch::s390x::cpu::irq::irq_restore(iflags);
+                sched::context::preempt_enable();
+            }
+        }
+
+        slab_header* sh = alloc_new_slab(cache);
+        if (!sh) [[unlikely]] return nullptr;
+
+        sched::context::preempt_disable();
+        const auto iflags = arch::s390x::cpu::irq::irq_save_disable();
+
+        activate_slab(cache, cs, sh);
+        void* obj = cs.freelist;
+        if (obj) {
+            cs.freelist = get_fp(cache, obj);
+            ++sh->inuse;
+        }
+
+        arch::s390x::cpu::irq::irq_restore(iflags);
+        sched::context::preempt_enable();
+
+        if (obj) {
+            (void)cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
+            (void)cache.live_objects.fetch_add(1, memory_order::relaxed);
+        }
+        return obj;
+    }
+
+    auto free_slow(kmem_cache& cache, slab_header* sh, void* obj) noexcept -> void {
+        (void)cache.stat_free_slow.fetch_add(1U, memory_order::relaxed);
+        (void)cache.live_objects.fetch_sub(1, memory_order::relaxed);
+
+        const locking::irq_lock_guard guard{cache.node.list_lock};
+
+        // Encode and push object to slab's freelist.
+        set_fp(cache, obj, sh->freelist);
+        sh->freelist = obj;
+        --sh->inuse;
+
+        if (sh->inuse == 0 && cache.node.nr_partial >= cache.node.min_partial) {
+            // Slab is empty and we have enough partial slabs — return to PMM.
+            if (sh->frozen == 0)
+                node_remove_partial(cache, sh);
+            sh->frozen = 0;
+            free_slab(cache, sh);
+            return;
+        }
+
+        if (!sh->frozen) {
+            node_add_partial(cache, sh);
+        }
+        // If frozen: it's on a CPU's cpu_partial list; leave it there.
+    }
+
+} // namespace zxfoundation::memory::slub::_internal
+
+export {
+
+namespace zxfoundation::memory::slub {
+
+    /// @brief Initialise the SLUB allocator.
+    /// Must be called before any kmem_cache_create().
+    auto slub_init() noexcept -> void {
+        using namespace _internal;
+        if (g_initialized) return;
+        g_cache_count = 0;
+        g_initialized = true;
+    }
+
+    /// @brief Create a new slab cache.
+    /// @param[in]  name         ASCII name for diagnostics.
+    /// @param[in]  object_size  sizeof(T) for the object type.
+    /// @param[in]  align        Required alignment.  0 → use object_size alignment.
+    /// @param[in]  flags        slub_flags bitmask.
+    [[nodiscard]] auto kmem_cache_create(
+        const char*  name,
+        u32          object_size,
+        u32          align,
+        slub_flags   flags = slub_flags::none
+    ) noexcept -> lib::expected<kmem_cache_ref_ready, lib::kernel_error> {
+        using namespace _internal;
+        using namespace pmm;
+
+        if (!g_initialized || !name || object_size == 0 ||
+            object_size > SLUB_MAX_SIZE)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::code::invalid_arg));
+
+        // ── Phase 1: Compute geometry (pure computation, no side effects) ─
+
+        u32 eff_align = (align > 0) ? align : 8U;
+        if (!!(flags & slub_flags::hwcache_align))
+            eff_align = lib::max(eff_align,
+                        static_cast<u32>(S390X_CACHE_LINE_SIZE));
+
+        const u32 eff_size = lib::align_up(static_cast<u64>(object_size),
+                                      static_cast<u64>(eff_align));
+        const u32 fp_off   = 0U;
+
+        u32 ord = 0;
+        u32 obj_count = 0;
+        while (ord <= SLUB_MAX_ORDER) {
+            const u64 slab_bytes = static_cast<u64>(PAGE_SIZE) << ord;
+            const u64 hdr_end    = lib::align_up(
+                static_cast<u64>(sizeof(slab_header)),
+                static_cast<u64>(eff_align));
+            if (hdr_end < slab_bytes) {
+                obj_count = static_cast<u32>((slab_bytes - hdr_end) / eff_size);
+                if (obj_count >= 1) break;
+            }
+            ++ord;
+        }
+        if (obj_count == 0)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::code::invalid_arg));
+
+        const locking::irq_lock_guard guard{g_cache_table_lock};
+        if (g_cache_count >= SLUB_MAX_CACHES)
+            return lib::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::code::out_of_memory));
+
+        // STCK seeding inside lock: stable timestamp relative to slot index.
+        const u64 rseq = arch::s390x::cpu::processor::stck()
+                       ^ reinterpret_cast<u64>(name)
+                       ^ static_cast<u64>(object_size)
+                       ^ static_cast<u64>(g_cache_count);
+
+        kmem_cache& slot = g_cache_table[g_cache_count];
+        slot.name             = name;
+        slot.object_size      = object_size;
+        slot.size             = eff_size;
+        slot.align            = eff_align;
+        slot.fp_offset        = fp_off;
+        slot.order            = ord;
+        slot.objects_per_slab = obj_count;
+        slot.flags            = flags;
+        slot.random_seq       = rseq;
+        slot.cpu_partial      = SLUB_CPU_PARTIAL_DEFAULT;
+
+        // Register with SCOMS before typestate transition.
+        (void)g_cache_type.register_node(slot.scoms_node);
+
+        // Typestate transition: fresh → ready via kmem_cache_ref.
+        // Only then is the count bumped so the slot becomes visible
+        // to kmem_get_cache() iterators.
+        kmem_cache_ref_fresh fresh_ref{&slot};
+        auto ready_ref = fresh_ref.activate();
+        ++g_cache_count;
+        return ready_ref;
+    }
+
+    /// @brief Destroy a slab cache.
+    auto kmem_cache_destroy(kmem_cache* cache) noexcept -> void {
+        using namespace _internal;
+        if (!cache || !g_initialized) return;
+
+        // Unregister from SCOMS before teardown.
+        scoms::unregister_object(cache->scoms_node);
+
+        constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
+
+        // ── Flush all CPU partial slabs to the node list ─────────────────
+        for (u32 i = 0; i < max_cpus; ++i) {
+            // Skip CPUs that have no registered lowcore (not online yet).
+            if (!arch::s390x::cpu::lowcore::get_for_cpu(static_cast<u16>(i))) continue;
+            kmem_cache_cpu& cs = cache->cpu[i];
+            sched::context::preempt_disable();
+            const auto iflags = arch::s390x::cpu::irq::irq_save_disable();
+
+            // Deactivate the active slab.
+            if (cs.slab) {
+                cs.slab->freelist = cs.freelist;
+                cs.slab->frozen   = 0;
+                {
+                    const locking::irq_lock_guard nl{cache->node.list_lock};
+                    if (cs.slab->inuse > 0)
+                        node_add_partial(*cache, cs.slab);
+                    else
+                        free_slab(*cache, cs.slab);
+                }
+                cs.slab    = nullptr;
+                cs.freelist = nullptr;
+            }
+
+            // Flush cpu_partial to node.
+            slab_header* sh = cs.partial;
+            while (sh) {
+                slab_header* nx = sh->cpu_partial_next;
+                sh->frozen = 0;
+                sh->cpu_partial_next = nullptr;
+                const locking::irq_lock_guard nl{cache->node.list_lock};
+                if (sh->inuse > 0)
+                    node_add_partial(*cache, sh);
+                else
+                    free_slab(*cache, sh);
+                sh = nx;
+            }
+            cs.partial = nullptr;
+            cs.partial_count = 0;
+
+            arch::s390x::cpu::irq::irq_restore(iflags);
+            sched::context::preempt_enable();
+        }
+
+        {
+            const locking::irq_lock_guard guard{cache->node.list_lock};
+            slab_header* sh = cache->node.partial;
+            while (sh) {
+                slab_header* nx = sh->next;
+                sh->next = nullptr;
+                sh->prev = nullptr;
+                free_slab(*cache, sh);
+                sh = nx;
+            }
+            cache->node.partial    = nullptr;
+            cache->node.nr_partial = 0;
+        }
+    }
+
+    /// @brief Return empty node-partial slabs to PMM.
+    auto kmem_cache_shrink(kmem_cache* cache) noexcept -> u32 {
+        using namespace _internal;
+        if (!cache || !!(cache->flags & slub_flags::no_reap)) return 0U;
+
+        u32 freed = 0;
+        const locking::irq_lock_guard guard{cache->node.list_lock};
+
+        slab_header* sh = cache->node.partial;
+        while (sh) {
+            slab_header* nx = sh->next;
+            if (sh->inuse == 0 &&
+                cache->node.nr_partial > cache->node.min_partial)
+            {
+                node_remove_partial(*cache, sh);
+                free_slab(*cache, sh);
+                ++freed;
+            }
+            sh = nx;
+        }
+        return freed;
+    }
+
+    /// @brief Allocate one object from the given cache.
+    /// @return  Pointer to the allocated object (HHDM virtual address),
+    ///          or nullptr on OOM.
+    [[nodiscard]] auto kmem_alloc(kmem_cache& cache) noexcept -> void* {
+        using namespace _internal;
+
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& cs  = cache.cpu[pcp.cpu_id];
+
+        sched::context::preempt_disable();
+        const auto iflags = arch::s390x::cpu::irq::irq_save_disable();
+
+        void* obj = cs.freelist;
+        if (obj) [[likely]] {
+            cs.freelist = get_fp(cache, obj);
+            ++cs.slab->inuse;
+            ++cs.stat_fast_alloc;  // per-CPU non-atomic — aggregated on demand
+            arch::s390x::cpu::irq::irq_restore(iflags);
+            sched::context::preempt_enable();
+            return obj;
+        }
+
+        arch::s390x::cpu::irq::irq_restore(iflags);
+        sched::context::preempt_enable();
+
+        return alloc_slow(cache);
+    }
+
+    /// @brief Typed allocation helper — returns a pointer to T.
+    ///
+    /// @tparam T  Object type.  sizeof(T) must equal cache.object_size.
+    template<typename T>
+    [[nodiscard]] auto kmem_alloc_t(kmem_cache& cache) noexcept -> T* {
+        return static_cast<T*>(kmem_alloc(cache));
+    }
+
+    /// @brief Free one object back to its cache.
+    /// @param[in]  cache  The cache the object was allocated from.
+    /// @param[in]  obj    Pointer to the object to free.
+    auto kmem_free(kmem_cache& cache, void* obj) noexcept -> void {
+        using namespace _internal;
+        if (!obj) [[unlikely]] return;
+
+        slab_header* sh = slab_of(cache, obj);
+
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& cs  = cache.cpu[pcp.cpu_id];
+
+        sched::context::preempt_disable();
+        const auto iflags = arch::s390x::cpu::irq::irq_save_disable();
+
+        if (sh == cs.slab) [[likely]] {
+            set_fp(cache, obj, cs.freelist);
+            cs.freelist = obj;
+            --sh->inuse;
+            ++cs.stat_fast_free;  // per-CPU non-atomic
+            arch::s390x::cpu::irq::irq_restore(iflags);
+            sched::context::preempt_enable();
+            // shared atomic stats omitted on fast path (see kmem_alloc comment)
+            return;
+        }
+
+        arch::s390x::cpu::irq::irq_restore(iflags);
+        sched::context::preempt_enable();
+
+        free_slow(cache, sh, obj);
+    }
+
+    /// @brief Return the number of live (allocated) objects in a cache.
+    [[nodiscard]] auto kmem_cache_live_objects(
+        const kmem_cache& cache
+    ) noexcept -> i64 {
+        return cache.live_objects.load(memory_order::relaxed);
+    }
+
+    /// @brief Return a pointer to the Nth registered cache, or nullptr.
+    [[nodiscard]] auto kmem_get_cache(u32 idx) noexcept -> kmem_cache* {
+        using namespace _internal;
+        if (!g_initialized || idx >= g_cache_count) return nullptr;
+        return &g_cache_table[idx];
+    }
+
+    /// @brief Return the total number of registered caches.
+    [[nodiscard]] auto kmem_cache_count() noexcept -> u32 {
+        return _internal::g_cache_count;
+    }
+
+    /// @brief Free a slab-allocated object without knowing its cache.
+    ///
+    /// Recovers the owning kmem_cache via frame_desc_of(phys)->order() to
+    /// compute the slab frame base, then reads slab_header::cache back-pointer.
+    ///
+    /// frame_desc_of is an O(1) array index into g_frame_table[pfn].
+    /// For the alloc/free hot pattern the frame_desc entry is already in L1
+    /// cache (accessed during alloc_new_slab), so this is effectively free.
+    ///
+    /// @pre ptr was allocated by kmem_alloc / kmalloc. Passing non-slab
+    ///      memory is UB (same contract as Linux kfree).
+    auto kmem_free_raw(void* ptr) noexcept -> void {
+        using namespace _internal;
+        if (!ptr) [[unlikely]] return;
+
+        const u64 phys = hhdm::virt_to_phys(reinterpret_cast<u64>(ptr));
+
+        const pmm::frame_desc* fd = pmm::frame_desc_of(phys);
+        if (!fd) [[unlikely]] return;
+
+        const u32 ord       = static_cast<u32>(fd->order());
+        const u64 slabmask  = ~((static_cast<u64>(PAGE_SIZE) << ord) - 1ULL);
+        const u64 slab_phys = phys & slabmask;
+        auto* sh = reinterpret_cast<slab_header*>(hhdm::phys_to_virt(slab_phys));
+
+        if (!sh->cache) [[unlikely]] return;
+        kmem_free(*sh->cache, ptr);
+    }
+
+} // namespace zxfoundation::memory::slub
+
+} // end export

@@ -3,4 +3,8 @@
     hhdm.cxxm
     pmm_types.cxxm
     pmm.cxxm
+    slub_types.cxxm
+    slub.cxxm
+    slub_typed.cxxm
+    kmalloc.cxxm
 }

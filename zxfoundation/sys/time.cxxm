@@ -4,23 +4,24 @@
 
 export module zxfoundation.sys.time;
 import zxfoundation.base.types;
-import zxfoundation.locking.lock;
-import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.seqlock;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.irq;
+import arch.s390x.lib.atomic;
 import lib.expected;
 import lib.error;
 import lib.compare;
 
 namespace _internal {
-    struct time_state {
-        zxfoundation::locking::qspinlock::qspinlock offset_lock;
-        u64 wall_clock_offset_ns; ///< Offset to add to raw TOD-derived NS to get realtime.
-        u64 boot_tod;             ///< TOD value at the moment of kernel entry.
-    };
+    /// @brief Seqlock-protected wall-clock offset.
+    /// Read-lock-free; write serialised by IRQ disable.
+    static zxfoundation::locking::seqlock<u64> g_wall_offset{};
 
-    /// @brief Global internal state of the time system.
-    /// @note Initialized during zxfoundation::sys::time::initialize().
-    static time_state g_state;
+    /// @brief TOD value captured at kernel entry (set once by time::initialize).
+    static u64 g_boot_tod{0};
+
+    /// @brief Monotonic tick counter — incremented by the clock comparator handler.
+    static arch::s390x::lib::atomic::atomic<u64> g_tick{0};
 }
 
 export {
@@ -32,50 +33,28 @@ namespace zxfoundation::sys::time {
         u64 m_ns;
 
     public:
-        /// @brief Default constructor (zero duration).
         constexpr duration() noexcept : m_ns(0) {}
-
-        /// @brief Construct from raw nanoseconds.
         constexpr explicit duration(u64 ns) noexcept : m_ns(ns) {}
 
-        /// @brief Get the duration in nanoseconds.
         [[nodiscard]] constexpr auto count_ns() const noexcept -> u64 { return m_ns; }
-
-        /// @brief Get the duration in microseconds.
         [[nodiscard]] constexpr auto count_us() const noexcept -> u64 { return m_ns / 1000U; }
-
-        /// @brief Get the duration in milliseconds.
         [[nodiscard]] constexpr auto count_ms() const noexcept -> u64 { return m_ns / 1000000U; }
-
-        /// @brief Get the duration in seconds.
         [[nodiscard]] constexpr auto count_s()  const noexcept -> u64 { return m_ns / 1000000000U; }
 
-        /// @brief Add two durations.
-        constexpr auto operator+(duration other) const noexcept -> duration { return duration(m_ns + other.m_ns); }
-
-        /// @brief Subtract two durations.
-        constexpr auto operator-(duration other) const noexcept -> duration { return duration(m_ns - other.m_ns); }
-
-        /// @brief Compare two durations.
+        constexpr auto operator+(duration o) const noexcept -> duration { return duration(m_ns + o.m_ns); }
+        constexpr auto operator-(duration o) const noexcept -> duration { return duration(m_ns - o.m_ns); }
         constexpr auto operator<=>(const duration&) const noexcept = default;
 
         /// @brief Convert s390x TOD clock units to a duration.
-        /// @param tod_units 64-bit TOD clock value (bit 51 = 1us).
-        /// @return Duration representing the TOD value.
-        /// @note Calculation: NS = (TOD * 1000) / 4096 = (TOD * 125) / 512.
+        /// Calculation: NS = (TOD * 1000) / 4096 = (TOD * 125) / 512.
         static constexpr auto from_tod(u64 tod_units) noexcept -> duration {
             const u128 val = static_cast<u128>(tod_units) * 125U;
             return duration(static_cast<u64>(val >> 9U));
         }
 
-        /// @brief Create a duration from seconds.
-        static constexpr auto from_seconds(u64 s) noexcept -> duration { return duration(s * 1000000000U); }
-        
-        /// @brief Create a duration from milliseconds.
-        static constexpr auto from_milliseconds(u64 ms) noexcept -> duration { return duration(ms * 1000000U); }
-
-        /// @brief Create a duration from microseconds.
-        static constexpr auto from_microseconds(u64 us) noexcept -> duration { return duration(us * 1000U); }
+        static constexpr auto from_seconds(u64 s)      noexcept -> duration { return duration(s * 1'000'000'000U); }
+        static constexpr auto from_milliseconds(u64 ms) noexcept -> duration { return duration(ms * 1'000'000U); }
+        static constexpr auto from_microseconds(u64 us) noexcept -> duration { return duration(us * 1'000U); }
     };
 
     /// @brief Represents an absolute point in time.
@@ -83,68 +62,85 @@ namespace zxfoundation::sys::time {
         u64 m_ns_since_epoch;
 
     public:
-        /// @brief Default constructor (epoch start).
         constexpr instant() noexcept : m_ns_since_epoch(0) {}
-
-        /// @brief Construct from nanoseconds since epoch.
         constexpr explicit instant(u64 ns) noexcept : m_ns_since_epoch(ns) {}
 
-        /// @brief Get the number of nanoseconds since the epoch.
         [[nodiscard]] constexpr auto nanoseconds_since_epoch() const noexcept -> u64 { return m_ns_since_epoch; }
 
-        /// @brief Add a duration to an instant.
-        constexpr auto operator+(duration d) const noexcept -> instant { return instant(m_ns_since_epoch + d.count_ns()); }
-
-        /// @brief Subtract a duration from an instant.
-        constexpr auto operator-(duration d) const noexcept -> instant { return instant(m_ns_since_epoch - d.count_ns()); }
-
-        /// @brief Calculate the duration between two instants.
-        constexpr auto operator-(instant other) const noexcept -> duration { return duration(m_ns_since_epoch - other.m_ns_since_epoch); }
-
-        /// @brief Compare two instants.
+        constexpr auto operator+(duration d) const noexcept -> instant  { return instant(m_ns_since_epoch + d.count_ns()); }
+        constexpr auto operator-(duration d) const noexcept -> instant  { return instant(m_ns_since_epoch - d.count_ns()); }
+        constexpr auto operator-(instant o)  const noexcept -> duration { return duration(m_ns_since_epoch - o.m_ns_since_epoch); }
         constexpr auto operator<=>(const instant&) const noexcept = default;
     };
 
     /// @brief Initialize the global time system.
-    /// @param[in] tod_boot Pointer to the ZXFL boot protocol.
-    /// @note This MUST be called early during kernel initialization.
+    /// @param[in] tod_boot  TOD clock value captured at kernel entry by ZXFL.
+    /// @note  MUST be called before any other time function.
     auto initialize(const u64 tod_boot) noexcept -> void {
-        _internal::g_state.boot_tod = tod_boot;
-        _internal::g_state.wall_clock_offset_ns = 0;
+        _internal::g_boot_tod = tod_boot;
+        _internal::g_wall_offset.write(0ULL);   // no IRQ disable needed before EXT is armed
     }
 
-    /// @brief Retrieve the current monotonic time.
-    /// @return An instant representing the time since the system booted.
-    /// @note This clock is guaranteed to be non-decreasing and SMP-consistent.
-    auto monotonic_now() noexcept -> instant {
-        const u64 current_tod = arch::s390x::cpu::processor::stck();
-        const u64 delta = (current_tod > _internal::g_state.boot_tod) ? (current_tod - _internal::g_state.boot_tod) : 0;
+    /// @brief Retrieve the current monotonic time (time since boot).
+    ///
+    /// Lock-free.  Reads STCK and computes delta from boot_tod.
+    /// Guaranteed non-decreasing on a single CPU; SMP-consistent via STCK.
+    [[nodiscard]] auto monotonic_now() noexcept -> instant {
+        const u64 now   = arch::s390x::cpu::processor::stck();
+        const u64 delta = (now > _internal::g_boot_tod)
+                        ? (now - _internal::g_boot_tod) : 0U;
         return instant(duration::from_tod(delta).count_ns());
     }
 
     /// @brief Retrieve the current realtime (wall-clock) time.
-    /// @return An instant representing the time since the epoch.
-    /// @note This clock may be adjusted (e.g., by NTP steering).
-    auto realtime_now() noexcept -> instant {
-        const u64 current_tod = arch::s390x::cpu::processor::stck();
-        const u64 raw_ns = duration::from_tod(current_tod).count_ns();
-
-        // TODO: a sequence-lock would be superior to avoid write-blocking.
-        locking::lock_guard guard(_internal::g_state.offset_lock);
-        return instant(raw_ns + _internal::g_state.wall_clock_offset_ns);
+    ///
+    /// Lock-free read path via seqlock.  Retries only on a concurrent
+    /// set_realtime() write — which is expected to be rare.
+    [[nodiscard]] auto realtime_now() noexcept -> instant {
+        const u64 raw_ns = duration::from_tod(
+            arch::s390x::cpu::processor::stck()).count_ns();
+        const u64 offset = _internal::g_wall_offset.read();
+        return instant(raw_ns + offset);
     }
 
-    /// @brief Adjust the realtime clock.
-    /// @param[in] now The new absolute time to set.
-    /// @return Success or a kernel error if the adjustment is invalid.
-    auto set_realtime(const instant now) noexcept -> lib::expected<void, lib::kernel_error> {
-        const u64 current_tod = arch::s390x::cpu::processor::stck();
-        const u64 current_raw_ns = duration::from_tod(current_tod).count_ns();
+    /// @brief Adjust the realtime clock (e.g., NTP steering).
+    ///
+    /// @param[in]  now  New absolute epoch-relative time.
+    /// @return  lib::expected<void, kernel_error>.
+    [[nodiscard]] auto set_realtime(const instant now) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        const u64 raw_ns = duration::from_tod(
+            arch::s390x::cpu::processor::stck()).count_ns();
+        const u64 new_offset = now.nanoseconds_since_epoch() - raw_ns;
 
-        locking::lock_guard guard(_internal::g_state.offset_lock);
-        _internal::g_state.wall_clock_offset_ns = now.nanoseconds_since_epoch() - current_raw_ns;
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        _internal::g_wall_offset.write(new_offset);
+        arch::s390x::cpu::irq::irq_restore(flags);
 
         return {};
+    }
+
+    /// @brief Advance the wall-clock offset by one tick's worth of time.
+    ///
+    /// Called by the clock comparator EXT handler on each 10ms tick.
+    /// Runs at in_hardirq() with EXT already masked by the new-PSW;
+    /// no additional IRQ save/disable needed inside the handler.
+    ///
+    /// @param[in]  tick_ns  Duration of one tick in nanoseconds (10,000,000).
+    auto tick_advance_wall(u64 tick_ns) noexcept -> void {
+        (void)_internal::g_tick.fetch_add(
+            1U, arch::s390x::lib::atomic::memory_order::relaxed);
+        const u64 old_offset = _internal::g_wall_offset.read();
+        _internal::g_wall_offset.write(old_offset + tick_ns);
+    }
+
+    /// @brief Return the current monotonic tick counter.
+    ///
+    /// Each tick represents one clock comparator interval (10 ms).
+    /// Useful for lightweight timeouts before a full timer wheel is wired.
+    [[nodiscard]] auto tick_count() noexcept -> u64 {
+        return _internal::g_tick.load(arch::s390x::lib::atomic::memory_order::relaxed);
     }
 
 } // namespace zxfoundation::sys::time

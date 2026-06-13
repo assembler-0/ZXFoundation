@@ -2,4 +2,5 @@
     lock.cxxm
     mcs_types.cxxm
     qspinlock.cxxm
+    seqlock.cxxm
 }

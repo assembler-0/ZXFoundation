@@ -1,0 +1,85 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/locking/seqlock.cxxm
+/// @brief Sequence lock for read-heavy, write-rare shared data.
+///
+/// Allows concurrent lock-free reads; writers are serialised externally.
+/// Readers retry only when they observe a write in progress (odd sequence).
+///
+/// Protocol:
+///   Writer: seq|=1 (release) -> update data -> seq+=1 (release) [seq even again]
+///   Reader: s1=seq (acquire) -> if odd, spin -> copy data -> s2=seq (acquire)
+///           -> if s1!=s2, retry -> return copy
+///
+/// On s390x TSO, acquire loads and release stores have essentially zero
+/// hardware overhead; the seqlock read path costs two EPSW-class loads.
+///
+/// T must be trivially copyable (no destructors, no virtual dispatch).
+/// Writers must be mutually exclusive; seqlock does not embed a spinlock.
+
+export module zxfoundation.locking.seqlock;
+import arch.s390x.cpu.processor;
+import arch.s390x.lib.atomic;
+import zxfoundation.base.types;
+import lib.concepts;
+
+export {
+
+namespace zxfoundation::locking {
+
+    template<typename T>
+        requires lib::is_trivially_copyable<T>
+    class seqlock {
+        using atomic_u64   = arch::s390x::lib::atomic::atomic<u64>;
+        using memory_order = arch::s390x::lib::atomic::memory_order;
+
+        mutable atomic_u64 m_seq{0};
+        T                  m_val{};
+
+    public:
+        constexpr seqlock() noexcept = default;
+
+        constexpr explicit seqlock(const T& initial) noexcept
+            : m_seq{0}, m_val{initial} {}
+
+        seqlock(const seqlock&)        = delete;
+        seqlock(seqlock&&)             = delete;
+        auto operator=(const seqlock&) = delete;
+        auto operator=(seqlock&&)      = delete;
+
+        /// @brief Write a new value.
+        ///
+        /// @pre  Caller must ensure mutual exclusion with other writers
+        ///       (e.g., disable IRQs or hold a companion spinlock).
+        ///
+        /// @note  Readers are never blocked; they retry transparently.
+        auto write(const T& val) noexcept -> void {
+            const u64 seq = m_seq.load(memory_order::relaxed);
+            m_seq.store(seq + 1U, memory_order::release);  // odd: write in progress
+            m_val = val;
+            m_seq.store(seq + 2U, memory_order::release);  // even: write complete
+        }
+
+        /// @brief Read the current value. Lock-free; retries on torn read.
+        [[nodiscard]] auto read() const noexcept -> T {
+            while (true) {
+                const u64 s1 = m_seq.load(memory_order::acquire);
+                if (s1 & 1U) [[unlikely]] {
+                    arch::s390x::cpu::processor::cpu_relax();
+                    continue;
+                }
+                const T v  = m_val;
+                const u64 s2 = m_seq.load(memory_order::acquire);
+                if (s1 == s2) [[likely]] return v;
+                arch::s390x::cpu::processor::cpu_relax();
+            }
+        }
+
+        /// @brief Return the sequence counter (diagnostic).
+        [[nodiscard]] auto sequence() const noexcept -> u64 {
+            return m_seq.load(memory_order::relaxed);
+        }
+    };
+
+} // namespace zxfoundation::locking
+
+} // end export

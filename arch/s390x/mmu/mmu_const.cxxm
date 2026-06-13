@@ -1,0 +1,179 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/mmu/mmu_const.cxxm
+/// @brief Hardware DAT entry bit definitions for z/Architecture.
+
+export module arch.s390x.mmu.mmu_const;
+import arch.s390x.mmu.mmu_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::mmu {
+
+    inline constexpr u64 PTE_NOEXEC      = 0x100ULL;   ///< HW no-execute bit.
+    inline constexpr u64 PTE_PROTECT     = 0x200ULL;   ///< HW read-only (store-protect) bit.
+    inline constexpr u64 PTE_INVALID     = 0x400ULL;   ///< HW invalid bit.
+    inline constexpr u64 PTE_LARGE       = 0x800ULL;   ///< Large-page marker (unused for PTE).
+    inline constexpr u64 PTE_ORIGIN_MASK = ~0xFFFULL;  ///< Physical frame [63:12].
+
+    /// @brief Empty (invalid) PTE — used to initialize page tables.
+    inline constexpr u64 PTE_EMPTY = PTE_INVALID;
+
+    inline constexpr u64 RSTE_ORIGIN_MASK = ~0xFFFULL; ///< Table/frame origin [63:12].
+    inline constexpr u64 RSTE_PROTECT     = 0x200ULL;  ///< Protection bit.
+    inline constexpr u64 RSTE_NOEXEC      = 0x100ULL;  ///< No-execute bit.
+    inline constexpr u64 RSTE_INVALID     = 0x020ULL;  ///< Invalid bit (bit 58).
+    inline constexpr u64 RSTE_TYPE_MASK   = 0x00CULL;  ///< Type field [3:2].
+
+    inline constexpr u64 RSTE_TYPE_R1 = 0x00CULL;  ///< Region-first table type (0b11).
+    inline constexpr u64 RSTE_TYPE_R2 = 0x008ULL;  ///< Region-second table type (0b10).
+    inline constexpr u64 RSTE_TYPE_R3 = 0x004ULL;  ///< Region-third table type (0b01).
+    inline constexpr u64 RSTE_TYPE_SG = 0x000ULL;  ///< Segment table type (0b00).
+
+    /// @brief Table length field — full 2048 entries (bits [1:0] = 0b11).
+    inline constexpr u64 RSTE_LENGTH_FULL = 0x003ULL;
+
+    /// @brief STE format-control bit (FC=1) — marks a 1 MiB direct mapping.
+    inline constexpr u64 SEG_LARGE         = 0x400ULL;
+    /// @brief 1 MiB-aligned physical address mask for segment large pages.
+    inline constexpr u64 SEG_LARGE_ORIGIN  = ~0xFFFFFULL;
+
+    /// @brief RTTE format-control bit (FC=1) — marks a 2 GiB direct mapping.
+    inline constexpr u64 R3_LARGE          = 0x400ULL;
+    /// @brief 2 GiB-aligned physical address mask for region-3 large pages.
+    inline constexpr u64 R3_LARGE_ORIGIN   = ~0x7FFFFFFFULL;
+
+    inline constexpr u64 ASCE_ORIGIN_MASK  = ~0xFFFULL;
+    inline constexpr u64 ASCE_PRIVATE      = 0x100ULL;  ///< Private-space control.
+    inline constexpr u64 ASCE_ALT_EVENT    = 0x080ULL;  ///< Storage-alteration event.
+    inline constexpr u64 ASCE_SPACE_SWITCH = 0x040ULL;  ///< Space-switch event.
+    inline constexpr u64 ASCE_REAL_SPACE   = 0x020ULL;  ///< Real-space control.
+    inline constexpr u64 ASCE_TYPE_MASK    = 0x00CULL;
+    inline constexpr u64 ASCE_TYPE_R1      = 0x00CULL;  ///< Region-first table.
+    inline constexpr u64 ASCE_TYPE_R2      = 0x008ULL;  ///< Region-second table.
+    inline constexpr u64 ASCE_TYPE_R3      = 0x004ULL;  ///< Region-third table.
+    inline constexpr u64 ASCE_TYPE_SEG     = 0x000ULL;  ///< Segment table.
+    inline constexpr u64 ASCE_LENGTH_MASK  = 0x003ULL;  ///< Table length.
+
+    /// @brief CRST type code for a given dat_level.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    [[nodiscard]] constexpr auto rste_type_code() noexcept -> u64 {
+        if constexpr (Level == dat_level::region_1) return RSTE_TYPE_R1;
+        else if constexpr (Level == dat_level::region_2) return RSTE_TYPE_R2;
+        else if constexpr (Level == dat_level::region_3) return RSTE_TYPE_R3;
+        else return RSTE_TYPE_SG;
+    }
+
+    /// @brief Runtime CRST type code.
+    [[nodiscard]] constexpr auto rste_type_code_rt(dat_level lvl) noexcept -> u64 {
+        switch (lvl) {
+            case dat_level::region_1: return RSTE_TYPE_R1;
+            case dat_level::region_2: return RSTE_TYPE_R2;
+            case dat_level::region_3: return RSTE_TYPE_R3;
+            case dat_level::segment:  return RSTE_TYPE_SG;
+            default: __builtin_unreachable();
+        }
+    }
+
+    /// @brief ASCE type code for a given root level.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    [[nodiscard]] constexpr auto asce_type_code() noexcept -> u64 {
+        if constexpr (Level == dat_level::region_1) return ASCE_TYPE_R1;
+        else if constexpr (Level == dat_level::region_2) return ASCE_TYPE_R2;
+        else if constexpr (Level == dat_level::region_3) return ASCE_TYPE_R3;
+        else return ASCE_TYPE_SEG;
+    }
+
+    /// @brief Invalid (empty) entry value for a CRST table at a given level.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    [[nodiscard]] constexpr auto rste_empty() noexcept -> u64 {
+        return rste_type_code<Level>() | RSTE_INVALID;
+    }
+
+    /// @brief Runtime empty-entry value.
+    [[nodiscard]] constexpr auto rste_empty_rt(dat_level lvl) noexcept -> u64 {
+        return rste_type_code_rt(lvl) | RSTE_INVALID;
+    }
+
+    /// @brief Construct a valid CRST entry pointing to a child table.
+    template <dat_level Level>
+        requires (Level != dat_level::page)
+    [[nodiscard]] constexpr auto rste_make(u64 child_phys) noexcept -> u64 {
+        return (child_phys & RSTE_ORIGIN_MASK)
+             | rste_type_code<Level>()
+             | RSTE_LENGTH_FULL;
+    }
+
+    /// @brief Runtime CRST entry construction.
+    [[nodiscard]] constexpr auto rste_make_rt(
+        dat_level lvl, u64 child_phys
+    ) noexcept -> u64 {
+        return (child_phys & RSTE_ORIGIN_MASK)
+             | rste_type_code_rt(lvl)
+             | RSTE_LENGTH_FULL;
+    }
+
+    /// @brief Construct a valid PTE from physical frame + protection.
+    [[nodiscard]] constexpr auto pte_make(
+        u64 phys, page_prot prot
+    ) noexcept -> u64 {
+        return (phys & PTE_ORIGIN_MASK) | prot.bits;
+    }
+
+    /// @brief Construct a 1 MiB large-page segment entry (EDAT-1).
+    [[nodiscard]] constexpr auto seg_large_make(
+        u64 phys, page_prot prot
+    ) noexcept -> u64 {
+        return (phys & SEG_LARGE_ORIGIN)
+             | SEG_LARGE
+             | RSTE_TYPE_SG
+             | RSTE_LENGTH_FULL
+             | prot.bits;
+    }
+
+    /// @brief Construct a 2 GiB large-page region-3 entry (EDAT-2).
+    [[nodiscard]] constexpr auto r3_large_make(
+        u64 phys, page_prot prot
+    ) noexcept -> u64 {
+        return (phys & R3_LARGE_ORIGIN)
+             | R3_LARGE
+             | RSTE_TYPE_R3
+             | RSTE_LENGTH_FULL
+             | prot.bits;
+    }
+
+    [[nodiscard]] constexpr auto rste_is_invalid(u64 val) noexcept -> bool {
+        return (val & RSTE_INVALID) != 0;
+    }
+
+    [[nodiscard]] constexpr auto pte_is_invalid(u64 val) noexcept -> bool {
+        return (val & PTE_INVALID) != 0;
+    }
+
+    [[nodiscard]] constexpr auto seg_is_large(u64 val) noexcept -> bool {
+        return (val & SEG_LARGE) != 0;
+    }
+
+    [[nodiscard]] constexpr auto r3_is_large(u64 val) noexcept -> bool {
+        return (val & R3_LARGE) != 0;
+    }
+
+    [[nodiscard]] constexpr auto rste_origin(u64 val) noexcept -> u64 {
+        return val & RSTE_ORIGIN_MASK;
+    }
+
+    [[nodiscard]] constexpr auto pte_frame(u64 val) noexcept -> u64 {
+        return val & PTE_ORIGIN_MASK;
+    }
+
+    inline constexpr page_prot PAGE_KERNEL_RWX{0};                           ///< RWX (avoid).
+    inline constexpr page_prot PAGE_KERNEL_RW {PTE_NOEXEC};                  ///< RW, NX.
+    inline constexpr page_prot PAGE_KERNEL_RO {PTE_PROTECT | PTE_NOEXEC};    ///< RO, NX.
+    inline constexpr page_prot PAGE_KERNEL_RX {PTE_PROTECT};                 ///< RO, X (code).
+
+} // namespace arch::s390x::mmu
+
+} // end export

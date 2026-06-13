@@ -1,10 +1,11 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/locking/qspinlock.cxxm
 /// @brief Queued spinlock (MCS-based) for z/Architecture.
-///
+
 export module zxfoundation.locking.qspinlock;
 import zxfoundation.base.types;
 import zxfoundation.locking.mcs_types;
+import zxfoundation.sched.context;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.lowcore;
@@ -74,9 +75,27 @@ namespace zxfoundation::locking::qspinlock {
         constexpr qspinlock() noexcept = default;
 
         /// @brief Acquire the lock (blocking, SMP-safe).
-        /// @note  Interrupts must be disabled by the caller before acquiring
-        ///        a spinlock to prevent priority inversion.  Use lock_irqsave().
+        ///
+        /// @pre  EXT + IO interrupts must be disabled in the PSW before calling
+        ///       this function.  Use irq_lock_guard (which calls irq_save_disable
+        ///       before spinning) from thread context.  In interrupt-handler
+        ///       context the hardware already disables EXT+IO via the new-PSW,
+        ///       so the precondition is automatically satisfied.
+        ///
+        ///       Acquiring a spinlock with interrupts enabled is a
+        ///       priority-inversion hazard: if an EXT interrupt fires while
+        ///       spinning and its handler also needs this lock, the system
+        ///       deadlocks.  The assertion below detects this at runtime.
+        ///
+        /// @note  Panics via disabled-wait PSW if the IRQs-disabled precondition
+        ///        is not met (context::assert_irqs_disabled).
         auto lock() noexcept -> void {
+            // Enforce IRQs-off precondition.  irqs_disabled() reads EPSW and
+            // checks the EXT+IO bits in PSW byte 0 — zero overhead on the
+            // fast path (interrupts are already off when we reach here in
+            // the expected usage pattern).
+            sched::context::assert_irqs_disabled();
+
             u32 expected = 0;
             if (m_val.compare_exchange_strong(
                     expected, _Q_LOCKED_VAL, memory_order::acquire, memory_order::relaxed))

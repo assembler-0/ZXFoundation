@@ -1,7 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/trap/trap.cxxm
 /// @brief C-callable interrupt handlers invoked by entry.S.
-/// All handlers read the interrupt code from the lowcore and route through irq_dispatch.
 
 export module arch.s390x.trap;
 import arch.s390x.cpu.irq_frame;
@@ -11,28 +10,56 @@ import zxfoundation.base.types;
 
 extern "C" {
 
-auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+/// @brief Program-check (exception) handler entry point.
+/// @param[in]  frame  Saved GPR and PSW frame from SAVE_FRAME in entry.S.
+auto do_pgm_check(
+    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
+) noexcept -> void {
     const u16 code = arch::s390x::cpu::lowcore::get_current()->pgm_code;
     zxfoundation::sys::irq::irq_dispatch(
-        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_PGM + code), frame);
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_PGM + code),
+        frame,
+        arch::s390x::cpu::irq::ZX_IRQ_CLASS_PGM
+    );
 }
 
-auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+/// @brief External interrupt handler entry point.
+/// @param[in]  frame  Saved GPR and PSW frame.
+auto do_ext_interrupt(
+    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
+) noexcept -> void {
     const u16 code = arch::s390x::cpu::lowcore::get_current()->ext_int_code;
-    const u16 irq = static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + (code & 0xFF));
-    zxfoundation::sys::irq::irq_dispatch(irq, frame);
+    zxfoundation::sys::irq::irq_dispatch(
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + (code & 0xFF)),
+        frame,
+        arch::s390x::cpu::irq::ZX_IRQ_CLASS_EXT
+    );
 }
 
-auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+/// @brief I/O interrupt handler entry point.
+/// @param[in]  frame  Saved GPR and PSW frame.
+auto do_io_interrupt(
+    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
+) noexcept -> void {
     const u16 sch = arch::s390x::cpu::lowcore::get_current()->subchannel_nr;
     zxfoundation::sys::irq::irq_dispatch(
-        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_IO + (sch & 0xFF)), frame);
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_IO + (sch & 0xFF)),
+        frame,
+        arch::s390x::cpu::irq::ZX_IRQ_CLASS_IO
+    );
 }
 
-auto do_mcck_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+/// @brief Machine-check (MCCK) interrupt handler entry point.
+/// @param[in]  frame  Saved GPR and PSW frame.
+auto do_mcck_interrupt(
+    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
+) noexcept -> void {
     const u64 code = arch::s390x::cpu::lowcore::get_current()->mcck_interruption_code;
     zxfoundation::sys::irq::irq_dispatch(
-        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_MCCK + (code & 0xFF)), frame);
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_MCCK + (code & 0xFF)),
+        frame,
+        arch::s390x::cpu::irq::ZX_IRQ_CLASS_MCCK
+    );
 }
 
 } // extern "C"

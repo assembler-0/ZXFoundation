@@ -1,0 +1,99 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/features.cxxm
+/// @brief Centralized CPU feature detection — caches STFLE facility bits
+///        and exposes a readable, type-safe query API.
+
+export module arch.s390x.cpu.features;
+import arch.s390x.cpu.stfle;
+import arch.s390x.cpu.stfle_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::features {
+
+    /// @brief Named CPU facility identifiers.
+    ///        These map to STFLE bit numbers but provide a human-readable API.
+    enum class facility : u32 {
+        zarch           = 2,    ///< z/Architecture installed.
+        stfle           = 7,    ///< STFLE instruction.
+        edat1           = 8,    ///< Enhanced-DAT facility 1 (1 MiB large pages).
+        pfmf            = 14,   ///< Perform-Frame-Management-Function.
+        eimm            = 21,   ///< Extended-immediate facility.
+        gen_inst        = 25,   ///< General-instructions-extension.
+        execute_ext     = 35,   ///< Execute-extensions facility.
+        fp_ext          = 41,   ///< Floating-point extension.
+        dfp             = 42,   ///< Decimal-floating-point.
+        pfpo            = 44,   ///< PFPO instruction.
+        misc_inst_ext1  = 58,   ///< Miscellaneous-instruction-extensions 1.
+        misc_inst_ext3  = 61,   ///< Miscellaneous-instruction-extensions 3.
+        misc_inst_ext2  = 76,   ///< Miscellaneous-instruction-extensions 2.
+        edat2           = 78,   ///< Enhanced-DAT facility 2 (2 GiB large pages).
+        vector          = 129,  ///< Vector facility.
+        guarded_storage = 133,  ///< Guarded-storage facility.
+        vx_base         = 134,  ///< Vector-enhancements facility 0.
+        vector_enh1     = 135,  ///< Vector-enhancements facility 1.
+        vector_enh2     = 148,  ///< Vector-enhancements facility 2.
+        vxrs            = 149,  ///< Vector-enhancements facility 3.
+    };
+
+    /// @brief Initialize the CPU features cache.
+    ///
+    /// Reads the STFLE facility list and caches all known facility bits.
+    /// Must be called once during early boot, BEFORE any subsystem queries.
+    ///
+    /// @param[in] stfle_fac  Pointer to the STFLE doubleword array
+    ///                       (from ZXFL boot protocol or manual STFLE).
+    auto init(const u64* stfle_fac) noexcept -> void;
+
+    /// @brief Query whether a specific facility is available.
+    [[nodiscard]] auto has(facility f) noexcept -> bool;
+
+    /// @brief Query a raw STFLE bit by number (for bits not in the enum).
+    [[nodiscard]] auto has_raw(u32 bit) noexcept -> bool;
+
+} // namespace arch::s390x::cpu::features
+
+} // end export
+
+// ---------------------------------------------------------------------------
+// Implementation
+// ---------------------------------------------------------------------------
+
+module :private;
+
+namespace arch::s390x::cpu::features {
+
+    /// Internal facility list cache — same size as the STFLE maximum.
+    static u64  g_fac_list[stfle::STFLE_MAX_DWORDS]{};
+
+    /// Guard: ensures init() is only applied once.
+    static bool g_initialized{false};
+
+    auto init(const u64* stfle_fac) noexcept -> void {
+        if (g_initialized) {
+            return;
+        }
+
+        for (u32 i = 0; i < stfle::STFLE_MAX_DWORDS; ++i) {
+            g_fac_list[i] = stfle_fac[i];
+        }
+
+        g_initialized = true;
+    }
+
+    auto has(facility f) noexcept -> bool {
+        return has_raw(static_cast<u32>(f));
+    }
+
+    auto has_raw(u32 bit) noexcept -> bool {
+        const u32 dword = bit / 64U;
+        const u32 pos   = bit % 64U;
+        if (dword >= stfle::STFLE_MAX_DWORDS) {
+            return false;
+        }
+        // s390x uses MSB-first bit numbering
+        return (g_fac_list[dword] & (1ULL << (63U - pos))) != 0;
+    }
+
+} // namespace arch::s390x::cpu::features

@@ -1,0 +1,6 @@
+!files : !compile_group -> [auto] {
+    mmu_types.cxxm
+    mmu_const.cxxm
+    mmu_tlb.cxxm
+    mmu.cxxm
+}

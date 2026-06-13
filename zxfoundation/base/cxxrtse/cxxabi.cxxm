@@ -10,6 +10,9 @@ import lib.error;
 import lib.static_vector;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
+import zxfoundation.sys.printk;
+
+using zxfoundation::sys::printk::pinfo;
 
 namespace {
 
@@ -28,6 +31,20 @@ auto atexit_lock()   noexcept -> void { g_atexit_lock.lock(); }
 auto atexit_unlock() noexcept -> void { g_atexit_lock.unlock(); }
 
 } // anonymous namespace
+
+extern "C" {
+
+extern void (*__init_array_start[])() __attribute__((weak));
+
+extern void (*__init_array_end[])() __attribute__((weak));
+
+extern void (*__fini_array_start[])() __attribute__((weak));
+
+extern void (*__fini_array_end[])() __attribute__((weak));
+
+extern void *__dso_handle __attribute__((weak));
+
+}
 
 extern "C" {
 
@@ -154,5 +171,71 @@ auto __cxa_free_exception(void*) -> void* {
     );
 }
 
-
 } // extern "C"
+
+export {
+
+namespace zxfoundation::base::cxxrtse::cxxabi {
+    
+    void run_global_constructor() noexcept {
+        if (&__init_array_end == nullptr) [[unlikely]] {
+            pinfo("cxxabi: __init_array_start or __init_array_end "
+                "symbols are missing. No global constructors will be called. "
+                "Check the kernel linker script.");
+            return;
+        }
+
+        const auto count = static_cast<usize>(
+            __init_array_end - __init_array_start);
+
+        pinfo("cxxabi: running {} global constructors.", count);
+
+        for (usize i = 0; i < count; ++i) {
+            void (*fn)() = __init_array_start[i];
+            if (fn == nullptr) [[unlikely]] {
+                pinfo("cxxabi: null constructor pointer at index {}. "
+                            "Possible linker script alignment issue. Skipping.", i);
+                continue;
+            }
+            fn();
+        }
+
+        pinfo("cxxabi: all constructors completed.");
+    }
+
+    void run_fini_array() noexcept {
+        if (&__fini_array_end == nullptr) [[unlikely]] {
+            pinfo("cxxabi: __fini_array_start or __fini_array_end "
+                "symbols are missing. No fini_array functions will be called.");
+            return;
+        }
+
+        const usize count = static_cast<usize>(
+            __fini_array_end - __fini_array_start);
+
+        pinfo("cxxabi: running {} fini_array entries (reverse order).", count);
+
+        // Reverse walk (LIFO).
+        for (usize i = count; i > 0; --i) {
+            void (*fn)() = __fini_array_start[i - 1];
+            if (fn == nullptr) [[unlikely]] {
+                pinfo("cxxabi: null fini_array pointer at index {}. Skipping.",
+                            i - 1);
+                continue;
+            }
+            fn();
+        }
+
+        pinfo("cxxabi: all fini_array entries completed.");
+    }
+
+    void run_global_destructors() noexcept {
+        pinfo("cxxabi: running all registered atexit destructors.");
+        __cxa_finalize(nullptr);
+        run_fini_array();
+        pinfo("cxxabi: all destructors completed.");
+    }
+    
+}
+
+}
