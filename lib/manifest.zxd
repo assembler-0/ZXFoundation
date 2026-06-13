@@ -10,6 +10,7 @@
     expected.cxxm
     format.cxxm
     list.cxxm
+    rbtree.cxxm
     optional.cxxm
     pair.cxxm
     placementnew.cxxm

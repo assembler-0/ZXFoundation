@@ -1,0 +1,624 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/rbtree.cxxm
+/// @brief Intrusive augmented red-black tree.
+
+export module lib.rbtree;
+import zxfoundation.base.types;
+import lib.util;
+
+export {
+
+namespace lib {
+
+    constexpr uptr RB_RED   = 0;
+    constexpr uptr RB_BLACK = 1;
+
+    /// @brief Intrusive red-black tree node.
+    struct rb_node {
+        uptr      __parent_color{};  ///< Parent pointer | color bit.
+        rb_node*  left{};            ///< Left child (nullptr = leaf).
+        rb_node*  right{};           ///< Right child (nullptr = leaf).
+    };
+
+    // ── Accessor helpers ──────────────────────────────────────────────────
+
+    [[nodiscard]] inline auto rb_parent(const rb_node* n) noexcept -> rb_node* {
+        return reinterpret_cast<rb_node*>(n->__parent_color & ~uptr(3));
+    }
+
+    [[nodiscard]] inline auto rb_color(const rb_node* n) noexcept -> uptr {
+        return n->__parent_color & 1;
+    }
+
+    [[nodiscard]] inline auto rb_is_red(const rb_node* n) noexcept -> bool {
+        return !rb_color(n);
+    }
+
+    [[nodiscard]] inline auto rb_is_black(const rb_node* n) noexcept -> bool {
+        return rb_color(n) != 0;
+    }
+
+    inline auto rb_set_parent(rb_node* n, rb_node* p) noexcept -> void {
+        n->__parent_color = (n->__parent_color & 1) | reinterpret_cast<uptr>(p);
+    }
+
+    inline auto rb_set_color(rb_node* n, uptr color) noexcept -> void {
+        n->__parent_color = (n->__parent_color & ~uptr(1)) | color;
+    }
+
+    inline auto rb_set_parent_color(rb_node* n, rb_node* p, uptr color) noexcept -> void {
+        n->__parent_color = reinterpret_cast<uptr>(p) | color;
+    }
+
+    // ── Root ──────────────────────────────────────────────────────────────
+
+    /// @brief RB-tree root.  nullptr = empty tree.
+    struct rb_root {
+        rb_node* node{nullptr};
+
+        [[nodiscard]] auto empty() const noexcept -> bool { return node == nullptr; }
+    };
+
+    /// @brief RB-tree root with cached leftmost node for O(1) begin().
+    struct rb_root_cached {
+        rb_root   root{};
+        rb_node*  leftmost{nullptr};
+
+        [[nodiscard]] auto empty() const noexcept -> bool { return root.empty(); }
+
+        /// @brief Typed in-order iterator (yields Owner&).
+        template <typename Owner, rb_node Owner::* member>
+        struct typed_iterator {
+            rb_node* current;
+
+            constexpr explicit typed_iterator(rb_node* cur) noexcept : current(cur) {}
+
+            [[nodiscard]] auto operator*() noexcept -> Owner& {
+                return *container_of<Owner, rb_node, member>(current);
+            }
+            [[nodiscard]] auto operator*() const noexcept -> const Owner& {
+                return *container_of<Owner, rb_node, member>(current);
+            }
+            [[nodiscard]] auto operator->() noexcept -> Owner* {
+                return container_of<Owner, rb_node, member>(current);
+            }
+
+            auto operator++() noexcept -> typed_iterator&;    // defined after rb_next
+            auto operator++(int) noexcept -> typed_iterator {
+                auto t = *this; ++(*this); return t;
+            }
+
+            [[nodiscard]] auto operator==(const typed_iterator& o) const noexcept -> bool {
+                return current == o.current;
+            }
+            [[nodiscard]] auto operator!=(const typed_iterator& o) const noexcept -> bool {
+                return current != o.current;
+            }
+        };
+
+        /// @brief Typed range adaptor for range-for.
+        template <typename Owner, rb_node Owner::* member>
+        struct typed_range {
+            rb_node* first;
+
+            [[nodiscard]] auto begin() const noexcept -> typed_iterator<Owner, member> {
+                return typed_iterator<Owner, member>{first};
+            }
+            [[nodiscard]] auto end() const noexcept -> typed_iterator<Owner, member> {
+                return typed_iterator<Owner, member>{nullptr};
+            }
+        };
+
+        /// @brief Get a typed iterable range over the tree.
+        ///
+        /// Usage: `for (auto& vma : tree.iter<vm_area, &vm_area::rb_link>()) { ... }`
+        template <typename Owner, rb_node Owner::* member>
+        [[nodiscard]] auto iter() const noexcept -> typed_range<Owner, member> {
+            return typed_range<Owner, member>{leftmost};
+        }
+    };
+
+    // ── Augmentation policy ───────────────────────────────────────────────
+
+    /// @brief Default augmentation — no-op.  Zero overhead when not needed.
+    struct rb_augment_none {
+        static auto propagate(rb_node*) noexcept -> void {}
+        static auto copy(rb_node*, rb_node*) noexcept -> void {}
+        static auto rotate(rb_node*, rb_node*) noexcept -> void {}
+    };
+
+    // ── Core operations ───────────────────────────────────────────────────
+
+    /// @brief Link a new node into the tree at the caller-determined position.
+    ///
+    /// The caller must have performed a BST walk to find:
+    ///   - @p parent: the future parent of @p node.
+    ///   - @p link:   pointer to parent->left or parent->right (the nullptr slot).
+    ///
+    /// After linking, call @ref rb_insert_color to rebalance.
+    ///
+    /// @param[in] node    The new node to insert.
+    /// @param[in] parent  Parent of the new node (nullptr if tree is empty).
+    /// @param[in] link    Address of the parent's child pointer to set.
+    inline auto rb_link_node(rb_node* node, rb_node* parent,
+                             rb_node** link) noexcept -> void {
+        node->__parent_color = reinterpret_cast<uptr>(parent) | RB_RED;
+        node->left  = nullptr;
+        node->right = nullptr;
+        *link = node;
+    }
+
+    // ── Rotation helpers ──────────────────────────────────────────────────
+
+    namespace _detail {
+
+        inline auto __rb_rotate_set_parents(
+            rb_node* old_n, rb_node* new_n, rb_root& root, uptr color
+        ) noexcept -> void {
+            rb_node* p = rb_parent(old_n);
+            new_n->__parent_color = old_n->__parent_color;
+            rb_set_parent_color(old_n, new_n, color);
+            if (p) {
+                if (p->left == old_n)
+                    p->left = new_n;
+                else
+                    p->right = new_n;
+            } else {
+                root.node = new_n;
+            }
+        }
+
+    } // namespace _detail
+
+    // ── Insert rebalancing ────────────────────────────────────────────────
+
+    /// @brief Rebalance the tree after inserting a new (red) node.
+    ///
+    /// @tparam Augment  Augmentation policy (default = no-op).
+    /// @param[in,out] node  The newly inserted node (must be red, linked via rb_link_node).
+    /// @param[in,out] root  The tree root.
+    template <typename Augment = rb_augment_none>
+    auto rb_insert_color(rb_node* node, rb_root& root) noexcept -> void {
+        rb_node* parent = rb_parent(node);
+
+        while (true) {
+            // Case 1: node is root — color black, done.
+            if (!parent) {
+                rb_set_parent_color(node, nullptr, RB_BLACK);
+                break;
+            }
+
+            // Case 2: parent is black — tree is valid, done.
+            if (rb_is_black(parent))
+                break;
+
+            rb_node* gparent = rb_parent(parent);
+
+            // Parent is red, so grandparent must exist and be black.
+            if (parent == gparent->left) {
+                rb_node* uncle = gparent->right;
+
+                if (uncle && rb_is_red(uncle)) {
+                    // Case 3: uncle is red — recolor and push up.
+                    rb_set_parent_color(uncle, gparent, RB_BLACK);
+                    rb_set_parent_color(parent, gparent, RB_BLACK);
+                    rb_set_parent_color(gparent, rb_parent(gparent), RB_RED);
+                    node = gparent;
+                    parent = rb_parent(node);
+                    continue;
+                }
+
+                // Case 4: uncle is black.
+                if (node == parent->right) {
+                    // Case 4a: node is right child — left rotate parent.
+                    //   gparent            gparent
+                    //    /                   /
+                    //  parent    →         node
+                    //    \                  /
+                    //    node            parent
+                    parent->right = node->left;
+                    if (node->left)
+                        rb_set_parent(node->left, parent);
+                    node->left = parent;
+                    rb_set_parent(parent, node);
+                    Augment::rotate(parent, node);
+
+                    parent = node;
+                    node = parent->left;
+                }
+
+                // Case 4b: node is left child — right rotate grandparent.
+                //     gparent          parent
+                //      /    \    →     /    \
+                //   parent   U      node   gparent
+                //    /                       \
+                //  node                       U
+                gparent->left = parent->right;
+                if (parent->right)
+                    rb_set_parent(parent->right, gparent);
+                parent->right = gparent;
+
+                _detail::__rb_rotate_set_parents(gparent, parent, root, RB_RED);
+                Augment::rotate(gparent, parent);
+                break;
+            } else {
+                // Mirror: parent == gparent->right.
+                rb_node* uncle = gparent->left;
+
+                if (uncle && rb_is_red(uncle)) {
+                    rb_set_parent_color(uncle, gparent, RB_BLACK);
+                    rb_set_parent_color(parent, gparent, RB_BLACK);
+                    rb_set_parent_color(gparent, rb_parent(gparent), RB_RED);
+                    node = gparent;
+                    parent = rb_parent(node);
+                    continue;
+                }
+
+                if (node == parent->left) {
+                    parent->left = node->right;
+                    if (node->right)
+                        rb_set_parent(node->right, parent);
+                    node->right = parent;
+                    rb_set_parent(parent, node);
+                    Augment::rotate(parent, node);
+
+                    parent = node;
+                    node = parent->right;
+                }
+
+                gparent->right = parent->left;
+                if (parent->left)
+                    rb_set_parent(parent->left, gparent);
+                parent->left = gparent;
+
+                _detail::__rb_rotate_set_parents(gparent, parent, root, RB_RED);
+                Augment::rotate(gparent, parent);
+                break;
+            }
+        }
+    }
+
+    namespace _detail {
+
+        /// @brief Erase rebalance fixup (called when we removed a black node).
+        template <typename Augment>
+        auto __rb_erase_fixup(rb_node* node, rb_node* parent,
+                              rb_root& root) noexcept -> void {
+            rb_node* sibling;
+
+            while (true) {
+                // node is the "double-black" position.
+                // If node is red or root, just color it black and done.
+                if (node && rb_is_red(node)) {
+                    rb_set_color(node, RB_BLACK);
+                    break;
+                }
+                if (!parent) break; // node is root (or null root)
+
+                if (node == parent->left) {
+                    sibling = parent->right;
+
+                    // Case 1: sibling is red → rotate left at parent.
+                    if (sibling && rb_is_red(sibling)) {
+                        parent->right = sibling->left;
+                        if (sibling->left)
+                            rb_set_parent(sibling->left, parent);
+                        sibling->left = parent;
+                        _detail::__rb_rotate_set_parents(parent, sibling, root, RB_RED);
+                        Augment::rotate(parent, sibling);
+                        sibling = parent->right;
+                    }
+
+                    // sibling is now black.
+                    bool sl_black = !sibling->left  || rb_is_black(sibling->left);
+                    bool sr_black = !sibling->right || rb_is_black(sibling->right);
+
+                    if (sl_black && sr_black) {
+                        // Case 2: both nephews black → recolor sibling red, push up.
+                        rb_set_color(sibling, RB_RED);
+                        node = parent;
+                        parent = rb_parent(node);
+                        continue;
+                    }
+
+                    if (sr_black) {
+                        // Case 3: left nephew red, right nephew black → rotate right at sibling.
+                        rb_node* sl = sibling->left;
+                        sibling->left = sl->right;
+                        if (sl->right)
+                            rb_set_parent(sl->right, sibling);
+                        sl->right = sibling;
+                        rb_set_parent(sibling, sl);
+                        parent->right = sl;
+                        rb_set_parent(sl, parent);
+                        Augment::rotate(sibling, sl);
+                        sibling = sl;
+                    }
+
+                    // Case 4: right nephew is red → rotate left at parent.
+                    parent->right = sibling->left;
+                    if (sibling->left)
+                        rb_set_parent(sibling->left, parent);
+                    sibling->left = parent;
+                    rb_set_color(sibling->right, RB_BLACK);
+                    _detail::__rb_rotate_set_parents(parent, sibling, root, RB_BLACK);
+                    Augment::rotate(parent, sibling);
+                    break;
+                } else {
+                    // Mirror: node == parent->right.
+                    sibling = parent->left;
+
+                    if (sibling && rb_is_red(sibling)) {
+                        parent->left = sibling->right;
+                        if (sibling->right)
+                            rb_set_parent(sibling->right, parent);
+                        sibling->right = parent;
+                        _detail::__rb_rotate_set_parents(parent, sibling, root, RB_RED);
+                        Augment::rotate(parent, sibling);
+                        sibling = parent->left;
+                    }
+
+                    bool sl_black = !sibling->left  || rb_is_black(sibling->left);
+                    bool sr_black = !sibling->right || rb_is_black(sibling->right);
+
+                    if (sl_black && sr_black) {
+                        rb_set_color(sibling, RB_RED);
+                        node = parent;
+                        parent = rb_parent(node);
+                        continue;
+                    }
+
+                    if (sl_black) {
+                        rb_node* sr = sibling->right;
+                        sibling->right = sr->left;
+                        if (sr->left)
+                            rb_set_parent(sr->left, sibling);
+                        sr->left = sibling;
+                        rb_set_parent(sibling, sr);
+                        parent->left = sr;
+                        rb_set_parent(sr, parent);
+                        Augment::rotate(sibling, sr);
+                        sibling = sr;
+                    }
+
+                    parent->left = sibling->right;
+                    if (sibling->right)
+                        rb_set_parent(sibling->right, parent);
+                    sibling->right = parent;
+                    rb_set_color(sibling->left, RB_BLACK);
+                    _detail::__rb_rotate_set_parents(parent, sibling, root, RB_BLACK);
+                    Augment::rotate(parent, sibling);
+                    break;
+                }
+            }
+        }
+
+    } // namespace _detail
+
+    /// @brief Remove a node from the tree and rebalance.
+    ///
+    /// @tparam Augment  Augmentation policy (default = no-op).
+    /// @param[in,out] node  The node to remove.
+    /// @param[in,out] root  The tree root.
+    template <typename Augment = rb_augment_none>
+    auto rb_erase(rb_node* node, rb_root& root) noexcept -> void {
+        rb_node* child;
+        rb_node* parent;
+        uptr color;
+
+        if (!node->left) {
+            // No left child — splice out and replace with right child.
+            child  = node->right;
+            parent = rb_parent(node);
+            color  = rb_color(node);
+
+            if (child) rb_set_parent(child, parent);
+            if (parent) {
+                if (parent->left == node)
+                    parent->left = child;
+                else
+                    parent->right = child;
+                Augment::propagate(parent);
+            } else {
+                root.node = child;
+            }
+        } else if (!node->right) {
+            // No right child — splice out and replace with left child.
+            child  = node->left;
+            parent = rb_parent(node);
+            color  = rb_color(node);
+
+            rb_set_parent(child, parent);
+            if (parent) {
+                if (parent->left == node)
+                    parent->left = child;
+                else
+                    parent->right = child;
+                Augment::propagate(parent);
+            } else {
+                root.node = child;
+            }
+        } else {
+            // Both children exist — find in-order successor.
+            rb_node* successor = node->right;
+            while (successor->left)
+                successor = successor->left;
+
+            child  = successor->right;
+            parent = rb_parent(successor);
+            color  = rb_color(successor);
+
+            if (child) rb_set_parent(child, parent);
+
+            if (parent == node) {
+                parent = successor;
+                parent->right = child;
+            } else {
+                parent->left = child;
+                successor->right = node->right;
+                rb_set_parent(node->right, successor);
+                Augment::propagate(parent);
+            }
+
+            successor->left = node->left;
+            rb_set_parent(node->left, successor);
+
+            // Take node's position in the tree.
+            rb_node* np = rb_parent(node);
+            successor->__parent_color = node->__parent_color;
+            if (np) {
+                if (np->left == node)
+                    np->left = successor;
+                else
+                    np->right = successor;
+            } else {
+                root.node = successor;
+            }
+
+            Augment::copy(node, successor);
+            Augment::propagate(successor);
+        }
+
+        if (color == RB_BLACK)
+            _detail::__rb_erase_fixup<Augment>(child, parent, root);
+    }
+
+    // ── Traversal ─────────────────────────────────────────────────────────
+
+    /// @brief Return the leftmost (minimum) node, or nullptr if empty.
+    [[nodiscard]] inline auto rb_first(const rb_root& root) noexcept -> rb_node* {
+        rb_node* n = root.node;
+        if (!n) return nullptr;
+        while (n->left) n = n->left;
+        return n;
+    }
+
+    /// @brief Return the rightmost (maximum) node, or nullptr if empty.
+    [[nodiscard]] inline auto rb_last(const rb_root& root) noexcept -> rb_node* {
+        rb_node* n = root.node;
+        if (!n) return nullptr;
+        while (n->right) n = n->right;
+        return n;
+    }
+
+    /// @brief Return the in-order successor, or nullptr if node is the last.
+    [[nodiscard]] inline auto rb_next(const rb_node* node) noexcept -> rb_node* {
+        if (!node) return nullptr;
+
+        // If right subtree exists, successor is its leftmost.
+        if (node->right) {
+            rb_node* n = node->right;
+            while (n->left) n = n->left;
+            return n;
+        }
+
+        // Walk up until we're a left child.
+        rb_node* parent = rb_parent(node);
+        while (parent && node == parent->right) {
+            node = parent;
+            parent = rb_parent(node);
+        }
+        return parent;
+    }
+
+    /// @brief Return the in-order predecessor, or nullptr if node is the first.
+    [[nodiscard]] inline auto rb_prev(const rb_node* node) noexcept -> rb_node* {
+        if (!node) return nullptr;
+
+        if (node->left) {
+            rb_node* n = node->left;
+            while (n->right) n = n->right;
+            return n;
+        }
+
+        rb_node* parent = rb_parent(node);
+        while (parent && node == parent->left) {
+            node = parent;
+            parent = rb_parent(node);
+        }
+        return parent;
+    }
+
+    // ── Typed iterator increment (defined after rb_next) ──────────────────
+
+    template <typename Owner, rb_node Owner::* member>
+    auto rb_root_cached::typed_iterator<Owner, member>::operator++() noexcept
+        -> typed_iterator& {
+        current = rb_next(current);
+        return *this;
+    }
+
+    // ── Cached root operations ────────────────────────────────────────────
+
+    /// @brief Insert + rebalance for a cached root.
+    ///
+    /// @param[in,out] node       The newly linked node (via rb_link_node).
+    /// @param[in,out] tree       The cached root.
+    /// @param[in]     leftmost   true if this node is the new leftmost.
+    template <typename Augment = rb_augment_none>
+    auto rb_insert_color_cached(rb_node* node, rb_root_cached& tree,
+                                bool leftmost) noexcept -> void {
+        if (leftmost)
+            tree.leftmost = node;
+        rb_insert_color<Augment>(node, tree.root);
+    }
+
+    /// @brief Erase from a cached root.
+    template <typename Augment = rb_augment_none>
+    auto rb_erase_cached(rb_node* node, rb_root_cached& tree) noexcept -> void {
+        if (tree.leftmost == node)
+            tree.leftmost = rb_next(node);
+        rb_erase<Augment>(node, tree.root);
+    }
+
+    // ── Replace ───────────────────────────────────────────────────────────
+
+    /// @brief Replace a node in the tree with another node.
+    ///
+    /// @p new_node takes @p old_node's position.  The caller must ensure
+    /// @p new_node has the same key as @p old_node.
+    inline auto rb_replace_node(rb_node* old_node, rb_node* new_node,
+                                rb_root& root) noexcept -> void {
+        rb_node* parent = rb_parent(old_node);
+        *new_node = *old_node; // copy parent/color/children
+
+        if (old_node->left)
+            rb_set_parent(old_node->left, new_node);
+        if (old_node->right)
+            rb_set_parent(old_node->right, new_node);
+
+        if (parent) {
+            if (parent->left == old_node)
+                parent->left = new_node;
+            else
+                parent->right = new_node;
+        } else {
+            root.node = new_node;
+        }
+    }
+
+    /// @brief Replace for cached root.
+    inline auto rb_replace_node_cached(rb_node* old_node, rb_node* new_node,
+                                       rb_root_cached& tree) noexcept -> void {
+        if (tree.leftmost == old_node)
+            tree.leftmost = new_node;
+        rb_replace_node(old_node, new_node, tree.root);
+    }
+
+    // ── Node count (O(n) — diagnostic only) ───────────────────────────────
+
+    namespace _detail {
+        inline auto __rb_count(const rb_node* n) noexcept -> u32 {
+            if (!n) return 0;
+            return 1 + __rb_count(n->left) + __rb_count(n->right);
+        }
+    }
+
+    /// @brief Count all nodes in the tree.  O(n) — for diagnostics only.
+    [[nodiscard]] inline auto rb_count(const rb_root& root) noexcept -> u32 {
+        return _detail::__rb_count(root.node);
+    }
+
+} // namespace lib
+
+} // end export
