@@ -275,13 +275,13 @@ static void add_usable_region(zxfl_mem_region_t *map, uint32_t *count, uint32_t 
     while (curr < end && *count < max) {
         uint64_t next_boundary = (curr + node_chunk) & ~(node_chunk - 1);
         uint64_t chunk_end = (next_boundary < end) ? next_boundary : end;
-        
-        map[*count].base = curr;
-        map[*count].length = chunk_end - curr;
-        map[*count].type = type;
-        map[*count].numa_node = (curr / node_chunk) % 4;
+
+        map[*count].base      = curr;
+        map[*count].length    = chunk_end - curr;
+        map[*count].type      = type;
+        map[*count].numa_node = (uint8_t)((curr / node_chunk) % 4U);
         (*count)++;
-        
+
         curr = chunk_end;
     }
 }

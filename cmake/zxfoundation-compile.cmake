@@ -4,6 +4,21 @@ set(zxfoundation_LINKER_SCRIPT
         "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/link.ld"
         CACHE STRING "zxfoundation linker script")
 
+set(_zxf_config_cxxm "${CMAKE_SOURCE_DIR}/zxfoundation/base/config.cxxm")
+
+add_custom_target(zxf_bump_buildno ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DZXFoundation_Release=${ZXFoundation_Release}
+        "-DZXFoundation_Copyright_Date=${ZXFoundation_Copyright_Date}"
+        "-DZXFoundation_Host_Build_Platform=${ZXFoundation_Host_Build_Platform}"
+        -P ${CMAKE_SOURCE_DIR}/cmake/build_number.cmake
+    BYPRODUCTS "${_zxf_config_cxxm}"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "zxfoundation::build: incrementing BUILD_NUMBER"
+    VERBATIM
+)
+
 include(cmake/zxfl-compile.cmake)
 if (ZXALLSYMS_GEN AND ZX_NM AND ZX_CXXFILT)
     include(cmake/zxfoundation-zxallsyms-compile.cmake)
@@ -94,6 +109,8 @@ if (ZXSIGN)
         VERBATIM
     )
 endif()
+
+add_dependencies(core.zxfoundation.nucleus zxf_bump_buildno)
 
 if (ZXALLSYMS_GEN AND ZX_NM AND ZX_CXXFILT)
     add_dependencies(core.zxfoundation.nucleus zxallsyms_data)

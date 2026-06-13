@@ -7,6 +7,10 @@ import zxfoundation.base.types;
 import zxfoundation.base.object;
 import zxfoundation.memory.hhdm;
 import lib.util;
+import arch.s390x.lib.atomic;
+
+using arch::s390x::lib::atomic::atomic;
+using arch::s390x::lib::atomic::memory_order;
 
 export {
 
@@ -16,13 +20,24 @@ namespace zxfoundation::memory::pmm {
     using base::kernel_object;
     using base::tag_phys_region;
 
-    constexpr u32 PAGE_SHIFT = 12;
-    constexpr u32 PAGE_SIZE  = 1U << PAGE_SHIFT;   ///< 4 KiB
-    constexpr u32 MAX_ORDER  = 10;                  ///< Largest block: 2^10 pages = 4 MiB
-    constexpr u64 MAX_PHYS_GB = 512ULL;
-    constexpr u64 MAX_FRAMES  = (MAX_PHYS_GB << 30) >> PAGE_SHIFT;
+    constexpr u32 PAGE_SHIFT    = 12;
+    constexpr u32 PAGE_SIZE     = 1U << PAGE_SHIFT;   ///< 4 KiB
+    constexpr u32 MAX_ORDER     = 10;                  ///< Largest block: 2^10 pages = 4 MiB
 
-    /// z/Architecture CCW/CDA 31-bit addressing constraint.
+    /// @brief Maximum order served by the per-CPU page cache (2^3 pages = 32 KiB).
+    /// Orders 0..PCP_MAX_ORDER bypass the buddy lock on the hot path.
+    constexpr u32 PCP_MAX_ORDER = 3;
+
+    /// @brief Pages bulk-moved between PCP and buddy per refill/drain call.
+    constexpr u32 PCP_BATCH     = 16;
+
+    /// @brief Per-list high-watermark.  A drain is triggered when count > PCP_HIGH.
+    constexpr u32 PCP_HIGH      = 128;
+
+    constexpr u64 MAX_PHYS_GB   = 512ULL;
+    constexpr u64 MAX_FRAMES    = (MAX_PHYS_GB << 30) >> PAGE_SHIFT;
+
+    /// @brief z/Architecture CCW/CDA 31-bit addressing constraint.
     constexpr u64 ZONE_DMA_LIMIT = 2ULL << 30;
 
     /// @brief Physical address zone.
@@ -62,7 +77,7 @@ namespace zxfoundation::memory::pmm {
     enum class frame_owner : u8 {
         none       = 0, ///< Frame not present / never initialized.
         reserved   = 1, ///< Firmware / kernel image / lowcore — permanently off-limits.
-        buddy      = 2, ///< In the buddy free list (pmm-owned).
+        buddy      = 2, ///< In the buddy free list or PCP (pmm-owned).
         slab       = 3, ///< Backing a slab_cache.
         vmm        = 4, ///< Backing a kernel virtual mapping (VMM).
         page_table = 5, ///< A page table frame.
@@ -74,17 +89,20 @@ namespace zxfoundation::memory::pmm {
     enum frame_flags : u8 {
         ff_none    = 0,
         ff_suspect = 1U << 0, ///< MCCK corrected error; still usable.
-        ff_offline = 1U << 1, ///< MCCK uncorrected; permanently removed.
+        ff_offline = 1U << 1, ///< MCCK uncorrected; frame excluded from merging and allocation.
         ff_zeroed  = 1U << 2, ///< Contents are known-zero (set by page_init::zeroed path).
         ff_shared  = 1U << 3, ///< refcount > 1 (future CoW / file cache).
     };
 
-    /// @brief 8-byte per-physical-frame metadata record.
+    /// @brief 16-byte per-physical-frame metadata record.
     struct frame_desc {
-        u8  order_owner{0}; ///< packed: [7:4]=order, [3:0]=frame_owner
-        u8  flags{0};       ///< frame_flags bitmask
-        u16 refcount{0};    ///< 0 for kernel-exclusive frames; >0 when ff_shared
-        u32 _pad{0};        ///< reserved — NUMA node, storage key (future)
+        u8  order_owner{0};
+        u8  flags{0};
+        u8  numa_node{0};   ///< Drawer_id of the CPU that allocated this frame. Advisory only.
+        u8  _r0{0};
+        atomic<u16> refcount{0};    ///< Accessed exclusively via __atomic_* builtins in pmm.cxxm.
+        u16 _r1{0};
+        u64 storage_key{0}; ///< Reserved for future s390x storage-key / protection use.
 
         [[nodiscard]] constexpr auto order() const noexcept -> u8 {
             return static_cast<u8>(order_owner >> 4);
@@ -98,16 +116,48 @@ namespace zxfoundation::memory::pmm {
         constexpr auto set_owner(frame_owner ow) noexcept -> void {
             order_owner = static_cast<u8>((order_owner & 0xF0U) | static_cast<u8>(ow));
         }
-        /// @brief Initialize all fields atomically in one assignment.
-        constexpr auto set(u8 o, frame_owner ow, u8 fl = ff_none) noexcept -> void {
+
+        /// @brief Initialize all fields in one call.
+        ///
+        /// @param[in] o     Buddy order (0–MAX_ORDER).
+        /// @param[in] ow    Owning subsystem.
+        /// @param[in] numa  CPU drawer_id at allocation time (0 if unknown).
+        /// @param[in] fl    Initial frame_flags bitmask.
+        ///
+        /// @note  refcount is reset to zero via a relaxed atomic store.  This is
+        ///        safe only while the caller holds the zone lock or the frame has
+        ///        not been published to another CPU.
+        constexpr auto set(u8 o, frame_owner ow, u8 numa = 0, u8 fl = ff_none) noexcept -> void {
             order_owner = static_cast<u8>((o << 4) | static_cast<u8>(ow));
             flags       = fl;
-            refcount    = 0;
-            _pad        = 0;
+            numa_node   = numa;
+            _r0         = 0;
+            refcount.store(0, memory_order::relaxed);
+            _r1         = 0;
+            storage_key = 0;
         }
     };
 
-    static_assert(sizeof(frame_desc) == 8, "frame_desc must be exactly 8 bytes");
+    static_assert(sizeof(frame_desc) == 16, "frame_desc must be exactly 16 bytes");
+    static_assert(__builtin_offsetof(frame_desc, refcount)    ==  4);
+    static_assert(__builtin_offsetof(frame_desc, storage_key) ==  8);
+
+    /// @brief One order-specific free list within the PCP.
+    struct pcp_list {
+        u64 head_phys{0}; ///< Physical base of the chain head; 0 = empty.
+        u32 count{0};     ///< Number of pages currently in this list.
+        u32 _pad{0};
+    };
+    static_assert(sizeof(pcp_list) == 16);
+
+    /// @brief Per-CPU page cache block.
+    struct pcp_pool {
+        pcp_list lists[static_cast<u32>(zone::count)][PCP_MAX_ORDER + 1]{};
+    };
+
+    static_assert(sizeof(pcp_pool) ==
+        static_cast<u32>(zone::count) * (PCP_MAX_ORDER + 1U) * 16U,
+        "pcp_pool layout mismatch");
 
     /// @brief Move-only, typestate-tracked physical memory allocation.
     template <lifecycle_state State = lifecycle_state::fresh>
@@ -133,8 +183,7 @@ namespace zxfoundation::memory::pmm {
         /// @brief Advance fresh → ready, consuming this folio.
         /// @note  Only available on fresh folios (requires clause).
         [[nodiscard]] auto make_ready() && noexcept -> folio<lifecycle_state::ready>
-            requires (State == lifecycle_state::fresh)
-        {
+            requires (State == lifecycle_state::fresh) {
             folio<lifecycle_state::ready> r{ phys_base, order, use, mem_zone };
             phys_base = 0;
             return r;

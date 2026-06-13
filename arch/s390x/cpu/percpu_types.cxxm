@@ -7,13 +7,13 @@ import arch.s390x.cpu.processor_types;
 import arch.s390x.lib.atomic;
 import zxfoundation.base.types;
 import zxfoundation.locking.mcs_types;
+import zxfoundation.memory.pmm_types;
 
 export {
 
 namespace arch::s390x::cpu::percpu {
 
-    /// @brief Number of PMM zones tracked in the per-CPU page cache.
-    constexpr u32 PERCPU_ZONE_MAX = 4;
+    using zxfoundation::memory::pmm::pcp_pool;
 
     /// @brief s390x per-CPU data block embedded in the lowcore at 0x0400.
     struct alignas(processor::S390X_CACHE_LINE_SIZE) s390x_percpu_data {
@@ -31,9 +31,7 @@ namespace arch::s390x::cpu::percpu {
         u32     softirq_pending{};     ///< Bitmask of pending deferred softirqs.
         u32     irq_nesting{};         ///< IRQ nesting depth (0 = not in IRQ handler).
         u32     lock_depth{};          ///< Current qspinlock MCS node allocation depth.
-        /// @brief Pending IPI action bitmask (EC_HALT_BIT, ec_schedule, etc.).
-        /// Declared atomic<u64> — smp.cxxm exchanges this without a cast.
-        arch::s390x::lib::atomic::atomic<u64> ec_bits{};
+        lib::atomic::atomic<u64> ec_bits{};
 
         zxfoundation::locking::mcs::mcs_node qnodes[zxfoundation::locking::mcs::MCS_MAX_LOCK_DEPTH]{};
 
@@ -47,7 +45,19 @@ namespace arch::s390x::cpu::percpu {
 
         u64     ap_stack_phys{};       ///< Physical address of AP's initial stack top.
 
-        u64     pcp_list[PERCPU_ZONE_MAX]{};  ///< Per-zone PMM per-CPU free list heads.
+        /// @brief Per-CPU page cache (PCP).  Zero-init == valid empty state.
+        ///
+        /// Accessed with local IRQs disabled (no spinlock on the PCP itself).
+        /// The buddy zone lock is taken only during bulk refill and drain.
+        pcp_pool pcp{};
+
+        /// @brief CPU topology drawer_id (0-based, from STSI 15.1.x).
+        ///
+        /// Copied from zxfl::cpu_info::drawer_id during AP init.
+        /// Used as the cache-affinity NUMA hint written into frame_desc::numa_node
+        /// at allocation time.  Advisory only — s390x memory is physically flat.
+        u8      drawer_id{0};
+        u8      _pad_drawer[7]{};
     };
 
     static_assert(__builtin_offsetof(s390x_percpu_data, cpu_id) == 8,

@@ -1,4 +1,6 @@
-# preconf.cmake
+# SPDX-License-Identifier: Apache-2.0
+# cmake/preconf.cmake
+# Pre-configuration: compute release label, copyright date, and host platform.
 
 string(TIMESTAMP CURRENT_YEAR "%Y")
 string(TIMESTAMP CURRENT_MONTH "%m")
@@ -24,27 +26,17 @@ endif()
 
 set(ZXFoundation_Release "${RELEASE_YY}${RELEASE_H}")
 
-set(BUILD_NUMBER_FILE "${CMAKE_SOURCE_DIR}/BUILD_NUMBER")
-if(EXISTS "${BUILD_NUMBER_FILE}")
-    file(READ "${BUILD_NUMBER_FILE}" BUILD_NUMBER_RAW)
-    string(STRIP "${BUILD_NUMBER_RAW}" BUILD_NUMBER_STR)
-    math(EXPR ZXFoundation_Build "${BUILD_NUMBER_STR} + 1")
-else()
-    set(ZXFoundation_Build "1")
-endif()
-file(WRITE "${BUILD_NUMBER_FILE}" "${ZXFoundation_Build}")
-message(STATUS "zxfoundation::build: build number: ${ZXFoundation_Build}")
-
-set(ZXFoundation_Host_Build_Platform "${CMAKE_HOST_SYSTEM_NAME}@${CMAKE_HOST_SYSTEM_VERSION}::${CMAKE_HOST_SYSTEM_PROCESSOR}")
-
-configure_file(
-    ${CMAKE_SOURCE_DIR}/zxfoundation/base/config.cxxm.in
-    ${CMAKE_SOURCE_DIR}/zxfoundation/base/config.cxxm
-    @ONLY
-)
+set(ZXFoundation_Host_Build_Platform
+    "${CMAKE_HOST_SYSTEM_NAME}@${CMAKE_HOST_SYSTEM_VERSION}::${CMAKE_HOST_SYSTEM_PROCESSOR}")
 
 configure_file(
     ${CMAKE_SOURCE_DIR}/arch/s390x/init/zxfl/include/zxfoundation/zxconfig.h.in
     ${CMAKE_SOURCE_DIR}/arch/s390x/init/zxfl/include/zxfoundation/zxconfig.h
+    @ONLY
+)
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/zxfoundation/base/config.cxxm.in
+    ${CMAKE_SOURCE_DIR}/zxfoundation/base/config.cxxm
     @ONLY
 )

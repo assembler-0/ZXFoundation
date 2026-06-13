@@ -8,6 +8,7 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.processor;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.pmm_types;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
 
@@ -30,8 +31,16 @@ namespace arch::s390x::cpu::percpu {
 
         pcp.ipi_pending_count  = 0;
 
-        for (u32 z = 0; z < PERCPU_ZONE_MAX; ++z)
-            pcp.pcp_list[z] = 0;
+        // Zero pcp_pool (head_phys == 0 is the valid empty-list sentinel for every
+        // pcp_list; no placement-new required because pcp_list is POD).
+        for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
+            for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
+                pcp.pcp.lists[z][o].head_phys = 0;
+                pcp.pcp.lists[z][o].count     = 0;
+                pcp.pcp.lists[z][o]._pad      = 0;
+            }
+        // BSP is always in drawer 0; APs have drawer_id set by smp::init_aps().
+        pcp.drawer_id = 0;
 
         pcp.softirq_pending = 0;
     }
@@ -56,8 +65,13 @@ namespace arch::s390x::cpu::percpu {
         pcp.current_task      = 0;
         pcp.user_asce         = 0;
 
-        for (u32 z = 0; z < PERCPU_ZONE_MAX; ++z)
-            pcp.pcp_list[z] = 0;
+        for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
+            for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
+                pcp.pcp.lists[z][o].head_phys = 0;
+                pcp.pcp.lists[z][o].count     = 0;
+                pcp.pcp.lists[z][o]._pad      = 0;
+            }
+        // drawer_id is set by smp::init_aps() from ci.drawer_id after this call.
     }
 
     /// @brief Return a reference to the current CPU's per-CPU block.

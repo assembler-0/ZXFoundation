@@ -19,6 +19,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.smp;
+import arch.s390x.cpu.lowcore_types;
 import crypto.sha256_types;
 import crypto.sha256;
 import drivers.console.diag;

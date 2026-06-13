@@ -20,6 +20,3 @@
 
 /// @brief maximum number of CPUs
 #define CONFIG_ZX_MAX_CPUS           128U
-
-/// @brief build number
-#define CONFIG_ZX_BUILD_NUMBER     "24"

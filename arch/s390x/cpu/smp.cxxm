@@ -121,6 +121,9 @@ namespace arch::s390x::cpu::smp {
             lc->mcck_stack   = zxfoundation::memory::hhdm::phys_to_virt(mcck_top);
 
             percpu::init_ap(*lc);
+            // Propagate the STSI 15.1.x drawer_id so the PMM can stamp
+            // frame_desc::numa_node with the correct CPU affinity hint.
+            lc->percpu.drawer_id = ci.drawer_id;
             lowcore::register_cpu_lowcore(new_cpu_id, lc_phys);
 
             u32 status{0};
