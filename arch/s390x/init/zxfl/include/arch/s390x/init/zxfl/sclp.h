@@ -42,7 +42,10 @@ struct read_info_sccb {
     uint8_t  rnsize;
     uint8_t  _reserved0[23];
     uint16_t max_cores;
-    uint8_t  _reserved1[94];
+    uint8_t  _reserved1a[76];  /* offset 36-111 */
+    uint64_t rnmax2;           /* offset 112-119 */
+    uint32_t rnsize2;          /* offset 120-123 */
+    uint8_t  _reserved1b[6];   /* offset 124-129 */
     uint64_t facilities;
     uint8_t  _reserved2[24];
 } __attribute__((packed, aligned(4096)));

@@ -1,0 +1,334 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/vmo.cxxm
+/// @brief Virtual Memory Object (VMO) lifecycle engine.
+
+export module zxfoundation.memory.vmo;
+import zxfoundation.memory.vmo_types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.memory.kmalloc;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import arch.s390x.lib.atomic;
+import lib.expected;
+import lib.error;
+import lib.string;
+import lib.format;
+
+namespace zxfoundation::memory::vmo::_internal {
+
+    /// Monotonic VMO ID counter.
+    static arch::s390x::lib::atomic::atomic<u64> g_next_id{0};
+
+} // namespace zxfoundation::memory::vmo::_internal
+
+export {
+
+namespace zxfoundation::memory::vmo {
+
+    /// @brief Create a new VMO of the given size.
+    ///
+    /// @param[in] size   Requested size in bytes (must be page-aligned and > 0).
+    /// @param[in] flags  VMO capability flags.
+    /// @return Pointer to the new VMO on success, or kernel_error on failure.
+    [[nodiscard]] auto vmo_create(u64 size, vmo_flags flags) noexcept
+        -> lib::expected<vmo*, lib::kernel_error>
+    {
+        using namespace _internal;
+
+        // Validate: size must be page-aligned and non-zero.
+        if (size == 0 || (size & (pmm::PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        const u32 page_count = static_cast<u32>(size / pmm::PAGE_SIZE);
+        if (page_count > VMO_MAX_PAGES)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        const u32 list_pages = (page_count + VMO_ENTRIES_PER_PAGE - 1)
+                             / VMO_ENTRIES_PER_PAGE;
+        if (list_pages > VMO_MAX_LIST_PAGES)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        // Allocate the VMO struct via kmalloc.
+        auto* obj = static_cast<vmo*>(kmalloc::kmalloc(sizeof(vmo)));
+        if (!obj)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+
+        // Placement-new to initialize all fields.
+        ::new(static_cast<void*>(obj)) vmo{};
+
+        obj->size       = size;
+        obj->page_count = page_count;
+        obj->flags      = flags;
+        obj->list_page_count = list_pages;
+
+        // Allocate page-list pages from PMM (order 0, zeroed).
+        for (u32 i = 0; i < list_pages; ++i) {
+            auto result = pmm::alloc(0, pmm::zone::normal,
+                                     pmm::purpose::generic,
+                                     pmm::page_init::zeroed);
+            if (!result) {
+                // Rollback: free already-allocated page-list pages.
+                for (u32 j = 0; j < i; ++j) {
+                    const u64 phys = hhdm::virt_to_phys(
+                        reinterpret_cast<u64>(obj->page_list[j]));
+                    auto fresh = pmm::folio_fresh{ phys, 0,
+                        pmm::purpose::generic, pmm::zone::normal };
+                    pmm::free(static_cast<pmm::folio_fresh&&>(fresh).make_ready());
+                }
+                obj->~vmo();
+                kmalloc::kfree(static_cast<void*>(obj));
+                return lib::unexpected(result.error());
+            }
+
+            auto ready = static_cast<pmm::folio_fresh&&>(*result).make_ready();
+            const u64 virt = hhdm::phys_to_virt(ready.phys_base);
+            obj->page_list[i] = reinterpret_cast<u64*>(virt);
+
+            ready.phys_base = 0;
+        }
+
+        // Activate: fresh → ready.
+        obj->activate();
+
+        sys::printk::pinfo("vmo: created id={} size={:#x} pages={} flags={:#x}",
+            g_next_id.fetch_add(1, arch::s390x::lib::atomic::memory_order::relaxed),
+            size, page_count, static_cast<u32>(flags));
+
+        return obj;
+    }
+
+    /// @brief Destroy a VMO, freeing all committed pages and the VMO struct.
+    ///
+    /// @param[in] obj  Pointer to the VMO to destroy.  Must not be null.
+    auto vmo_destroy(vmo* obj) noexcept -> void {
+        if (!obj) return;
+        obj->begin_destroy();
+        for (u32 i = 0; i < obj->page_count; ++i) {
+            const u64 phys = obj->page_at(i);
+            if (phys == 0) continue;
+
+            // Check refcount: if shared, just decrement and skip free.
+            auto* fd = pmm::frame_desc_of(phys);
+            if (fd) {
+                const u16 rc = fd->refcount.load(
+                    arch::s390x::lib::atomic::memory_order::relaxed);
+                if (rc > 0) {
+                    (void)pmm::frame_unref(phys);
+                    continue;
+                }
+            }
+
+            // Return the page to the PMM.
+            pmm::folio_ready ready{ phys, 0,
+                pmm::purpose::generic, pmm::zone::normal };
+            pmm::free(static_cast<pmm::folio_ready&&>(ready));
+        }
+
+        // Free page-list pages themselves.
+        for (u32 i = 0; i < obj->list_page_count; ++i) {
+            if (!obj->page_list[i]) continue;
+            const u64 phys = hhdm::virt_to_phys(
+                reinterpret_cast<u64>(obj->page_list[i]));
+            pmm::folio_ready ready{ phys, 0,
+                pmm::purpose::generic, pmm::zone::normal };
+            pmm::free(static_cast<pmm::folio_ready&&>(ready));
+        }
+
+
+        // Destroy and free the VMO struct.
+        obj->~vmo();
+        kmalloc::kfree(static_cast<void*>(obj));
+    }
+
+    /// @brief Commit a single page at the given offset within the VMO.
+    /// @param[in] obj          The VMO to commit a page in.
+    /// @param[in] page_offset  Page index within the VMO [0, page_count).
+    /// @return Physical address of the committed page, or kernel_error.
+    [[nodiscard]] auto vmo_commit_page(vmo* obj, u32 page_offset) noexcept
+        -> lib::expected<u64, lib::kernel_error>
+    {
+        if (!obj)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        if (page_offset >= obj->page_count)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        const u64 existing = obj->page_at(page_offset);
+        if (existing != 0) return existing;
+
+        auto result = pmm::alloc(0, pmm::zone::normal,
+                                 pmm::purpose::generic,
+                                 pmm::page_init::zeroed);
+        if (!result)
+            return lib::unexpected(result.error());
+
+        auto ready = static_cast<pmm::folio_fresh&&>(*result).make_ready();
+        const u64 phys = ready.phys_base;
+
+        ready.phys_base = 0;
+
+        // Record in the page list.
+        obj->set_page(page_offset, phys);
+
+        // Bump committed count.
+        (void)obj->committed.fetch_add(1,
+            arch::s390x::lib::atomic::memory_order::relaxed);
+
+        return phys;
+    }
+
+    /// @brief Decommit a single page at the given offset within the VMO.
+    ///
+    /// @param[in] obj          The VMO.
+    /// @param[in] page_offset  Page index within the VMO [0, page_count).
+    auto vmo_decommit_page(vmo* obj, u32 page_offset) noexcept -> void {
+        if (!obj || page_offset >= obj->page_count) return;
+
+        const u64 phys = obj->page_at(page_offset);
+        if (phys == 0) return;
+
+        // Return the page to the PMM.
+        pmm::folio_ready ready{ phys, 0,
+            pmm::purpose::generic, pmm::zone::normal };
+        pmm::free(static_cast<pmm::folio_ready&&>(ready));
+
+        // Clear the page-list entry.
+        obj->set_page(page_offset, 0);
+
+        // Decrement committed count.
+        (void)obj->committed.fetch_sub(1,
+            arch::s390x::lib::atomic::memory_order::relaxed);
+    }
+
+    /// @brief Commit all uncommitted pages in the VMO (transactional).
+    ///
+    /// On failure, all pages committed during this call are rolled back.
+    ///
+    /// @param[in] obj  The VMO.
+    /// @return Number of newly committed pages, or kernel_error.
+    [[nodiscard]] auto vmo_commit_all(vmo* obj) noexcept
+        -> lib::expected<u32, lib::kernel_error>
+    {
+        if (!obj)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        u32 newly_committed = 0;
+        u32 failed_at = obj->page_count;
+
+        for (u32 i = 0; i < obj->page_count; ++i) {
+            if (obj->page_at(i) != 0) continue;
+
+            auto result = vmo_commit_page(obj, i);
+            if (!result) {
+                failed_at = i;
+                break;
+            }
+            ++newly_committed;
+        }
+
+        if (failed_at == obj->page_count)
+            return newly_committed;
+
+        // Transactional rollback: scan backwards from the failure point and
+        // decommit exactly `newly_committed` pages.  We committed pages at
+        // indices where page_at was previously zero, in forward order.
+        // Scanning backward and decommitting non-zero entries gives us the
+        // most recently committed pages first.
+        u32 to_rollback = newly_committed;
+        for (u32 k = failed_at; k > 0 && to_rollback > 0; --k) {
+            if (obj->page_at(k - 1) == 0) continue;
+            vmo_decommit_page(obj, k - 1);
+            --to_rollback;
+        }
+
+        return lib::unexpected(lib::kernel_error::from_memory(
+            lib::memory_error::out_of_memory));
+    }
+
+    /// @brief Acquire a mapping reference to the VMO.
+    ///
+    /// @param[in] obj  The VMO.
+    auto vmo_ref(vmo* obj) noexcept -> void {
+        if (!obj) return;
+        (void)obj->map_count.fetch_add(1,
+            arch::s390x::lib::atomic::memory_order::relaxed);
+    }
+
+    /// @brief Release a mapping reference to the VMO.
+    ///
+    /// When the map_count reaches 0, the VMO is destroyed.
+    ///
+    /// @param[in] obj  The VMO.
+    auto vmo_unref(vmo* obj) noexcept -> void {
+        if (!obj) return;
+        const u32 prev = obj->map_count.fetch_sub(1,
+            arch::s390x::lib::atomic::memory_order::acq_rel);
+        if (prev == 1) {
+            vmo_destroy(obj);
+        }
+    }
+
+    /// @brief Create a snapshot CoW clone of a VMO.
+    /// @param[in] src  The VMO to clone.  Must not be null.
+    /// @return New VMO sharing the same physical pages.
+    [[nodiscard]] auto vmo_clone(vmo* src) noexcept
+        -> lib::expected<vmo*, lib::kernel_error>
+    {
+        using namespace _internal;
+
+        if (!src)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+
+        // Create a new VMO of the same size with cow_clone flag.
+        auto clone_result = vmo_create(src->size,
+            src->flags | vmo_flags::cow_clone);
+        if (!clone_result)
+            return clone_result;
+
+        auto* clone = *clone_result;
+
+        u32 shared = 0;
+        for (u32 i = 0; i < src->page_count; ++i) {
+            const u64 phys = src->page_at(i);
+            if (phys == 0) continue;
+
+            // Bump the frame's refcount — both VMOs now own this page.
+            auto ref_result = pmm::frame_ref(phys);
+            if (!ref_result) [[unlikely]] {
+                // Rollback: unref pages we already shared.
+                for (u32 j = 0; j < i; ++j) {
+                    const u64 p = clone->page_at(j);
+                    if (p != 0) (void)pmm::frame_unref(p);
+                }
+                vmo_destroy(clone);
+                return lib::unexpected(ref_result.error());
+            }
+
+            // Store the shared page in the clone's page list.
+            clone->set_page(i, phys);
+            ++shared;
+        }
+
+        // Update the clone's committed count to match shared pages.
+        clone->committed.store(shared,
+            arch::s390x::lib::atomic::memory_order::relaxed);
+
+        sys::printk::pinfo("vmo: cloned {} pages ({} shared)",
+            src->page_count, shared);
+
+        return clone;
+    }
+
+} // namespace zxfoundation::memory::vmo
+
+} // end export

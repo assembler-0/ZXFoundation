@@ -1,0 +1,73 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/kthread.cxxm
+/// @brief Kernel thread creation — kthread_create / kthread_run.
+
+export module zxfoundation.sched.kthread;
+import zxfoundation.sched.task_types;
+import zxfoundation.sched.task;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import arch.s390x.cpu.lowcore;
+import lib.expected;
+import lib.error;
+
+namespace _internal {
+
+    /// @brief Entry wrapper for kernel threads.
+    extern "C" [[noreturn]] void kthread_entry() noexcept {
+        auto* self = static_cast<zxfoundation::sched::task*>(
+            arch::s390x::cpu::lowcore::current_task_ptr());
+
+        // Call the thread function.
+        if (self->thread_fn) {
+            self->thread_fn(self->thread_arg);
+        }
+
+        // Thread function returned — transition to dead state.
+        self->state = zxfoundation::sched::task_state::dead;
+        self->flags |= zxfoundation::sched::task_flags::exiting;
+
+        zxfoundation::sys::printk::pdebug(
+            "kthread: '{}' (pid {}) exited", self->name, self->pid);
+
+        while (true) {
+            zxfoundation::sched::yield_schedule();
+        }
+    }
+
+} // namespace _internal
+
+export {
+
+namespace zxfoundation::sched {
+
+    /// @brief Create a kernel thread (not yet scheduled).
+    /// @param[in] name  Debug name for the thread.
+    /// @param[in] fn    Entry function.
+    /// @param[in] arg   Argument passed to fn.
+    /// @return Pointer to the new task, or error.
+    [[nodiscard]] auto kthread_create(
+        const char*     name,
+        void          (*fn)(void*),
+        void*           arg
+    ) noexcept -> lib::expected<task*, lib::kernel_error>
+    {
+        auto result = task_alloc(name, task_flags::kthread);
+        if (!result)
+            return result;
+
+        auto* t = *result;
+        t->thread_fn  = fn;
+        t->thread_arg = arg;
+
+        setup_initial_context(t,
+            reinterpret_cast<void(*)()>(_internal::kthread_entry));
+
+        sys::printk::pinfo("kthread: created '{}' pid={}", name, t->pid);
+
+        return t;
+    }
+
+} // namespace zxfoundation::sched
+
+} // end export

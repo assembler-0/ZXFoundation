@@ -3,5 +3,5 @@
     types.cxxm
     endian.cxxm
     linksym.cxxm
-    object.cxxm
+    typestate.cxxm
 }

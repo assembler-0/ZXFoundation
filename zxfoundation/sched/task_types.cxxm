@@ -1,0 +1,175 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/task_types.cxxm
+/// @brief Scheduler type definitions — task, EEVDF entity, run_queue, sched_class.
+///
+/// ── Design notes ─────────────────────────────────────────────────────────
+///
+///   • sched_class uses typed run_queue& and task& — no void*.
+///   • rb_node lives directly in task (not eevdf_entity) so that
+///     rb_root_cached::iter<task, &task::sched_rb>() yields task& directly.
+///   • The struct layout is carefully arranged so that kstack_top and ksp
+///     remain at fixed offsets used by __switch_to_asm.
+
+export module zxfoundation.sched.task_types;
+import zxfoundation.base.types;
+import zxfoundation.locking.qspinlock;
+import lib.rbtree;
+import lib.list;
+
+export {
+
+namespace zxfoundation::sched {
+
+    /// @brief Kernel stack size per task (16 KiB = 4 pages).
+    constexpr u64 TASK_KERNEL_STACK_SIZE = 4 * 4096;
+
+    /// @brief Scheduling state of a task.
+    enum class task_state : u8 {
+        running         = 0,   ///< On-CPU or ready to run.
+        interruptible   = 1,   ///< Sleeping, wakes on signal or event.
+        uninterruptible = 2,   ///< Sleeping, wakes only on event.
+        stopped         = 3,   ///< Stopped (e.g. by debugger / SIGSTOP).
+        zombie          = 4,   ///< Exited, awaiting parent reap.
+        dead            = 5,   ///< Final state, about to be freed.
+    };
+
+    /// @brief Per-task flags (bitfield).
+    enum class task_flags : u32 {
+        none         = 0,
+        kthread      = 1U << 0,   ///< Kernel thread (no user address space).
+        idle         = 1U << 1,   ///< Idle task (per-CPU).
+        exiting      = 1U << 2,   ///< Task is in the process of exiting.
+        need_resched = 1U << 3,   ///< Reschedule requested on return to task.
+    };
+
+    [[nodiscard]] constexpr auto operator|(task_flags a, task_flags b) noexcept -> task_flags {
+        return static_cast<task_flags>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(task_flags a, task_flags b) noexcept -> task_flags {
+        return static_cast<task_flags>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator~(task_flags f) noexcept -> task_flags {
+        return static_cast<task_flags>(~static_cast<u32>(f));
+    }
+    [[nodiscard]] constexpr auto operator!(task_flags f) noexcept -> bool {
+        return static_cast<u32>(f) == 0;
+    }
+    constexpr auto operator|=(task_flags& a, task_flags b) noexcept -> task_flags& {
+        a = a | b;
+        return a;
+    }
+    constexpr auto operator&=(task_flags& a, task_flags b) noexcept -> task_flags& {
+        a = a & b;
+        return a;
+    }
+
+    /// @brief Per-task EEVDF scheduling parameters.
+    struct sched_entity {
+        u64           vruntime{0};    ///< Virtual runtime (TOD clock ticks).
+        u64           deadline{0};    ///< Virtual deadline (vruntime + slice/weight).
+        u64           slice{0};       ///< Time slice (TOD clock ticks).
+        i64           lag{0};         ///< Lag = fair_vruntime - vruntime.
+        u32           weight{1024};   ///< Nice-derived weight (1024 = nice 0).
+    };
+
+    struct run_queue;
+    struct sched_class;
+
+    /// @brief The central schedulable entity.
+    struct task {
+        // ── Identity ── (0-15)
+        i32                    pid{-1};           ///< Process ID.
+        i32                    tgid{-1};          ///< Thread group ID (shared among threads).
+        const char*            name{""};          ///< Debug name (string literal, not owned).
+
+        // ── State ── (16-23)
+        task_state             state{task_state::running};
+        task_flags             flags{task_flags::none};
+
+        // ── Scheduler ── (24-95)
+        const sched_class*     sclass{nullptr};   ///< Scheduler class vtable.
+        sched_entity           se{};              ///< EEVDF scheduling entity (40 bytes).
+        lib::rb_node           sched_rb{};        ///< RB-tree node for fair_tree (24 bytes).
+
+        // ── Run queue membership ── (96-103)
+        bool                   on_rq{false};      ///< True if enqueued on a run queue.
+        u16                    cpu{0};            ///< CPU this task is assigned to.
+
+        // ── Address space ── (104-111)
+        void*                  mm{nullptr};       ///< address_space* (void* to avoid circular import).
+
+        // ── Kernel stack ── (112-135)
+        u64                    kstack_base{0};    ///< Kernel stack bottom (lowest address).
+        u64                    kstack_top{0};     ///< Kernel stack top (highest address, initial SP).
+        u64                    ksp{0};            ///< Saved kernel stack pointer (for __switch_to_asm).
+
+        // ── Kthread entry ── (136-151)
+        void                 (*thread_fn)(void*){nullptr};  ///< Kthread entry function.
+        void*                  thread_arg{nullptr};         ///< Kthread argument.
+
+        // ── List linkage ──
+        lib::list_node         task_list{};       ///< Global task list linkage.
+        lib::list_node         sched_link{};      ///< Misc scheduler linkage (RT queue, wait lists).
+
+        // ── File descriptors ──
+        void*                  files{nullptr};    ///< fd_table* (void* to avoid circular import).
+
+        // ── Non-copyable, non-movable (intrusive pointers) ──
+        task(const task&)            = delete;
+        auto operator=(const task&)  = delete;
+        task(task&&)                 = delete;
+        auto operator=(task&&)       = delete;
+
+        task() noexcept = default;
+    };
+
+    static_assert(__builtin_offsetof(task, ksp) == 128,
+        "task::ksp must be at offset 128 — __switch_to_asm depends on this");
+
+    static_assert(__builtin_offsetof(task, kstack_top) == 120,
+        "task::kstack_top must be at offset 120 — __switch_to_asm depends on this");
+
+    static_assert(__builtin_offsetof(task, pid) == 0,
+        "task::pid must be at offset 0");
+
+    static_assert(__builtin_offsetof(task, se) == 32,
+        "task::se must be at offset 32");
+
+    /// @brief Scheduler class — vtable of typed function pointers.
+    struct sched_class {
+        void  (*enqueue_task)(run_queue& rq, task& t);    ///< Add task to the run queue.
+        void  (*dequeue_task)(run_queue& rq, task& t);    ///< Remove task from the run queue.
+        task* (*pick_next_task)(run_queue& rq);            ///< Select the next task to run.
+        void  (*task_tick)(run_queue& rq, task& t);        ///< Called on each timer tick.
+        void  (*check_preempt)(run_queue& rq, task& t);   ///< Check if t should preempt curr.
+    };
+
+    /// @brief Per-CPU run queue.
+    struct run_queue {
+        locking::qspinlock::qspinlock lock{};       ///< Protects all run_queue mutations.
+        u32                    nr_running{0};        ///< Total runnable tasks on this CPU.
+
+        task*                  curr{nullptr};        ///< Currently running task.
+        task*                  idle{nullptr};        ///< This CPU's idle task.
+
+        /// @brief EEVDF fair scheduling tree (cached leftmost = earliest deadline).
+        lib::rb_root_cached    fair_tree{};
+
+        u64                    min_vruntime{0};      ///< Monotonically increasing vruntime floor.
+
+        /// @brief RT FIFO queue (tasks dequeued in FIFO order).
+        lib::list_head         rt_queue{};
+
+        u16                    cpu_id{0};            ///< Logical CPU ID this run_queue belongs to.
+
+        // ── Non-copyable, non-movable ──
+        run_queue() noexcept = default;
+        run_queue(const run_queue&)            = delete;
+        auto operator=(const run_queue&)       = delete;
+        run_queue(run_queue&&)                 = delete;
+        auto operator=(run_queue&&)            = delete;
+    };
+
+} // namespace zxfoundation::sched
+
+} // end export

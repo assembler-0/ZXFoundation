@@ -6,7 +6,108 @@ export module arch.s390x.trap;
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
 import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sys.syschk;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.vm_types;
 import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import zxfoundation.sched.task_types;
+import lib.error;
+
+namespace arch::s390x::trap::_internal {
+
+    constexpr u16 PGM_SEGMENT_TRANSLATION   = 0x10;
+    constexpr u16 PGM_PAGE_TRANSLATION      = 0x11;
+    constexpr u16 PGM_REGION_FIRST_TRANS    = 0x39;
+    constexpr u16 PGM_REGION_SECOND_TRANS   = 0x3A;
+    constexpr u16 PGM_REGION_THIRD_TRANS    = 0x3B;
+
+    /// @brief Check if a program-check code is a DAT translation exception.
+    [[nodiscard]] constexpr auto is_dat_exception(u16 code) noexcept -> bool {
+        return code == PGM_PAGE_TRANSLATION
+            || code == PGM_SEGMENT_TRANSLATION
+            || code == PGM_REGION_FIRST_TRANS
+            || code == PGM_REGION_SECOND_TRANS
+            || code == PGM_REGION_THIRD_TRANS;
+    }
+
+    /// @brief TEID bit 61 — store indicator.
+    ///        1 = the access that faulted was a store (write).
+    constexpr u64 TEID_STORE_INDICATOR = 1ULL << (63 - 61);
+
+    /// @brief Extract the faulting virtual address from the TEID.
+    ///        Bits 0–51 contain the page-frame address (bits 52–63 are zero).
+    [[nodiscard]] constexpr auto teid_address(u64 teid) noexcept -> u64 {
+        return teid & 0xFFFFFFFFFFFFF000ULL;
+    }
+
+    /// @brief Extract the store indicator from the TEID.
+    [[nodiscard]] constexpr auto teid_is_write(u64 teid) noexcept -> bool {
+        return (teid & TEID_STORE_INDICATOR) != 0;
+    }
+
+    /// @brief Handle a DAT translation exception.
+    auto do_dat_exception(
+        arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+        u16 pgm_code
+    ) noexcept -> void {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+
+        const u64 teid     = lc->trans_exc_code;
+        const u64 fault_va = teid_address(teid);
+        const bool is_write = teid_is_write(teid);
+
+        constexpr u64 PSW_MASK_PSTATE = 1ULL << 48;  // Bit 15 in the PSW mask
+        const bool is_user_fault = (frame->psw_mask & PSW_MASK_PSTATE) != 0;
+
+        zxfoundation::memory::vm::address_space* space = nullptr;
+
+        if (is_user_fault) {
+            auto* current_task = reinterpret_cast<zxfoundation::sched::task*>(
+                lc->current_task);
+            if (current_task && current_task->mm) {
+                space = static_cast<zxfoundation::memory::vm::address_space*>(
+                    current_task->mm);
+            }
+        }
+
+        auto result = zxfoundation::memory::vm::vm_page_fault(
+            space, fault_va, is_write);
+
+        if (result) {
+            zxfoundation::sys::printk::pinfo(
+                "trap: page fault resolved for va={:#x}", fault_va);
+        }
+
+        if (!result) {
+            zxfoundation::sys::printk::pemerg(
+                "trap: unhandled DAT exception at va={:#018x} "
+                "pgm_code={:#06x} write={} teid={:#018x}",
+                fault_va, pgm_code, is_write, teid);
+
+            zxfoundation::sys::printk::pemerg(
+                "trap: PSW at fault: mask={:#018x} addr={:#018x}",
+                frame->psw_mask, frame->psw_addr);
+
+            if (is_user_fault) {
+                // TODO: deliver SIGSEGV to user process instead of panic.
+                zxfoundation::sys::printk::pemerg(
+                    "trap: user-mode segfault — killing task");
+            }
+
+            if (is_user_fault) {
+                zxfoundation::sys::syschk::syschk_fatal(
+                    result.error(),
+                    "trap: unresolvable user DAT exception");
+            } else {
+                zxfoundation::sys::syschk::syschk_fatal(
+                    result.error(),
+                    "trap: unresolvable kernel DAT exception");
+            }
+        }
+    }
+
+} // namespace arch::s390x::trap::_internal
 
 extern "C" {
 
@@ -16,6 +117,12 @@ auto do_pgm_check(
     arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
 ) noexcept -> void {
     const u16 code = arch::s390x::cpu::lowcore::get_current()->pgm_code;
+
+    if (arch::s390x::trap::_internal::is_dat_exception(code)) {
+        arch::s390x::trap::_internal::do_dat_exception(frame, code);
+        return;
+    }
+
     zxfoundation::sys::irq::irq_dispatch(
         static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_PGM + code),
         frame,

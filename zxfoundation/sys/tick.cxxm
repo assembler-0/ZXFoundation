@@ -6,6 +6,7 @@ export module zxfoundation.sys.tick;
 import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sys.time;
 import zxfoundation.sys.syschk;
+import zxfoundation.sched.sched;
 import zxfoundation.rcu.rcu;
 import zxfoundation.base.types;
 import arch.s390x.cpu.clkcomp;
@@ -28,6 +29,7 @@ namespace zxfoundation::sys::tick {
         arch::s390x::cpu::clkcomp::clkcomp_rearm();
         time::tick_advance_wall(TICK_NS);
         rcu::rcu_tick();
+        sched::scheduler_tick();
     }
 
     /// @brief Register the clock comparator handler and arm the first tick.

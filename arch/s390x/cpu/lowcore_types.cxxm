@@ -219,6 +219,14 @@ namespace arch::s390x::cpu::lowcore {
         __builtin_offsetof(percpu::s390x_percpu_data, irq_nesting) == LC_IRQ_NESTING,
         "LC_IRQ_NESTING does not match irq_nesting field; update LC_IRQ_NESTING");
 
+    /// @brief LC_PREEMPT_COUNT = 0x0428 — used by entry.S CHECK_PREEMPT macro.
+    constexpr u64 LC_PREEMPT_COUNT = 0x0428UL;
+
+    static_assert(
+        __builtin_offsetof(zx_lowcore, percpu) +
+        __builtin_offsetof(percpu::s390x_percpu_data, preempt_count) == LC_PREEMPT_COUNT,
+        "LC_PREEMPT_COUNT does not match preempt_count field; update entry.S");
+
 } // namespace arch::s390x::cpu::lowcore
 
 } // end export

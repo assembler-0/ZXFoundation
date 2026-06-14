@@ -1,4 +1,4 @@
 !files : !compile_group -> [auto] {
-    scoms_types.cxxm
-    scoms.cxxm
+    switch_to.S
+    ret_to_user.S
 }

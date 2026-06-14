@@ -8,7 +8,7 @@
 
 #include <zxfoundation/types.h>
 
-#define TAPE_CCW_REWIND         0x01U   ///< Rewind to beginning of tape
+#define TAPE_CCW_REWIND         0x07U   ///< Rewind to beginning of tape
 #define TAPE_CCW_READ_FWD       0x02U   ///< Read Forward (one block)
 #define TAPE_CCW_READ_BACKWARD  0x0CU   ///< Read Backward (one block)
 #define TAPE_CCW_WRITE          0x01U   ///< Write (not used in bootloader)

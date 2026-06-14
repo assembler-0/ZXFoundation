@@ -4,7 +4,7 @@
 
 export module zxfoundation.memory.pmm_types;
 import zxfoundation.base.types;
-import zxfoundation.base.object;
+import zxfoundation.base.typestate;
 import zxfoundation.memory.hhdm;
 import lib.util;
 import arch.s390x.lib.atomic;
@@ -17,8 +17,7 @@ export {
 namespace zxfoundation::memory::pmm {
 
     using base::lifecycle_state;
-    using base::kernel_object;
-    using base::tag_phys_region;
+    using base::typestate;
 
     constexpr u32 PAGE_SHIFT    = 12;
     constexpr u32 PAGE_SIZE     = 1U << PAGE_SHIFT;   ///< 4 KiB
@@ -161,7 +160,7 @@ namespace zxfoundation::memory::pmm {
 
     /// @brief Move-only, typestate-tracked physical memory allocation.
     template <lifecycle_state State = lifecycle_state::fresh>
-    class folio : public kernel_object<tag_phys_region, State> {
+    class folio : public typestate<State> {
     public:
         u64     phys_base{0};
         u32     order{0};

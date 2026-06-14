@@ -20,10 +20,6 @@ export {
 namespace zxfoundation::locking::qspinlock {
 
     /// @brief Queued spinlock — SMP-safe, cache-line-efficient.
-    ///
-    /// Callers must not use this lock in NMI/MCCK context unless the NMI/MCCK
-    /// handler never acquires a lock that is also used in task context, because
-    /// the MCS queue uses per-CPU nodes indexed by lock_depth (0-3).
     class qspinlock {
         using atomic_u32    = arch::s390x::lib::atomic::atomic<u32>;
         using atomic_mcs    = arch::s390x::lib::atomic::atomic<mcs::mcs_node*>;
@@ -46,16 +42,11 @@ namespace zxfoundation::locking::qspinlock {
 
         atomic_u32 m_val{0};
 
-        // ---- Tail encoding helpers ------------------------------------------
-
         /// @brief Encode (cpu_id + 1, node_idx) into a tail value shifted into
         ///        the correct position in the lock word.
         static constexpr auto encode_tail(const u16 cpu_id, const u32 node_idx) noexcept -> u32 {
-            // cpu_id+1 occupies the upper _Q_CPU_BITS bits of the tail field.
-            // node_idx occupies the lower _Q_NODE_BITS bits.
             const u32 tail_raw = ((static_cast<u32>(cpu_id) + 1U) << _Q_NODE_BITS)
                                  | (node_idx & _Q_NODE_MASK);
-            // Shift the packed tail left by _Q_TAIL_OFFSET to skip LOCKED+PENDING.
             return tail_raw << _Q_TAIL_OFFSET;
         }
 
@@ -75,25 +66,9 @@ namespace zxfoundation::locking::qspinlock {
         constexpr qspinlock() noexcept = default;
 
         /// @brief Acquire the lock (blocking, SMP-safe).
-        ///
-        /// @pre  EXT + IO interrupts must be disabled in the PSW before calling
-        ///       this function.  Use irq_lock_guard (which calls irq_save_disable
-        ///       before spinning) from thread context.  In interrupt-handler
-        ///       context the hardware already disables EXT+IO via the new-PSW,
-        ///       so the precondition is automatically satisfied.
-        ///
-        ///       Acquiring a spinlock with interrupts enabled is a
-        ///       priority-inversion hazard: if an EXT interrupt fires while
-        ///       spinning and its handler also needs this lock, the system
-        ///       deadlocks.  The assertion below detects this at runtime.
-        ///
         /// @note  Panics via disabled-wait PSW if the IRQs-disabled precondition
         ///        is not met (context::assert_irqs_disabled).
         auto lock() noexcept -> void {
-            // Enforce IRQs-off precondition.  irqs_disabled() reads EPSW and
-            // checks the EXT+IO bits in PSW byte 0 — zero overhead on the
-            // fast path (interrupts are already off when we reach here in
-            // the expected usage pattern).
             sched::context::assert_irqs_disabled();
 
             u32 expected = 0;

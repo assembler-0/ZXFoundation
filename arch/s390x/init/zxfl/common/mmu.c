@@ -85,8 +85,23 @@
 /// Entries per page table.
 #define PAGE_TABLE_ENTRIES   256U
 
-/// Maximum physical memory to map (8 GB for now, plenty for our setup).
-#define MAX_PHYS_MAP         (8ULL * 1024 * 1024 * 1024)
+/// Entries per Region-3 table.
+#define R3_TABLE_ENTRIES     2048U
+
+/// Maximum physical memory the HHDM will map.
+///
+/// This covers the ENTIRE installed RAM — phys_to_virt() must work for
+/// every valid physical address.  A single z16 drawer holds up to 2 TB;
+/// a 4-drawer system can exceed 8 TB.  We cap at 16 TB which covers
+/// any practical z/Architecture LPAR with comfortable headroom.
+///
+/// Page-table overhead with EDAT-1 (1 MB large pages):
+///   512 GB  →  ~4 MB       2 TB  → ~16 MB
+///     4 TB  → ~32 MB      16 TB  → ~128 MB
+///
+/// Projects that depend on the loader's HHDM for the kernel's entire
+/// lifetime should set this high enough for their target hardware.
+#define MAX_PHYS_MAP         (16ULL * 1024 * 1024 * 1024 * 1024)
 
 static uint64_t r1_table[2048] __attribute__((aligned(16384)));
 static uint64_t r2_table_ident[2048] __attribute__((aligned(16384)));
@@ -154,7 +169,7 @@ static uint64_t *alloc_page_table(void) {
     if (map_bytes < 0x200000ULL) map_bytes = 0x200000ULL;
     map_bytes = (map_bytes + SEG_TABLE_COVERAGE - 1) & ~(SEG_TABLE_COVERAGE - 1);
 
-    // Hard limit at 8 GB for the loader's simple mapping.
+    // Hard limit — see MAX_PHYS_MAP definition for rationale.
     if (map_bytes > MAX_PHYS_MAP) map_bytes = MAX_PHYS_MAP;
 
     for (uint32_t i = 0; i < 2048; i++) {
@@ -167,10 +182,17 @@ static uint64_t *alloc_page_table(void) {
     if (pool_base < 0x2000000ULL) pool_base = 0x2000000ULL;
     pool_next = pool_base;
 
+    // Compute R1/R2 index offsets for identity and HHDM mappings.
+    const uint32_t rfx_identity = 0;
+    const uint32_t rfx_hhdm     = (uint32_t)((virt_base >> 53) & 0x7FFULL);
+    const uint32_t rsx_hhdm     = (uint32_t)((virt_base >> 42) & 0x7FFULL);
+
     // Build the Region-3 and Segment tables.
-    // Each R3 table covers 4 TB (2048 * 2 GB).
-    // For 8 GB, we only need 4 entries in ONE R3 table.
-    uint64_t *r3_tab = alloc_r3_table();
+    // Each R3 table covers 4 TB (2048 entries × 2 GB).
+    // Each R2 entry points to one R3 table.
+    // For >4 TB, we need multiple R3 tables (one per 4 TB).
+    const uint64_t r3_coverage = (uint64_t)R3_TABLE_ENTRIES * SEG_TABLE_COVERAGE;
+    const uint32_t num_r2_entries = (uint32_t)((map_bytes + r3_coverage - 1) / r3_coverage);
 
     // --- Relocate BSP Lowcore ---
     // Allocate 8KB for the new prefix area (lowcore), 8KB aligned.
@@ -181,43 +203,47 @@ static uint64_t *alloc_page_table(void) {
     proto->lowcore_phys = bsp_lowcore_phys;
     proto->flags |= ZXFL_FLAG_LOWCORE;
 
-    const uint32_t num_r3_entries = (uint32_t)((map_bytes + SEG_TABLE_COVERAGE - 1) / SEG_TABLE_COVERAGE);
+    for (uint32_t r2e = 0; r2e < num_r2_entries; r2e++) {
+        uint64_t *r3_tab = alloc_r3_table();
 
-    for (uint32_t r3e = 0; r3e < num_r3_entries; r3e++) {
-        uint64_t *seg_table = alloc_seg_table();
+        // How many R3 entries are needed in this slice?
+        uint64_t slice_start = (uint64_t)r2e * r3_coverage;
+        uint64_t slice_end   = slice_start + r3_coverage;
+        if (slice_end > map_bytes) slice_end = map_bytes;
+        const uint32_t num_r3e = (uint32_t)((slice_end - slice_start + SEG_TABLE_COVERAGE - 1) / SEG_TABLE_COVERAGE);
 
-        for (uint32_t sx = 0; sx < SEG_TABLE_ENTRIES; sx++) {
-            uint64_t phys = (uint64_t)r3e * SEG_TABLE_COVERAGE + (uint64_t)sx * SEG_SIZE;
-            if (phys >= map_bytes) {
-                seg_table[sx] = Z_I | Z_TT_SEG;
-                continue;
-            }
+        for (uint32_t r3e = 0; r3e < num_r3e; r3e++) {
+            uint64_t *seg_table = alloc_seg_table();
 
-            if (has_edat1) {
-                // EDAT-1: Directly map 1 MB large page in the segment table.
-                seg_table[sx] = phys | Z_STE_FC | Z_TT_SEG;
-            } else {
-                // Legacy: Map 256 x 4 KB pages via a page table.
-                uint64_t *pt = alloc_page_table();
-                for (uint32_t p = 0; p < PAGE_TABLE_ENTRIES; p++) {
-                    pt[p] = phys + ((uint64_t)p * 4096ULL);
+            for (uint32_t sx = 0; sx < SEG_TABLE_ENTRIES; sx++) {
+                uint64_t phys = slice_start + (uint64_t)r3e * SEG_TABLE_COVERAGE + (uint64_t)sx * SEG_SIZE;
+                if (phys >= map_bytes) {
+                    seg_table[sx] = Z_I | Z_TT_SEG;
+                    continue;
                 }
-                seg_table[sx] = (uint64_t)(uintptr_t)pt | Z_TT_SEG;
-            }
-        }
-        r3_tab[r3e] = (uint64_t)(uintptr_t)seg_table | Z_TL_2048 | Z_TT_R3;
-    }
 
-    uint32_t rfx_identity = 0;
-    uint32_t rfx_hhdm     = (uint32_t)((virt_base >> 53) & 0x7FFULL);
-    uint32_t rsx_identity = 0;
-    uint32_t rsx_hhdm     = (uint32_t)((virt_base >> 42) & 0x7FFULL);
+                if (has_edat1) {
+                    // EDAT-1: Directly map 1 MB large page in the segment table.
+                    seg_table[sx] = phys | Z_STE_FC | Z_TT_SEG;
+                } else {
+                    // Legacy: Map 256 x 4 KB pages via a page table.
+                    uint64_t *pt = alloc_page_table();
+                    for (uint32_t p = 0; p < PAGE_TABLE_ENTRIES; p++) {
+                        pt[p] = phys + ((uint64_t)p * 4096ULL);
+                    }
+                    seg_table[sx] = (uint64_t)(uintptr_t)pt | Z_TT_SEG;
+                }
+            }
+            r3_tab[r3e] = (uint64_t)(uintptr_t)seg_table | Z_TL_2048 | Z_TT_R3;
+        }
+
+        // Wire this R3 table into BOTH R2 tables (identity + HHDM).
+        r2_table_ident[r2e] = (uint64_t)(uintptr_t)r3_tab | Z_TL_2048 | Z_TT_R2;
+        r2_table_hhdm[rsx_hhdm + r2e] = (uint64_t)(uintptr_t)r3_tab | Z_TL_2048 | Z_TT_R2;
+    }
 
     r1_table[rfx_identity] = (uint64_t)(uintptr_t)r2_table_ident | Z_TL_2048 | Z_TT_R1;
     r1_table[rfx_hhdm]     = (uint64_t)(uintptr_t)r2_table_hhdm | Z_TL_2048 | Z_TT_R1;
-
-    r2_table_ident[rsx_identity] = (uint64_t)(uintptr_t)r3_tab | Z_TL_2048 | Z_TT_R2;
-    r2_table_hhdm[rsx_hhdm]     = (uint64_t)(uintptr_t)r3_tab | Z_TL_2048 | Z_TT_R2;
 
     // Update protocol addresses to be HHDM-virtual.
     proto->kernel_stack_top = hhdm_phys_to_virt(proto->kernel_stack_top);

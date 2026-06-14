@@ -1,0 +1,53 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/zx_syscalls.cxxm
+/// @brief ZX-namespace syscall definitions and registration.
+
+export module zxfoundation.sys.zx_syscalls;
+import zxfoundation.base.types;
+import zxfoundation.sys.svc;
+import zxfoundation.sys.printk;
+import lib.string_view;
+import arch.s390x.cpu.irq_frame;
+
+export {
+
+namespace zxfoundation::sys::zx {
+
+    constexpr u16 ZX_SYS_BASE    = 256;       ///< Start of ZX-specific range.
+    constexpr u16 ZX_SYS_PRINTK  = ZX_SYS_BASE + 0;  ///< 256: kernel printk.
+    constexpr u16 ZX_SYS_EXIT    = ZX_SYS_BASE + 1;  ///< 257: exit (placeholder).
+    constexpr u16 ZX_SYS_YIELD   = ZX_SYS_BASE + 2;  ///< 258: yield (placeholder).
+
+    /// @brief SVC 256 — write a string to the kernel console via printk.
+    auto sys_printk_handler(
+        arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
+    ) noexcept -> i64 {
+        const auto str_ptr = frame->gprs[2];
+        auto max_len = static_cast<u64>(frame->gprs[3]);
+
+        if (str_ptr == 0) return -14;  // -EFAULT
+
+        if (max_len > 256) max_len = 256;
+
+        const auto* str = reinterpret_cast<const char*>(str_ptr);
+
+        u64 actual_len = 0;
+        for (u64 i = 0; i < max_len; ++i) {
+            if (str[i] == '\0') break;
+            ++actual_len;
+        }
+
+        printk::pinfo("[user] sys_printk: {}\n", lib::string_view{str, actual_len});
+
+        return static_cast<i64>(actual_len);
+    }
+
+    /// @brief Register all ZX-namespace syscalls into the dispatch table.
+    auto zx_syscalls_init() noexcept -> void {
+        svc::g_syscall_table[ZX_SYS_PRINTK] = sys_printk_handler;
+        printk::pinfo("zx_syscalls: registered {} handlers (base={})", 1, ZX_SYS_BASE);
+    }
+
+} // namespace zxfoundation::sys::zx
+
+} // end export

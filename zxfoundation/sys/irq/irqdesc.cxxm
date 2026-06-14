@@ -1,43 +1,9 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/irq/irqdesc.cxxm
 /// @brief Generic IRQ descriptor table — dynamically allocated, pointer-sparse.
-///
-/// ── Design ───────────────────────────────────────────────────────────────
-///
-///   Static layout (BSS):
-///     irq_desc*  g_ptrs[IRQ_NR_MAX]   — 1024 × 8 B = 8 KB (was ~80 KB)
-///
-///   Dynamic layout (SLUB, injected):
-///     irq_desc objects allocated from a caller-provided slab cache.
-///     The allocator is injected via irq_slab_ops at irq_subsystem_init()
-///     time to break the module dependency cycle:
-///
-///       irqdesc → slub_typed → slub → syschk → trap → irqdesc  ← CYCLE
-///
-///     Breaking it: irqdesc does NOT import slub or slub_typed.
-///     main.cxxm (which sees both) creates the cache and injects it.
-///
-///   Typestate (runtime):
-///     g_ptrs[irq] == nullptr   → slot unallocated (fresh)
-///     g_ptrs[irq] != nullptr   → slot allocated; handler may be null (transient)
-///     handler != nullptr       → descriptor live (registered)
-///
-///   Locking order (always acquire in this order to prevent deadlock):
-///     g_table_lock → desc->lock
-///
-/// ── IRQL contract ────────────────────────────────────────────────────────
-///
-///   entry.S SAVE_FRAME increments pcp.irq_nesting by 1 before C stub.
-///   irq_dispatch() raises by an additional class-specific amount:
-///     EXT / IO / PGM : +1  → irq_nesting == 2  (in_hardirq)
-///     MCCK           : +2  → irq_nesting == 3  (in_mcck)
-///   On return the same amount is subtracted symmetrically.
 
 export module zxfoundation.sys.irq.irqdesc;
-import zxfoundation.base.object;
 import zxfoundation.base.types;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.scoms.scoms;
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
@@ -51,7 +17,6 @@ export {
 
 namespace zxfoundation::sys::irq {
 
-    /// ── IRQ vector space ─────────────────────────────────────────────────
     constexpr u16 IRQ_NR_MAX    = 0x0400;   ///< Total vector slots (1024).
     constexpr u16 IRQ_BASE_PGM  = 0x0000;   ///< Program-check vectors.
     constexpr u16 IRQ_BASE_EXT  = 0x0100;   ///< External-interrupt vectors.
@@ -67,9 +32,7 @@ namespace zxfoundation::sys::irq {
         void*                                         data) noexcept;
 
     /// @brief IRQ descriptor — dynamically allocated per active vector.
-    ///
-    /// Non-copyable, non-movable (contains qspinlock + atomic<u32>).
-    struct irq_desc : base::kernel_object<base::tag_irq_line> {
+    struct irq_desc {
         handler_fn   handler{nullptr};  ///< Dispatch target; nullptr = unregistered.
         void*        data{nullptr};     ///< Handler-private context.
         u32          flags{0};          ///< IRQF_* bitmask.
@@ -77,7 +40,6 @@ namespace zxfoundation::sys::irq {
 
         arch::s390x::lib::atomic::atomic<u32>    count{0}; ///< Dispatch count (relaxed).
         locking::qspinlock::qspinlock            lock{};
-        scoms::object_node node;  ///< SCOMS registry node.
 
         irq_desc() noexcept = default;
 
@@ -94,16 +56,7 @@ namespace zxfoundation::sys::irq {
         auto operator=(irq_desc&&)           = delete;
     };
 
-    // ── Allocator injection ───────────────────────────────────────────────
-
     /// @brief Slab allocator interface — injected at irq_subsystem_init().
-    ///
-    /// Decouples irqdesc.cxxm from the slub/slub_typed modules, breaking
-    /// the module import cycle:
-    ///   irqdesc → slub → syschk → trap → irqdesc
-    ///
-    /// main.cxxm imports both slub_typed and irqdesc, creates the cache,
-    /// and fills in this struct before calling irq_subsystem_init().
     struct irq_slab_ops {
         void*  cache{nullptr};                          ///< Opaque kmem_cache*.
         void* (*alloc)(void* cache) noexcept = nullptr; ///< Allocate one slot.
@@ -118,12 +71,7 @@ namespace zxfoundation::sys::irq {
 
 } // end export
 
-// ── Module-private implementation ─────────────────────────────────────────
 namespace zxfoundation::sys::irq::_internal {
-
-    /// SCOMS type registration for irq_line objects.
-    static scoms::scoms_type_info<base::tag_irq_line, irq_desc>
-        g_irq_line_type{ "irq_line" };
 
     /// Sparse pointer table — 8 KB in BSS, nullptr = unallocated slot.
     static irq_desc* g_ptrs[IRQ_NR_MAX]{};
@@ -142,7 +90,6 @@ namespace zxfoundation::sys::irq::_internal {
         void* slot = g_ops.alloc(g_ops.cache);
         if (!slot) [[unlikely]] return nullptr;
         auto* d = ::new(slot) irq_desc(irq);
-        (void)g_irq_line_type.register_node(d->node);
         return d;
     }
 
@@ -150,7 +97,7 @@ namespace zxfoundation::sys::irq::_internal {
     /// @pre g_table_lock held.
     static auto irq_desc_free(irq_desc* d) noexcept -> void {
         if (!d) [[unlikely]] return;
-        scoms::unregister_object(d->node);
+
         d->~irq_desc();
         g_ops.free(g_ops.cache, static_cast<void*>(d));
     }
@@ -160,8 +107,6 @@ namespace zxfoundation::sys::irq::_internal {
 export {
 
 namespace zxfoundation::sys::irq {
-
-    // ── Dispatch ─────────────────────────────────────────────────────────
 
     /// @brief Dispatch an IRQ — called from C interrupt entry stubs (trap.cxxm).
     auto irq_dispatch(
@@ -194,15 +139,11 @@ namespace zxfoundation::sys::irq {
         pcp.irq_nesting -= raise;
     }
 
-    // ── Lookup ───────────────────────────────────────────────────────────
-
     [[nodiscard]] auto irq_get_desc(u16 irq) noexcept -> irq_desc* {
         using namespace _internal;
         if (!g_initialized || irq >= IRQ_NR_MAX) return nullptr;
         return g_ptrs[irq];
     }
-
-    // ── Registration ─────────────────────────────────────────────────────
 
     /// @brief Register a handler for a vector.
     ///
@@ -251,9 +192,6 @@ namespace zxfoundation::sys::irq {
     }
 
     /// @brief Unregister the handler for a vector and free the descriptor.
-    ///
-    /// Clears handler under per-desc lock (makes dispatch a no-op),
-    /// then frees descriptor back to slab under table lock.
     auto irq_unregister(u16 irq) noexcept -> void {
         using namespace _internal;
         if (!g_initialized || irq >= IRQ_NR_MAX) return;
@@ -274,15 +212,7 @@ namespace zxfoundation::sys::irq {
         irq_desc_free(d);
     }
 
-    // ── Initialization ────────────────────────────────────────────────────
-
     /// @brief Initialize the IRQ subsystem with an injected slab allocator.
-    ///
-    /// Must be called after the slab cache for irq_desc has been created
-    /// by the caller (typically main.cxxm which imports both slub_typed and
-    /// irqdesc).  g_ptrs[] starts all-nullptr (BSS) — descriptors are
-    /// allocated lazily on the first irq_register() per slot.
-    ///
     /// @param ops  Filled irq_slab_ops with cache pointer + alloc/free fns.
     auto irq_subsystem_init_with_ops(const irq_slab_ops& ops) noexcept -> void {
         using namespace _internal;

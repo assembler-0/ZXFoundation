@@ -354,6 +354,21 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     print("zxfl01: ZXFoundationLoader - core.zxfoundationloader01.sys\n");
     s_proto.stfle_count = stfle_detect(s_proto.stfle_fac, STFLE_MAX_DWORDS);
     s_proto.flags |= ZXFL_FLAG_STFLE;
+
+    /* Minimum facility check — the kernel requires these to function.
+     * If any are missing, panic early with a clear message rather than
+     * crashing later with an operation exception. */
+    if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_ZARCH))
+        panic("zxfl01: z/Architecture (facility 2) not available");
+    if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_EIMM))
+        panic("zxfl01: extended-immediate facility (21) required");
+    if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_GEN_INST))
+        panic("zxfl01: general-instructions-extension (25) required");
+    /* EDAT-1 (bit 8) is strongly recommended but not fatal — the MMU
+     * falls back to 4K page tables without it. */
+    if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_EDAT1))
+        print("zxfl01: WARNING: EDAT-1 (facility 8) not available, using 4K pages\n");
+
     setup_control_regs();
     probe_ipl_device(schid, &s_proto);
     load_parmfile(schid);

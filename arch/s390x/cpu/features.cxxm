@@ -38,10 +38,6 @@ namespace arch::s390x::cpu::features {
     };
 
     /// @brief Initialize the CPU features cache.
-    ///
-    /// Reads the STFLE facility list and caches all known facility bits.
-    /// Must be called once during early boot, BEFORE any subsystem queries.
-    ///
     /// @param[in] stfle_fac  Pointer to the STFLE doubleword array
     ///                       (from ZXFL boot protocol or manual STFLE).
     auto init(const u64* stfle_fac) noexcept -> void;
@@ -55,10 +51,6 @@ namespace arch::s390x::cpu::features {
 } // namespace arch::s390x::cpu::features
 
 } // end export
-
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
 
 module :private;
 

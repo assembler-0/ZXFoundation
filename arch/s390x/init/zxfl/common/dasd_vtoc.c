@@ -143,10 +143,11 @@ int dasd_find_dataset_extents(uint32_t schid,
                 ext0_off = DSCB1_KD_EXTENT0_OFF;
                 ptr3_off = DSCB1_KD_PTR3_OFF;
             } else {
-                fmtid    = dscb_buf[DSCB1_D_FMTID_OFF];
-                name_off = 0U;
-                ext0_off = DSCB1_D_EXTENT0_OFF;
-                ptr3_off = DSCB1_D_PTR3_OFF;
+                /* Data-only read: the 44-byte dataset name is in the key
+                 * which was not returned.  We cannot match by name, so
+                 * skip this record.  The key+data path above should
+                 * succeed on all 3390/3380 devices. */
+                continue;
             }
 
             // Skip non-DSCB1 records (F4=VTOC header, F5=free space, etc.)

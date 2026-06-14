@@ -42,7 +42,7 @@ namespace lib {
         /// @param[in] order Memory ordering.
         auto set(usize bit, memory_order order = memory_order::seq_cst) noexcept -> void {
             if (bit >= N) [[unlikely]] return;
-            m_storage[bit / bits_per_word].fetch_or(lib::bit_mask_msb<u64>(bit % bits_per_word), order);
+            (void)m_storage[bit / bits_per_word].fetch_or(lib::bit_mask_msb<u64>(bit % bits_per_word), order);
         }
 
         /// @brief Atomically clear a bit.
@@ -50,7 +50,7 @@ namespace lib {
         /// @param[in] order Memory ordering.
         auto clear(usize bit, memory_order order = memory_order::seq_cst) noexcept -> void {
             if (bit >= N) [[unlikely]] return;
-            m_storage[bit / bits_per_word].fetch_and(~lib::bit_mask_msb<u64>(bit % bits_per_word), order);
+            (void)m_storage[bit / bits_per_word].fetch_and(~lib::bit_mask_msb<u64>(bit % bits_per_word), order);
         }
 
         /// @brief Atomically test a bit.

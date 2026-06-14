@@ -1,0 +1,60 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/scope_guard.cxxm
+/// @brief RAII scope guard — executes a cleanup callback on scope exit.
+export module lib.scope_guard;
+
+export {
+
+namespace lib {
+
+    /// @brief RAII scope guard — calls @p fn on destruction unless dismissed.
+    ///
+    /// @tparam Fn  Callable type (typically a lambda).
+    template <typename Fn>
+    class scope_guard {
+        Fn   m_fn;
+        bool m_active{true};
+
+    public:
+        /// @brief Construct a scope guard with the given cleanup function.
+        explicit scope_guard(Fn fn) noexcept : m_fn(static_cast<Fn&&>(fn)) {}
+
+        /// @brief Move constructor — transfers ownership.
+        scope_guard(scope_guard&& other) noexcept
+            : m_fn(static_cast<Fn&&>(other.m_fn))
+            , m_active(other.m_active)
+        {
+            other.m_active = false;
+        }
+
+        /// @brief Destructor — executes the cleanup if still active.
+        ~scope_guard() noexcept {
+            if (m_active) m_fn();
+        }
+
+        /// @brief Dismiss — disarm the guard (cleanup will NOT run).
+        auto dismiss() noexcept -> void { m_active = false; }
+
+        /// @brief Re-arm a dismissed guard.
+        auto rearm() noexcept -> void { m_active = true; }
+
+        /// @brief Check if the guard is active.
+        [[nodiscard]] auto active() const noexcept -> bool { return m_active; }
+
+        // Non-copyable.
+        scope_guard(const scope_guard&) = delete;
+        auto operator=(const scope_guard&) = delete;
+        auto operator=(scope_guard&&) = delete;
+    };
+
+    /// @brief Factory function — deduces Fn from the argument.
+    ///
+    /// Usage: auto guard = lib::make_scope_guard([&]{ cleanup(); });
+    template <typename Fn>
+    [[nodiscard]] auto make_scope_guard(Fn&& fn) noexcept -> scope_guard<Fn> {
+        return scope_guard<Fn>(static_cast<Fn&&>(fn));
+    }
+
+} // namespace lib
+
+} // end export

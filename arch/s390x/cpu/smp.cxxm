@@ -19,6 +19,7 @@ import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sched.sched;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.expected;
@@ -27,6 +28,9 @@ import lib.string;
 
 // AP online counter — written by each AP in ap_startup, polled by BSP.
 static arch::s390x::lib::atomic::atomic<u32> g_ap_online{0};
+
+// Set by BSP after sched_init() completes.  APs spin until this is true.
+static arch::s390x::lib::atomic::atomic<u32> g_sched_ready{0};
 
 extern "C" {
 
@@ -37,8 +41,12 @@ auto ap_dat_on() -> void;
     arch::s390x::cpu::processor::ctl_set_bit<0>(13);
     arch::s390x::cpu::processor::ctl_set_bit<0>(14);
     (void)g_ap_online.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
-    while (true)
+
+    while (g_sched_ready.load(arch::s390x::lib::atomic::memory_order::acquire) == 0)
         arch::s390x::cpu::processor::cpu_relax();
+
+    const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+    zxfoundation::sched::sched_init_ap(pcp.cpu_id);
 }
 
 }
@@ -136,6 +144,14 @@ namespace arch::s390x::cpu::smp {
             processor::cpu_relax();
 
         return started;
+    }
+
+    /// @brief Signal APs that the scheduler is ready.
+    ///
+    /// Called by the BSP after sched_init() completes.  APs spin in
+    /// ap_startup() until this is called, then proceed to sched_init_ap().
+    auto notify_sched_ready() noexcept -> void {
+        g_sched_ready.store(1, lib::atomic::memory_order::release);
     }
 
 } // namespace arch::s390x::cpu::smp

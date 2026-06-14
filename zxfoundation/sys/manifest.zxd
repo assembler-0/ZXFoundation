@@ -10,4 +10,8 @@
     zxallsyms_stub.cxx
     tick.cxxm
     timer_types.cxxm
+    fd_types.cxxm
+    fd.cxxm
+    svc.cxxm
+    zx_syscalls.cxxm
 }

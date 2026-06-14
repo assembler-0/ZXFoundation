@@ -10,10 +10,21 @@ import zxfoundation.base.config;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.sys.irq.irqdesc_init;
-import zxfoundation.scoms.scoms;
 import zxfoundation.sys.syschk;
 import zxfoundation.memory.hhdm;
 import zxfoundation.base.cxxrtse.cxxabi;
+import zxfoundation.sys.tick;
+import zxfoundation.memory.slub;
+import zxfoundation.rcu.rcu;
+import zxfoundation.memory.kmalloc;
+import zxfoundation.memory.vm_types;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.vmo;
+import zxfoundation.sched.sched;
+import zxfoundation.sched.kthread;
+import zxfoundation.sched.task_types;
+import zxfoundation.sys.zx_syscalls;
+import zxfoundation.exec.exec;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
@@ -22,13 +33,11 @@ import arch.s390x.cpu.psw;
 import arch.s390x.cpu.smp;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.clkcomp;
-import zxfoundation.sys.tick;
-import zxfoundation.memory.slub;
-import zxfoundation.rcu.rcu;
-import zxfoundation.memory.kmalloc;
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.features;
+import arch.s390x.cpu.irq;
 import arch.s390x.mmu.mmu;
+import arch.s390x.lib.atomic;
 import crypto.sha256_types;
 import crypto.sha256;
 import drivers.console.diag;
@@ -45,6 +54,7 @@ export {
 
 namespace zxfoundation::init {
 
+    /// @brief Copy of the protocol the kernel is booted with
     arch::s390x::init::zxfl::protocol boot_protocol{};
 
 } // namespace zxfoundation::init
@@ -195,19 +205,28 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::memory::slub::slub_init();
     zxfoundation::memory::kmalloc::kmalloc_init();
 
-    zxfoundation::scoms::init();
     zxfoundation::sys::irq::irq_subsystem_init();
+
+    zxfoundation::sys::zx::zx_syscalls_init();
 
     zxfoundation::sys::tick::tick_init();
     arch::s390x::cpu::clkcomp::clkcomp_arm_bsp();
 
     zxfoundation::rcu::rcu_init();
 
+    zxfoundation::memory::vm::vm_bootstrap(protocol->mem_total_bytes);
+
+    zxfoundation::sched::sched_init();
+
     arch::s390x::cpu::smp::init_bsp();
     pinfo("smp: {} processors started", arch::s390x::cpu::smp::init_aps(*protocol));
 
     pinfo("sys: core.zxfoundation.nucleus initialization complete\n");
 
-    while (true)
+    arch::s390x::cpu::irq::irq_enable();
+
+    while (true) {
+        zxfoundation::sched::schedule();
         arch::s390x::cpu::processor::cpu_relax();
+    }
 }

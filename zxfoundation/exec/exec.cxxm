@@ -1,0 +1,263 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/exec/exec.cxxm
+/// @brief Process execution — load an ELF and enter user mode.
+
+export module zxfoundation.exec.exec;
+import zxfoundation.exec.elf_types;
+import zxfoundation.exec.elf_loader;
+import zxfoundation.base.types;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.vm_types;
+import zxfoundation.memory.vmo;
+import zxfoundation.memory.vmo_types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.sched.task_types;
+import zxfoundation.sched.task;
+import zxfoundation.sched.sched;
+import zxfoundation.sys.printk;
+import zxfoundation.sys.fd_types;
+import zxfoundation.sys.fd;
+import arch.s390x.cpu.psw_types;
+import arch.s390x.cpu.irq_frame;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.init.zxfl.protocol;
+import lib.expected;
+import lib.error;
+
+export {
+
+extern "C" void ret_to_user();
+
+namespace zxfoundation::exec {
+
+    using lib::expected;
+    using lib::kernel_error;
+    using lib::unexpected;
+    using namespace sys::printk;
+
+    // ── User address space constants ─────────────────────────────────────
+
+    /// @brief Top of user stack (just below the "red zone" at top of user VA).
+    constexpr u64 USER_STACK_TOP  = 0x0000'7FFF'FFFE'0000ULL;
+
+    /// @brief User stack size (64 KiB = 16 pages).
+    constexpr u64 USER_STACK_SIZE = 16 * memory::pmm::PAGE_SIZE;
+
+    // ── PSW mask for user-mode execution ─────────────────────────────────
+
+    /// @brief User-mode PSW mask: problem state, DAT on, interrupts enabled,
+    ///        primary address space mode (CR1), 64-bit.
+    constexpr u64 PSW_MASK_USER =
+        arch::s390x::cpu::psw::PSW_BIT_DAT |
+        arch::s390x::cpu::psw::PSW_BIT_IO |
+        arch::s390x::cpu::psw::PSW_BIT_EXT |
+        arch::s390x::cpu::psw::PSW_BIT_PSTATE |    // ← problem state
+        arch::s390x::cpu::psw::PSW_ARCH_BITS |
+        arch::s390x::cpu::psw::PSW_ASC_PRIMARY;     // ← user space via CR1
+
+    /// @brief Load a ZXFL module as the first user process.
+    ///
+    /// Called from kernel init.  Finds the named module in the ZXFL
+    /// protocol, loads it as an ELF into a new user address space,
+    /// and enters user mode.
+    ///
+    /// @param proto    Boot protocol (contains module list).
+    /// @param name     Module name to find (e.g., "init.zxf").
+    /// @return         Error if the module is not found or ELF loading fails.
+    ///                 Does NOT return on success (enters user mode).
+    [[nodiscard]] auto kernel_exec_module(
+        const arch::s390x::init::zxfl::protocol& proto,
+        const char* name
+    ) noexcept -> expected<void, kernel_error> {
+        // ── 1. Find the module in the protocol ──────────────────────────
+
+        u64 mod_phys = 0;
+        u64 mod_size = 0;
+        bool found = false;
+
+        for (u32 i = 0; i < proto.module_count; ++i) {
+            // String compare (the module name is NUL-terminated in the protocol).
+            const char* mn = proto.modules[i].name;
+            const char* sn = name;
+            bool match = true;
+            while (*mn && *sn) {
+                if (*mn != *sn) { match = false; break; }
+                ++mn; ++sn;
+            }
+            if (match && *mn == '\0' && *sn == '\0') {
+                mod_phys = proto.modules[i].phys_start;
+                mod_size = proto.modules[i].size_bytes;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            perr("exec: module '{}' not found in ZXFL protocol", name);
+            return unexpected(kernel_error::from_generic(
+                lib::generic_error::not_found));
+        }
+
+        pinfo("exec: found module '{}' at phys={:#x} size={:#x}",
+            name, mod_phys, mod_size);
+
+        // ── 2. Create user address space ────────────────────────────────
+
+        auto space_result = memory::vm::space_create();
+        if (!space_result) {
+            perr("exec: space_create failed");
+            return unexpected(space_result.error());
+        }
+        auto* space = *space_result;
+
+        // ── 3. Load the ELF image ───────────────────────────────────────
+
+        const auto* image = reinterpret_cast<const void*>(
+            memory::hhdm::phys_to_virt(mod_phys));
+
+        auto load_result = elf_load(space, image, mod_size);
+        if (!load_result) {
+            perr("exec: elf_load failed");
+            memory::vm::space_destroy(space);
+            return unexpected(load_result.error());
+        }
+
+        const auto& elf_info = *load_result;
+
+        // ── 4. Allocate user stack ──────────────────────────────────────
+
+        const u64 stack_base = USER_STACK_TOP - USER_STACK_SIZE;
+
+        auto stack_vmo_result = memory::vmo::vmo_create(
+            USER_STACK_SIZE, memory::vmo::vmo_flags::none);
+        if (!stack_vmo_result) {
+            perr("exec: stack vmo_create failed");
+            memory::vm::space_destroy(space);
+            return unexpected(stack_vmo_result.error());
+        }
+
+        auto stack_commit = memory::vmo::vmo_commit_all(*stack_vmo_result);
+        if (!stack_commit) {
+            perr("exec: stack commit failed");
+            memory::vmo::vmo_destroy(*stack_vmo_result);
+            memory::vm::space_destroy(space);
+            return unexpected(stack_commit.error());
+        }
+
+        auto stack_map = memory::vm::vm_map(
+            space, stack_base, USER_STACK_SIZE,
+            *stack_vmo_result, 0,
+            memory::vm::vm_prot::read | memory::vm::vm_prot::write,
+            memory::vm::vm_flags::fixed);
+
+        if (!stack_map) {
+            perr("exec: stack vm_map failed");
+            memory::vmo::vmo_destroy(*stack_vmo_result);
+            memory::vm::space_destroy(space);
+            return unexpected(stack_map.error());
+        }
+
+        pinfo("exec: user stack at [{:#x}, {:#x})", stack_base, USER_STACK_TOP);
+
+        // ── 5. Allocate the task ────────────────────────────────────────
+
+        auto task_result = sched::task_alloc(name, sched::task_flags::none);
+        if (!task_result) {
+            perr("exec: task_alloc failed");
+            memory::vm::space_destroy(space);
+            return unexpected(task_result.error());
+        }
+        auto* t = *task_result;
+
+        // Assign the address space to the task.
+        t->mm = static_cast<void*>(space);
+
+        // Assign the EEVDF fair scheduler class.
+        t->sclass = &sched::fair_class();
+
+        // ── 6. Set up the initial kernel stack for user-mode return ─────
+        //
+        // Layout of the kernel stack for a new user task:
+        //
+        //   kstack_top  ──────────────────
+        //               │  irq_frame     │ ← user PSW + user GPRs r0-r15
+        //               │  (144 bytes)   │    (read by ret_to_user)
+        //               ├────────────────┤
+        //               │  switch_to     │ ← callee-save frame (r6-r15, r14=ret_to_user)
+        //               │  frame         │    (read by __switch_to_asm)
+        //               │  (160 bytes)   │
+        //               ├────────────────┤
+        //               │  ...           │
+        //   kstack_base ──────────────────
+        //
+        // __switch_to_asm restores r6-r15 from the switch_to frame and
+        // does `br r14` → jumps to ret_to_user.
+        // ret_to_user finds the irq_frame at kstack_top - IRQ_FRAME_SIZE,
+        // copies the PSW to lowcore, restores all user GPRs, and LPSWE.
+
+        constexpr u64 IRQ_FRAME_SIZE = 0x90;  // sizeof(irq_frame)
+
+        // Place the irq_frame at the very top of the kernel stack.
+        auto* frame = reinterpret_cast<arch::s390x::cpu::irq::arch_s390x_irq_frame*>(
+            t->kstack_top - IRQ_FRAME_SIZE);
+
+        // Zero the entire frame.
+        auto* frame_bytes = reinterpret_cast<u8*>(frame);
+        for (u64 i = 0; i < IRQ_FRAME_SIZE; ++i) frame_bytes[i] = 0;
+
+        // Set the user-mode PSW.
+        frame->psw_mask = PSW_MASK_USER;
+        frame->psw_addr = elf_info.entry_point;
+
+        // Set user stack pointer (r15) and clear other user GPRs.
+        frame->gprs[15] = USER_STACK_TOP;
+
+        // Set up the switch_to frame BELOW the irq_frame.
+        //
+        // setup_initial_context places a 160-byte callee-save frame at
+        // kstack_top - 160, and saves r14=entry, r15=kstack_top.
+        //
+        // Problem: if we use the real kstack_top, the switch_to frame
+        // overlaps the irq_frame (both start near kstack_top).
+        //
+        // Solution: temporarily lower kstack_top so the switch_to frame
+        // goes below the irq_frame.  Then __switch_to_asm will restore
+        // r15 = fake_top = real_kstack_top - IRQ_FRAME_SIZE.
+        // But ret_to_user expects r15 = kstack_top (real), then subtracts
+        // IRQ_FRAME_SIZE.
+        //
+        // Fix: ret_to_user gets r15 = fake_top from __switch_to_asm.
+        // Then it does r15 -= IRQ_FRAME_SIZE?  No — ret_to_user should
+        // just use r15 directly as the irq_frame pointer!
+        //
+        // New plan:
+        //   fake_top = real_kstack_top - IRQ_FRAME_SIZE  (= &irq_frame)
+        //   setup_initial_context saves r15 = fake_top
+        //   __switch_to_asm restores r15 = fake_top
+        //   ret_to_user: r15 already points to the irq_frame!
+
+        const u64 real_top = t->kstack_top;
+        t->kstack_top = real_top - IRQ_FRAME_SIZE;  // fake top = &irq_frame
+
+        sched::setup_initial_context(t,
+            reinterpret_cast<void(*)()>(ret_to_user));
+
+        t->kstack_top = real_top;  // restore real top for future SVC entries
+
+        pinfo("exec: task pid={} '{}' ready, entry={:#x} sp={:#x}",
+            t->pid, name, elf_info.entry_point, USER_STACK_TOP);
+
+        // ── 7. Enqueue the task ─────────────────────────────────────────
+
+        sched::enqueue_task(t);
+
+        pinfo("exec: user process '{}' enqueued", name);
+
+        return {};
+    }
+
+} // namespace zxfoundation::exec
+
+} // end export

@@ -1,0 +1,165 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/vm_types.cxxm
+/// @brief Virtual memory area (VMA) and address space type definitions.
+
+export module zxfoundation.memory.vm_types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.memory.vmo_types;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.locking.qspinlock;
+import arch.s390x.mmu.mmu_types;
+import arch.s390x.lib.atomic;
+import lib.rbtree;
+import lib.list;
+
+export {
+
+namespace zxfoundation::memory::vm {
+
+    using base::lifecycle_state;
+
+    /// @brief Virtual memory protection flags.
+    enum class vm_prot : u32 {
+        none    = 0,
+        read    = 1U << 0,
+        write   = 1U << 1,
+        exec    = 1U << 2,
+
+        rw      = read | write,
+        rx      = read | exec,
+        rwx     = read | write | exec,
+    };
+
+    [[nodiscard]] constexpr auto operator|(vm_prot a, vm_prot b) noexcept -> vm_prot {
+        return static_cast<vm_prot>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(vm_prot a, vm_prot b) noexcept -> vm_prot {
+        return static_cast<vm_prot>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator!(vm_prot p) noexcept -> bool {
+        return static_cast<u32>(p) == 0;
+    }
+    [[nodiscard]] constexpr auto operator~(vm_prot p) noexcept -> vm_prot {
+        return static_cast<vm_prot>(~static_cast<u32>(p));
+    }
+
+    // ── Mapping flags ─────────────────────────────────────────────────────
+
+    /// @brief VMA mapping flags.
+    enum class vm_flags : u32 {
+        none      = 0,
+        fixed     = 1U << 0,  ///< Map at the exact requested address.
+        shared    = 1U << 1,  ///< Shared mapping (writes visible to other mappers).
+        private_  = 1U << 2,  ///< Private mapping (CoW on write).
+        growsdown = 1U << 3,  ///< Stack-like: grows toward lower addresses.
+        locked    = 1U << 4,  ///< Pages are locked in memory (no eviction).
+    };
+
+    [[nodiscard]] constexpr auto operator|(vm_flags a, vm_flags b) noexcept -> vm_flags {
+        return static_cast<vm_flags>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(vm_flags a, vm_flags b) noexcept -> vm_flags {
+        return static_cast<vm_flags>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator!(vm_flags f) noexcept -> bool {
+        return static_cast<u32>(f) == 0;
+    }
+
+    constexpr u64 VM_USER_BASE  = 0x0000'0000'0010'0000ULL;  // 1 MiB (above lowcore)
+    constexpr u64 VM_USER_TOP   = 0x0000'3FFF'FFFF'FFFFULL;  // 4 TiB - 1
+    constexpr u64 VM_MMAP_BASE  = 0x0000'0000'4000'0000ULL;  // 1 GiB (default mmap hint)
+
+    /// @brief Virtual Memory Area — a contiguous mapping in an address space.
+    struct vm_area {
+        u64           va_start{0};          ///< Start address (inclusive, page-aligned).
+        u64           va_end{0};            ///< End address (exclusive, page-aligned).
+        vm_prot       prot{vm_prot::none};  ///< Access protection.
+        vm_flags      flags{vm_flags::none};///< Mapping flags.
+
+        /// @brief Backing VMO and offset.
+        vmo::vmo*     backing{nullptr};     ///< The VMO this VMA maps (refcounted).
+        u64           vmo_offset{0};        ///< Byte offset into the VMO.
+
+        /// @brief RB-tree linkage (sorted by va_start for O(log n) lookup).
+        lib::rb_node  rb_link{};
+
+        /// @brief Linked list linkage (for ordered linear iteration).
+        lib::list_node list_link;
+
+
+
+        vm_area() noexcept : rb_link{0, nullptr, nullptr} {}
+
+        [[nodiscard]] auto size() const noexcept -> u64 {
+            return va_end - va_start;
+        }
+
+        [[nodiscard]] auto contains(u64 va) const noexcept -> bool {
+            return va >= va_start && va < va_end;
+        }
+
+        [[nodiscard]] auto page_count() const noexcept -> u32 {
+            return static_cast<u32>(size() / pmm::PAGE_SIZE);
+        }
+
+        vm_area(const vm_area&)            = delete;
+        auto operator=(const vm_area&)     = delete;
+        vm_area(vm_area&&)                 = delete;
+        auto operator=(vm_area&&)          = delete;
+    };
+
+    // ── Address Space ─────────────────────────────────────────────────────
+
+    /// @brief Maximum VMAs per address space.
+    constexpr u32 VM_MAX_VMAS = 4096;
+
+    /// @brief Virtual address space — owns a page table root and a set of VMAs.
+    struct address_space {
+        /// @brief z/Architecture page table root.
+        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1>
+                              asce{};
+        u64                   root_phys{0};   ///< Physical address of the root table.
+
+        /// @brief VMA management.
+        lib::rb_root_cached   vma_tree{};     ///< RB-tree of VMAs (by va_start).
+        lib::list_head        vma_list{};     ///< Linked list for linear walk.
+        u32                   vma_count{0};   ///< Number of VMAs.
+
+        /// @brief Address space lock — protects all VMM mutations.
+        locking::qspinlock::qspinlock lock{};
+
+        /// @brief Lifecycle state.
+        lifecycle_state       state{lifecycle_state::fresh};
+
+
+
+        address_space() noexcept = default;
+
+        /// @brief Activate: transition fresh → ready.
+        /// @pre state == fresh.
+        auto activate() noexcept -> void {
+            __builtin_expect(state == lifecycle_state::fresh, 1)
+                ? (void)0
+                : __builtin_trap();
+            state = lifecycle_state::ready;
+        }
+
+        /// @brief Begin teardown: transition ready → dying.
+        /// @pre state == ready.
+        auto begin_destroy() noexcept -> void {
+            __builtin_expect(state == lifecycle_state::ready, 1)
+                ? (void)0
+                : __builtin_trap();
+            state = lifecycle_state::dying;
+        }
+
+        address_space(const address_space&)            = delete;
+        auto operator=(const address_space&)           = delete;
+        address_space(address_space&&)                 = delete;
+        auto operator=(address_space&&)                = delete;
+    };
+
+} // namespace zxfoundation::memory::vm
+
+} // end export

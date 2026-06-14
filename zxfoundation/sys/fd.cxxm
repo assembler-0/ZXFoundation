@@ -1,0 +1,177 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/fd.cxxm
+/// @brief File descriptor table operations.
+
+export module zxfoundation.sys.fd;
+import zxfoundation.sys.fd_types;
+import zxfoundation.base.types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.memory.kmalloc;
+import arch.s390x.lib.atomic;
+import lib.expected;
+import lib.error;
+
+export {
+
+namespace zxfoundation::sys::fd {
+
+    using lib::expected;
+    using lib::kernel_error;
+    using memory::kmalloc::kmalloc;
+    using memory::kmalloc::kfree;
+    using arch::s390x::lib::atomic::memory_order;
+
+    /// @brief Increment reference count on a file_description.
+    auto file_ref(file_description* f) noexcept -> void {
+        if (f) {
+            (void)f->refcount.fetch_add(1, memory_order::relaxed);
+        }
+    }
+
+    /// @brief Decrement reference count.  When it hits zero, invoke the
+    ///        close callback and free the file_description.
+    auto file_unref(file_description* f) noexcept -> void {
+        if (!f) return;
+
+        const u32 old = f->refcount.fetch_sub(1, memory_order::acq_rel);
+        if (old == 1) {
+            if (f->ops && f->ops->close) {
+                (void)f->ops->close(*f);
+            }
+            kfree(f);
+        }
+    }
+
+    /// @brief Initialize a new fd_table (all slots nullptr).
+    auto fd_table_init(fd_table& table) noexcept -> void {
+        for (u32 i = 0; i < FD_MAX; ++i) {
+            table.fds[i] = nullptr;
+        }
+        table.next_fd = 0;
+    }
+
+    /// @brief Destroy an fd_table — close all open descriptors.
+    auto fd_table_destroy(fd_table& table) noexcept -> void {
+        for (u32 i = 0; i < FD_MAX; ++i) {
+            if (table.fds[i]) {
+                file_unref(table.fds[i]);
+                table.fds[i] = nullptr;
+            }
+        }
+    }
+
+    /// @brief Allocate the lowest free FD for a file_description.
+    ///
+    /// @param table  The process's fd_table.
+    /// @param desc   The file_description to install (must have refcount >= 1).
+    /// @return       The allocated FD number, or error if table full.
+    [[nodiscard]] auto fd_alloc(
+        fd_table& table, file_description* desc
+    ) noexcept -> expected<i32, kernel_error> {
+        if (!desc) {
+            return lib::unexpected(kernel_error::from_generic(
+                lib::generic_error::invalid_arg)); // null desc
+        }
+
+        const locking::irq_lock_guard guard{table.lock};
+
+        // Search from the hint position.
+        for (u32 i = table.next_fd; i < FD_MAX; ++i) {
+            if (!table.fds[i]) {
+                table.fds[i] = desc;
+                table.next_fd = i + 1;
+                return static_cast<i32>(i);
+            }
+        }
+        // Wrap around and search before hint.
+        for (u32 i = 0; i < table.next_fd; ++i) {
+            if (!table.fds[i]) {
+                table.fds[i] = desc;
+                table.next_fd = i + 1;
+                return static_cast<i32>(i);
+            }
+        }
+
+        return lib::unexpected(kernel_error::from_generic(
+            lib::generic_error::out_of_range)); // table full
+    }
+
+    /// @brief Look up the file_description for an FD.
+    ///
+    /// @return Pointer to the file_description, or nullptr if invalid/closed.
+    [[nodiscard]] auto fd_get(fd_table& table, i32 fd) noexcept -> file_description* {
+        if (fd < 0 || static_cast<u32>(fd) >= FD_MAX) return nullptr;
+        return table.fds[static_cast<u32>(fd)];
+    }
+
+    /// @brief Close an FD — remove from table and decrement refcount.
+    [[nodiscard]] auto fd_close(
+        fd_table& table, i32 fd
+    ) noexcept -> expected<void, kernel_error> {
+        if (fd < 0 || static_cast<u32>(fd) >= FD_MAX) {
+            return lib::unexpected(kernel_error::from_generic(
+                lib::generic_error::not_found)); // EBADF
+        }
+
+        file_description* f = nullptr;
+        {
+            const locking::irq_lock_guard guard{table.lock};
+            f = table.fds[static_cast<u32>(fd)];
+            if (!f) {
+                return lib::unexpected(kernel_error::from_generic(
+                lib::generic_error::not_found)); // EBADF
+            }
+            table.fds[static_cast<u32>(fd)] = nullptr;
+
+            // Update hint if this FD is lower.
+            if (static_cast<u32>(fd) < table.next_fd) {
+                table.next_fd = static_cast<u32>(fd);
+            }
+        }
+
+        file_unref(f);
+        return {};
+    }
+
+    /// @brief Duplicate an FD — allocate a new FD pointing to the same
+    ///        file_description with an incremented refcount.
+    [[nodiscard]] auto fd_dup(
+        fd_table& table, i32 old_fd
+    ) noexcept -> expected<i32, kernel_error> {
+        if (old_fd < 0 || static_cast<u32>(old_fd) >= FD_MAX) {
+            return lib::unexpected(kernel_error::from_generic(
+                lib::generic_error::not_found)); // EBADF
+        }
+
+        file_description* f = nullptr;
+        {
+            const locking::irq_lock_guard guard{table.lock};
+            f = table.fds[static_cast<u32>(old_fd)];
+            if (!f) {
+                return lib::unexpected(kernel_error::from_generic(
+                lib::generic_error::not_found)); // EBADF
+            }
+            file_ref(f);
+        }
+
+        auto result = fd_alloc(table, f);
+        if (!result) {
+            file_unref(f);  // undo the ref we just took
+        }
+        return result;
+    }
+
+    /// @brief Clone an entire fd_table (for fork).
+    auto fd_table_clone(fd_table& dst, const fd_table& src) noexcept -> void {
+        for (u32 i = 0; i < FD_MAX; ++i) {
+            if (src.fds[i]) {
+                file_ref(src.fds[i]);
+                dst.fds[i] = src.fds[i];
+            }
+        }
+    }
+
+} // namespace zxfoundation::sys::fd
+
+} // end export

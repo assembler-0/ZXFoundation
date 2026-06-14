@@ -1,0 +1,98 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/fd_types.cxxm
+/// @brief File descriptor table types.
+
+export module zxfoundation.sys.fd_types;
+import zxfoundation.base.types;
+import arch.s390x.lib.atomic;
+import zxfoundation.locking.qspinlock;
+
+export {
+
+namespace zxfoundation::sys::fd {
+
+    /// @brief Open file flags, matching Linux/POSIX values.
+    constexpr u32 O_RDONLY  = 0U;
+    constexpr u32 O_WRONLY  = 1U;
+    constexpr u32 O_RDWR   = 2U;
+    constexpr u32 O_CLOEXEC = 0x80000U;
+
+    struct file_description;
+
+    /// @brief Virtual file operations table.
+    ///
+    /// Each file type (console, pipe, vmo-backed, etc.) provides an
+    /// instance of this structure with its operation implementations.
+    /// A null function pointer means "operation not supported".
+    struct vnode_ops {
+        /// @brief Read from file.
+        /// @param[in]     fd    Per-open file state.
+        /// @param[out]    buf   Destination buffer.
+        /// @param[in]     count Maximum bytes to read.
+        /// @return        Bytes read, or negative errno on error.
+        auto (*read)(file_description& fd, void* buf, u64 count) noexcept -> i64{nullptr};
+
+        /// @brief Write to file.
+        /// @param[in]     fd    Per-open file state.
+        /// @param[in]     buf   Source buffer.
+        /// @param[in]     count Maximum bytes to write.
+        /// @return        Bytes written, or negative errno on error.
+        auto (*write)(file_description& fd, const void* buf, u64 count) noexcept -> i64{nullptr};
+
+        /// @brief Device control.
+        /// @param[in]     fd    Per-open file state.
+        /// @param[in]     cmd   ioctl command code.
+        /// @param[in]     arg   Command-specific argument.
+        /// @return        Command-specific return, or negative errno.
+        auto (*ioctl)(file_description& fd, u64 cmd, u64 arg) noexcept -> i64{nullptr};
+
+        /// @brief Close the file (release driver resources).
+        /// @param[in]     fd    Per-open file state.
+        /// @return        0 on success, or negative errno.
+        auto (*close)(file_description& fd) noexcept -> i64{nullptr};
+
+        /// @brief Reposition the file offset.
+        /// @param[in]     fd      Per-open file state.
+        /// @param[in]     offset  Signed offset value.
+        /// @param[in]     whence  SEEK_SET(0), SEEK_CUR(1), SEEK_END(2).
+        /// @return        New absolute offset, or negative errno.
+        auto (*seek)(file_description& fd, i64 offset, u32 whence) noexcept -> i64{nullptr};
+    };
+
+    /// @brief Per-open-file state.
+    struct file_description {
+        const vnode_ops* ops{nullptr};            ///< Operation vtable.
+        void*            private_data{nullptr};   ///< Driver-specific data.
+        arch::s390x::lib::atomic::atomic<u32>
+                         refcount{0};             ///< Reference count (shared via dup/fork).
+        u64              offset{0};               ///< Current file offset.
+        u32              flags{0};                ///< O_RDONLY, O_WRONLY, O_RDWR, etc.
+
+        file_description() noexcept = default;
+
+        file_description(const file_description&)            = delete;
+        auto operator=(const file_description&)              = delete;
+        file_description(file_description&&)                 = delete;
+        auto operator=(file_description&&)                   = delete;
+    };
+
+    /// @brief Maximum number of file descriptors per process.
+    constexpr u32 FD_MAX = 256U;
+
+    /// @brief Per-process file descriptor table.
+    struct fd_table {
+        file_description* fds[FD_MAX]{};                      ///< FD → file_description mapping.
+        locking::qspinlock::qspinlock lock{};                 ///< Protects all mutations.
+        u32               next_fd{0};                         ///< Hint for next free fd search.
+
+        fd_table() noexcept = default;
+
+        fd_table(const fd_table&)            = delete;
+        auto operator=(const fd_table&)      = delete;
+        fd_table(fd_table&&)                 = delete;
+        auto operator=(fd_table&&)           = delete;
+    };
+
+} // namespace zxfoundation::sys::fd
+
+} // end export

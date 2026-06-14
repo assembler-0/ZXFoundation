@@ -1,0 +1,201 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/exec/elf_types.cxxm
+/// @brief ELF64 type definitions for the kernel ELF loader.
+///
+/// ── ZXFoundation ELF Convention ──────────────────────────────────────────
+///
+///   ZXFoundation uses standard ELF64 with:
+///
+///   • OSABI:     ELFOSABI_ZXF (0x42) — identifies ZXFoundation binaries.
+///                Loader also accepts ELFOSABI_NONE (0x00) for portability.
+///   • Machine:   EM_S390 (22) — IBM System/390 (covers both ESA and z/Arch).
+///   • Type:      ET_EXEC (2) — static executables only (no ET_DYN yet).
+///   • Section:   .zxnote — optional ZXFoundation metadata section.
+///
+///   The .zxnote section uses ELF NOTE format (Elf64_Nhdr):
+///     namesz=4, name="ZXF\0", type=ZXF_NOTE_*, variable desc.
+///
+///   This is a valid ELF extension — any standard ELF tool can still
+///   read the binary; it just ignores the custom OSABI and .zxnote.
+///
+/// ── Design ───────────────────────────────────────────────────────────────
+///
+///   Types mirror the ELF64 ABI specification exactly.  We define them
+///   as C++ structs with [[gnu::packed]] to match on-disk layout.
+///   Big-endian byte order (ELFDATA2MSB) — native on s390x.
+
+export module zxfoundation.exec.elf_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::exec::elf {
+
+    // ── ELF identification indices ────────────────────────────────────────
+
+    constexpr u32 EI_MAG0       = 0;
+    constexpr u32 EI_MAG1       = 1;
+    constexpr u32 EI_MAG2       = 2;
+    constexpr u32 EI_MAG3       = 3;
+    constexpr u32 EI_CLASS      = 4;
+    constexpr u32 EI_DATA       = 5;
+    constexpr u32 EI_VERSION    = 6;
+    constexpr u32 EI_OSABI      = 7;
+    constexpr u32 EI_ABIVERSION = 8;
+    constexpr u32 EI_NIDENT     = 16;
+
+    // ── Magic values ──────────────────────────────────────────────────────
+
+    constexpr u8 ELFMAG0 = 0x7F;
+    constexpr u8 ELFMAG1 = 'E';
+    constexpr u8 ELFMAG2 = 'L';
+    constexpr u8 ELFMAG3 = 'F';
+
+    // ── EI_CLASS ──────────────────────────────────────────────────────────
+
+    constexpr u8 ELFCLASS64 = 2;
+
+    // ── EI_DATA ───────────────────────────────────────────────────────────
+
+    constexpr u8 ELFDATA2MSB = 2;   ///< Big-endian (s390x native).
+
+    // ── EI_OSABI ──────────────────────────────────────────────────────────
+
+    constexpr u8 ELFOSABI_NONE  = 0;     ///< Generic / System V.
+    constexpr u8 ELFOSABI_ZXF   = 0x42;  ///< ZXFoundation custom OSABI.
+
+    // ── e_type ────────────────────────────────────────────────────────────
+
+    constexpr u16 ET_EXEC = 2;   ///< Static executable.
+    constexpr u16 ET_DYN  = 3;   ///< Shared object / PIE (future).
+
+    // ── e_machine ─────────────────────────────────────────────────────────
+
+    constexpr u16 EM_S390 = 22;  ///< IBM System/390 (ESA + z/Arch).
+
+    // ── Program header types ──────────────────────────────────────────────
+
+    constexpr u32 PT_NULL    = 0;
+    constexpr u32 PT_LOAD    = 1;
+    constexpr u32 PT_NOTE    = 4;
+    constexpr u32 PT_PHDR    = 6;
+
+    // ── Program header flags ──────────────────────────────────────────────
+
+    constexpr u32 PF_X = 0x1;   ///< Execute.
+    constexpr u32 PF_W = 0x2;   ///< Write.
+    constexpr u32 PF_R = 0x4;   ///< Read.
+
+    // ── Section header types ──────────────────────────────────────────────
+
+    constexpr u32 SHT_NOTE = 7;
+
+    // ── ZXFoundation NOTE types (.zxnote section) ─────────────────────────
+
+    constexpr u32 ZXF_NOTE_ABI_TAG   = 1;  ///< ABI version tag.
+    constexpr u32 ZXF_NOTE_CAPS      = 2;  ///< Required kernel capabilities.
+    constexpr u32 ZXF_NOTE_BUILDID   = 3;  ///< Build identifier.
+
+    // ── ELF64 Header ──────────────────────────────────────────────────────
+
+    struct [[gnu::packed]] elf64_ehdr {
+        u8   e_ident[EI_NIDENT];   ///< Magic, class, data, version, OS/ABI, pad.
+        u16  e_type;               ///< Object file type (ET_EXEC).
+        u16  e_machine;            ///< Architecture (EM_S390).
+        u32  e_version;            ///< ELF version (1).
+        u64  e_entry;              ///< Virtual entry point address.
+        u64  e_phoff;              ///< Program header table offset.
+        u64  e_shoff;              ///< Section header table offset.
+        u32  e_flags;              ///< Processor-specific flags.
+        u16  e_ehsize;             ///< ELF header size (64).
+        u16  e_phentsize;          ///< Program header entry size (56).
+        u16  e_phnum;              ///< Number of program headers.
+        u16  e_shentsize;          ///< Section header entry size.
+        u16  e_shnum;              ///< Number of section headers.
+        u16  e_shstrndx;           ///< Section name string table index.
+    };
+
+    static_assert(sizeof(elf64_ehdr) == 64, "ELF64 header must be 64 bytes");
+
+    // ── ELF64 Program Header ─────────────────────────────────────────────
+
+    struct [[gnu::packed]] elf64_phdr {
+        u32  p_type;     ///< Segment type (PT_LOAD, PT_NOTE, ...).
+        u32  p_flags;    ///< Segment flags (PF_R | PF_W | PF_X).
+        u64  p_offset;   ///< File offset of segment data.
+        u64  p_vaddr;    ///< Virtual address in memory.
+        u64  p_paddr;    ///< Physical address (unused, same as vaddr).
+        u64  p_filesz;   ///< Size of segment data in file.
+        u64  p_memsz;    ///< Size of segment in memory (>= p_filesz for BSS).
+        u64  p_align;    ///< Alignment (power of 2).
+    };
+
+    static_assert(sizeof(elf64_phdr) == 56, "ELF64 phdr must be 56 bytes");
+
+    // ── ELF64 Section Header ─────────────────────────────────────────────
+
+    struct [[gnu::packed]] elf64_shdr {
+        u32  sh_name;       ///< Section name (string table index).
+        u32  sh_type;       ///< Section type (SHT_NOTE, ...).
+        u64  sh_flags;      ///< Section flags.
+        u64  sh_addr;       ///< Virtual address.
+        u64  sh_offset;     ///< File offset.
+        u64  sh_size;       ///< Section size in bytes.
+        u32  sh_link;       ///< Link to another section.
+        u32  sh_info;       ///< Additional section info.
+        u64  sh_addralign;  ///< Address alignment.
+        u64  sh_entsize;    ///< Entry size (for fixed-size entries).
+    };
+
+    static_assert(sizeof(elf64_shdr) == 64, "ELF64 shdr must be 64 bytes");
+
+    // ── ELF64 Note Header ─────────────────────────────────────────────────
+
+    struct [[gnu::packed]] elf64_nhdr {
+        u32  n_namesz;  ///< Length of note name (including NUL).
+        u32  n_descsz;  ///< Length of note descriptor.
+        u32  n_type;    ///< Note type (ZXF_NOTE_*).
+    };
+
+    // ── Validation ────────────────────────────────────────────────────────
+
+    /// @brief Validate ELF64 header for ZXFoundation s390x executables.
+    ///
+    /// Checks: magic, class=64, data=MSB, machine=s390,
+    ///         type=EXEC, OSABI=NONE or ZXF.
+    [[nodiscard]] constexpr auto elf64_validate(
+        const elf64_ehdr& hdr
+    ) noexcept -> bool {
+        // Magic bytes.
+        if (hdr.e_ident[EI_MAG0] != ELFMAG0 ||
+            hdr.e_ident[EI_MAG1] != ELFMAG1 ||
+            hdr.e_ident[EI_MAG2] != ELFMAG2 ||
+            hdr.e_ident[EI_MAG3] != ELFMAG3)
+            return false;
+
+        // Must be 64-bit ELF.
+        if (hdr.e_ident[EI_CLASS] != ELFCLASS64) return false;
+
+        // Must be big-endian (s390x native).
+        if (hdr.e_ident[EI_DATA] != ELFDATA2MSB) return false;
+
+        // OSABI: accept generic (0) or ZXFoundation (0x42).
+        const u8 osabi = hdr.e_ident[EI_OSABI];
+        if (osabi != ELFOSABI_NONE && osabi != ELFOSABI_ZXF) return false;
+
+        // Must be a static executable.
+        if (hdr.e_type != ET_EXEC) return false;
+
+        // Must be s390x.
+        if (hdr.e_machine != EM_S390) return false;
+
+        // Sanity: phdr table must exist and entries must be the right size.
+        if (hdr.e_phnum == 0) return false;
+        if (hdr.e_phentsize != sizeof(elf64_phdr)) return false;
+
+        return true;
+    }
+
+} // namespace zxfoundation::exec::elf
+
+} // end export

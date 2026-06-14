@@ -12,7 +12,6 @@ import zxfoundation.rcu.rcu_types;
 import zxfoundation.sched.context;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import zxfoundation.base.object;
 import zxfoundation.locking.lock;
 import zxfoundation.locking.qspinlock;
 import arch.s390x.cpu.lowcore;
@@ -23,7 +22,6 @@ import lib.error;
 import lib.expected;
 import lib.util;
 import lib.algorithm;
-import zxfoundation.scoms.scoms;
 
 namespace zxfoundation::memory::slub::_internal {
 
@@ -38,9 +36,7 @@ namespace zxfoundation::memory::slub::_internal {
     static locking::qspinlock::qspinlock g_cache_table_lock{};
     static bool              g_initialized{false};
 
-    /// SCOMS type info for kmem_cache objects.
-    static scoms::scoms_type_info<base::tag_slub_cache, kmem_cache>
-        g_cache_type{ "slub_cache" };
+
 
     [[nodiscard]] inline auto encode_fp(
         const kmem_cache& cache,
@@ -87,12 +83,7 @@ namespace zxfoundation::memory::slub::_internal {
         return decode_fp(cache, obj, *slot);
     }
 
-    // ── Slab ↔ object translation ───────────────────────────────────────
-
     /// @brief Recover the slab_header* for an object via its physical address.
-    ///
-    /// On allocation, we store the order in frame_desc::order (set by PMM).
-    /// The slab frame's physical base is phys masked by the slab size.
     [[nodiscard]] inline auto slab_of(
         const kmem_cache& cache,
         void* obj
@@ -424,8 +415,6 @@ namespace zxfoundation::memory::slub {
         slot.random_seq       = rseq;
         slot.cpu_partial      = SLUB_CPU_PARTIAL_DEFAULT;
 
-        // Register with SCOMS before typestate transition.
-        (void)g_cache_type.register_node(slot.scoms_node);
 
         // Typestate transition: fresh → ready via kmem_cache_ref.
         // Only then is the count bumped so the slot becomes visible
@@ -441,8 +430,6 @@ namespace zxfoundation::memory::slub {
         using namespace _internal;
         if (!cache || !g_initialized) return;
 
-        // Unregister from SCOMS before teardown.
-        scoms::unregister_object(cache->scoms_node);
 
         constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
 
@@ -615,16 +602,6 @@ namespace zxfoundation::memory::slub {
     }
 
     /// @brief Free a slab-allocated object without knowing its cache.
-    ///
-    /// Recovers the owning kmem_cache via frame_desc_of(phys)->order() to
-    /// compute the slab frame base, then reads slab_header::cache back-pointer.
-    ///
-    /// frame_desc_of is an O(1) array index into g_frame_table[pfn].
-    /// For the alloc/free hot pattern the frame_desc entry is already in L1
-    /// cache (accessed during alloc_new_slab), so this is effectively free.
-    ///
-    /// @pre ptr was allocated by kmem_alloc / kmalloc. Passing non-slab
-    ///      memory is UB (same contract as Linux kfree).
     auto kmem_free_raw(void* ptr) noexcept -> void {
         using namespace _internal;
         if (!ptr) [[unlikely]] return;

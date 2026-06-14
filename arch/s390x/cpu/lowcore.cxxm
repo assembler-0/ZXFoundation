@@ -28,6 +28,7 @@ extern "C" {
     auto trap_pgm_entry()  -> void;
     auto trap_ext_entry()  -> void;
     auto trap_io_entry()   -> void;
+    auto trap_svc_entry()  -> void;
     auto trap_mcck_entry() -> void;
     auto ap_dat_on()       -> void;
 }
@@ -72,6 +73,12 @@ namespace arch::s390x::cpu::lowcore {
         return get_current()->percpu;
     }
 
+    /// @brief Get the current task pointer from lowcore.
+    [[nodiscard]] inline auto current_task_ptr() noexcept -> void* {
+        const auto* lc = get_current();
+        return reinterpret_cast<void*>(lc->current_task);
+    }
+
     [[nodiscard]] auto cpu_percpu(const u16 cpu_id) noexcept -> percpu::s390x_percpu_data* {
         zx_lowcore* lc = get_for_cpu(cpu_id);
         return lc ? &lc->percpu : nullptr;
@@ -82,8 +89,7 @@ namespace arch::s390x::cpu::lowcore {
         lc.external_new_psw = psw::make_handler_psw(reinterpret_cast<u64>(trap_ext_entry));
         lc.io_new_psw       = psw::make_handler_psw(reinterpret_cast<u64>(trap_io_entry));
         lc.mcck_new_psw     = psw::make_handler_psw(reinterpret_cast<u64>(trap_mcck_entry));
-        lc.svc_new_psw      = psw::zx_psw{ .mask = psw::PSW_MASK_DISABLED_WAIT,
-                                            .addr = 0x0000000000DEAD1CULL };
+        lc.svc_new_psw      = psw::make_handler_psw(reinterpret_cast<u64>(trap_svc_entry));
     }
 
     /// @brief Initialize the BSP lowcore.  Must be called once after HHDM is active.

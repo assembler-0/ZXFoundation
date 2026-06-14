@@ -1,0 +1,114 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/vmo_types.cxxm
+/// @brief Virtual Memory Object (VMO) type definitions.
+
+export module zxfoundation.memory.vmo_types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace zxfoundation::memory::vmo {
+
+    using base::lifecycle_state;
+
+    /// @brief VMO capability flags.
+    enum class vmo_flags : u32 {
+        none         = 0,
+        resizable    = 1U << 0,  ///< Can be resized after creation.
+        cow_clone    = 1U << 1,  ///< This VMO is a CoW clone of another.
+        contiguous   = 1U << 2,  ///< Pages must be physically contiguous.
+        pinned       = 1U << 3,  ///< Pages cannot be evicted/swapped.
+    };
+
+    [[nodiscard]] constexpr auto operator|(vmo_flags a, vmo_flags b) noexcept -> vmo_flags {
+        return static_cast<vmo_flags>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(vmo_flags a, vmo_flags b) noexcept -> vmo_flags {
+        return static_cast<vmo_flags>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator!(vmo_flags f) noexcept -> bool {
+        return static_cast<u32>(f) == 0;
+    }
+
+    /// @brief Maximum pages per VMO page list page (512 entries per 4K page).
+    constexpr u32 VMO_ENTRIES_PER_PAGE = 512;
+
+    /// @brief Maximum VMO size with a single page list page: 2 MiB.
+    constexpr u32 VMO_MAX_PAGES_SINGLE = VMO_ENTRIES_PER_PAGE;
+
+    /// @brief Maximum pages per VMO (limited to keep page list manageable).
+    ///        4 page-list pages = 2048 entries = 8 MiB.
+    constexpr u32 VMO_MAX_PAGES = 2048;
+
+    /// @brief Maximum page-list pages.
+    constexpr u32 VMO_MAX_LIST_PAGES = 4;
+
+    /// @brief Virtual Memory Object — owns physical pages.
+    struct vmo {
+        u64           size{0};              ///< Size in bytes (page-aligned).
+        u32           page_count{0};        ///< Total pages in this VMO.
+        arch::s390x::lib::atomic::atomic<u32>
+                      committed{0};         ///< Currently committed pages.
+        vmo_flags     flags{vmo_flags::none};
+        lifecycle_state state{lifecycle_state::fresh};
+
+        /// @brief Page list — array of physical addresses.
+        u64*          page_list[VMO_MAX_LIST_PAGES]{};
+        u32           list_page_count{0};   ///< Number of allocated page-list pages.
+
+        /// @brief Number of VMAs currently mapping this VMO.
+        arch::s390x::lib::atomic::atomic<u32> map_count{0};
+
+
+        vmo() noexcept = default;
+        vmo(const vmo&)            = delete;
+        auto operator=(const vmo&) = delete;
+        vmo(vmo&&)                 = delete;
+        auto operator=(vmo&&)      = delete;
+
+        /// @brief Get the physical address for a page at the given offset.
+        /// @param[in] page_offset  Page index within the VMO [0, page_count).
+        /// @return Physical address, or 0 if not committed.
+        [[nodiscard]] auto page_at(u32 page_offset) const noexcept -> u64 {
+            if (page_offset >= page_count) return 0;
+            const u32 list_idx = page_offset / VMO_ENTRIES_PER_PAGE;
+            const u32 entry_idx = page_offset % VMO_ENTRIES_PER_PAGE;
+            if (!page_list[list_idx]) return 0;
+            return page_list[list_idx][entry_idx];
+        }
+
+        /// @brief Set the physical address for a page at the given offset.
+        /// @param[in] page_offset  Page index within the VMO.
+        /// @param[in] phys         Physical address (0 to decommit).
+        auto set_page(u32 page_offset, u64 phys) noexcept -> void {
+            if (page_offset >= page_count) return;
+            const u32 list_idx = page_offset / VMO_ENTRIES_PER_PAGE;
+            const u32 entry_idx = page_offset % VMO_ENTRIES_PER_PAGE;
+            if (!page_list[list_idx]) return;
+            page_list[list_idx][entry_idx] = phys;
+        }
+
+        /// @brief Activate: transition fresh → ready.
+        /// @pre state == fresh.  Double-activation is a kernel bug.
+        auto activate() noexcept -> void {
+            __builtin_expect(state == lifecycle_state::fresh, 1)
+                ? (void)0
+                : __builtin_trap();
+            state = lifecycle_state::ready;
+        }
+
+        /// @brief Begin teardown: transition ready → dying.
+        /// @pre state == ready.
+        auto begin_destroy() noexcept -> void {
+            __builtin_expect(state == lifecycle_state::ready, 1)
+                ? (void)0
+                : __builtin_trap();
+            state = lifecycle_state::dying;
+        }
+    };
+
+} // namespace zxfoundation::memory::vmo
+
+} // end export

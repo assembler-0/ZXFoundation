@@ -63,6 +63,14 @@ namespace lib::format {
         }
     };
 
+    /// @brief Formatter for fixed-size character arrays (string literals).
+    template <usize N>
+    struct formatter<char[N]> {
+        auto format(format_context& ctx, const char (&val)[N]) const noexcept -> void {
+            ctx.write(string_view(val));
+        }
+    };
+
     /// @brief Formatter for booleans — prints "true" or "false".
     template <>
     struct formatter<bool> {

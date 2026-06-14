@@ -169,7 +169,11 @@ int dasd_tape_read_block(uint32_t schid, void *buf, uint32_t len,
         return -1;
     }
 
-    if (out_read) *out_read = len;
+    /* Actual bytes = requested - residual count from SCSW word 2 bits 0-15 */
+    if (out_read) {
+        uint16_t residual = (uint16_t)(status & 0xFFFFU);
+        *out_read = (residual <= len) ? (len - residual) : len;
+    }
     return 0;
 }
 

@@ -4,11 +4,11 @@
 
 export module zxfoundation.memory.slub_types;
 import zxfoundation.base.types;
-import zxfoundation.base.object;
+import zxfoundation.base.typestate;
 import zxfoundation.base.config;
 import zxfoundation.rcu.rcu_types;
 import zxfoundation.locking.qspinlock;
-import zxfoundation.scoms.scoms_types;
+
 import arch.s390x.lib.atomic;
 import arch.s390x.cpu.processor_types;
 
@@ -17,8 +17,6 @@ export {
 namespace zxfoundation::memory::slub {
 
     using base::lifecycle_state;
-    using base::kernel_object;
-    using base::tag_slub_cache;
     using arch::s390x::lib::atomic::atomic;
     using arch::s390x::lib::atomic::memory_order;
     using arch::s390x::cpu::processor::S390X_CACHE_LINE_SIZE;
@@ -30,17 +28,6 @@ namespace zxfoundation::memory::slub {
     constexpr u32 SLUB_MAX_SIZE       = 32768U;
 
     /// @brief Maximum PMM order SLUB will use for slab pages.
-    ///
-    /// Minimum order required by each kmalloc size class:
-    ///   8..4096   → order 0 (4 KiB slab, many objects per slab)
-    ///   8192      → order 1 (8 KiB slab, ~0 objects if hdr aligned)
-    ///                 actually: hdr_end=8192, slab=8192 → need order 2
-    ///   16384     → order 2 (16 KiB)
-    ///   32768     → order 4 (64 KiB): hdr pads to 32768 alignment,
-    ///                 consuming the entire order-3 (32 KiB) slab.
-    ///                 order 4 gives 64 KiB, leaving 32 KiB for the object.
-    ///
-    /// Set to 5 (128 KiB) to provide headroom above the largest size class.
     constexpr u32 SLUB_MAX_ORDER      = 5U;
 
     /// @brief Maximum partial slabs kept on the node partial list per cache.
@@ -133,7 +120,7 @@ namespace zxfoundation::memory::slub {
         "kmem_cache_cpu must be exactly one cache line");
 
     /// @brief SLUB slab cache descriptor.
-    class kmem_cache : public kernel_object<tag_slub_cache> {
+    class kmem_cache {
     public:
         const char*  name{nullptr};
         u32          object_size{0};
@@ -160,7 +147,7 @@ namespace zxfoundation::memory::slub {
 
         kmem_cache_cpu cpu[base::config::CONFIG_ZX_MAX_CPUS]{};
 
-        scoms::object_node scoms_node;  ///< SCOMS registry node for this cache.
+
 
         kmem_cache() noexcept = default;
 
@@ -170,12 +157,20 @@ namespace zxfoundation::memory::slub {
         auto operator=(kmem_cache&&)                 = delete;
 
         /// @brief Activate: transition fresh → ready after full initialisation.
+        /// @pre state == fresh.
         auto activate() noexcept -> void {
+            __builtin_expect(state == lifecycle_state::fresh, 1)
+                ? (void)0
+                : __builtin_trap();
             state = lifecycle_state::ready;
         }
 
         /// @brief Begin teardown: transition ready → dying.
+        /// @pre state == ready.
         auto begin_destroy() noexcept -> void {
+            __builtin_expect(state == lifecycle_state::ready, 1)
+                ? (void)0
+                : __builtin_trap();
             state = lifecycle_state::dying;
         }
 
@@ -186,13 +181,6 @@ namespace zxfoundation::memory::slub {
     };
 
     /// @brief Type-safe, zero-overhead reference to a kmem_cache in a known lifecycle state.
-    ///
-    /// This provides compile-time typestate enforcement for consumers of slab caches
-    /// without requiring the pinned, non-movable kmem_cache to change its layout.
-    ///
-    /// Only `kmem_cache_ref<lifecycle_state::ready>` permits allocation/free.
-    /// Construction of a ready-ref is gated through `kmem_cache_create()`
-    /// which activates the cache before returning.
     template <lifecycle_state State>
     class kmem_cache_ref {
         kmem_cache* ptr_{nullptr};

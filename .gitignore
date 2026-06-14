@@ -8,10 +8,8 @@ __pycache__/
 mytoolchain.cmake
 book
 compile_flags.txt
-.kiro
 flatboot/
 .DS_Store
-.antigravitycli
 include/zxfoundation/zxconfig.h
 zxfoundation/base/config.cxxm
 doxygen-build/
