@@ -1,172 +1,140 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/trap/trap.cxxm
-/// @brief C-callable interrupt handlers invoked by entry.S.
+/// @brief C++ interrupt handlers called from entry.S via brasl.
+///
+/// Each handler receives an irq_frame* in %r2 (the first C parameter).
+/// The frame was saved by the SAVE_FRAME macro in entry.S.
+///
+/// SVC handling is now a thin dispatch through the nucleus gate dispatch
+/// table. Handler logic lives in zxfoundation.gate.nucleus_handlers.
 
-export module arch.s390x.trap;
+export module arch.s390x.trap.trap;
+
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
-import zxfoundation.sys.irq.irqdesc;
-import zxfoundation.sys.syschk;
-import zxfoundation.memory.vm;
-import zxfoundation.memory.vm_types;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.psw_types;
+import arch.s390x.cpu.psw;
+import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
+import zxfoundation.sys.syschk;
 import zxfoundation.sys.printk;
-import zxfoundation.sched.task_types;
+import zxfoundation.sys.timer;
+
+import zxfoundation.domain.domain_types;
+import zxfoundation.gate.dispatch;
 import lib.error;
 
-namespace arch::s390x::trap::_internal {
+/// @brief Program check handler.
+///
+/// Routes faults based on whether the interrupted context was nucleus or domain:
+/// - If interrupted in supervisor state → nucleus bug → panic
+/// - If interrupted in problem state → domain fault → terminate the domain
+extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+    // Read program interruption code from lowcore offset 0x008E (u16).
+    const u16 pgm_code = *reinterpret_cast<const u16*>(0x8EUL);
 
-    constexpr u16 PGM_SEGMENT_TRANSLATION   = 0x10;
-    constexpr u16 PGM_PAGE_TRANSLATION      = 0x11;
-    constexpr u16 PGM_REGION_FIRST_TRANS    = 0x39;
-    constexpr u16 PGM_REGION_SECOND_TRANS   = 0x3A;
-    constexpr u16 PGM_REGION_THIRD_TRANS    = 0x3B;
+    // Read translation exception address from lowcore 0x00A8 (u64).
+    const u64 trans_exc = *reinterpret_cast<const u64*>(0xA8UL);
 
-    /// @brief Check if a program-check code is a DAT translation exception.
-    [[nodiscard]] constexpr auto is_dat_exception(u16 code) noexcept -> bool {
-        return code == PGM_PAGE_TRANSLATION
-            || code == PGM_SEGMENT_TRANSLATION
-            || code == PGM_REGION_FIRST_TRANS
-            || code == PGM_REGION_SECOND_TRANS
-            || code == PGM_REGION_THIRD_TRANS;
+    // Check if we were in problem state (PSW bit 15 = PSW_BIT_PSTATE).
+    const bool in_problem_state =
+        (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
+
+    if (!in_problem_state) {
+        // Nucleus fault — this is a kernel bug.
+        zxfoundation::sys::syschk::syschk_fatal(
+            lib::kernel_error::from_generic(lib::generic_error::internal_error),
+            "NUCLEUS FAULT: program check {:#06x} at PSW {:#018x}:{:#018x} tex={:#018x}",
+            static_cast<u32>(pgm_code), frame->psw_mask, frame->psw_addr, trans_exc);
     }
 
-    /// @brief TEID bit 61 — store indicator.
-    ///        1 = the access that faulted was a store (write).
-    constexpr u64 TEID_STORE_INDICATOR = 1ULL << (63 - 61);
+    // Domain fault — terminate the faulting domain.
+    auto* lc = arch::s390x::cpu::lowcore::get_current();
+    auto* d = reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
 
-    /// @brief Extract the faulting virtual address from the TEID.
-    ///        Bits 0–51 contain the page-frame address (bits 52–63 are zero).
-    [[nodiscard]] constexpr auto teid_address(u64 teid) noexcept -> u64 {
-        return teid & 0xFFFFFFFFFFFFF000ULL;
+    if (d) {
+        zxfoundation::sys::printk::perr(
+            "domain: '{}' (id={}) fault: pgm_code={:#06x} addr={:#018x} tex={:#018x}\n",
+            d->name, d->id, static_cast<u32>(pgm_code), frame->psw_addr, trans_exc);
+
+        // Mark domain as dying.  Set need_resched so that the
+        // CHECK_PREEMPT macro in entry.S will call schedule() on
+        // the kernel stack after RESTORE_FRAME unwinds the
+        // interrupt context.  Calling schedule() directly here
+        // would corrupt the async stack (see entry.S comments).
+        d->state = zxfoundation::domain::domain_state::dying;
+        d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
+    } else {
+        zxfoundation::sys::printk::perr(
+            "domain fault: pgm_code={:#06x} addr={:#018x} (no current domain)\n",
+            static_cast<u32>(pgm_code), frame->psw_addr);
+        arch::s390x::cpu::psw::load_disabled_wait_psw();
     }
+}
 
-    /// @brief Extract the store indicator from the TEID.
-    [[nodiscard]] constexpr auto teid_is_write(u64 teid) noexcept -> bool {
-        return (teid & TEID_STORE_INDICATOR) != 0;
-    }
+/// @brief External interrupt handler.
+///
+/// Dispatches based on the external interrupt code read from lowcore 0x0086:
+/// - 0x1004: clock comparator → timer subsystem interrupt handler
+/// - 0x1202: external call (IPI) → check need_resched
+/// - 0x1201: emergency signal
+extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+    (void)frame;
 
-    /// @brief Handle a DAT translation exception.
-    auto do_dat_exception(
-        arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
-        u16 pgm_code
-    ) noexcept -> void {
-        auto* lc = arch::s390x::cpu::lowcore::get_current();
+    // Read external interrupt code from lowcore offset 0x0086 (u16).
+    const u16 ext_code = *reinterpret_cast<const u16*>(0x86UL);
 
-        const u64 teid     = lc->trans_exc_code;
-        const u64 fault_va = teid_address(teid);
-        const bool is_write = teid_is_write(teid);
-
-        constexpr u64 PSW_MASK_PSTATE = 1ULL << 48;  // Bit 15 in the PSW mask
-        const bool is_user_fault = (frame->psw_mask & PSW_MASK_PSTATE) != 0;
-
-        zxfoundation::memory::vm::address_space* space = nullptr;
-
-        if (is_user_fault) {
-            auto* current_task = reinterpret_cast<zxfoundation::sched::task*>(
-                lc->current_task);
-            if (current_task && current_task->mm) {
-                space = static_cast<zxfoundation::memory::vm::address_space*>(
-                    current_task->mm);
-            }
-        }
-
-        auto result = zxfoundation::memory::vm::vm_page_fault(
-            space, fault_va, is_write);
-
-        if (result) {
-            zxfoundation::sys::printk::pinfo(
-                "trap: page fault resolved for va={:#x}", fault_va);
-        }
-
-        if (!result) {
-            zxfoundation::sys::printk::pemerg(
-                "trap: unhandled DAT exception at va={:#018x} "
-                "pgm_code={:#06x} write={} teid={:#018x}",
-                fault_va, pgm_code, is_write, teid);
-
-            zxfoundation::sys::printk::pemerg(
-                "trap: PSW at fault: mask={:#018x} addr={:#018x}",
-                frame->psw_mask, frame->psw_addr);
-
-            if (is_user_fault) {
-                // TODO: deliver SIGSEGV to user process instead of panic.
-                zxfoundation::sys::printk::pemerg(
-                    "trap: user-mode segfault — killing task");
-            }
-
-            if (is_user_fault) {
-                zxfoundation::sys::syschk::syschk_fatal(
-                    result.error(),
-                    "trap: unresolvable user DAT exception");
-            } else {
-                zxfoundation::sys::syschk::syschk_fatal(
-                    result.error(),
-                    "trap: unresolvable kernel DAT exception");
-            }
-        }
-    }
-
-} // namespace arch::s390x::trap::_internal
-
-extern "C" {
-
-/// @brief Program-check (exception) handler entry point.
-/// @param[in]  frame  Saved GPR and PSW frame from SAVE_FRAME in entry.S.
-auto do_pgm_check(
-    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
-) noexcept -> void {
-    const u16 code = arch::s390x::cpu::lowcore::get_current()->pgm_code;
-
-    if (arch::s390x::trap::_internal::is_dat_exception(code)) {
-        arch::s390x::trap::_internal::do_dat_exception(frame, code);
+    // Clock comparator (0x1004) → timer subsystem.
+    if (ext_code == 0x1004U) {
+        zxfoundation::sys::timer::timer_interrupt();
         return;
     }
 
-    zxfoundation::sys::irq::irq_dispatch(
-        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_PGM + code),
-        frame,
-        arch::s390x::cpu::irq::ZX_IRQ_CLASS_PGM
-    );
+    // External call (0x1202) → IPI: CHECK_PREEMPT handles rescheduling.
+    if (ext_code == 0x1202U) {
+        return;
+    }
+
+    // Emergency signal (0x1201).
+    if (ext_code == 0x1201U) {
+        return;
+    }
 }
 
-/// @brief External interrupt handler entry point.
-/// @param[in]  frame  Saved GPR and PSW frame.
-auto do_ext_interrupt(
-    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
-) noexcept -> void {
-    const u16 code = arch::s390x::cpu::lowcore::get_current()->ext_int_code;
-    zxfoundation::sys::irq::irq_dispatch(
-        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + (code & 0xFF)),
-        frame,
-        arch::s390x::cpu::irq::ZX_IRQ_CLASS_EXT
-    );
+/// @brief I/O interrupt handler.
+///
+/// Reads the subchannel ID and I/O interrupt word from lowcore.
+/// Phase 6: routes to the owning domain's IRQ gate.
+extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+    (void)frame;
+    // I/O routing requires CSS multiplexer (domain→subchannel ownership).
+    // Interrupts are acknowledged at the hardware level by the entry stub.
 }
 
-/// @brief I/O interrupt handler entry point.
-/// @param[in]  frame  Saved GPR and PSW frame.
-auto do_io_interrupt(
-    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
-) noexcept -> void {
-    const u16 sch = arch::s390x::cpu::lowcore::get_current()->subchannel_nr;
-    zxfoundation::sys::irq::irq_dispatch(
-        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_IO + (sch & 0xFF)),
-        frame,
-        arch::s390x::cpu::irq::ZX_IRQ_CLASS_IO
-    );
+/// @brief SVC handler — nucleus call dispatch.
+///
+/// The SVC code (from lowcore 0x008A, loaded by entry.S into r3) selects
+/// the nucleus call handler via the gate dispatch table. Arguments are
+/// passed in GPRs r2-r6, saved in the irq_frame by SAVE_FRAME.
+/// Return value goes in r2.
+extern "C" auto do_svc(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame, u16 svc_code) noexcept -> void {
+    zxfoundation::sys::printk::pinfo(
+        "svc: code={} r2={:#x} r3={:#x}", svc_code, frame->gprs[2], frame->gprs[3]);
+    const u64 result = zxfoundation::gate::dispatch::nucleus_dispatch(
+        static_cast<u32>(svc_code),
+        frame->gprs[2], frame->gprs[3], frame->gprs[4],
+        frame->gprs[5], frame->gprs[6]);
+    frame->gprs[2] = result;
 }
 
-/// @brief Machine-check (MCCK) interrupt handler entry point.
-/// @param[in]  frame  Saved GPR and PSW frame.
-auto do_mcck_interrupt(
-    arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
-) noexcept -> void {
-    const u64 code = arch::s390x::cpu::lowcore::get_current()->mcck_interruption_code;
-    zxfoundation::sys::irq::irq_dispatch(
-        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_MCCK + (code & 0xFF)),
-        frame,
-        arch::s390x::cpu::irq::ZX_IRQ_CLASS_MCCK
-    );
+/// @brief Machine check handler.
+///
+/// Reads the machine-check interruption code from lowcore and logs it.
+extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+    (void)frame;
+    const u64 mcck_code = *reinterpret_cast<const u64*>(0xE8UL);
+    if (mcck_code != 0) {
+        zxfoundation::sys::printk::perr("mcck: interruption code={:#018x}\n", mcck_code);
+    }
 }
-
-} // extern "C"

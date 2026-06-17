@@ -1,6 +1,10 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/timer_types.cxxm
-/// @brief Kernel timer type definitions.
+/// @brief Kernel timer type definitions and per-CPU min-heap storage.
+///
+/// All deadline and interval fields are expressed in z/Architecture TOD
+/// clock units (2^12 increments per microsecond) for zero-conversion
+/// comparisons against the hardware clock comparator.
 
 export module zxfoundation.sys.timer_types;
 import zxfoundation.base.types;
@@ -9,34 +13,88 @@ export {
 
 namespace zxfoundation::sys::timer {
 
+    // ---- Constants ----------------------------------------------------------
+
+    /// @brief EXT interrupt code for the clock comparator.
+    constexpr u16 EXT_CODE_CLK_COMP = 0x1004;
+
+    /// @brief Tick interval: 10 ms expressed in TOD clock units.
+    ///
+    /// The s390x TOD clock increments at 2^12 (4096) units per microsecond.
+    /// 10 ms = 10'000 µs × 4096 = 40'960'000.
+    constexpr u64 TICK_INTERVAL_TOD = 40'960'000ULL;
+
+    /// @brief Tick interval: 10 ms expressed in nanoseconds.
+    constexpr u64 TICK_INTERVAL_NS = 10'000'000ULL;
+
+    /// @brief Maximum number of timers in a single CPU's min-heap.
+    constexpr u32 TIMER_HEAP_CAPACITY = 256;
+
+    // ---- Callback type ------------------------------------------------------
+
     /// @brief Timer callback signature.
     ///
-    /// @param[in] data  Opaque context pointer.
+    /// @param[in] data  Opaque context pointer supplied at timer creation.
     using timer_fn = auto (*)(void* data) noexcept -> void;
 
-    /// @brief Timer mode.
+    // ---- Timer mode ---------------------------------------------------------
+
+    /// @brief Timer operating mode.
     enum class timer_mode : u8 {
-        oneshot  = 0,  ///< Fire once.
-        periodic = 1,  ///< Re-arm after each expiry.
+        oneshot  = 0,  ///< Fire once and disarm.
+        periodic = 1,  ///< Re-arm automatically after each expiry.
     };
 
-    /// @brief Kernel timer.
-    /// @note  Timer wheel/heap infrastructure is not yet implemented.
-    ///        This type defines the interface; scheduling logic is Phase 4.
-    struct kernel_timer {
-        timer_fn    callback{nullptr};       ///< Expiry callback.
-        void*       data{nullptr};           ///< Callback context.
-        u64         deadline_ns{0};          ///< Absolute deadline (monotonic ns).
-        u64         interval_ns{0};          ///< Re-arm interval (periodic only).
-        timer_mode  mode{timer_mode::oneshot};
-        bool        armed{false};            ///< true if in the timer queue.
+    // ---- kernel_timer -------------------------------------------------------
 
+    /// @brief Kernel timer descriptor.
+    ///
+    /// Each timer holds an absolute TOD deadline, an optional periodic re-arm
+    /// interval (also in TOD units), a callback/data pair, and bookkeeping
+    /// state.  Timers are enqueued into a per-CPU min-heap indexed by
+    /// deadline_tod.
+    ///
+    /// @note  Non-copyable, non-movable.  Timers are always manipulated by
+    ///        pointer/reference — they must remain at a stable address while
+    ///        they are armed.
+    struct kernel_timer {
+        u64         deadline_tod{0};       ///< Absolute TOD deadline (hardware clock units).
+        u64         interval_tod{0};       ///< Re-arm interval for periodic timers (TOD units).
+        timer_fn    callback{nullptr};     ///< Expiry callback.
+        void*       data{nullptr};         ///< Callback context.
+        timer_mode  mode{timer_mode::oneshot}; ///< Oneshot or periodic.
+        bool        armed{false};          ///< true if currently in a CPU's heap.
+        u16         cpu{0};                ///< CPU this timer is enqueued on.
+        u8          _pad[5]{};             ///< Pad to nice 8-byte alignment.
+
+        /// @brief Default constructor.
         kernel_timer() noexcept = default;
 
         kernel_timer(const kernel_timer&)            = delete;
         auto operator=(const kernel_timer&)          = delete;
         kernel_timer(kernel_timer&&)                 = delete;
         auto operator=(kernel_timer&&)               = delete;
+    };
+
+    // ---- timer_heap ---------------------------------------------------------
+
+    /// @brief Fixed-capacity binary min-heap of kernel_timer pointers.
+    ///
+    /// Ordered by deadline_tod (smallest at index 0).  Each CPU owns exactly
+    /// one heap; access is serialized by disabling local interrupts.
+    ///
+    /// @note  Non-copyable, non-movable.
+    struct timer_heap {
+        kernel_timer* entries[TIMER_HEAP_CAPACITY]{}; ///< Heap-ordered array of timer pointers.
+        u32           count{0};                       ///< Number of active entries.
+
+        /// @brief Default constructor.
+        timer_heap() noexcept = default;
+
+        timer_heap(const timer_heap&)            = delete;
+        auto operator=(const timer_heap&)        = delete;
+        timer_heap(timer_heap&&)                 = delete;
+        auto operator=(timer_heap&&)             = delete;
     };
 
 } // namespace zxfoundation::sys::timer

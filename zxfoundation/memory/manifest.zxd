@@ -7,8 +7,4 @@
     slub.cxxm
     slub_typed.cxxm
     kmalloc.cxxm
-    vmo_types.cxxm
-    vmo.cxxm
-    vm_types.cxxm
-    vm.cxxm
 }

@@ -13,6 +13,9 @@ import lib.string_view;
 import lib.span;
 import lib.algorithm;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.irq;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.sched.context;
 
 namespace _internal {
 
@@ -63,6 +66,9 @@ namespace _internal {
         }
     };
 
+    /// @brief Hardware-level DIAG emission lock.
+    zxfoundation::locking::qspinlock::qspinlock g_diag_lock;
+
 } // namespace _internal
 
 export {
@@ -71,11 +77,15 @@ namespace drivers::console::diag {
 
     /// @brief Flush ASCII content to the DIAG 8 console.
     /// @param[in] s The ASCII string view to transmit.
-    /// @note This function is re-entrant and handles ASCII->EBCDIC conversion.
     auto write(const lib::string_view s) noexcept -> void {
         _internal::hercules_message msg;
         msg.transcribe(s);
+
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        _internal::g_diag_lock.lock();
         msg.transmit();
+        _internal::g_diag_lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(flags);
     }
 
     /// @brief Initializer for the DIAG console backend.

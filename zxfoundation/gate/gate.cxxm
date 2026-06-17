@@ -1,0 +1,237 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/gate.cxxm
+/// @brief Gate lifecycle management — create, destroy, find, and nucleus
+///        dispatch table registration.
+
+export module zxfoundation.gate.gate;
+import zxfoundation.gate.gate_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.sys.printk;
+import zxfoundation.sys.syschk;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+import lib.error;
+import lib.expected;
+
+using zxfoundation::gate::gate_id;
+using zxfoundation::gate::gate_desc;
+using zxfoundation::gate::gate_type;
+using zxfoundation::gate::gate_auth;
+using zxfoundation::gate::nucleus_call;
+using zxfoundation::gate::nucleus_handler_fn;
+using zxfoundation::gate::nucleus_dispatch_table;
+using zxfoundation::gate::GATE_ID_INVALID;
+using zxfoundation::gate::MAX_GATES;
+using zxfoundation::sys::printk::pinfo;
+using zxfoundation::sys::printk::perr;
+
+// ── Internal state ──────────────────────────────────────────────────────
+
+namespace _internal {
+
+    static gate_desc g_gate_table[MAX_GATES]{};
+    static nucleus_dispatch_table g_nucleus_dispatch{};
+    static zxfoundation::locking::qspinlock::qspinlock g_gate_lock{};
+    static u32 g_gate_count{0};
+    static bool g_gate_initialized{false};
+
+} // namespace _internal
+
+// ── Exported API ────────────────────────────────────────────────────────
+
+export {
+
+namespace zxfoundation::gate {
+
+    /// @brief Initialize the gate subsystem.
+    ///
+    /// Marks the subsystem as initialized.  Must be called once during
+    /// kernel bring-up before any gate_create or gate_register calls.
+    auto gate_init() noexcept -> void {
+        const locking::irq_lock_guard guard{_internal::g_gate_lock};
+
+        // Reset the gate table to a known-good state.
+        for (u32 i = 0; i < MAX_GATES; ++i) {
+            _internal::g_gate_table[i] = gate_desc{};
+        }
+
+        // Clear all nucleus dispatch handlers.
+        for (u32 i = 0; i < static_cast<u32>(nucleus_call::_count); ++i) {
+            _internal::g_nucleus_dispatch.handlers[i] = nullptr;
+        }
+
+        _internal::g_gate_count       = 0;
+        _internal::g_gate_initialized = true;
+
+        pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
+    }
+
+    /// @brief Register a handler function for a nucleus call number.
+    ///
+    /// @param call     The nucleus call to register.
+    /// @param handler  The handler function pointer (must not be nullptr).
+    /// @return         Success, or an error if the call number is out of range
+    ///                 or the handler is null.
+    auto gate_register_nucleus_handler(
+        nucleus_call       call,
+        nucleus_handler_fn handler
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+
+        const auto idx = static_cast<u32>(call);
+
+        if (idx >= static_cast<u32>(nucleus_call::_count)) {
+            perr("gate: nucleus handler registration failed — call {} out of range", idx);
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::out_of_range));
+        }
+
+        if (handler == nullptr) {
+            perr("gate: nucleus handler registration failed — null handler for call {}", idx);
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        const locking::irq_lock_guard guard{_internal::g_gate_lock};
+
+        _internal::g_nucleus_dispatch.handlers[idx] = handler;
+
+        pinfo("gate: registered nucleus handler for call {}", idx);
+        return {};
+    }
+
+    /// @brief Create a new gate descriptor.
+    /// @param type             Gate type (nucleus or domain).
+    /// @param auth             Authorization policy.
+    /// @param target_domain_id Target domain ID.
+    /// @param entry_va         Entry-point virtual address in the target domain.
+    /// @param target_key       Storage key of the target domain.
+    /// @return                 The allocated gate_id, or an error if the table is full.
+    auto gate_create(
+        gate_type type,
+        gate_auth auth,
+        u32       target_domain_id,
+        u64       entry_va,
+        u8        target_key
+    ) noexcept -> lib::expected<gate_id, lib::kernel_error> {
+
+        const locking::irq_lock_guard guard{_internal::g_gate_lock};
+
+        if (!_internal::g_gate_initialized) {
+            perr("gate: gate_create called before gate_init");
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+        }
+
+        // Find a free slot.
+        for (u32 i = 0; i < MAX_GATES; ++i) {
+            if (_internal::g_gate_table[i].id == GATE_ID_INVALID) {
+                auto& desc          = _internal::g_gate_table[i];
+                desc.id             = i;
+                desc.type           = type;
+                desc.auth           = auth;
+                desc.target_domain  = target_domain_id;
+                desc.entry_va       = entry_va;
+                desc.target_key     = target_key;
+
+                ++_internal::g_gate_count;
+
+                pinfo("gate: created gate {} (type={}, target_domain={}, entry_va={:#x})",
+                      i,
+                      static_cast<u8>(type),
+                      target_domain_id,
+                      entry_va);
+
+                return static_cast<gate_id>(i);
+            }
+        }
+
+        perr("gate: gate table full ({} / {})", _internal::g_gate_count, MAX_GATES);
+        return lib::unexpected(
+            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+    }
+
+    /// @brief Destroy a gate, freeing its slot.
+    ///
+    /// @param id  The gate_id to destroy.
+    /// @return    Success, or an error if the id is invalid or already free.
+    auto gate_destroy(gate_id id) noexcept
+        -> lib::expected<void, lib::kernel_error> {
+
+        if (id >= MAX_GATES) {
+            perr("gate: gate_destroy — id {} out of range", id);
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::out_of_range));
+        }
+
+        const locking::irq_lock_guard guard{_internal::g_gate_lock};
+
+        auto& desc = _internal::g_gate_table[id];
+        if (desc.id == GATE_ID_INVALID) {
+            perr("gate: gate_destroy — gate {} already free", id);
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+
+        // Reset the slot to default state.
+        desc = gate_desc{};
+
+        if (_internal::g_gate_count > 0) {
+            --_internal::g_gate_count;
+        }
+
+        pinfo("gate: destroyed gate {}", id);
+        return {};
+    }
+
+    /// @brief Destroy all gates owned by a specific domain.
+    ///
+    /// Iterates the gate table and resets every slot whose target_domain
+    /// matches @p domain_id.  Called during domain teardown.
+    ///
+    /// @param domain_id  The domain whose gates should be destroyed.
+    auto gate_destroy_for_domain(u32 domain_id) noexcept -> void {
+        const locking::irq_lock_guard guard{_internal::g_gate_lock};
+        for (u32 i = 0; i < MAX_GATES; ++i) {
+            if (_internal::g_gate_table[i].id != GATE_ID_INVALID &&
+                _internal::g_gate_table[i].target_domain == domain_id) {
+                _internal::g_gate_table[i] = gate_desc{};
+                if (_internal::g_gate_count > 0) --_internal::g_gate_count;
+            }
+        }
+    }
+
+    /// @brief Look up a gate descriptor by id.
+    ///
+    /// @param id  The gate_id to look up.
+    /// @return    Pointer to the gate_desc, or nullptr if the id is invalid
+    ///            or the slot is unused.
+    auto gate_find(gate_id id) noexcept -> gate_desc* {
+        if (id >= MAX_GATES) {
+            return nullptr;
+        }
+
+        auto& desc = _internal::g_gate_table[id];
+        if (desc.id == GATE_ID_INVALID) {
+            return nullptr;
+        }
+
+        return &desc;
+    }
+
+    /// @brief Return a const reference to the nucleus dispatch table.
+    ///
+    /// Used by the dispatcher to look up handlers without copying.
+    auto nucleus_dispatch() noexcept -> const nucleus_dispatch_table& {
+        return _internal::g_nucleus_dispatch;
+    }
+
+    /// @brief Return the current number of active gates.
+    auto gate_count() noexcept -> u32 {
+        return _internal::g_gate_count;
+    }
+
+} // namespace zxfoundation::gate
+
+} // end export

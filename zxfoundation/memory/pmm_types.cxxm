@@ -78,7 +78,7 @@ namespace zxfoundation::memory::pmm {
         reserved   = 1, ///< Firmware / kernel image / lowcore — permanently off-limits.
         buddy      = 2, ///< In the buddy free list or PCP (pmm-owned).
         slab       = 3, ///< Backing a slab_cache.
-        vmm        = 4, ///< Backing a kernel virtual mapping (VMM).
+        domain     = 4, ///< Backing a domain memory mapping.
         page_table = 5, ///< A page table frame.
         stack      = 6, ///< Kernel stack.
         device     = 7, ///< DMA / device buffer.

@@ -1,170 +1,60 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sched/sched.cxxm
-/// @brief Scheduler core
+/// @brief Scheduler core — schedule(), tick, init, work-stealing.
+
 export module zxfoundation.sched.sched;
-import zxfoundation.sched.task_types;
-import zxfoundation.sched.task;
-import zxfoundation.sched.kthread;
+import zxfoundation.sched.sched_fair;
+import zxfoundation.sched.sched_idle;
+import zxfoundation.sched.sched_domain;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.gate.gate;
+import zxfoundation.portal.portal;
 import zxfoundation.base.types;
+import zxfoundation.base.config;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sys.printk;
-import zxfoundation.locking.qspinlock;
 import zxfoundation.sys.syschk;
-import zxfoundation.memory.vm_types;
+import zxfoundation.sys.timer_types;
+import zxfoundation.sys.timer;
+import zxfoundation.sys.time;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.irq;
+import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
-import arch.s390x.cpu.clkcomp;
-import lib.rbtree;
-import lib.list;
-import lib.util;
-import lib.expected;
 import lib.error;
+import lib.format;
 
 extern "C" auto __switch_to_asm(
-    zxfoundation::sched::task* prev,
-    zxfoundation::sched::task* next
-) noexcept -> zxfoundation::sched::task*;
+    zxfoundation::domain::domain* prev,
+    zxfoundation::domain::domain* next
+) noexcept -> zxfoundation::domain::domain*;
 
 namespace _internal {
-    using namespace zxfoundation::sched;
+
+    using namespace zxfoundation::domain;
     using namespace zxfoundation::sys::printk;
 
-    static constexpr u32 MAX_CPUS = 4;
-    static run_queue g_rqs[MAX_CPUS]{};
+    static run_queue g_rqs[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
     static bool g_sched_initialized{false};
 
-    static constexpr u64 EEVDF_DEFAULT_SLICE = 40'960'000ULL;
+    /// @brief Static storage for the BSP scheduler tick timer.
+    static zxfoundation::sys::timer::kernel_timer g_bsp_tick_timer{};
 
-    [[nodiscard]] inline auto rb_node_to_task(lib::rb_node* node) noexcept -> task* {
-        return lib::container_of<task, lib::rb_node, &task::sched_rb>(node);
-    }
+    /// @brief Try to steal a domain from the busiest CPU.
+    /// @param local_rq  Caller's run_queue (lock held on entry, held on return).
+    /// @return Stolen domain, or nullptr.
+    auto try_steal_domain_locked(run_queue& local_rq) noexcept -> domain* {
+        namespace fair = zxfoundation::sched::fair;
 
-    auto idle_enqueue(run_queue&, task&) noexcept -> void {}
-    auto idle_dequeue(run_queue&, task&) noexcept -> void {}
-    auto idle_pick_next(run_queue& rq) noexcept -> task* {
-        return rq.idle;
-    }
-    auto idle_tick(run_queue&, task&) noexcept -> void {}
-    auto idle_preempt(run_queue&, task&) noexcept -> void {}
-
-    static const sched_class g_idle_class{
-        idle_enqueue, idle_dequeue, idle_pick_next, idle_tick, idle_preempt
-    };
-
-    auto fair_enqueue(run_queue& rq, task& t) noexcept -> void {
-        // Set initial deadline if not yet set.
-        if (t.se.deadline == 0) {
-            t.se.vruntime = rq.min_vruntime;
-            t.se.slice    = EEVDF_DEFAULT_SLICE;
-            t.se.deadline = t.se.vruntime +
-                (t.se.slice * 1024 / t.se.weight);
-        }
-
-        // Insert into the RB-tree, keyed by deadline.
-        lib::rb_node** link = &rq.fair_tree.root.node;
-        lib::rb_node*  parent = nullptr;
-        bool leftmost = true;
-
-        while (*link) {
-            parent = *link;
-            auto* existing = rb_node_to_task(parent);
-            if (t.se.deadline < existing->se.deadline) {
-                link = &parent->left;
-            } else {
-                link = &parent->right;
-                leftmost = false;
-            }
-        }
-        lib::rb_link_node(&t.sched_rb, parent, link);
-        lib::rb_insert_color_cached(&t.sched_rb, rq.fair_tree, leftmost);
-
-        t.on_rq = true;
-        ++rq.nr_running;
-    }
-
-    auto fair_dequeue(run_queue& rq, task& t) noexcept -> void {
-        if (!t.on_rq) return;
-
-        lib::rb_erase_cached(&t.sched_rb, rq.fair_tree);
-        t.on_rq = false;
-        --rq.nr_running;
-    }
-
-    auto fair_pick_next(run_queue& rq) noexcept -> task* {
-        auto* rb_left = rq.fair_tree.leftmost;
-        if (!rb_left) return nullptr;
-
-        // Walk from leftmost looking for an eligible task (lag >= 0).
-        auto* node = rb_left;
-        while (node) {
-            auto* t = rb_node_to_task(node);
-
-            // Compute lag: positive means the task is behind its fair share.
-            t->se.lag = static_cast<i64>(rq.min_vruntime) -
-                        static_cast<i64>(t->se.vruntime);
-
-            if (t->se.lag >= 0) {
-                return t;
-            }
-            node = lib::rb_next(node);
-        }
-
-        // No eligible task — just pick the leftmost (earliest deadline).
-        return rb_node_to_task(rb_left);
-    }
-
-    auto fair_tick(run_queue& rq, task& t) noexcept -> void {
-        const u64 delta = EEVDF_DEFAULT_SLICE;
-
-        // Weighted delta: higher weight → less vruntime per real-time unit.
-        const u64 weighted_delta = (delta * 1024) / t.se.weight;
-        t.se.vruntime += weighted_delta;
-
-        // Update min_vruntime (monotonic floor).
-        if (t.se.vruntime > rq.min_vruntime)
-            rq.min_vruntime = t.se.vruntime;
-
-        // Check if deadline exceeded → set need_resched.
-        if (t.se.vruntime >= t.se.deadline) {
-            t.flags |= task_flags::need_resched;
-            // Recompute deadline for the next slice.
-            t.se.deadline = t.se.vruntime +
-                (t.se.slice * 1024 / t.se.weight);
-        }
-    }
-
-    auto fair_preempt(run_queue& rq, task& waking) noexcept -> void {
-        if (!rq.curr) return;
-
-        // If the waking task has an earlier deadline, preempt.
-        if (waking.se.deadline < rq.curr->se.deadline) {
-            rq.curr->flags |= task_flags::need_resched;
-        }
-    }
-
-    static constexpr sched_class g_fair_class{
-        fair_enqueue, fair_dequeue, fair_pick_next, fair_tick, fair_preempt
-    };
-
-    void idle_thread_fn(void*) noexcept {
-        while (true) {
-            arch::s390x::cpu::processor::cpu_relax();
-        }
-    }
-
-    /// @brief Try to steal a task from the busiest CPU.
-    /// @param local_rq  The run_queue of the CPU going idle.
-    /// @return Stolen task, or nullptr if nothing to steal.
-    auto try_steal_task(run_queue& local_rq) noexcept -> task* {
         run_queue* busiest = nullptr;
-        u32 max_running = 1;  // Only steal if source has > 1 task.
+        u32 max_running = 1;
 
-        for (u32 i = 0; i < MAX_CPUS; ++i) {
+        for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
             auto& rq = g_rqs[i];
             if (&rq == &local_rq) continue;
-            if (!rq.curr) continue;  // CPU not online.
+            if (!rq.idle) continue;
 
             if (rq.nr_running > max_running) {
                 max_running = rq.nr_running;
@@ -174,21 +64,32 @@ namespace _internal {
 
         if (!busiest) return nullptr;
 
-        // Pull the rightmost task (latest deadline = least urgent).
-        auto* last = busiest->fair_tree.root.node;
-        if (!last) return nullptr;
-        while (last->right) last = last->right;
+        local_rq.lock.unlock();
 
-        auto* stolen = rb_node_to_task(last);
+        run_queue& first  = (local_rq.cpu_id < busiest->cpu_id) ? local_rq : *busiest;
+        run_queue& second = (local_rq.cpu_id < busiest->cpu_id) ? *busiest : local_rq;
 
-        // Dequeue from source.
-        fair_dequeue(*busiest, *stolen);
-        stolen->cpu = local_rq.cpu_id;
+        first.lock.lock();
+        second.lock.lock();
 
-        // Reset deadline for the new queue's vruntime base.
-        stolen->se.vruntime = local_rq.min_vruntime;
-        stolen->se.deadline = stolen->se.vruntime +
-            (stolen->se.slice * 1024 / stolen->se.weight);
+        domain* stolen = nullptr;
+        if (busiest->nr_running > 1) {
+            auto* last = busiest->fair_tree.root.node;
+            if (last) {
+                while (last->right) last = last->right;
+
+                stolen = fair::rb_node_to_domain(last);
+
+                fair::dequeue(*busiest, *stolen);
+                stolen->cpu = local_rq.cpu_id;
+
+                stolen->sched.vruntime = local_rq.min_vruntime;
+                stolen->sched.deadline = stolen->sched.vruntime +
+                    (stolen->sched.slice * 1024 / stolen->sched.weight);
+            }
+        }
+
+        busiest->lock.unlock();
 
         return stolen;
     }
@@ -199,15 +100,17 @@ export {
 
 namespace zxfoundation::sched {
 
-    /// @brief Get the sched_class for fair (EEVDF) tasks.
-    [[nodiscard]] auto fair_class() noexcept -> const sched_class& {
-        return _internal::g_fair_class;
-    }
+    using zxfoundation::domain::domain;
+    using zxfoundation::domain::domain_id;
+    using zxfoundation::domain::domain_flags;
+    using zxfoundation::domain::domain_state;
+    using zxfoundation::domain::run_queue;
 
-    /// @brief Get the sched_class for idle tasks.
-    [[nodiscard]] auto idle_class() noexcept -> const sched_class& {
-        return _internal::g_idle_class;
-    }
+    // ── Re-exports from sub-modules ─────────────────────────────────────
+
+    using domain_ctx::domain_entry_fn;
+    using domain_ctx::setup_domain_context;
+    using domain_ctx::domain_enter_user;
 
     /// @brief Get the run_queue for a given CPU.
     [[nodiscard]] auto cpu_rq(u16 cpu_id) noexcept -> run_queue& {
@@ -220,124 +123,122 @@ namespace zxfoundation::sched {
         return _internal::g_rqs[pcp.cpu_id];
     }
 
-    /// @brief Enqueue a task on its assigned CPU's run queue.
-    auto enqueue_task(task* t) noexcept -> void {
-        auto& rq = cpu_rq(t->cpu);
-        if (t->sclass && t->sclass->enqueue_task) {
-            t->sclass->enqueue_task(rq, *t);
-        }
+    /// @brief Enqueue a domain on its assigned CPU's run queue.
+    auto enqueue_domain(domain* d) noexcept -> void {
+        auto& rq = cpu_rq(d->cpu);
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        rq.lock.lock();
+        fair::enqueue(rq, *d);
+        rq.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(flags);
     }
 
-    /// @brief Dequeue a task from its run queue.
-    auto dequeue_task(task* t) noexcept -> void {
-        auto& rq = cpu_rq(t->cpu);
-        if (t->sclass && t->sclass->dequeue_task) {
-            t->sclass->dequeue_task(rq, *t);
-        }
+    /// @brief Dequeue a domain from its run queue.
+    auto dequeue_domain(domain* d) noexcept -> void {
+        auto& rq = cpu_rq(d->cpu);
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        rq.lock.lock();
+        fair::dequeue(rq, *d);
+        rq.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(flags);
     }
 
-    /// @brief Core scheduling function — pick next task and switch.
-    ///
-    /// Must be called with preemption disabled (or from interrupt
-    /// return path).  IRQs are disabled inside this function.
+    // ── Core scheduler ──────────────────────────────────────────────────
+
+    /// @brief Core scheduling function — pick next domain and switch.
     auto schedule() noexcept -> void {
         auto& rq = this_rq();
 
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        rq.lock.lock();
 
-        task* prev = rq.curr;
-        task* next = nullptr;
+        domain* prev = rq.curr;
+        domain* next = nullptr;
 
-        // Clear need_resched on prev.
         if (prev) {
-            prev->flags &= ~task_flags::need_resched;
+            prev->flags &= ~domain_flags::need_resched;
 
-            // If prev is still runnable and was dequeued, re-enqueue it.
-            if (prev->state == task_state::running && !prev->on_rq
+            if (prev->state == domain_state::active && !prev->on_rq
                 && prev != rq.idle) {
-                prev->sclass->enqueue_task(rq, *prev);
+                fair::enqueue(rq, *prev);
             }
         }
 
-        // Pick next task: fair tree first.
         if (rq.nr_running > 0) {
-            next = _internal::g_fair_class.pick_next_task(rq);
+            next = fair::pick_next(rq);
         }
 
-        // If no local tasks, try to steal from another CPU.
         if (!next && _internal::g_sched_initialized) {
-            next = _internal::try_steal_task(rq);
+            next = _internal::try_steal_domain_locked(rq);
             if (next) {
-                // Enqueue the stolen task locally, then pick it.
-                next->sclass->enqueue_task(rq, *next);
-                next = _internal::g_fair_class.pick_next_task(rq);
+                fair::enqueue(rq, *next);
+                next = fair::pick_next(rq);
             }
         }
 
-        // Fallback to idle.
         if (!next) {
             next = rq.idle;
         }
 
         if (next == prev) {
+            rq.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
             return;
         }
 
-        // Dequeue next from the tree (it's now running, not "on queue").
         if (next != rq.idle && next->on_rq) {
-            next->sclass->dequeue_task(rq, *next);
+            fair::dequeue(rq, *next);
         }
 
         rq.curr = next;
 
-        // ── Address space switch (CR1) ──────────────────────────────
-        // If the next task has a user address space and it differs from
-        // the previous one, load the next task's ASCE into CR1.
-        // Kernel threads (mm == nullptr) keep the previous CR1.
-        if (next->mm && next->mm != prev->mm) {
-            auto* next_space = static_cast<memory::vm::address_space*>(next->mm);
-            const u64 next_asce = next_space->asce.val;
-            sys::printk::pinfo("sched: CR1 swap prev_mm={} next_mm={} asce={:#x}",
-                prev->mm, next->mm, next_asce);
-            // Load CR1 (primary ASCE) — used in primary address space mode.
-            asm volatile("lctlg 1,1,%0" : : "m"(next_asce) : "memory");
-            // Update lowcore so trap entry can reference the user ASCE.
+        if (next->asce.val != 0 && next->asce.val != prev->asce.val) {
+            const u64 next_asce_val = next->asce.val;
+            arch::s390x::cpu::processor::ctl_load<1, 1>(next_asce_val);
             auto* lc = arch::s390x::cpu::lowcore::get_current();
-            lc->user_asce = next_asce;
-        } else {
-            sys::printk::pinfo("sched: NO CR1 swap prev='{}' mm={} next='{}' mm={}",
-                prev->name, prev->mm, next->name, next->mm);
+            lc->user_asce = next_asce_val;
         }
 
-        // Context switch.
-        (void)__switch_to_asm(prev, next);
+        rq.lock.unlock();
 
-        // We return here when we're switched BACK to prev.
+        auto* switched_from = __switch_to_asm(prev, next);
+
         arch::s390x::cpu::irq::irq_restore(flags);
+
+        if (switched_from &&
+            switched_from->state == domain_state::dying &&
+            (switched_from->flags & domain_flags::idle) == domain_flags::none) {
+            zxfoundation::gate::gate_destroy_for_domain(switched_from->id);
+            zxfoundation::portal::portal_destroy_for_domain(switched_from->id);
+            zxfoundation::domain::domain_reap(*switched_from);
+        }
     }
+
+    // ── Tick / preemption ────────────────────────────────────────────────
 
     /// @brief Called from the tick handler on each timer interrupt.
     auto scheduler_tick() noexcept -> void {
         if (!_internal::g_sched_initialized) return;
 
         auto& rq = this_rq();
-        auto* curr = rq.curr;
-        if (!curr || curr == rq.idle) return;
+        rq.lock.lock();
 
-        if (curr->sclass && curr->sclass->task_tick) {
-            curr->sclass->task_tick(rq, *curr);
+        auto* curr = rq.curr;
+        if (!curr || curr == rq.idle) {
+            rq.lock.unlock();
+            return;
         }
+
+        fair::tick(rq, *curr);
+        rq.lock.unlock();
     }
 
-    /// @brief Check if the current task has need_resched set.
-    ///
-    /// Called from preempt_enable() and interrupt return path.
+    /// @brief Check if the current domain has need_resched set.
     [[nodiscard]] auto need_resched() noexcept -> bool {
-        auto* cur = static_cast<task*>(
-            arch::s390x::cpu::lowcore::current_task_ptr());
+        auto* cur = static_cast<domain*>(
+            arch::s390x::cpu::lowcore::current_domain_ptr());
         if (!cur) return false;
-        return !!(cur->flags & task_flags::need_resched);
+        return !!(cur->flags & domain_flags::need_resched);
     }
 
     /// @brief Called from preempt_enable() when preempt_count drops to 0.
@@ -348,51 +249,60 @@ namespace zxfoundation::sched {
         }
     }
 
+    /// @brief Check if the scheduler has been initialized.
+    [[nodiscard]] auto sched_active() noexcept -> bool {
+        return _internal::g_sched_initialized;
+    }
+
+    // ── Initialization ──────────────────────────────────────────────────
+
     /// @brief Initialize the scheduler on the BSP (CPU 0).
     auto sched_init() noexcept -> void {
         using namespace _internal;
         using namespace zxfoundation::sys::printk;
 
-        pinfo("sched: initializing scheduler (EEVDF)");
+        pinfo("sched: initializing scheduler");
 
-        pid_init();
-
-        set_schedule_fn(&schedule);
-
-        // Initialize run queues.
-        for (u32 i = 0; i < MAX_CPUS; ++i) {
+        for (u32 i = 0; i < base::config::CONFIG_ZX_MAX_CPUS; ++i) {
             g_rqs[i].cpu_id = static_cast<u16>(i);
         }
 
-        // Create idle task for CPU 0.
-        auto idle_r = task_alloc("idle/0",
-            task_flags::kthread | task_flags::idle);
-        if (!idle_r) {
-            perr("sched: FATAL: cannot create idle task");
+        auto* idle_dom = idle::init_idle_domain(0);
+        if (!idle_dom) {
+            perr("sched: cannot create idle domain");
             return;
         }
-        auto* idle = *idle_r;
-        idle->sclass = &g_idle_class;
-
-        setup_initial_context(idle,
-            reinterpret_cast<void(*)()>(+[](){ idle_thread_fn(nullptr); }));
+        idle_dom->name = "idle/0";
 
         auto& rq = g_rqs[0];
-        rq.idle = idle;
-        rq.curr = idle;
+        rq.idle = idle_dom;
+        rq.curr = idle_dom;
 
-        // Store idle as current_task in lowcore.
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
-        lc.current_task = reinterpret_cast<u64>(idle);
-        lc.kernel_stack = idle->kstack_top;
+        lc.current_domain = reinterpret_cast<u64>(idle_dom);
+        lc.kernel_stack = idle_dom->kstack_top;
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        pcp.current_task = reinterpret_cast<u64>(idle);
-        pcp.kernel_stack = idle->kstack_top;
+        pcp.current_domain = reinterpret_cast<u64>(idle_dom);
+        pcp.kernel_stack = idle_dom->kstack_top;
+
+        // Create BSP periodic scheduler tick timer.
+        {
+            using namespace zxfoundation::sys::timer;
+            auto& t = g_bsp_tick_timer;
+            t.deadline_tod = arch::s390x::cpu::processor::stck() + TICK_INTERVAL_TOD;
+            t.interval_tod = TICK_INTERVAL_TOD;
+            t.callback     = [](void*) noexcept -> void {
+                zxfoundation::sys::time::tick_advance_wall(TICK_INTERVAL_NS);
+                zxfoundation::sched::scheduler_tick();
+            };
+            t.data         = nullptr;
+            t.mode         = timer_mode::periodic;
+            (void)timer_add(t);
+        }
 
         g_sched_initialized = true;
 
-        pinfo("sched: idle/0 pid={}, scheduler ready (pids_in_use={})",
-            idle->pid, pid_count());
+        pinfo("sched: idle/0 id={}, scheduler ready", idle_dom->id);
     }
 
     /// @brief Initialize the scheduler on an AP.
@@ -400,65 +310,55 @@ namespace zxfoundation::sched {
         using namespace _internal;
         using namespace zxfoundation::sys::printk;
 
-        // Create idle task for this AP.
-        auto idle_r = task_alloc("idle/N",
-            task_flags::kthread | task_flags::idle);
-        if (!idle_r) {
+        auto* idle_dom = idle::init_idle_domain(cpu_id);
+        if (!idle_dom) {
             zxfoundation::sys::syschk::syschk_fatal(
                 lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
-            "sched: cannot create AP idle task for cpu {}",
+                "sched: cannot create AP idle domain for cpu {}",
                 cpu_id);
         }
-        auto* idle = *idle_r;
-        idle->cpu = cpu_id;
-        idle->sclass = &g_idle_class;
-        setup_initial_context(idle,
-            reinterpret_cast<void(*)()>(+[](){ idle_thread_fn(nullptr); }));
+        idle_dom->name = "idle/N";
 
         auto& rq = g_rqs[cpu_id];
-        rq.idle = idle;
-        rq.curr = idle;
+        rq.idle = idle_dom;
+        rq.curr = idle_dom;
 
-        // Set up this CPU's lowcore.
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
-        lc.current_task = reinterpret_cast<u64>(idle);
-        lc.kernel_stack = idle->kstack_top;
+        lc.current_domain = reinterpret_cast<u64>(idle_dom);
+        lc.kernel_stack = idle_dom->kstack_top;
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        pcp.current_task = reinterpret_cast<u64>(idle);
-        pcp.kernel_stack = idle->kstack_top;
+        pcp.current_domain = reinterpret_cast<u64>(idle_dom);
+        pcp.kernel_stack = idle_dom->kstack_top;
 
-        // Arm the clock comparator and enable interrupts.
-        arch::s390x::cpu::clkcomp::clkcomp_arm_bsp();
+        pinfo("sched: cpu{} online, idle id={}", cpu_id, idle_dom->id);
 
-        pinfo("sched: cpu{} online, idle pid={}", cpu_id, idle->pid);
+        // Initialize timer subsystem for this AP and create tick timer.
+        {
+            using namespace zxfoundation::sys::timer;
+            timer_init_ap(cpu_id);
 
-        // Enter the scheduler — the idle task runs until work is migrated.
-        while (true) {
-            schedule();
-            arch::s390x::cpu::processor::cpu_relax();
+            static kernel_timer ap_tick_timers[base::config::CONFIG_ZX_MAX_CPUS]{};
+            auto& t = ap_tick_timers[cpu_id];
+            t.deadline_tod = arch::s390x::cpu::processor::stck() + TICK_INTERVAL_TOD;
+            t.interval_tod = TICK_INTERVAL_TOD;
+            t.callback     = [](void*) noexcept -> void {
+                zxfoundation::sys::time::tick_advance_wall(TICK_INTERVAL_NS);
+                zxfoundation::sched::scheduler_tick();
+            };
+            t.data         = nullptr;
+            t.mode         = timer_mode::periodic;
+            (void)timer_add(t);
         }
-    }
 
-    /// @brief Check if the scheduler has been initialized.
-    [[nodiscard]] auto sched_active() noexcept -> bool {
-        return _internal::g_sched_initialized;
+        // Enter the scheduler idle loop.
+        while (true) {
+            arch::s390x::cpu::irq::irq_enable();
+            arch::s390x::cpu::processor::cpu_relax();
+            arch::s390x::cpu::irq::irq_disable();
+            schedule();
+        }
     }
 
 } // namespace zxfoundation::sched
 
 } // end export
-
-extern "C" {
-    auto zxf_waitqueue_get_current() noexcept -> zxfoundation::sched::task* {
-        return reinterpret_cast<zxfoundation::sched::task*>(
-            arch::s390x::cpu::lowcore::this_cpu_percpu().current_task);
-    }
-
-    auto zxf_waitqueue_schedule() noexcept -> void {
-        zxfoundation::sched::schedule();
-    }
-
-    auto zxf_waitqueue_wake_task(zxfoundation::sched::task* t) noexcept -> void {
-        zxfoundation::sched::enqueue_task(t);
-    }
-}

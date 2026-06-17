@@ -1,0 +1,119 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/skey.cxxm
+/// @brief z/Architecture storage key operations (SSKE, ISKE, RRBE).
+
+export module arch.s390x.cpu.skey;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::skey {
+
+    /// @brief Access control bits occupy the high nibble of the key byte.
+    constexpr u8 SKEY_ACC_MASK       = 0xF0;
+
+    /// @brief Shift count to position an access-control value into the key byte.
+    constexpr u8 SKEY_ACC_SHIFT      = 4;
+
+    /// @brief Fetch-protection bit (bit 4 of the key byte, value 0x08).
+    constexpr u8 SKEY_FETCH_PROTECT  = 0x08;
+
+    /// @brief Reference bit (bit 5 of the key byte, value 0x04).
+    /// Set by the CPU when the frame is accessed (read or write).
+    constexpr u8 SKEY_REF            = 0x04;
+
+    /// @brief Change bit (bit 6 of the key byte, value 0x02).
+    /// Set by the CPU when the frame is written.
+    constexpr u8 SKEY_CHANGE         = 0x02;
+
+    /// @brief PSW key field position within the 64-bit PSW mask word.
+    constexpr u32 PSW_KEY_SHIFT      = 52;
+
+    /// @brief Set Storage Key Extended (SSKE).
+    /// @param phys_addr  Real (absolute) address within the target frame.
+    /// @param key        Key byte: ACC(4) | F(1) | R(1) | C(1) | 0(1).
+    inline auto sske(u64 phys_addr, u8 key) noexcept -> void {
+        __asm__ volatile(
+            "sske %[skey],%[addr]"
+            :
+            : [skey] "d" (key), [addr] "a" (phys_addr)
+            : "memory"
+        );
+    }
+
+    /// @brief Set Storage Key Extended, non-quiescing form (SSKE with M3=8).
+    /// @param phys_addr  Real (absolute) address within the target frame.
+    /// @param key        Key byte.
+    inline auto sske_nq(u64 phys_addr, u8 key) noexcept -> void {
+        __asm__ volatile(
+            ".insn rrf,0xb22b0000,%[skey],%[addr],8,0"
+            :
+            : [skey] "d" (key), [addr] "a" (phys_addr)
+            : "memory"
+        );
+    }
+
+    /// @brief Insert Storage Key Extended (ISKE).
+    /// @param phys_addr  Real (absolute) address within the target frame.
+    /// @return Key byte: ACC(4) | F(1) | R(1) | C(1) | 0(1).
+    [[nodiscard]] inline auto iske(u64 phys_addr) noexcept -> u8 {
+        u8 skey;
+        __asm__ volatile(
+            "iske %[skey],%[addr]"
+            : [skey] "=d" (skey)
+            : [addr] "a" (phys_addr)
+        );
+        return skey;
+    }
+
+    /// @brief Reset Reference Bit Extended (RRBE).
+    /// @param phys_addr  Real (absolute) address within the target frame.
+    /// @return Condition code (0-3).
+    [[nodiscard]] inline auto rrbe(u64 phys_addr) noexcept -> int {
+        int cc;
+        __asm__ volatile(
+            "rrbe 0,%[addr]\n\t"
+            "ipm  %[cc]\n\t"
+            "srl  %[cc],28"
+            : [cc] "=d" (cc)
+            : [addr] "a" (phys_addr)
+            : "cc"
+        );
+        return cc;
+    }
+
+    /// @brief Construct a storage key byte from an access-control value and
+    ///        a fetch-protection flag.
+    /// @param acc            4-bit access control value (0-15).
+    /// @param fetch_protect  If true, set the fetch-protection bit.
+    /// @return Assembled key byte (R and C bits are zero).
+    [[nodiscard]] constexpr auto make_skey(u8 acc, bool fetch_protect) noexcept -> u8 {
+        return static_cast<u8>(
+            ((acc & 0x0FU) << SKEY_ACC_SHIFT) |
+            (fetch_protect ? SKEY_FETCH_PROTECT : 0U)
+        );
+    }
+
+    /// @brief Extract the 4-bit access-control field from a key byte.
+    [[nodiscard]] constexpr auto skey_acc(u8 key) noexcept -> u8 {
+        return static_cast<u8>((key & SKEY_ACC_MASK) >> SKEY_ACC_SHIFT);
+    }
+
+    /// @brief Test whether the fetch-protection bit is set in a key byte.
+    [[nodiscard]] constexpr auto skey_is_fetch_protected(u8 key) noexcept -> bool {
+        return (key & SKEY_FETCH_PROTECT) != 0;
+    }
+
+    /// @brief Test whether the reference bit is set in a key byte.
+    [[nodiscard]] constexpr auto skey_is_referenced(u8 key) noexcept -> bool {
+        return (key & SKEY_REF) != 0;
+    }
+
+    /// @brief Test whether the change bit is set in a key byte.
+    [[nodiscard]] constexpr auto skey_is_changed(u8 key) noexcept -> bool {
+        return (key & SKEY_CHANGE) != 0;
+    }
+
+} // namespace arch::s390x::cpu::skey
+
+} // end export

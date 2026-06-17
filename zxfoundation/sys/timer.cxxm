@@ -1,0 +1,183 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/timer.cxxm
+/// @brief Generic kernel timer subsystem — per-CPU min-heap with clock comparator arming.
+
+export module zxfoundation.sys.timer;
+import zxfoundation.sys.timer_types;
+import zxfoundation.base.types;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.clkcomp;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.lowcore;
+import zxfoundation.sys.printk;
+import lib.min_heap;
+import lib.expected;
+import lib.error;
+import lib.format;
+
+namespace _internal {
+
+    using namespace zxfoundation::sys::timer;
+
+    /// @brief Comparator for kernel_timer pointers — orders by deadline_tod.
+    struct timer_less {
+        [[nodiscard]] auto operator()(
+            const kernel_timer* a, const kernel_timer* b
+        ) const noexcept -> bool {
+            return a->deadline_tod < b->deadline_tod;
+        }
+    };
+
+    /// @brief Per-CPU timer heaps, indexed by logical cpu_id.
+    static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY> g_heaps[128]{};
+
+    /// @brief Subsystem initialization flag.
+    static bool g_timer_initialized{false};
+
+    /// @brief Program the clock comparator for the next timer deadline.
+    auto rearm_comparator(u16 cpu_id) noexcept -> void {
+        const auto* top = g_heaps[cpu_id].peek();
+        if (top) {
+            arch::s390x::cpu::clkcomp::clkcomp_set(top->deadline_tod);
+        } else {
+            // Far future: current TOD + ~10 seconds.
+            const u64 far_future = arch::s390x::cpu::processor::stck()
+                                 + 40'960'000'000ULL;
+            arch::s390x::cpu::clkcomp::clkcomp_set(far_future);
+        }
+    }
+
+} // namespace _internal
+
+export {
+
+namespace zxfoundation::sys::timer {
+
+    /// @brief Convert nanoseconds to TOD clock units.
+    [[nodiscard]] constexpr auto ns_to_tod(u64 ns) noexcept -> u64 {
+        return static_cast<u64>(
+            (static_cast<u128>(ns) * 4096ULL) / 1000ULL);
+    }
+
+    /// @brief Convert TOD clock units to nanoseconds.
+    [[nodiscard]] constexpr auto tod_to_ns(u64 tod) noexcept -> u64 {
+        return static_cast<u64>(
+            (static_cast<u128>(tod) * 1000ULL) / 4096ULL);
+    }
+
+    /// @brief Initialize the timer subsystem on the BSP (CPU 0).
+    auto timer_init() noexcept -> void {
+        _internal::g_timer_initialized = true;
+        printk::pinfo("timer: subsystem initialized (heap capacity={})",
+            lib::format::dec{static_cast<u64>(TIMER_HEAP_CAPACITY)});
+    }
+
+    /// @brief Initialize the timer subsystem on an application processor.
+    auto timer_init_ap(u16 cpu_id) noexcept -> void {
+        printk::pinfo("timer: AP cpu{} timer heap ready",
+            lib::format::dec{static_cast<u64>(cpu_id)});
+    }
+
+    /// @brief Add a timer to the current CPU's heap and arm the clock comparator.
+    [[nodiscard]] auto timer_add(kernel_timer& t) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        if (t.armed) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+        }
+
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+
+        const u16 cpu_id = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        t.cpu = cpu_id;
+
+        if (!_internal::g_heaps[cpu_id].push(&t, _internal::timer_less{})) {
+            arch::s390x::cpu::irq::irq_restore(flags);
+            return lib::unexpected(
+                lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+        }
+
+        t.armed = true;
+
+        if (_internal::g_heaps[cpu_id].peek() == &t) {
+            _internal::rearm_comparator(cpu_id);
+        }
+
+        arch::s390x::cpu::irq::irq_restore(flags);
+        return {};
+    }
+
+    /// @brief Cancel an armed timer.
+    [[nodiscard]] auto timer_cancel(kernel_timer& t) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        if (!t.armed) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+        }
+
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+
+        const u16 current_cpu =
+            arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        if (t.cpu != current_cpu) {
+            arch::s390x::cpu::irq::irq_restore(flags);
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::not_supported));
+        }
+
+        (void)_internal::g_heaps[t.cpu].remove(&t, _internal::timer_less{});
+        t.armed = false;
+
+        _internal::rearm_comparator(t.cpu);
+
+        arch::s390x::cpu::irq::irq_restore(flags);
+        return {};
+    }
+
+    /// @brief Clock comparator interrupt handler.
+    auto timer_interrupt() noexcept -> void {
+        const u16 cpu_id =
+            arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u64 now = arch::s390x::cpu::processor::stck();
+
+        auto& heap = _internal::g_heaps[cpu_id];
+        constexpr _internal::timer_less less{};
+
+        while (!heap.empty()) {
+            kernel_timer* t = heap.peek();
+            if (t->deadline_tod > now)
+                break;
+
+            (void)heap.remove(t, less);
+            t->armed = false;
+
+            if (t->callback) {
+                t->callback(t->data);
+            }
+
+            if (t->mode == timer_mode::periodic && t->interval_tod > 0) {
+                u64 next = t->deadline_tod + t->interval_tod;
+                if (next <= now) {
+                    const u64 missed = (now - t->deadline_tod) / t->interval_tod;
+                    next = t->deadline_tod + (missed + 1) * t->interval_tod;
+                }
+                t->deadline_tod = next;
+                t->cpu = cpu_id;
+                if (heap.push(t, less)) {
+                    t->armed = true;
+                }
+            }
+        }
+
+        _internal::rearm_comparator(cpu_id);
+    }
+
+} // namespace zxfoundation::sys::timer
+
+} // end export

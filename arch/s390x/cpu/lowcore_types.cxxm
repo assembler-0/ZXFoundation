@@ -120,7 +120,7 @@ namespace arch::s390x::cpu::lowcore {
         u64    ap_cr0{};                          /* 0x0330  LC_AP_CR0  */
         u64    ap_cr13{};                         /* 0x0338  LC_AP_CR13 */
 
-        u64    current_task{};                    /* 0x0340 */
+        u64    current_domain{};                  /* 0x0340 */
         u64    kernel_stack{};                    /* 0x0348  LC_KERNEL_STACK  */
 
         u64    async_stack{};                     /* 0x0350  LC_ASYNC_STACK   */

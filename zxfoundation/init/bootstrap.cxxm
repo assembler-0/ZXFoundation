@@ -1,0 +1,50 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/init/bootstrap.cxxm
+/// @brief sys/bootstrap — first schedulable kernel domain.
+
+export module zxfoundation.init.bootstrap;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import zxfoundation.domain.domain_types;
+import zxfoundation.sched.sched;
+import arch.s390x.cpu.lowcore;
+
+using zxfoundation::sys::printk::pinfo;
+
+export {
+
+namespace zxfoundation::init::bootstrap {
+
+    /// @brief Entry function for the sys/bootstrap domain.
+    /// @param arg  Unused (reserved for future boot parameters).
+    auto bootstrap_entry(void* arg) noexcept -> void {
+        (void)arg;
+
+        pinfo("bootstrap: sys/bootstrap domain running");
+
+        // ── Late initialization ──────────────────────────────────────────
+        //
+        // Future work:
+        //   1. Probe I/O devices (CHPID, subchannel enumeration)
+        //   2. Load init binary from IPL device or embedded ramdisk
+        //   3. Create first user-mode domain
+        //   4. Enqueue first user-mode domain
+
+        pinfo("bootstrap: late initialization complete (no init binary configured)");
+
+        // ── Exit ─────────────────────────────────────────────────────────
+        //
+        // Mark ourselves as dying and yield.  The scheduler will reap us
+        // on the next context switch away from this domain.
+        auto* self = static_cast<zxfoundation::domain::domain*>(
+            arch::s390x::cpu::lowcore::current_domain_ptr());
+        if (self) {
+            self->state = zxfoundation::domain::domain_state::dying;
+        }
+        zxfoundation::sched::schedule();
+
+    }
+
+} // namespace zxfoundation::init::bootstrap
+
+} // end export

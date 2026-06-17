@@ -1,0 +1,193 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nucleus_handlers.cxxm
+/// @brief Nucleus call handler implementations for the gate dispatch table.
+
+export module zxfoundation.gate.nucleus_handlers;
+import zxfoundation.gate.gate_types;
+import zxfoundation.gate.gate;
+import zxfoundation.domain.domain_types;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import zxfoundation.sys.syschk;
+import zxfoundation.memory.hhdm;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
+import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import lib.error;
+import lib.expected;
+import lib.string;
+import lib.string_view;
+import lib.algorithm;
+
+namespace _internal {
+
+    using namespace zxfoundation::domain;
+
+    /// @brief Get the current domain from lowcore.
+    /// @return Pointer to the current domain, or nullptr.
+    [[nodiscard]] auto current_domain() noexcept -> domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain*>(lc->current_domain);
+    }
+
+    /// @brief Copy bytes from user-space to a kernel buffer.
+    ///
+    /// Walks the current domain's page tables to translate user virtual
+    /// addresses to physical, then reads via HHDM. Handles page crossings.
+    ///
+    /// @param dst   Kernel-space destination buffer.
+    /// @param src   User-space source virtual address.
+    /// @param len   Number of bytes to copy (caller must validate).
+    /// @param d     Current domain (provides root_phys for DAT walk).
+    /// @return      0 on success, -1 on translation failure.
+    auto copy_from_user(void* dst, u64 src, u64 len, domain* d) noexcept -> i32 {
+        namespace mmu  = arch::s390x::mmu;
+        namespace hhdm = zxfoundation::memory::hhdm;
+
+        auto* out = static_cast<u8*>(dst);
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+
+        u64 copied = 0;
+        while (copied < len) {
+            const u64 user_va   = src + copied;
+            const u64 page_off  = user_va & 0xFFFULL;
+            const u64 chunk     = lib::min(len - copied,
+                                           mmu::PAGE_SIZE_4K - page_off);
+
+            // walk() returns the full physical address (frame + page offset).
+            auto phys_r = mmu::walk<mmu::dat_level::region_1>(root, user_va);
+            if (!phys_r) [[unlikely]]
+                return -1;
+
+            const auto* page_ptr = reinterpret_cast<const u8*>(
+                hhdm::phys_to_virt(*phys_r));
+
+            lib::memcpy(out + copied, page_ptr, chunk);
+            copied += chunk;
+        }
+        return 0;
+    }
+
+} // namespace _internal
+
+// ── Exported handlers and registration ──────────────────────────────────────
+
+/// @brief Error sentinel returned on handler failure.
+static constexpr u64 NC_ERROR = ~0ULL;
+
+export {
+
+namespace zxfoundation::gate::nucleus_handlers {
+
+    /// @brief Write a user-space buffer to the hypervisor console.
+    /// @param a0 User-space buffer pointer.
+    /// @param a1 Buffer length in bytes (max 256).
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_console_write_handler(
+        u64 a0, u64 a1, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        const u64 user_buf = a0;
+        const u64 user_len = a1;
+
+        zxfoundation::sys::printk::pinfo(
+            "nc_write: buf={:#x} len={}", user_buf, user_len);
+
+        // Sanity checks.
+        if (user_len == 0 || user_len > 256) {
+            zxfoundation::sys::printk::perr(
+                "nc_write: bad len={}", user_len);
+            return NC_ERROR;
+        }
+
+        // Get current domain for page table walk.
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] {
+            zxfoundation::sys::printk::perr("nc_write: no current domain");
+            return NC_ERROR;
+        }
+
+        zxfoundation::sys::printk::pinfo(
+            "nc_write: domain='{}' root_phys={:#x}", d->name, d->root_phys);
+
+        // Copy from user space to a kernel stack buffer.
+        char kbuf[256]{};
+        if (_internal::copy_from_user(kbuf, user_buf, user_len, d) != 0) {
+            zxfoundation::sys::printk::perr(
+                "nc_write: copy_from_user failed buf={:#x} len={} root={:#x}",
+                user_buf, user_len, d->root_phys);
+            return NC_ERROR;
+        }
+
+        // Write to the printk console.
+        zxfoundation::sys::printk::pinfo("domain: {}",
+            lib::string_view{kbuf, static_cast<usize>(user_len)});
+
+        return 0;
+    }
+
+    /// @brief Terminate the current domain.
+    /// @return 0 (never meaningfully consumed — domain is rescheduled away).
+    auto nc_domain_exit_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        zxfoundation::sys::printk::pinfo(
+            "domain: '{}' (id={}) exited", d->name, d->id);
+
+        d->state = domain::domain_state::dying;
+        d->flags = d->flags | domain::domain_flags::need_resched;
+
+        return 0;
+    }
+
+    /// @brief Voluntarily yield the CPU.
+    /// @return 0.
+    auto nc_time_yield_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (d) {
+            d->flags = d->flags | domain::domain_flags::need_resched;
+        }
+        return 0;
+    }
+
+    /// @brief Query current domain metadata.
+    /// @return Packed value: low 32 bits = domain_id, high 32 bits = cpu.
+    auto nc_domain_info_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        return static_cast<u64>(d->id) |
+               (static_cast<u64>(d->cpu) << 32);
+    }
+
+    /// @brief Register all implemented nucleus call handlers in the
+    ///        gate dispatch table.
+    ///
+    /// Must be called after gate_init() during kernel bring-up.
+    auto register_nucleus_handlers() noexcept -> void {
+        using nc = zxfoundation::gate::nucleus_call;
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::console_write, nc_console_write_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::domain_exit, nc_domain_exit_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::time_yield, nc_time_yield_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::domain_info, nc_domain_info_handler);
+    }
+
+} // namespace zxfoundation::gate::nucleus_handlers
+
+} // end export

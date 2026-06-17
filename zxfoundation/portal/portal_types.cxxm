@@ -1,0 +1,99 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file portal_types.cxxm
+/// @brief Portal subsystem types for zero-copy cross-domain data access
+///        using z/Architecture Access Register (AR) mode and ALETs.
+
+export module zxfoundation.portal.portal_types;
+
+import zxfoundation.base.types;
+
+export {
+
+    namespace zxfoundation::portal {
+
+        // --- Portal identifier ---
+
+        using portal_id = u32;
+        constexpr portal_id PORTAL_ID_INVALID = 0xFFFF'FFFFU;
+
+        // --- System limits ---
+
+        // Maximum portals in the system
+        constexpr u32 MAX_PORTALS = 1024U;
+
+        // Maximum portals per domain (limited by 16 access registers)
+        constexpr u32 MAX_PORTALS_PER_DOMAIN = 16U;
+
+        // --- Portal access rights ---
+
+        enum class portal_prot : u32 {
+            none  = 0,
+            read  = 1U << 0,
+            write = 1U << 1,
+            rw    = read | write,
+        };
+
+        // Bitwise OR
+        [[nodiscard]] constexpr auto operator|(portal_prot lhs, portal_prot rhs) noexcept -> portal_prot {
+            return static_cast<portal_prot>(
+                static_cast<u32>(lhs) | static_cast<u32>(rhs));
+        }
+
+        // Bitwise AND
+        [[nodiscard]] constexpr auto operator&(portal_prot lhs, portal_prot rhs) noexcept -> portal_prot {
+            return static_cast<portal_prot>(
+                static_cast<u32>(lhs) & static_cast<u32>(rhs));
+        }
+
+        // Bitwise NOT (complement)
+        [[nodiscard]] constexpr auto operator~(portal_prot val) noexcept -> portal_prot {
+            return static_cast<portal_prot>(~static_cast<u32>(val));
+        }
+
+        // Logical NOT (test for none)
+        [[nodiscard]] constexpr auto operator!(portal_prot val) noexcept -> bool {
+            return static_cast<u32>(val) == 0;
+        }
+
+        // Compound assignment OR
+        constexpr auto operator|=(portal_prot& lhs, portal_prot rhs) noexcept -> portal_prot& {
+            lhs = lhs | rhs;
+            return lhs;
+        }
+
+        // Compound assignment AND
+        constexpr auto operator&=(portal_prot& lhs, portal_prot rhs) noexcept -> portal_prot& {
+            lhs = lhs & rhs;
+            return lhs;
+        }
+
+        // --- Portal descriptor ---
+
+        /// Describes a cross-domain portal backed by an Access List Entry Token.
+        ///
+        /// A portal grants `source_domain` the ability to access a virtual
+        /// address range [va_start, va_end) inside `target_domain` through
+        /// Access Register mode.  The kernel assigns an ALET and binds it
+        /// to one of the 16 access registers in the source domain's context.
+        struct portal_desc {
+            portal_id    id{PORTAL_ID_INVALID};
+            u32          source_domain{0};   // Domain that holds this portal (has the ALET)
+            u32          target_domain{0};   // Domain whose address space is accessed
+            u64          va_start{0};        // Start of accessible range in target
+            u64          va_end{0};          // End of accessible range in target
+            portal_prot  prot{portal_prot::none};
+            u32          alet{0};            // Access List Entry Token assigned to this portal
+            u8           ar_num{0};          // Access register number (0-15) in source domain
+            u8           _pad[3]{};
+
+            portal_desc() noexcept = default;
+
+            /// Returns the size of the accessible range in bytes.
+            [[nodiscard]] auto size() const noexcept -> u64 {
+                return va_end - va_start;
+            }
+        };
+
+    } // namespace zxfoundation::portal
+
+} // end export

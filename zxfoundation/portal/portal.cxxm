@@ -1,0 +1,266 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/portal/portal.cxxm
+/// @brief Portal lifecycle — create, destroy, find, and count cross-domain
+///        portals backed by z/Architecture Access Register mode ALETs.
+
+export module zxfoundation.portal.portal;
+
+import zxfoundation.portal.portal_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.sys.printk;
+import zxfoundation.base.types;
+import arch.s390x.cpu.ar;
+import arch.s390x.cpu.irq;
+import lib.error;
+import lib.expected;
+
+// ── Internal portal table state ─────────────────────────────────────────────
+
+namespace _internal {
+
+    using namespace zxfoundation::portal;
+
+    // Global portal descriptor table.
+    static portal_desc g_portal_table[MAX_PORTALS]{};
+
+    // Protects all mutations of the portal table.
+    static zxfoundation::locking::qspinlock::qspinlock g_portal_lock{};
+
+    // Current number of active (valid) portals.
+    static u32 g_portal_count{0};
+
+    static bool g_portal_initialized{false};
+
+    static u32 g_next_alet{3};
+
+} // namespace _internal
+
+// ── Exported portal lifecycle functions ─────────────────────────────────────
+
+export {
+
+namespace zxfoundation::portal {
+
+    /// @brief Initialize the portal subsystem.
+    auto portal_init() noexcept -> void {
+        using namespace _internal;
+
+        const locking::irq_lock_guard guard{g_portal_lock};
+
+        // Reset every slot to the default (id == PORTAL_ID_INVALID).
+        for (u32 i = 0; i < MAX_PORTALS; ++i) {
+            g_portal_table[i] = portal_desc{};
+        }
+
+        g_portal_count       = 0;
+        g_next_alet          = 3;
+        g_portal_initialized = true;
+
+        sys::printk::pinfo("portal: subsystem initialized (max {} portals)\n",
+                   MAX_PORTALS);
+    }
+
+    /// @brief Create a new portal from @p source_domain_id to @p target_domain_id.
+    ///
+    /// @param source_domain_id  Domain that will hold the portal (owns the AR).
+    /// @param target_domain_id  Domain whose address space is accessed.
+    /// @param va_start          Start of the accessible VA range in the target.
+    /// @param va_end            End (exclusive) of the accessible VA range.
+    /// @param prot              Access protection (read, write, rw).
+    /// @param ar_num            Access register number (0-15) in the source domain.
+    ///
+    /// @return The portal_id of the newly created portal, or a kernel_error.
+    [[nodiscard]] auto portal_create(
+        u32         source_domain_id,
+        u32         target_domain_id,
+        u64         va_start,
+        u64         va_end,
+        portal_prot prot,
+        u8          ar_num
+    ) noexcept -> lib::expected<portal_id, lib::kernel_error> {
+        using namespace _internal;
+
+        // --- Argument validation ---
+
+        if (!g_portal_initialized) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::uninitialized));
+        }
+
+        if (ar_num >= arch::s390x::cpu::ar::AR_COUNT) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+        }
+
+        if (va_end <= va_start) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+        }
+
+        if (source_domain_id == target_domain_id) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+        }
+
+        // --- Critical section: find a free slot and fill it ---
+
+        const locking::irq_lock_guard guard{g_portal_lock};
+
+        if (g_portal_count >= MAX_PORTALS) {
+            return lib::unexpected(
+                lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+        }
+
+        // Scan for the first free slot (id == PORTAL_ID_INVALID).
+        portal_desc* slot = nullptr;
+        u32 slot_index = 0;
+        for (u32 i = 0; i < MAX_PORTALS; ++i) {
+            if (g_portal_table[i].id == PORTAL_ID_INVALID) {
+                slot       = &g_portal_table[i];
+                slot_index = i;
+                break;
+            }
+        }
+
+        if (!slot) [[unlikely]] {
+            // Table full despite count check — should not happen.
+            return lib::unexpected(
+                lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+        }
+
+        // Assign an ALET and use the slot index as the portal_id.
+        const u32 alet = g_next_alet++;
+
+        slot->id            = static_cast<portal_id>(slot_index);
+        slot->source_domain = source_domain_id;
+        slot->target_domain = target_domain_id;
+        slot->va_start      = va_start;
+        slot->va_end        = va_end;
+        slot->prot          = prot;
+        slot->alet          = alet;
+        slot->ar_num        = ar_num;
+
+        ++g_portal_count;
+
+        // Increment source domain's portal_count.
+        auto* src = zxfoundation::domain::domain_find(source_domain_id);
+        if (src) ++src->portal_count;
+
+        sys::printk::pdebug("portal: created id={} src={} tgt={} ar={} alet={} "
+                   "va=[{:#x},{:#x})\n",
+                   slot->id, source_domain_id, target_domain_id,
+                   static_cast<u32>(ar_num), alet, va_start, va_end);
+
+        // NOTE: ASTE/ALE hardware setup is deferred until domain context
+        //       switch into AR mode. ar::set_ar() will be called when
+        //       the portal is activated during AR-mode entry.
+
+        return slot->id;
+    }
+
+    /// @brief Destroy the portal identified by @p id.
+    /// @param id  Portal identifier (slot index) returned by portal_create().
+    /// @return    Nothing on success, or a kernel_error.
+    [[nodiscard]] auto portal_destroy(portal_id id) noexcept
+        -> lib::expected<void, lib::kernel_error> {
+
+        using namespace _internal;
+
+        if (!g_portal_initialized) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::uninitialized));
+        }
+
+        if (id >= MAX_PORTALS) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::out_of_range));
+        }
+
+        const locking::irq_lock_guard guard{g_portal_lock};
+
+        portal_desc& desc = g_portal_table[id];
+        if (desc.id == PORTAL_ID_INVALID) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::not_found));
+        }
+
+        sys::printk::pdebug("portal: destroying id={} src={} tgt={} alet={}\n",
+                   desc.id, desc.source_domain, desc.target_domain, desc.alet);
+
+        // Decrement source domain's portal_count.
+        auto* src = zxfoundation::domain::domain_find(desc.source_domain);
+        if (src && src->portal_count > 0) --src->portal_count;
+
+        // Reset the slot to its default state.
+        desc = portal_desc{};
+
+        if (g_portal_count > 0) {
+            --g_portal_count;
+        }
+
+        // Purge the Access-List Buffer so the CPU does not use stale ALETs.
+        arch::s390x::cpu::ar::purge_alb();
+
+        return {};
+    }
+
+    /// @brief Destroy all portals involving a specific domain.
+    ///
+    /// Iterates the portal table and resets every slot where @p domain_id
+    /// is either the source or target domain.  Called during domain teardown.
+    ///
+    /// @param domain_id  The domain whose portals should be destroyed.
+    auto portal_destroy_for_domain(u32 domain_id) noexcept -> void {
+        using namespace _internal;
+
+        const locking::irq_lock_guard guard{g_portal_lock};
+        for (u32 i = 0; i < MAX_PORTALS; ++i) {
+            auto& p = g_portal_table[i];
+            if (p.id != PORTAL_ID_INVALID &&
+                (p.source_domain == domain_id || p.target_domain == domain_id)) {
+                p = portal_desc{};
+                if (g_portal_count > 0) --g_portal_count;
+            }
+        }
+    }
+
+    /// @brief Look up a portal descriptor by its id.
+    /// @param id  Portal identifier (slot index).
+    /// @return    Pointer to the portal_desc, or nullptr if not found.
+    /// @note The caller must hold appropriate locking if it intends to
+    ///       mutate the returned descriptor.
+    [[nodiscard]] auto portal_find(portal_id id) noexcept -> portal_desc* {
+        using namespace _internal;
+
+        if (!g_portal_initialized || id >= MAX_PORTALS) {
+            return nullptr;
+        }
+
+        portal_desc& desc = g_portal_table[id];
+        if (desc.id == PORTAL_ID_INVALID) {
+            return nullptr;
+        }
+
+        return &desc;
+    }
+
+    /// @brief Return the number of currently active portals in the system.
+    [[nodiscard]] auto portal_count() noexcept -> u32 {
+        return _internal::g_portal_count;
+    }
+
+} // namespace zxfoundation::portal
+
+} // end export

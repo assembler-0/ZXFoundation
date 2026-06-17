@@ -1,8 +1,7 @@
 !files : !compile_group -> [auto] {
-    task_types.cxxm
     context.cxxm
-    task.cxxm
-    kthread.cxxm
-    waitqueue.cxxm
+    sched_fair.cxxm
+    sched_idle.cxxm
+    sched_domain.cxxm
     sched.cxxm
 }

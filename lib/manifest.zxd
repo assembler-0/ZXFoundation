@@ -26,4 +26,5 @@
     variant.cxxm !compile_options -> [ !compiler_id:clang(-Wno-unused-parameter) ]
     scope_guard.cxxm
     source_location.cxxm
+    min_heap.cxxm
 }

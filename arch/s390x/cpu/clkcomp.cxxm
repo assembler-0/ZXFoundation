@@ -1,46 +1,31 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/clkcomp.cxxm
-/// @brief z/Architecture Clock Comparator — setup and periodic tick arming.
+/// @brief z/Architecture Clock Comparator — raw hardware accessors.
+///
+/// Provides direct access to the SCKC (Set Clock Comparator) and STCKC
+/// (Store Clock Comparator) instructions.  All higher-level tick arming
+/// and periodic re-arming is handled by the timer subsystem
+/// (zxfoundation.sys.timer).
 
 export module arch.s390x.cpu.clkcomp;
-import arch.s390x.cpu.processor;
-import arch.s390x.cpu.irq;
 import zxfoundation.base.types;
 
 export {
 
 namespace arch::s390x::cpu::clkcomp {
 
-    /// @brief EXT interrupt code for the clock comparator.
-    constexpr u16 EXT_CODE_CLK_COMP = 0x1004;
-
-    /// @brief Tick interval: 10 ms expressed in TOD clock units.
-    constexpr u64 TICK_INTERVAL_TOD = 40'960'000ULL;
-
-    /// @brief Load a new value into the clock comparator register.
-    /// @param[in]  next_tod  Absolute TOD clock value at which to fire.
+    /// @brief Load a new value into the clock comparator register (SCKC).
+    /// @param[in] next_tod  Absolute TOD clock value at which to fire.
     auto clkcomp_set(u64 next_tod) noexcept -> void {
         __asm__ volatile ("sckc %[v]\n\t" :: [v] "Q"(next_tod) : "memory");
     }
 
-    /// @brief Read the current clock comparator value.
+    /// @brief Read the current clock comparator value (STCKC).
+    /// @return The 64-bit TOD value currently loaded in the comparator.
     [[nodiscard]] inline auto clkcomp_get() noexcept -> u64 {
         u64 v = 0;
         __asm__ volatile ("stckc %[v]\n\t" : [v] "=Q"(v) :: "memory");
         return v;
-    }
-
-    /// @brief Arm the clock comparator for the first tick on the BSP.
-    inline auto clkcomp_arm_bsp() noexcept -> void {
-        const u64 now  = processor::stck();
-        clkcomp_set(now + TICK_INTERVAL_TOD);
-        irq::irq_enable();
-    }
-
-    /// @brief Re-arm the clock comparator for the next tick.
-    inline auto clkcomp_rearm() noexcept -> void {
-        const u64 now = processor::stck();
-        clkcomp_set(now + TICK_INTERVAL_TOD);
     }
 
 } // namespace arch::s390x::cpu::clkcomp

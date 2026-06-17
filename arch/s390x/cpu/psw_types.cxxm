@@ -62,6 +62,22 @@ namespace arch::s390x::cpu::psw {
     constexpr u64 PSW_MASK_KERNEL_ENABLED =
         PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_ARCH_BITS | PSW_ASC_HOME;
 
+    /// @brief User-mode PSW mask for entering a domain in problem state.
+    ///
+    /// Problem state + DAT on + 64-bit + primary space mode (CR1 = user ASCE)
+    /// + I/O, external, and machine-check interrupts enabled.
+    constexpr u64 PSW_MASK_USER =
+        PSW_BIT_PSTATE |     // Problem state
+        PSW_BIT_DAT |        // DAT enabled
+        PSW_BIT_IO |         // I/O interrupts
+        PSW_BIT_EXT |        // External interrupts
+        PSW_BIT_MCCK |       // Machine check
+        PSW_ARCH_BITS |      // 64-bit addressing (EA+BA)
+        PSW_ASC_PRIMARY;     // Primary space mode (CR1 = user ASCE)
+
+    /// @brief PSW key field shift — bits 8–11 of the PSW mask word.
+    constexpr u32 PSW_KEY_SHIFT = 52;
+
     /// @brief Disabled-wait PSW mask: wait state, no interrupts, 64-bit.
     constexpr u64 PSW_MASK_DISABLED_WAIT = PSW_BIT_WAIT | PSW_ARCH_BITS;
 

@@ -21,4 +21,7 @@
     stsi_types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) ]
     stsi.cxxm
     clkcomp.cxxm
+    skey.cxxm
+    ar.cxxm
+    linkage.cxxm
 }

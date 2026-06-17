@@ -1,0 +1,128 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/gate_types.cxxm
+/// @brief Gate subsystem types — hardware-mediated cross-domain entry points
+///        using the z/Architecture PC (Program Call) instruction.
+
+export module zxfoundation.gate.gate_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::gate {
+
+    /// @brief Strongly-typed gate identifier.
+    using gate_id = u32;
+
+    /// @brief Sentinel value for an invalid / unassigned gate.
+    constexpr gate_id GATE_ID_INVALID = 0xFFFF'FFFFU;
+
+    /// @brief Maximum number of gates in the system.
+    constexpr u32 MAX_GATES = 512U;
+
+    /// @brief Maximum nucleus gates (PC numbers 0-31 reserved for nucleus calls).
+    constexpr u32 MAX_NUCLEUS_GATES = 32U;
+
+    // -----------------------------------------------------------------
+    // Gate classification
+    // -----------------------------------------------------------------
+
+    /// @brief Discriminator for the kind of gate.
+    enum class gate_type : u8 {
+        nucleus = 0,  ///< Gate into the nucleus (system call replacement).
+        domain  = 1,  ///< Gate between user domains.
+    };
+
+    /// @brief Authorization level required to invoke a gate.
+    enum class gate_auth : u8 {
+        any   = 0,  ///< Any domain can invoke this gate.
+        keyed = 1,  ///< Only domains with a matching storage key.
+        owner = 2,  ///< Only the owning domain.
+    };
+
+    // -----------------------------------------------------------------
+    // Nucleus call numbers  (replaces old SVC numbers)
+    // Logical numbering grouped by subsystem.
+    // -----------------------------------------------------------------
+
+    /// @brief Well-known PC numbers for nucleus services.
+    enum class nucleus_call : u32 {
+        // ── Domain lifecycle (0-3) ──
+        domain_create  = 0,
+        domain_destroy = 1,
+        domain_exit    = 2,
+        domain_info    = 3,
+
+        // ── Memory management (4-9) ──
+        mem_alloc   = 4,
+        mem_free    = 5,
+        mem_map     = 6,
+        mem_unmap   = 7,
+        mem_protect = 8,
+        mem_share   = 9,
+
+        // ── Gate management (10-11) ──
+        gate_create  = 10,
+        gate_destroy = 11,
+
+        // ── Portal management (12-13) ──
+        portal_create  = 12,
+        portal_destroy = 13,
+
+        // ── I/O — Channel Subsystem (14-17) ──
+        io_bind     = 14,
+        io_unbind   = 15,
+        io_submit   = 16,
+        io_irq_bind = 17,
+
+        // ── Time (18-20) ──
+        time_yield    = 18,
+        time_deadline = 19,
+        time_now      = 20,
+
+        // ── Console (21) ──
+        console_write = 21,
+
+        // Maximum (not a valid call number — used for bounds checking)
+        _count = 22,
+    };
+
+    // -----------------------------------------------------------------
+    // Gate descriptor
+    // -----------------------------------------------------------------
+
+    /// @brief Gate descriptor — one entry per gate in the nucleus gate table.
+    ///
+    /// Describes the target domain, entry point, type, and authorization
+    /// policy for a single PC-mediated cross-domain call.
+    struct gate_desc {
+        gate_id   id{GATE_ID_INVALID};
+        gate_type type{gate_type::nucleus};
+        gate_auth auth{gate_auth::any};
+        u8        target_key{0};       ///< Storage key of target domain (for keyed auth).
+        u8        _pad0{0};
+        u32       target_domain{0};    ///< Domain ID of the target (0 = nucleus).
+        u64       entry_va{0};         ///< Entry point virtual address in target domain.
+
+        gate_desc() noexcept = default;
+    };
+
+    // -----------------------------------------------------------------
+    // Nucleus call dispatch
+    // -----------------------------------------------------------------
+
+    /// @brief Nucleus call handler function type.
+    ///
+    /// Convention: arguments arrive in r2-r7 (6 arguments max), result
+    /// is returned in r2.
+    using nucleus_handler_fn = auto (*)(u64, u64, u64, u64, u64, u64) noexcept -> u64;
+
+    /// @brief Dispatch table mapping nucleus_call numbers to handler functions.
+    struct nucleus_dispatch_table {
+        nucleus_handler_fn handlers[static_cast<u32>(nucleus_call::_count)]{};
+
+        nucleus_dispatch_table() noexcept = default;
+    };
+
+} // namespace zxfoundation::gate
+
+} // end export

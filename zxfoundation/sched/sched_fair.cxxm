@@ -1,0 +1,117 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_fair.cxxm
+/// @brief EEVDF (Earliest Eligible Virtual Deadline First) scheduling class.
+
+export module zxfoundation.sched.sched_fair;
+import zxfoundation.domain.domain_types;
+import zxfoundation.base.types;
+import lib.rbtree;
+import lib.util;
+
+export {
+
+namespace zxfoundation::sched::fair {
+
+    using zxfoundation::domain::domain;
+    using zxfoundation::domain::domain_flags;
+    using zxfoundation::domain::run_queue;
+    using zxfoundation::domain::sched_class;
+
+    /// @brief Default time slice in TOD units (~10 ms).
+    inline constexpr u64 EEVDF_DEFAULT_SLICE = 40'960'000ULL;
+
+    /// @brief Convert an rb_node* back to its containing domain.
+    [[nodiscard]] inline auto rb_node_to_domain(lib::rb_node* node) noexcept -> domain* {
+        return lib::container_of<domain, lib::rb_node, &domain::sched_rb>(node);
+    }
+
+    /// @brief Enqueue a domain into the EEVDF fair tree.
+    inline auto enqueue(run_queue& rq, domain& d) noexcept -> void {
+        if (d.sched.deadline == 0) {
+            d.sched.vruntime = rq.min_vruntime;
+            d.sched.slice    = EEVDF_DEFAULT_SLICE;
+            d.sched.deadline = d.sched.vruntime +
+                (d.sched.slice * 1024 / d.sched.weight);
+        }
+
+        lib::rb_node** link = &rq.fair_tree.root.node;
+        lib::rb_node*  parent = nullptr;
+        bool leftmost = true;
+
+        while (*link) {
+            parent = *link;
+            auto* existing = rb_node_to_domain(parent);
+            if (d.sched.deadline < existing->sched.deadline) {
+                link = &parent->left;
+            } else {
+                link = &parent->right;
+                leftmost = false;
+            }
+        }
+        lib::rb_link_node(&d.sched_rb, parent, link);
+        lib::rb_insert_color_cached(&d.sched_rb, rq.fair_tree, leftmost);
+
+        d.on_rq = true;
+        ++rq.nr_running;
+    }
+
+    /// @brief Dequeue a domain from the EEVDF fair tree.
+    inline auto dequeue(run_queue& rq, domain& d) noexcept -> void {
+        if (!d.on_rq) return;
+        lib::rb_erase_cached(&d.sched_rb, rq.fair_tree);
+        d.on_rq = false;
+        --rq.nr_running;
+    }
+
+    /// @brief Pick the next eligible domain (earliest eligible deadline).
+    [[nodiscard]] inline auto pick_next(run_queue& rq) noexcept -> domain* {
+        auto* rb_left = rq.fair_tree.leftmost;
+        if (!rb_left) return nullptr;
+
+        auto* node = rb_left;
+        while (node) {
+            auto* d = rb_node_to_domain(node);
+            d->sched.lag = static_cast<i64>(rq.min_vruntime) -
+                        static_cast<i64>(d->sched.vruntime);
+
+            if (d->sched.lag >= 0) {
+                return d;
+            }
+            node = lib::rb_next(node);
+        }
+
+        return rb_node_to_domain(rb_left);
+    }
+
+    /// @brief Per-tick accounting: advance vruntime, check deadline.
+    inline auto tick(run_queue& rq, domain& d) noexcept -> void {
+        const u64 delta = EEVDF_DEFAULT_SLICE;
+        const u64 weighted_delta = (delta * 1024) / d.sched.weight;
+        d.sched.vruntime += weighted_delta;
+
+        if (d.sched.vruntime > rq.min_vruntime)
+            rq.min_vruntime = d.sched.vruntime;
+
+        if (d.sched.vruntime >= d.sched.deadline) {
+            d.flags |= domain_flags::need_resched;
+            d.sched.deadline = d.sched.vruntime +
+                (d.sched.slice * 1024 / d.sched.weight);
+        }
+    }
+
+    /// @brief Check if a waking domain should preempt the current one.
+    inline auto preempt(run_queue& rq, domain& waking) noexcept -> void {
+        if (!rq.curr) return;
+        if (waking.sched.deadline < rq.curr->sched.deadline) {
+            rq.curr->flags |= domain_flags::need_resched;
+        }
+    }
+
+    /// @brief The EEVDF scheduling class vtable.
+    inline constexpr sched_class the_class{
+        enqueue, dequeue, pick_next, tick, preempt
+    };
+
+} // namespace zxfoundation::sched::fair
+
+} // end export

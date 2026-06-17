@@ -126,26 +126,41 @@ namespace zxfoundation::sys::printk {
 
         lib::string_view final_msg(buf, offset);
 
-        locking::irq_lock_guard guard(_internal::g_state.lock);
+        // ── Critical section: push to ring buffer (fast) ──────────────
+        // Snapshot backends under the lock so we can emit outside it.
+        // The backends list is tiny (≤4) and static after boot.
+        lib::static_vector<printk_backend, _internal::MAX_BACKENDS> snap;
+        {
+            locking::irq_lock_guard guard(_internal::g_state.lock);
 
-        lib::span<const u8> to_push(reinterpret_cast<const u8*>(final_msg.data()), final_msg.size());
-        
-        while (to_push.size() > 0) {
-            usize written = _internal::g_state.log_buffer.push(to_push);
-            if (written == to_push.size()) break;
-            
-            u8 discard[1024];
-            (void)_internal::g_state.log_buffer.pop({discard, lib::min(static_cast<usize>(sizeof(discard)), _internal::g_state.log_buffer.size())});
-            
-            if (written > 0) {
-                to_push = to_push.subspan(written);
+            lib::span<const u8> to_push(reinterpret_cast<const u8*>(final_msg.data()), final_msg.size());
+
+            while (to_push.size() > 0) {
+                usize written = _internal::g_state.log_buffer.push(to_push);
+                if (written == to_push.size()) break;
+
+                u8 discard[1024];
+                (void)_internal::g_state.log_buffer.pop({discard, lib::min(static_cast<usize>(sizeof(discard)), _internal::g_state.log_buffer.size())});
+
+                if (written > 0) {
+                    to_push = to_push.subspan(written);
+                }
+            }
+
+            // Snapshot active backends.
+            for (usize i = 0; i < _internal::g_state.backends.size(); ++i) {
+                if (_internal::g_state.backends[i].active) {
+                    (void)snap.push_back(_internal::g_state.backends[i]);
+                }
             }
         }
+        // ── End critical section ─────────────────────────────────────────
 
-        for (usize i = 0; i < _internal::g_state.backends.size(); ++i) {
-            if (const auto b = _internal::g_state.backends[i]; b.active) {
-                b.emit(final_msg);
-            }
+        // Emit to backends WITHOUT the lock.  DIAG I/O is slow on
+        // Hercules; holding the lock here would serialize all CPUs
+        // through the console and cause non-deterministic boot hangs.
+        for (usize i = 0; i < snap.size(); ++i) {
+            snap[i].emit(final_msg);
         }
     }
 

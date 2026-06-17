@@ -1,0 +1,108 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ar.cxxm
+/// @brief z/Architecture access register operations (SAR, EAR, SAC, ALB purge).
+
+export module arch.s390x.cpu.ar;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::ar {
+
+    /// @brief ALET value 0 designates the primary address space.
+    constexpr u32 ALET_PRIMARY   = 0;
+
+    /// @brief ALET value 1 designates the secondary address space.
+    constexpr u32 ALET_SECONDARY = 1;
+
+    /// @brief ALET value 2 designates the home address space.
+    constexpr u32 ALET_HOME      = 2;
+
+    /// @brief Number of access registers on z/Architecture.
+    constexpr u32 AR_COUNT       = 16;
+
+    /// @brief Set access register @p ar_num to @p alet.
+    inline auto set_ar(u32 ar_num, u32 alet) noexcept -> void {
+        switch (ar_num) {
+            case  0: __asm__ volatile("sar %%a0,  %0" :: "d"(alet)); break;
+            case  1: __asm__ volatile("sar %%a1,  %0" :: "d"(alet)); break;
+            case  2: __asm__ volatile("sar %%a2,  %0" :: "d"(alet)); break;
+            case  3: __asm__ volatile("sar %%a3,  %0" :: "d"(alet)); break;
+            case  4: __asm__ volatile("sar %%a4,  %0" :: "d"(alet)); break;
+            case  5: __asm__ volatile("sar %%a5,  %0" :: "d"(alet)); break;
+            case  6: __asm__ volatile("sar %%a6,  %0" :: "d"(alet)); break;
+            case  7: __asm__ volatile("sar %%a7,  %0" :: "d"(alet)); break;
+            case  8: __asm__ volatile("sar %%a8,  %0" :: "d"(alet)); break;
+            case  9: __asm__ volatile("sar %%a9,  %0" :: "d"(alet)); break;
+            case 10: __asm__ volatile("sar %%a10, %0" :: "d"(alet)); break;
+            case 11: __asm__ volatile("sar %%a11, %0" :: "d"(alet)); break;
+            case 12: __asm__ volatile("sar %%a12, %0" :: "d"(alet)); break;
+            case 13: __asm__ volatile("sar %%a13, %0" :: "d"(alet)); break;
+            case 14: __asm__ volatile("sar %%a14, %0" :: "d"(alet)); break;
+            case 15: __asm__ volatile("sar %%a15, %0" :: "d"(alet)); break;
+            default: __builtin_unreachable();
+        }
+    }
+
+    /// @brief Extract the value of access register @p ar_num.
+    /// @param ar_num  Access register number (0-15).
+    /// @return The 32-bit ALET value stored in the access register.
+    [[nodiscard]] inline auto get_ar(u32 ar_num) noexcept -> u32 {
+        u32 alet;
+        switch (ar_num) {
+            case  0: __asm__ volatile("ear %0, %%a0"  : "=d"(alet)); break;
+            case  1: __asm__ volatile("ear %0, %%a1"  : "=d"(alet)); break;
+            case  2: __asm__ volatile("ear %0, %%a2"  : "=d"(alet)); break;
+            case  3: __asm__ volatile("ear %0, %%a3"  : "=d"(alet)); break;
+            case  4: __asm__ volatile("ear %0, %%a4"  : "=d"(alet)); break;
+            case  5: __asm__ volatile("ear %0, %%a5"  : "=d"(alet)); break;
+            case  6: __asm__ volatile("ear %0, %%a6"  : "=d"(alet)); break;
+            case  7: __asm__ volatile("ear %0, %%a7"  : "=d"(alet)); break;
+            case  8: __asm__ volatile("ear %0, %%a8"  : "=d"(alet)); break;
+            case  9: __asm__ volatile("ear %0, %%a9"  : "=d"(alet)); break;
+            case 10: __asm__ volatile("ear %0, %%a10" : "=d"(alet)); break;
+            case 11: __asm__ volatile("ear %0, %%a11" : "=d"(alet)); break;
+            case 12: __asm__ volatile("ear %0, %%a12" : "=d"(alet)); break;
+            case 13: __asm__ volatile("ear %0, %%a13" : "=d"(alet)); break;
+            case 14: __asm__ volatile("ear %0, %%a14" : "=d"(alet)); break;
+            case 15: __asm__ volatile("ear %0, %%a15" : "=d"(alet)); break;
+            default: __builtin_unreachable();
+        }
+        return alet;
+    }
+
+    /// @brief Switch to primary address space mode (ASC = 00).
+    inline auto set_asc_primary() noexcept -> void {
+        __asm__ volatile("sac 0" ::: "memory");
+    }
+
+    /// @brief Switch to secondary address space mode (ASC = 01).
+    inline auto set_asc_secondary() noexcept -> void {
+        __asm__ volatile("sac 256" ::: "memory");
+    }
+
+    /// @brief Switch to access-register mode (ASC = 10).
+    inline auto set_asc_ar() noexcept -> void {
+        __asm__ volatile("sac 512" ::: "memory");
+    }
+
+    /// @brief Switch to home address space mode (ASC = 11).
+    inline auto set_asc_home() noexcept -> void {
+        __asm__ volatile("sac 768" ::: "memory");
+    }
+
+    /// @brief Purge the Access-List Buffer (ALB).
+    inline auto purge_alb() noexcept -> void {
+        u64 cr2;
+        __asm__ volatile(
+            "stctg 2,2,%[cr2]\n\t"
+            "lctlg 2,2,%[cr2]"
+            : [cr2] "=Q" (cr2)
+            :
+            : "memory"
+        );
+    }
+
+} // namespace arch::s390x::cpu::ar
+
+} // end export

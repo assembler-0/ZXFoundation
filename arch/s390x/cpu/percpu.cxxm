@@ -62,7 +62,7 @@ namespace arch::s390x::cpu::percpu {
         pcp.ipi_pending_count = 0;
 
         pcp.softirq_pending   = 0;
-        pcp.current_task      = 0;
+        pcp.current_domain    = 0;
         pcp.user_asce         = 0;
 
         for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)

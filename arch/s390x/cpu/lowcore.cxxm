@@ -73,10 +73,10 @@ namespace arch::s390x::cpu::lowcore {
         return get_current()->percpu;
     }
 
-    /// @brief Get the current task pointer from lowcore.
-    [[nodiscard]] inline auto current_task_ptr() noexcept -> void* {
+    /// @brief Get the current domain pointer from lowcore.
+    [[nodiscard]] inline auto current_domain_ptr() noexcept -> void* {
         const auto* lc = get_current();
-        return reinterpret_cast<void*>(lc->current_task);
+        return reinterpret_cast<void*>(lc->current_domain);
     }
 
     [[nodiscard]] auto cpu_percpu(const u16 cpu_id) noexcept -> percpu::s390x_percpu_data* {
@@ -128,7 +128,7 @@ namespace arch::s390x::cpu::lowcore {
 
         lc->stack_canary  = processor::stck() ^ 0xC0FFEE00FACADE42ULL;
         lc->cpu_nr        = 0;
-        lc->current_task  = 0;
+        lc->current_domain = 0;
         lc->preempt_count = 0;
     }
 

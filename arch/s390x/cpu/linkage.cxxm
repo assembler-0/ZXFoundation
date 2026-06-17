@@ -1,0 +1,193 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/linkage.cxxm
+/// @brief z/Architecture PC-number linkage table and entry table types.
+
+export module arch.s390x.cpu.linkage;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::linkage {
+
+    /// @brief Maximum number of linkage table entries supported by the kernel.
+    constexpr u32 MAX_LINKAGE_ENTRIES     = 128;
+
+    /// @brief Maximum number of entry table entries per linkage entry.
+    constexpr u32 MAX_ENTRY_TABLE_ENTRIES = 128;
+
+    /// @brief Decomposed Program-Call number.
+    struct pc_number {
+        u8 lx{};  ///< Linkage index (0-127).
+        u8 ex{};  ///< Entry index (0-127).
+
+        /// @brief Compose a raw 20-bit PC number from LX and EX.
+        [[nodiscard]] constexpr auto to_raw() const noexcept -> u32 {
+            return (static_cast<u32>(lx) << 12) | static_cast<u32>(ex);
+        }
+
+        /// @brief Decompose a raw 20-bit PC number.
+        [[nodiscard]] static constexpr auto from_raw(u32 raw) noexcept -> pc_number {
+            return pc_number{
+                .lx = static_cast<u8>((raw >> 12) & 0xFFU),
+                .ex = static_cast<u8>(raw & 0x7FU)
+            };
+        }
+    };
+
+    /// @brief Hardware-format Linkage Table Entry (LTE).
+    /// @note Bit positions verified against PoP SA22-7832-13 §5.5.3 (z/Arch 64-bit mode).
+    struct [[gnu::packed]] alignas(8) linkage_table_entry {
+        u64 words[2]{};  ///< Raw hardware doublewords.
+
+        // -- Accessors for word 0 fields --
+
+        /// @brief Test whether this LTE is marked invalid.
+        [[nodiscard]] constexpr auto is_invalid() const noexcept -> bool {
+            return (words[0] & (1ULL << 63)) != 0;  // Bit 0 (MSB) = invalid
+        }
+
+        /// @brief Set or clear the invalid bit.
+        constexpr auto set_invalid(bool inv) noexcept -> void {
+            if (inv)
+                words[0] |= (1ULL << 63);
+            else
+                words[0] &= ~(1ULL << 63);
+        }
+
+        /// @brief Get the entry-table origin (ETO) as a real address.
+        ///
+        /// The ETO is stored in bits 1-25 of word 0. Extracting and shifting
+        /// left by 6 yields a 64-byte-aligned address.
+        /// @note Verified: ETO in bits 1-25, shifted left 6 → 64-byte aligned.
+        [[nodiscard]] constexpr auto entry_table_origin() const noexcept -> u64 {
+            return (words[0] >> 32) & 0x7FFFFFC0ULL;
+        }
+
+        /// @brief Set the entry-table origin from a 64-byte-aligned real address.
+        /// @note Verified: preserves I bit and ETL field during insertion.
+        constexpr auto set_entry_table_origin(u64 eto_addr) noexcept -> void {
+            // Clear ETO bits, preserve invalid bit and ETL
+            words[0] = (words[0] & 0x800000000000FFFFULL) |
+                       ((eto_addr & 0x7FFFFFC0ULL) << 32);
+        }
+
+        /// @brief Get the entry-table length (ETL) — maximum valid EX value.
+        /// Stored in bits 32-38 of word 0 (i.e., bits 0-6 of the low 32 bits).
+        /// @note Verified: ETL in bits 32-38 of word 0 (IBM numbering).
+        [[nodiscard]] constexpr auto entry_table_length() const noexcept -> u8 {
+            return static_cast<u8>((words[0] >> 25) & 0x7FU);
+        }
+
+        /// @brief Set the entry-table length.
+        constexpr auto set_entry_table_length(u8 etl) noexcept -> void {
+            words[0] = (words[0] & ~(0x7FULL << 25)) |
+                       (static_cast<u64>(etl & 0x7FU) << 25);
+        }
+
+        /// @brief Zero-initialize for a fresh entry.
+        constexpr auto clear() noexcept -> void {
+            words[0] = 0;
+            words[1] = 0;
+        }
+    };
+
+    static_assert(sizeof(linkage_table_entry) == 16,
+                  "linkage_table_entry must be exactly 16 bytes");
+
+    /// @brief Hardware-format Entry Table Entry (ETE).
+    /// @note Layout verified against PoP SA22-7832-13 §5.5.4 (z/Arch 64-bit ETE, G=1).
+    ///       The 64-bit ETE uses words[1] for the full 64-bit entry address.
+    struct [[gnu::packed]] alignas(8) entry_table_entry {
+        u64 words[4]{};  ///< Raw hardware doublewords.
+
+        // -- Word 0 field accessors --
+
+        /// @brief Get the PSW key for the target (bits 8-11 of word 0).
+        /// Returns the 4-bit key value (not shifted into PSW position).
+        [[nodiscard]] constexpr auto psw_key() const noexcept -> u8 {
+            return static_cast<u8>((words[0] >> 52) & 0x0FU);
+        }
+
+        /// @brief Set the PSW key for the target.
+        constexpr auto set_psw_key(u8 key) noexcept -> void {
+            words[0] = (words[0] & ~(0x0FULL << 52)) |
+                       (static_cast<u64>(key & 0x0FU) << 52);
+        }
+
+        /// @brief Test whether this is a stacking PC (S bit).
+        [[nodiscard]] constexpr auto is_stacking() const noexcept -> bool {
+            return (words[0] & (1ULL << 50)) != 0;  // Bit 13 from MSB
+        }
+
+        /// @brief Set or clear the stacking bit.
+        constexpr auto set_stacking(bool s) noexcept -> void {
+            if (s)
+                words[0] |= (1ULL << 50);
+            else
+                words[0] &= ~(1ULL << 50);
+        }
+
+        /// @brief Test whether this is a space-switching PC (C bit).
+        [[nodiscard]] constexpr auto is_space_switching() const noexcept -> bool {
+            return (words[0] & (1ULL << 49)) != 0;  // Bit 14 from MSB
+        }
+
+        /// @brief Set or clear the space-switching bit.
+        constexpr auto set_space_switching(bool c) noexcept -> void {
+            if (c)
+                words[0] |= (1ULL << 49);
+            else
+                words[0] &= ~(1ULL << 49);
+        }
+
+        /// @brief Get the authorization index (AX, bits 0-7 of word 0).
+        [[nodiscard]] constexpr auto authorization_index() const noexcept -> u8 {
+            return static_cast<u8>(words[0] >> 56);
+        }
+
+        /// @brief Set the authorization index.
+        constexpr auto set_authorization_index(u8 ax) noexcept -> void {
+            words[0] = (words[0] & 0x00FFFFFFFFFFFFFFULL) |
+                       (static_cast<u64>(ax) << 56);
+        }
+
+        // -- Word 1: entry point address --
+
+        /// @brief Get the 64-bit entry point address.
+        [[nodiscard]] constexpr auto entry_point() const noexcept -> u64 {
+            return words[1];
+        }
+
+        /// @brief Set the 64-bit entry point address.
+        constexpr auto set_entry_point(u64 addr) noexcept -> void {
+            words[1] = addr;
+        }
+
+        // -- Word 2: target ASCE --
+
+        /// @brief Get the ASCE for the target address space.
+        /// Only meaningful for space-switching PCs.
+        [[nodiscard]] constexpr auto target_asce() const noexcept -> u64 {
+            return words[2];
+        }
+
+        /// @brief Set the ASCE for the target address space.
+        constexpr auto set_target_asce(u64 asce) noexcept -> void {
+            words[2] = asce;
+        }
+
+        /// @brief Zero-initialize for a fresh entry.
+        constexpr auto clear() noexcept -> void {
+            words[0] = 0;
+            words[1] = 0;
+            words[2] = 0;
+            words[3] = 0;
+        }
+    };
+
+    static_assert(sizeof(entry_table_entry) == 32,
+                  "entry_table_entry must be exactly 32 bytes");
+
+} // namespace arch::s390x::cpu::linkage
+
+} // end export

@@ -22,6 +22,7 @@ import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sched.sched;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import zxfoundation.sys.printk;
 import lib.expected;
 import lib.error;
 import lib.string;
@@ -38,8 +39,9 @@ auto ap_entry() -> void;
 auto ap_dat_on() -> void;
 
 [[noreturn]] auto ap_startup() -> void {
-    arch::s390x::cpu::processor::ctl_set_bit<0>(13);
-    arch::s390x::cpu::processor::ctl_set_bit<0>(14);
+    arch::s390x::cpu::processor::ctl_set_bit<0>(13);  // External-interrupt subclass mask
+    arch::s390x::cpu::processor::ctl_set_bit<0>(14);  // I/O-interrupt subclass mask
+    arch::s390x::cpu::processor::ctl_set_bit<0>(15);  // ASF: address-space-function control
     (void)g_ap_online.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
 
     while (g_sched_ready.load(arch::s390x::lib::atomic::memory_order::acquire) == 0)
@@ -69,8 +71,9 @@ namespace arch::s390x::cpu::smp {
     auto init_bsp() noexcept -> void {
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, handle_ipi, nullptr, 0);
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   handle_ipi, nullptr, 0);
-        processor::ctl_set_bit<0>(13);
-        processor::ctl_set_bit<0>(14);
+        processor::ctl_set_bit<0>(13);  // External-interrupt subclass mask
+        processor::ctl_set_bit<0>(14);  // I/O-interrupt subclass mask
+        processor::ctl_set_bit<0>(15);  // ASF: address-space-function control
     }
 
     auto init_aps(const init::zxfl::protocol& proto) noexcept
@@ -147,10 +150,7 @@ namespace arch::s390x::cpu::smp {
     }
 
     /// @brief Signal APs that the scheduler is ready.
-    ///
-    /// Called by the BSP after sched_init() completes.  APs spin in
-    /// ap_startup() until this is called, then proceed to sched_init_ap().
-    auto notify_sched_ready() noexcept -> void {
+    auto ap_release_all() noexcept -> void {
         g_sched_ready.store(1, lib::atomic::memory_order::release);
     }
 

@@ -1,0 +1,147 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/min_heap.cxxm
+/// @brief Generic intrusive binary min-heap with fixed capacity.
+
+export module lib.min_heap;
+import zxfoundation.base.types;
+
+export {
+
+namespace lib {
+
+    /// @brief Fixed-capacity binary min-heap.
+    ///
+    /// Stores elements of type T in a contiguous array, ordered by a
+    /// caller-supplied comparator.  All mutating operations accept the
+    /// comparator so the heap remains stateless w.r.t. ordering policy.
+    ///
+    /// @tparam T         Element type (typically a pointer).
+    /// @tparam Capacity  Maximum number of elements.
+    template<typename T, u32 Capacity>
+    struct min_heap {
+        T     entries[Capacity]{};
+        u32   m_count{0};
+
+        /// @brief Number of elements in the heap.
+        [[nodiscard]] constexpr auto size() const noexcept -> u32 {
+            return m_count;
+        }
+
+        /// @brief Whether the heap is empty.
+        [[nodiscard]] constexpr auto empty() const noexcept -> bool {
+            return m_count == 0;
+        }
+
+        /// @brief Peek at the minimum element without removing it.
+        [[nodiscard]] constexpr auto peek() const noexcept -> T {
+            return (m_count > 0) ? entries[0] : T{};
+        }
+
+        /// @brief Insert an element, maintaining the heap invariant.
+        /// @return true on success, false if the heap is full.
+        template<typename Less>
+        [[nodiscard]] auto push(T elem, Less less) noexcept -> bool {
+            if (m_count >= Capacity)
+                return false;
+            const u32 idx = m_count;
+            entries[idx] = elem;
+            ++m_count;
+            sift_up(idx, less);
+            return true;
+        }
+
+        /// @brief Remove the minimum element.
+        template<typename Less>
+        auto pop(Less less) noexcept -> void {
+            if (m_count == 0) return;
+            --m_count;
+            if (m_count > 0) {
+                entries[0] = entries[m_count];
+                entries[m_count] = T{};
+                sift_down(0, less);
+            } else {
+                entries[0] = T{};
+            }
+        }
+
+        /// @brief Remove a specific element by linear scan.
+        /// @return true if the element was found and removed.
+        template<typename Less>
+        [[nodiscard]] auto remove(T elem, Less less) noexcept -> bool {
+            u32 pos = m_count;
+            for (u32 i = 0; i < m_count; ++i) {
+                if (entries[i] == elem) {
+                    pos = i;
+                    break;
+                }
+            }
+            if (pos == m_count) return false;
+
+            --m_count;
+            if (pos < m_count) {
+                entries[pos] = entries[m_count];
+                entries[m_count] = T{};
+
+                if (pos > 0 && less(entries[pos], entries[parent_of(pos)])) {
+                    sift_up(pos, less);
+                } else {
+                    sift_down(pos, less);
+                }
+            } else {
+                entries[pos] = T{};
+            }
+            return true;
+        }
+
+    private:
+        [[nodiscard]] static constexpr auto parent_of(u32 i) noexcept -> u32 {
+            return (i - 1) / 2;
+        }
+
+        [[nodiscard]] static constexpr auto left_of(u32 i) noexcept -> u32 {
+            return 2 * i + 1;
+        }
+
+        [[nodiscard]] static constexpr auto right_of(u32 i) noexcept -> u32 {
+            return 2 * i + 2;
+        }
+
+        template<typename Less>
+        auto sift_up(u32 idx, Less less) noexcept -> void {
+            while (idx > 0) {
+                const u32 p = parent_of(idx);
+                if (!less(entries[idx], entries[p]))
+                    break;
+                T tmp = entries[p];
+                entries[p] = entries[idx];
+                entries[idx] = tmp;
+                idx = p;
+            }
+        }
+
+        template<typename Less>
+        auto sift_down(u32 idx, Less less) noexcept -> void {
+            while (true) {
+                u32 smallest = idx;
+                const u32 l = left_of(idx);
+                const u32 r = right_of(idx);
+
+                if (l < m_count && less(entries[l], entries[smallest]))
+                    smallest = l;
+                if (r < m_count && less(entries[r], entries[smallest]))
+                    smallest = r;
+
+                if (smallest == idx)
+                    break;
+
+                T tmp = entries[idx];
+                entries[idx] = entries[smallest];
+                entries[smallest] = tmp;
+                idx = smallest;
+            }
+        }
+    };
+
+} // namespace lib
+
+} // end export

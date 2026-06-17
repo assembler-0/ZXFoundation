@@ -1,0 +1,6 @@
+!files : !compile_group -> [auto] {
+    gate_types.cxxm
+    gate.cxxm
+    dispatch.cxxm
+    nucleus_handlers.cxxm
+}

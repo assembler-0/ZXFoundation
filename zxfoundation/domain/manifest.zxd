@@ -1,4 +1,4 @@
 !files : !compile_group -> [auto] {
-    bootstrap.cxxm
-    main.cxxm
+    domain_types.cxxm
+    domain.cxxm
 }

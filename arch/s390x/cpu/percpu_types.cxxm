@@ -23,7 +23,7 @@ namespace arch::s390x::cpu::percpu {
         u16     cpu_addr{};            ///< Hardware CPU address (from STAP instruction).
         u32     _pad0{};               ///< Explicit padding to align next u64.
 
-        u64     current_task{};        ///< Virtual address of the current task_struct.
+        u64     current_domain{};      ///< Virtual address of the current domain struct.
         u64     kernel_stack{};        ///< Top of this CPU's kernel stack (virtual).
         u64     user_asce{};           ///< User ASCE (CR1 value for user address space).
 

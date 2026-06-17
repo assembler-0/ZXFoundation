@@ -1,207 +1,233 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/exec/elf_loader.cxxm
-/// @brief Kernel ELF loader — maps PT_LOAD segments into a user address space.
+/// @brief ELF64 loader — loads s390x executables into domain address spaces.
+///
+/// Maps PT_LOAD segments into the domain's page table, sets hardware
+/// storage keys via SSKE for isolation, and sets up a user stack.
 
 export module zxfoundation.exec.elf_loader;
 import zxfoundation.exec.elf_types;
-import zxfoundation.base.types;
-import zxfoundation.memory.vm;
-import zxfoundation.memory.vm_types;
-import zxfoundation.memory.vmo;
-import zxfoundation.memory.vmo_types;
+import zxfoundation.domain.domain_types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sys.printk;
-import lib.expected;
+import zxfoundation.base.types;
+import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.mmu_const;
+import arch.s390x.cpu.skey;
 import lib.error;
+import lib.expected;
+import lib.string;
+
+namespace zxfoundation::exec::_internal {
+
+    namespace pmm  = zxfoundation::memory::pmm;
+    namespace hhdm = zxfoundation::memory::hhdm;
+    namespace mmu  = arch::s390x::mmu;
+    namespace skey = arch::s390x::cpu::skey;
+
+    static constexpr u64 PAGE_SIZE   = 4096;
+    static constexpr u64 PAGE_MASK   = ~(PAGE_SIZE - 1);
+
+    /// @brief Default user stack virtual address (top of stack, grows down).
+    /// Placed at 512 GiB - 4K to leave headroom in the address space.
+    static constexpr u64 USER_STACK_TOP  = 0x0000'0080'0000'0000ULL; // 512 GiB
+    static constexpr u32 USER_STACK_PAGES = 4;  // 16 KiB stack
+
+    /// @brief Convert ELF segment flags to MMU page protection.
+    [[nodiscard]] auto flags_to_prot(u32 p_flags) noexcept -> mmu::page_prot {
+        const bool w = (p_flags & elf::PF_W) != 0;
+        const bool x = (p_flags & elf::PF_X) != 0;
+
+        if (w && x)  return mmu::PAGE_KERNEL_RWX;
+        if (w)       return mmu::PAGE_KERNEL_RW;
+        if (x)       return mmu::PAGE_KERNEL_RX;
+        return mmu::PAGE_KERNEL_RO;
+    }
+
+    /// @brief Allocate a single physical page, zero it, and return its phys address.
+    [[nodiscard]] auto alloc_user_page() noexcept
+        -> lib::expected<u64, lib::kernel_error>
+    {
+        auto result = pmm::alloc(
+            0, // order 0 = single page
+            pmm::zone::normal,
+            pmm::purpose::generic,
+            pmm::page_init::zeroed);
+        if (!result) [[unlikely]]
+            return lib::unexpected(result.error());
+        return result->phys_base;
+    }
+
+    /// @brief Map a single page into the domain and set its storage key.
+    [[nodiscard]] auto map_and_key(
+        domain::domain* d, u64 virt, u64 phys, mmu::page_prot prot
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+        auto r = mmu::map_page<mmu::dat_level::region_1>(root, virt, phys, prot);
+        if (!r) [[unlikely]]
+            return lib::unexpected(r.error());
+
+        // Program hardware storage key on the physical frame.
+        // ACC = domain's storage_key, no fetch-protect for general pages.
+        const u8 key_byte = skey::make_skey(d->storage_key, false);
+        skey::sske(phys, key_byte);
+
+        return {};
+    }
+
+    /// @brief Load a single PT_LOAD segment into the domain's address space.
+    [[nodiscard]] auto load_segment(
+        domain::domain* d,
+        const elf::elf64_phdr& phdr,
+        const u8* elf_data
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        const u64 seg_start  = phdr.p_vaddr & PAGE_MASK;
+        const u64 seg_end    = (phdr.p_vaddr + phdr.p_memsz + PAGE_SIZE - 1) & PAGE_MASK;
+        const mmu::page_prot prot = flags_to_prot(phdr.p_flags);
+
+        for (u64 va = seg_start; va < seg_end; va += PAGE_SIZE) {
+            // Allocate a physical page.
+            auto phys_r = alloc_user_page();
+            if (!phys_r) [[unlikely]]
+                return lib::unexpected(phys_r.error());
+            const u64 phys = *phys_r;
+
+            // Copy file data into the page (if within p_filesz).
+            const u64 page_virt_start = va;
+            auto* page_ptr = reinterpret_cast<u8*>(hhdm::phys_to_virt(phys));
+
+            // How much of this page overlaps with the file data?
+            if (page_virt_start < phdr.p_vaddr + phdr.p_filesz) {
+                const u64 copy_start = (page_virt_start > phdr.p_vaddr)
+                    ? page_virt_start : phdr.p_vaddr;
+                const u64 copy_end = (page_virt_start + PAGE_SIZE < phdr.p_vaddr + phdr.p_filesz)
+                    ? page_virt_start + PAGE_SIZE : phdr.p_vaddr + phdr.p_filesz;
+
+                if (copy_end > copy_start) {
+                    const u64 file_offset = phdr.p_offset + (copy_start - phdr.p_vaddr);
+                    const u64 page_offset = copy_start - page_virt_start;
+                    const u64 copy_len = copy_end - copy_start;
+                    lib::memcpy(page_ptr + page_offset, elf_data + file_offset, copy_len);
+                }
+            }
+            // BSS region (memsz > filesz) is already zeroed by page_init::zeroed.
+
+            // Map into domain's page table and set storage key.
+            auto map_r = map_and_key(d, va, phys, prot);
+            if (!map_r) [[unlikely]]
+                return lib::unexpected(map_r.error());
+        }
+
+        return {};
+    }
+
+    /// @brief Set up a user stack for the domain.
+    [[nodiscard]] auto setup_user_stack(domain::domain* d) noexcept
+        -> lib::expected<u64, lib::kernel_error>
+    {
+        const u64 stack_bottom = USER_STACK_TOP - (USER_STACK_PAGES * PAGE_SIZE);
+
+        for (u32 i = 0; i < USER_STACK_PAGES; ++i) {
+            const u64 va = stack_bottom + i * PAGE_SIZE;
+
+            auto phys_r = alloc_user_page();
+            if (!phys_r) [[unlikely]]
+                return lib::unexpected(phys_r.error());
+
+            auto map_r = map_and_key(d, va, *phys_r, mmu::PAGE_KERNEL_RW);
+            if (!map_r) [[unlikely]]
+                return lib::unexpected(map_r.error());
+        }
+
+        // Return stack top (SP points to top, grows down).
+        return USER_STACK_TOP;
+    }
+
+} // namespace zxfoundation::exec::_internal
 
 export {
 
 namespace zxfoundation::exec {
 
-    using namespace elf;
-    using namespace memory;
-    using lib::expected;
-    using lib::kernel_error;
-    using lib::unexpected;
-
-    /// @brief Result of a successful ELF load.
-    struct elf_load_result {
-        u64 entry_point;     ///< Virtual entry point (e_entry).
-        u64 load_base;       ///< Lowest virtual address mapped.
-        u64 load_end;        ///< Highest virtual address mapped (exclusive).
-        u32 segments_loaded; ///< Number of PT_LOAD segments mapped.
-    };
-
-    /// @brief Convert ELF p_flags to vm_prot.
-    [[nodiscard]] constexpr auto elf_flags_to_prot(u32 p_flags) noexcept -> vm::vm_prot {
-        auto prot = vm::vm_prot::none;
-        if (p_flags & PF_R) prot = prot | vm::vm_prot::read;
-        if (p_flags & PF_W) prot = prot | vm::vm_prot::write;
-        if (p_flags & PF_X) prot = prot | vm::vm_prot::exec;
-        return prot;
-    }
-
-    /// @brief Load an ELF64 image into a user address space.
+    /// @brief Load an ELF64 binary into a domain's address space.
     ///
-    /// @param space    Target address space (must be fresh/ready).
-    /// @param image    Pointer to the ELF image in kernel memory (HHDM-mapped).
-    /// @param image_sz Size of the ELF image in bytes.
-    /// @return         Load result with entry point and memory bounds.
+    /// Validates the ELF header, maps all PT_LOAD segments with proper
+    /// page protection and storage key enforcement, and sets up a user stack.
+    ///
+    /// @param d         Target domain (must have valid root_phys and storage_key).
+    /// @param elf_data  Pointer to the ELF binary in kernel memory.
+    /// @param elf_size  Size of the ELF binary in bytes.
+    /// @return Entry point virtual address on success, or kernel_error.
     [[nodiscard]] auto elf_load(
-        vm::address_space* space,
-        const void* image,
-        u64 image_sz
-    ) noexcept -> expected<elf_load_result, kernel_error> {
-        using namespace sys::printk;
+        domain::domain* d,
+        const void* elf_data,
+        u64 elf_size
+    ) noexcept -> lib::expected<u64, lib::kernel_error> {
+        using namespace _internal;
+        namespace elf = zxfoundation::exec::elf;
 
-        if (!space || !image || image_sz < sizeof(elf64_ehdr)) {
-            return unexpected(kernel_error::from_generic(
-                lib::generic_error::invalid_arg));
-        }
+        if (!d || !elf_data || elf_size < sizeof(elf::elf64_ehdr))
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        // ── 1. Validate the ELF header ──────────────────────────────────
+        const auto* raw = reinterpret_cast<const u8*>(elf_data);
+        const auto& ehdr = *reinterpret_cast<const elf::elf64_ehdr*>(raw);
 
-        const auto& ehdr = *static_cast<const elf64_ehdr*>(image);
-        if (!elf64_validate(ehdr)) {
-            perr("elf: invalid ELF header (magic/class/machine/type)");
-            return unexpected(kernel_error::from_generic(
-                lib::generic_error::invalid_arg));
-        }
+        // Validate ELF header.
+        if (!elf::elf64_validate(ehdr))
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        const bool is_zxf = (ehdr.e_ident[EI_OSABI] == ELFOSABI_ZXF);
-        pdebug("elf: loading {} s390x executable, entry={:#x}, phdrs={}",
-            is_zxf ? "ZXF" : "generic",
-            ehdr.e_entry, ehdr.e_phnum);
+        // Validate program header table fits within the file.
+        const u64 ph_end = ehdr.e_phoff +
+            static_cast<u64>(ehdr.e_phnum) * sizeof(elf::elf64_phdr);
+        if (ph_end > elf_size)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        // ── 2. Validate program header table bounds ─────────────────────
-
-        const u64 phdr_end = ehdr.e_phoff +
-            static_cast<u64>(ehdr.e_phnum) * sizeof(elf64_phdr);
-        if (phdr_end > image_sz) {
-            perr("elf: program header table extends past image end");
-            return unexpected(kernel_error::from_generic(
-                lib::generic_error::out_of_range));
-        }
-
-        const auto* phdrs = reinterpret_cast<const elf64_phdr*>(
-            static_cast<const u8*>(image) + ehdr.e_phoff);
-
-        // ── 3. Load PT_LOAD segments ────────────────────────────────────
-
-        elf_load_result result{};
-        result.entry_point = ehdr.e_entry;
-        result.load_base = ~0ULL;
-        result.load_end = 0;
-        result.segments_loaded = 0;
+        // Process PT_LOAD segments.
+        const auto* phdrs = reinterpret_cast<const elf::elf64_phdr*>(raw + ehdr.e_phoff);
+        u32 loaded = 0;
 
         for (u16 i = 0; i < ehdr.e_phnum; ++i) {
             const auto& ph = phdrs[i];
 
-            if (ph.p_type != PT_LOAD) continue;
+            if (ph.p_type != elf::PT_LOAD) continue;
             if (ph.p_memsz == 0) continue;
 
-            // Validate segment data bounds within the image.
-            if (ph.p_offset + ph.p_filesz > image_sz) {
-                perr("elf: PT_LOAD[{}] data extends past image end "
-                     "(offset={:#x} filesz={:#x} imgsz={:#x})",
-                     i, ph.p_offset, ph.p_filesz, image_sz);
-                return unexpected(kernel_error::from_generic(
-                    lib::generic_error::out_of_range));
-            }
+            // Validate segment data fits within the file.
+            if (ph.p_offset + ph.p_filesz > elf_size)
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-            // Page-align the virtual address range.
-            const u64 va_start = ph.p_vaddr & ~(pmm::PAGE_SIZE - 1);
-            const u64 va_end   = (ph.p_vaddr + ph.p_memsz + pmm::PAGE_SIZE - 1)
-                                 & ~(pmm::PAGE_SIZE - 1);
-            const u64 map_size = va_end - va_start;
-            const u64 va_offset_in_page = ph.p_vaddr - va_start;
+            auto r = load_segment(d, ph, raw);
+            if (!r) [[unlikely]]
+                return lib::unexpected(r.error());
 
-            // Create a VMO for this segment.
-            auto vmo_result = vmo::vmo_create(map_size, vmo::vmo_flags::none);
-            if (!vmo_result) {
-                perr("elf: PT_LOAD[{}] vmo_create({:#x}) failed", i, map_size);
-                return unexpected(vmo_result.error());
-            }
-            auto* seg_vmo = *vmo_result;
-
-            // Commit all pages in the VMO.
-            auto commit_result = vmo::vmo_commit_all(seg_vmo);
-            if (!commit_result) {
-                perr("elf: PT_LOAD[{}] vmo_commit_all failed", i);
-                vmo::vmo_destroy(seg_vmo);
-                return unexpected(commit_result.error());
-            }
-
-            // Copy file data into the VMO pages.
-            const auto* src = static_cast<const u8*>(image) + ph.p_offset;
-            u64 bytes_remaining = ph.p_filesz;
-            u64 dest_offset = va_offset_in_page;
-
-            for (u32 pg = 0; pg < seg_vmo->page_count && bytes_remaining > 0; ++pg) {
-                const u64 phys = seg_vmo->page_at(pg);
-                if (phys == 0) continue;
-
-                auto* page_va = reinterpret_cast<u8*>(
-                    hhdm::phys_to_virt(phys));
-
-                // How much to copy into this page?
-                u64 page_start = static_cast<u64>(pg) * pmm::PAGE_SIZE;
-                if (page_start + pmm::PAGE_SIZE <= dest_offset) continue;
-
-                u64 copy_start = (dest_offset > page_start)
-                    ? dest_offset - page_start : 0;
-                u64 copy_len = pmm::PAGE_SIZE - copy_start;
-                if (copy_len > bytes_remaining) copy_len = bytes_remaining;
-
-                // Zero the page first (handles BSS and alignment gaps).
-                for (u64 j = 0; j < pmm::PAGE_SIZE; ++j) page_va[j] = 0;
-
-                // Copy file data.
-                for (u64 j = 0; j < copy_len; ++j) {
-                    page_va[copy_start + j] = *src++;
-                }
-                bytes_remaining -= copy_len;
-            }
-
-            // Map the VMO into the address space.
-            const auto prot = elf_flags_to_prot(ph.p_flags);
-            auto map_result = vm::vm_map(
-                space, va_start, map_size,
-                seg_vmo, 0, prot,
-                vm::vm_flags::fixed);
-
-            if (!map_result) {
-                perr("elf: PT_LOAD[{}] vm_map({:#x}, {:#x}) failed",
-                     i, va_start, map_size);
-                vmo::vmo_destroy(seg_vmo);
-                return unexpected(map_result.error());
-            }
-
-            pinfo("elf: PT_LOAD[{}] {:#x}–{:#x} {}{}{}",
-                i, va_start, va_end,
-                (ph.p_flags & PF_R) ? "r" : "-",
-                (ph.p_flags & PF_W) ? "w" : "-",
-                (ph.p_flags & PF_X) ? "x" : "-");
-
-            // Update load bounds.
-            if (va_start < result.load_base) result.load_base = va_start;
-            if (va_end > result.load_end) result.load_end = va_end;
-            ++result.segments_loaded;
+            sys::printk::pdebug("elf: loaded segment {} va={:#x} memsz={:#x} filesz={:#x} flags={}\n",
+                loaded, ph.p_vaddr, ph.p_memsz, ph.p_filesz, ph.p_flags);
+            ++loaded;
         }
 
-        if (result.segments_loaded == 0) {
-            perr("elf: no PT_LOAD segments found");
-            return unexpected(kernel_error::from_generic(
-                lib::generic_error::not_found));
-        }
+        if (loaded == 0)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
 
-        pinfo("elf: loaded {} segments, entry={:#x}, range=[{:#x}, {:#x})",
-            result.segments_loaded, result.entry_point,
-            result.load_base, result.load_end);
+        // Set up user stack.
+        auto stack_r = setup_user_stack(d);
+        if (!stack_r) [[unlikely]]
+            return lib::unexpected(stack_r.error());
 
-        return result;
+        // Store stack pointer in user regs (r15 = stack top).
+        d->uregs.gprs[15] = *stack_r;
+
+        sys::printk::pdebug("elf: loaded {} segments, entry={:#x}, stack_top={:#x}\n",
+            loaded, ehdr.e_entry, *stack_r);
+
+        return ehdr.e_entry;
     }
 
 } // namespace zxfoundation::exec

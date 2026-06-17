@@ -1,0 +1,88 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_idle.cxxm
+/// @brief Idle scheduling class and idle domain initialization.
+
+export module zxfoundation.sched.sched_idle;
+import zxfoundation.domain.domain_types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+
+namespace _internal {
+
+    using namespace zxfoundation::domain;
+    using namespace zxfoundation::memory::pmm;
+    using zxfoundation::memory::hhdm::phys_to_virt;
+
+    /// @brief Static array of idle domains — one per CPU.
+    domain g_idle_domains[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS];
+
+    /// @brief Stack order for idle domain kernel stacks (order 2 = 4 pages = 16 KiB).
+    static constexpr u32 IDLE_STACK_ORDER = 2;
+
+    inline auto idle_enqueue(run_queue&, domain&) noexcept -> void {}
+    inline auto idle_dequeue(run_queue&, domain&) noexcept -> void {}
+    inline auto idle_pick_next(run_queue& rq) noexcept -> domain* { return rq.idle; }
+    inline auto idle_tick(run_queue&, domain&) noexcept -> void {}
+    inline auto idle_preempt(run_queue&, domain&) noexcept -> void {}
+
+} // namespace _internal
+
+export {
+
+namespace zxfoundation::sched::idle {
+
+    using zxfoundation::domain::domain;
+    using zxfoundation::domain::domain_flags;
+    using zxfoundation::domain::domain_state;
+    using zxfoundation::domain::run_queue;
+    using zxfoundation::domain::sched_class;
+    using zxfoundation::domain::DOMAIN_ID_NUCLEUS;
+    using zxfoundation::domain::SKEY_NUCLEUS;
+
+    /// @brief The idle scheduling class vtable.
+    inline constexpr sched_class the_class{
+        _internal::idle_enqueue,
+        _internal::idle_dequeue,
+        _internal::idle_pick_next,
+        _internal::idle_tick,
+        _internal::idle_preempt
+    };
+
+    /// @brief Initialize an idle domain for a given CPU.
+    /// @param cpu_id  Logical CPU identifier.
+    /// @return Pointer to the initialized idle domain, or nullptr on failure.
+    [[nodiscard]] inline auto init_idle_domain(u16 cpu_id) noexcept -> domain* {
+        using namespace zxfoundation::memory::pmm;
+
+        auto* d = &_internal::g_idle_domains[cpu_id];
+
+        d->id          = DOMAIN_ID_NUCLEUS;
+        d->name        = "idle/0";
+        d->flags       = domain_flags::idle;
+        d->state       = domain_state::active;
+        d->storage_key = SKEY_NUCLEUS;
+        d->cpu         = cpu_id;
+
+        auto stack_r = alloc(_internal::IDLE_STACK_ORDER,
+                             zone::dma31,
+                             purpose::stack,
+                             page_init::zeroed);
+        if (!stack_r) return nullptr;
+
+        const u64 stack_phys = stack_r->phys_base;
+        const u64 stack_virt = _internal::phys_to_virt(stack_phys);
+        const u64 stack_size = static_cast<u64>(PAGE_SIZE) << _internal::IDLE_STACK_ORDER;
+
+        d->kstack_base = stack_virt;
+        d->kstack_top  = stack_virt + stack_size;
+        d->ksp         = d->kstack_top;
+
+        return d;
+    }
+
+} // namespace zxfoundation::sched::idle
+
+} // end export

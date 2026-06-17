@@ -151,8 +151,8 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     uint64_t    ap_cr0;                         /* 0x0330  LC_AP_CR0 */
     uint64_t    ap_cr13;                        /* 0x0338  LC_AP_CR13 */
 
-    /* Current process */
-    uint64_t    current_task;                   /* 0x0340 */
+    /* Current domain */
+    uint64_t    current_domain;                 /* 0x0340 */
     uint64_t    kernel_stack;                   /* 0x0348  LC_KERNEL_STACK  */
 
     /* Stacks */
