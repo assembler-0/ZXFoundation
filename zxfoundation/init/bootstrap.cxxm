@@ -1,15 +1,79 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/init/bootstrap.cxxm
 /// @brief sys/bootstrap — first schedulable kernel domain.
+///
+/// Searches boot protocol modules for the init binary, loads the ELF
+/// into a new user-mode domain, and enqueues it on the scheduler.
 
 export module zxfoundation.init.bootstrap;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
 import zxfoundation.sched.sched;
+import zxfoundation.exec.elf_loader;
+import zxfoundation.memory.hhdm;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.init.zxfl.protocol;
+import arch.s390x.cpu.psw_types;
+import lib.error;
+import lib.expected;
+import lib.string;
 
 using zxfoundation::sys::printk::pinfo;
+using zxfoundation::sys::printk::perr;
+
+namespace _internal {
+
+    /// @brief Module descriptor passed to the init domain entry trampoline.
+    struct module_info {
+        u64 data_virt{};
+        u64 size_bytes{};
+    };
+
+    /// @brief Static storage for module info — must outlive the trampoline call.
+    static module_info g_init_module_info{};
+
+    /// @brief Kernel-mode entry function for the user/init domain.
+    ///
+    /// Called on the domain's kernel stack after the first context switch
+    /// into this domain. Loads the ELF binary, then enters user mode.
+    static auto init_domain_entry(void* arg) noexcept -> void {
+        auto* info = static_cast<module_info*>(arg);
+
+        auto* self = static_cast<zxfoundation::domain::domain*>(
+            arch::s390x::cpu::lowcore::current_domain_ptr());
+        if (!self) [[unlikely]] {
+            perr("bootstrap: init domain entry — no current domain");
+            return;
+        }
+
+        pinfo("bootstrap: loading ELF binary ({} bytes)", info->size_bytes);
+
+        auto entry_r = zxfoundation::exec::elf_load(
+            self,
+            reinterpret_cast<const void*>(info->data_virt),
+            info->size_bytes);
+
+        if (!entry_r) [[unlikely]] {
+            perr("bootstrap: elf_load failed for user/init");
+            self->state = zxfoundation::domain::domain_state::dying;
+            zxfoundation::sched::schedule();
+            return;
+        }
+
+        const u64 entry_point = *entry_r;
+        pinfo("bootstrap: ELF loaded, entry={:#x}", entry_point);
+
+        // Set up user PSW using the standard user-mode mask.
+        self->uregs.psw_mask = arch::s390x::cpu::psw::PSW_MASK_USER;
+        self->uregs.psw_addr = entry_point;
+
+        // Enter user mode — this does not return.
+        zxfoundation::sched::domain_enter_user(self);
+    }
+
+} // namespace _internal
 
 export {
 
@@ -18,31 +82,93 @@ namespace zxfoundation::init::bootstrap {
     /// @brief Entry function for the sys/bootstrap domain.
     /// @param arg  Unused (reserved for future boot parameters).
     auto bootstrap_entry(void* arg) noexcept -> void {
-        (void)arg;
+        if (!arg) goto exit;
 
+        {
         pinfo("bootstrap: sys/bootstrap domain running");
+        pinfo("bootstrap: searching for init module...");
 
-        // ── Late initialization ──────────────────────────────────────────
-        //
-        // Future work:
-        //   1. Probe I/O devices (CHPID, subchannel enumeration)
-        //   2. Load init binary from IPL device or embedded ramdisk
-        //   3. Create first user-mode domain
-        //   4. Enqueue first user-mode domain
+        const arch::s390x::init::zxfl::protocol* proto = static_cast<arch::s390x::init::zxfl::protocol*>(arg);
+        const arch::s390x::init::zxfl::sysmodule* found = nullptr;
 
-        pinfo("bootstrap: late initialization complete (no init binary configured)");
+        for (u32 i = 0; i < proto->module_count && i < 16U; ++i) {
+            const auto& mod = proto->modules[i];
+            if (lib::streq(mod.name, "ZXF.INIT")) {
+                found = &mod;
+                break;
+            }
+        }
 
-        // ── Exit ─────────────────────────────────────────────────────────
-        //
-        // Mark ourselves as dying and yield.  The scheduler will reap us
-        // on the next context switch away from this domain.
+        // Fall back to the first module if only one is loaded.
+        if (!found && proto->module_count == 1U) {
+            found = &proto->modules[0];
+            pinfo("bootstrap: using first module as init (name=\"{}\")", found->name);
+        }
+
+        if (!found || found->size_bytes == 0 || found->phys_start == 0) {
+            perr("bootstrap: no init module found — system cannot continue");
+            auto* self = static_cast<zxfoundation::domain::domain*>(
+                arch::s390x::cpu::lowcore::current_domain_ptr());
+            if (self) {
+                self->state = zxfoundation::domain::domain_state::dying;
+            }
+            zxfoundation::sched::schedule();
+            return;
+        }
+
+        pinfo("bootstrap: found init module phys={:#x} size={}", found->phys_start, found->size_bytes);
+
+        // ── Convert module physical address to HHDM virtual ─────────────
+        const u64 data_virt = zxfoundation::memory::hhdm::phys_to_virt(found->phys_start);
+
+        // ── Create the user/init domain ─────────────────────────────────
+        auto dom_r = zxfoundation::domain::domain_create("user/init");
+        if (!dom_r) {
+            perr("bootstrap: failed to create user/init domain");
+            auto* self = static_cast<zxfoundation::domain::domain*>(
+                arch::s390x::cpu::lowcore::current_domain_ptr());
+            if (self) {
+                self->state = zxfoundation::domain::domain_state::dying;
+            }
+            zxfoundation::sched::schedule();
+            return;
+        }
+        auto* d = *dom_r;
+
+        auto act_r = zxfoundation::domain::domain_activate(d->id);
+        if (!act_r) {
+            perr("bootstrap: failed to activate user/init domain");
+            auto* self = static_cast<zxfoundation::domain::domain*>(
+                arch::s390x::cpu::lowcore::current_domain_ptr());
+            if (self) {
+                self->state = zxfoundation::domain::domain_state::dying;
+            }
+            zxfoundation::sched::schedule();
+            return;
+        }
+
+        // ── Prepare module info and wire up the domain context ──────────
+        _internal::g_init_module_info.data_virt  = data_virt;
+        _internal::g_init_module_info.size_bytes = found->size_bytes;
+
+        d->cpu = 0;
+        zxfoundation::sched::setup_domain_context(
+            d,
+            _internal::init_domain_entry,
+            &_internal::g_init_module_info);
+        zxfoundation::sched::enqueue_domain(d);
+
+        pinfo("bootstrap: user/init domain created (id={}), enqueued", d->id);
+        }
+
+    exit:
+
         auto* self = static_cast<zxfoundation::domain::domain*>(
             arch::s390x::cpu::lowcore::current_domain_ptr());
         if (self) {
             self->state = zxfoundation::domain::domain_state::dying;
         }
         zxfoundation::sched::schedule();
-
     }
 
 } // namespace zxfoundation::init::bootstrap

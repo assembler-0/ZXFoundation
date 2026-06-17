@@ -1,5 +1,4 @@
 !files : !compile_group -> [auto] {
     elf_types.cxxm
     elf_loader.cxxm
-    test_binary.cxxm
 }

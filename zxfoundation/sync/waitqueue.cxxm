@@ -1,0 +1,111 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/waitqueue.cxxm
+/// @brief Wait queue operations — prepare, finish, and wake primitives.
+
+export module zxfoundation.sync.waitqueue;
+import zxfoundation.sync.waitqueue_types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.lowcore;
+import lib.list;
+import lib.util;
+
+export {
+
+namespace zxfoundation::sync {
+
+    /// @brief Initialize a wait queue head to the empty state.
+    auto waitqueue_init(wait_queue_head& wq) noexcept -> void {
+        static_cast<void>(wq);
+    }
+
+    /// @brief Add a wait entry to the queue and mark it active.
+    /// @param wq    The wait queue to join.
+    /// @param entry The caller-owned wait entry (typically on kernel stack).
+    /// @param flags Behavioural flags for this wait (exclusive, interruptible, etc.).
+    auto prepare_to_wait(wait_queue_head& wq,
+                         wait_entry& entry,
+                         wait_flags flags) noexcept -> void {
+        // Capture the sleeping domain's ID from lowcore before taking the lock.
+        const auto* lc = arch::s390x::cpu::lowcore::get_current();
+        const u64 dom_addr = lc->current_domain;
+        u32 dom_id = 0xFFFFFFFFU;
+        if (dom_addr != 0) {
+            dom_id = *reinterpret_cast<const u32*>(dom_addr);
+        }
+
+        locking::irq_lock_guard guard(wq.lock);
+
+        entry.flags     = flags;
+        entry.result    = wait_result::woken;
+        entry.domain_id = dom_id;
+        entry.active    = true;
+
+        // Append to the tail so that FIFO ordering is preserved for
+        // exclusive wakeups (wake_up_one wakes the first entry).
+        wq.entries.push_back(entry.link);
+    }
+
+    /// @brief Remove a wait entry from the queue if still active.
+    /// @param wq    The wait queue the entry was added to.
+    /// @param entry The wait entry to remove.
+    auto finish_wait(wait_queue_head& wq,
+                     wait_entry& entry) noexcept -> void {
+        locking::irq_lock_guard guard(wq.lock);
+
+        if (entry.active) {
+            lib::list_head::remove(entry.link);
+            entry.active = false;
+        }
+    }
+
+    /// @brief Wake ALL waiters on the queue.
+    /// @param wq The wait queue to drain.
+    auto wake_up(wait_queue_head& wq) noexcept -> void {
+        locking::irq_lock_guard guard(wq.lock);
+
+        for (const auto& node : wq.entries) {
+            auto* entry = lib::container_of<wait_entry, lib::list_node, &wait_entry::link>(node);
+
+            entry->result = wait_result::woken;
+            entry->active = false;
+            lib::list_head::remove(entry->link);
+        }
+    }
+
+    /// @brief Wake the first waiter on the queue.
+    /// @param wq The wait queue.
+    auto wake_up_one(wait_queue_head& wq) noexcept -> void {
+        locking::irq_lock_guard guard(wq.lock);
+
+        if (wq.entries.empty()) {
+            return;
+        }
+
+        lib::list_node* node = *wq.entries.begin();
+        auto* entry = lib::container_of<wait_entry, lib::list_node, &wait_entry::link>(node);
+
+        entry->result = wait_result::woken;
+        entry->active = false;
+        lib::list_head::remove(entry->link);
+    }
+
+    /// @brief Lockless snapshot: returns true if any waiters are queued.
+    /// @param wq The wait queue to test.
+    /// @return true if the entry list is non-empty.
+    [[nodiscard]] auto waitqueue_active(const wait_queue_head& wq) noexcept -> bool {
+        return !wq.entries.empty();
+    }
+
+    /// @brief Lockless snapshot: returns the number of queued waiters.
+    /// @param wq The wait queue to count.
+    /// @return Number of entries currently linked.
+    [[nodiscard]] auto waitqueue_count(const wait_queue_head& wq) noexcept -> u32 {
+        return static_cast<u32>(wq.entries.count());
+    }
+
+} // namespace zxfoundation::sync
+
+} // end export

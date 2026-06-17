@@ -60,11 +60,21 @@ namespace lib {
         strcpy(dest, src); // Reuse optimized strcpy
     }
 
-    auto strlen(const char *s) -> usize{
+    auto strlen(const char *s) -> usize {
         usize n = 0;
         while (s[n])
             n++;
         return n;
+    }
+
+    auto streq(const char* a, const char* b) noexcept -> bool {
+        if (!a || !b) return false;
+        while (*a && *b) {
+            if (*a != *b) return false;
+            ++a;
+            ++b;
+        }
+        return *a == *b;
     }
 
     auto memset(void *s, int c, usize n) -> void* {

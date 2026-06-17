@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    waitqueue_types.cxxm
+    waitqueue.cxxm
+}

@@ -1,0 +1,355 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/css/css_types.cxxm
+/// @brief z/Architecture Channel Subsystem hardware data structures (PoP Chapter 14).
+
+export module arch.s390x.css.css_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::css {
+
+    // -----------------------------------------------------------------------
+    // Subchannel limits
+    // -----------------------------------------------------------------------
+
+    /// @brief Maximum number of subchannels in the subchannel number space.
+    inline constexpr u32 MAX_SUBCHANNELS = 65536;
+
+    /// @brief Maximum valid subchannel number (0-based).
+    inline constexpr u16 MAX_SCHID = 0xFFFF;
+
+    // -----------------------------------------------------------------------
+    // CCW flag bits — PoP §14.1.2
+    // -----------------------------------------------------------------------
+
+    inline constexpr u8 CCW_FLAG_CC      = 0x40; ///< Command chaining.
+    inline constexpr u8 CCW_FLAG_SLI     = 0x20; ///< Suppress length indication.
+    inline constexpr u8 CCW_FLAG_SKIP    = 0x08; ///< Skip data transfer.
+    inline constexpr u8 CCW_FLAG_PCI     = 0x04; ///< Program-controlled interruption.
+    inline constexpr u8 CCW_FLAG_IDA     = 0x02; ///< Indirect data addressing.
+    inline constexpr u8 CCW_FLAG_SUSPEND = 0x01; ///< Suspend channel program.
+
+    // -----------------------------------------------------------------------
+    // CCW command codes — PoP §14.1.1
+    // -----------------------------------------------------------------------
+
+    inline constexpr u8 CCW_CMD_NOP         = 0x03; ///< No operation.
+    inline constexpr u8 CCW_CMD_BASIC_SENSE = 0x04; ///< Basic sense.
+    inline constexpr u8 CCW_CMD_TIC         = 0x08; ///< Transfer in channel.
+    inline constexpr u8 CCW_CMD_READ        = 0x02; ///< Read.
+    inline constexpr u8 CCW_CMD_WRITE       = 0x01; ///< Write.
+    inline constexpr u8 CCW_CMD_CONTROL     = 0x03; ///< Control.
+    inline constexpr u8 CCW_CMD_SENSE_ID    = 0xE4; ///< Sense ID.
+
+    // -----------------------------------------------------------------------
+    // Device status bits — PoP §14.3.5
+    // -----------------------------------------------------------------------
+
+    inline constexpr u8 DEV_STAT_ATTN = 0x80; ///< Attention.
+    inline constexpr u8 DEV_STAT_MOD  = 0x40; ///< Status modifier.
+    inline constexpr u8 DEV_STAT_CUE  = 0x20; ///< Control unit end.
+    inline constexpr u8 DEV_STAT_BUSY = 0x10; ///< Busy.
+    inline constexpr u8 DEV_STAT_CE   = 0x08; ///< Channel end.
+    inline constexpr u8 DEV_STAT_DE   = 0x04; ///< Device end.
+    inline constexpr u8 DEV_STAT_UC   = 0x02; ///< Unit check.
+    inline constexpr u8 DEV_STAT_UX   = 0x01; ///< Unit exception.
+
+    // -----------------------------------------------------------------------
+    // Subchannel status bits — PoP §14.3.5
+    // -----------------------------------------------------------------------
+
+    inline constexpr u8 SCH_STAT_PCI  = 0x80; ///< Program-controlled interruption.
+    inline constexpr u8 SCH_STAT_INCL = 0x40; ///< Incorrect length.
+    inline constexpr u8 SCH_STAT_PROG = 0x20; ///< Program check.
+    inline constexpr u8 SCH_STAT_PROT = 0x10; ///< Protection check.
+    inline constexpr u8 SCH_STAT_CHD  = 0x08; ///< Channel data check.
+    inline constexpr u8 SCH_STAT_CHC  = 0x04; ///< Channel control check.
+    inline constexpr u8 SCH_STAT_ICC  = 0x02; ///< Interface control check.
+    inline constexpr u8 SCH_STAT_CC   = 0x01; ///< Chaining check.
+
+    // -----------------------------------------------------------------------
+    // SCSW function control bits — PoP §14.3.5
+    // -----------------------------------------------------------------------
+
+    inline constexpr u8 FCTL_START = 0x4; ///< Start function.
+    inline constexpr u8 FCTL_HALT  = 0x2; ///< Halt function.
+    inline constexpr u8 FCTL_CLEAR = 0x1; ///< Clear function.
+
+    // -----------------------------------------------------------------------
+    // SCSW status control bits — PoP §14.3.5
+    // -----------------------------------------------------------------------
+
+    inline constexpr u8 STCTL_STATUS_PEND = 0x4; ///< Status pending.
+    inline constexpr u8 STCTL_PRIMARY     = 0x2; ///< Primary status.
+    inline constexpr u8 STCTL_SECONDARY   = 0x1; ///< Secondary status.
+
+    // -----------------------------------------------------------------------
+    // SCSW activity control bits — PoP §14.3.5
+    // -----------------------------------------------------------------------
+
+    inline constexpr u8 ACTL_SUSPENDED  = 0x40; ///< Suspended.
+    inline constexpr u8 ACTL_DEV_ACTIVE = 0x08; ///< Device active.
+    inline constexpr u8 ACTL_SCH_ACTIVE = 0x04; ///< Subchannel active.
+
+    // -----------------------------------------------------------------------
+    // ccw1 — Format-1 Channel Command Word (16 bytes) — PoP §14.1
+    // -----------------------------------------------------------------------
+
+    /// @brief Format-1 CCW: 16 bytes, big-endian, used with Format-1 ORB.
+    struct [[gnu::packed]] ccw1 {
+        u8  cmd{};          ///< Command code.
+        u8  flags{};        ///< Flag byte (CC, SLI, SKIP, PCI, IDA, SUSPEND).
+        u16 count{};        ///< Byte count.
+        u32 _reserved{0};   ///< Reserved, must be zero.
+        u64 data_addr{};    ///< 64-bit data address.
+    };
+
+    static_assert(sizeof(ccw1) == 16, "ccw1 must be exactly 16 bytes");
+
+    // -----------------------------------------------------------------------
+    // scsw — Subchannel Status Word (12 bytes) — PoP §14.3.5
+    // -----------------------------------------------------------------------
+
+    /// @brief Subchannel Status Word — packed status from TSCH.
+    ///
+    /// Word 0 contains key, flags, function/activity/status control fields.
+    /// Stored as u32 with accessor methods for the individual bit fields.
+    struct [[gnu::packed]] scsw {
+        u32 flags{0};       ///< Word 0: key(4), control bits, fctl(3), actl(7), stctl(3).
+        u32 ccw_addr{0};    ///< CCW address.
+        u8  dev_status{0};  ///< Device status byte.
+        u8  sch_status{0};  ///< Subchannel status byte.
+        u16 count{0};       ///< Residual byte count.
+
+        /// @brief Extract function control field (bits 21-23 of word 0).
+        [[nodiscard]] constexpr auto fctl() const noexcept -> u8 {
+            return static_cast<u8>((flags >> 8) & 0x07);
+        }
+
+        /// @brief Extract activity control field (bits 24-30 of word 0).
+        [[nodiscard]] constexpr auto actl() const noexcept -> u8 {
+            return static_cast<u8>((flags >> 1) & 0x7F);
+        }
+
+        /// @brief Extract status control field (bits 29-31 of word 0).
+        ///
+        /// Note: stctl occupies the lowest 3 bits that are not consumed by the
+        /// zero padding bit. The field sits at bits [5:7] of the last byte in
+        /// word 0 when viewed in IBM bit order; in host u32 layout this is
+        /// (flags >> 5) & 0x07 with the zero bit at bit 4.
+        ///
+        /// Corrected mapping: IBM bits 26-28 → host bits 5..3.
+        [[nodiscard]] constexpr auto stctl() const noexcept -> u8 {
+            return static_cast<u8>((flags >> 5) & 0x07);
+        }
+
+        /// @brief True if status is solicited (primary status pending).
+        [[nodiscard]] constexpr auto is_solicited() const noexcept -> bool {
+            return (stctl() & STCTL_STATUS_PEND) != 0;
+        }
+
+        /// @brief True if primary status is indicated.
+        [[nodiscard]] constexpr auto is_primary() const noexcept -> bool {
+            return (stctl() & STCTL_PRIMARY) != 0;
+        }
+
+        /// @brief True if secondary status is indicated.
+        [[nodiscard]] constexpr auto is_secondary() const noexcept -> bool {
+            return (stctl() & STCTL_SECONDARY) != 0;
+        }
+
+        /// @brief True if alert status (unsolicited primary without secondary).
+        [[nodiscard]] constexpr auto is_alert() const noexcept -> bool {
+            return is_primary() && !is_secondary();
+        }
+
+        /// @brief True if device-end (DE) bit is set in device status.
+        [[nodiscard]] constexpr auto has_device_end() const noexcept -> bool {
+            return (dev_status & DEV_STAT_DE) != 0;
+        }
+
+        /// @brief True if channel-end (CE) bit is set in device status.
+        [[nodiscard]] constexpr auto has_channel_end() const noexcept -> bool {
+            return (dev_status & DEV_STAT_CE) != 0;
+        }
+
+        /// @brief True if any error condition is indicated.
+        ///
+        /// Checks unit-check, unit-exception in device status and
+        /// all subchannel status error bits (program, protection,
+        /// channel-data, channel-control, interface-control, chaining).
+        [[nodiscard]] constexpr auto has_error() const noexcept -> bool {
+            constexpr u8 dev_err_mask = DEV_STAT_UC | DEV_STAT_UX;
+            constexpr u8 sch_err_mask = SCH_STAT_PROG | SCH_STAT_PROT |
+                                        SCH_STAT_CHD  | SCH_STAT_CHC  |
+                                        SCH_STAT_ICC  | SCH_STAT_CC;
+            return ((dev_status & dev_err_mask) != 0) ||
+                   ((sch_status & sch_err_mask) != 0);
+        }
+    };
+
+    static_assert(sizeof(scsw) == 12, "scsw must be exactly 12 bytes");
+
+    // -----------------------------------------------------------------------
+    // pmcw — Path Management Control Word (28 bytes) — PoP §14.3.3
+    // -----------------------------------------------------------------------
+
+    /// @brief Path Management Control Word — subchannel configuration.
+    struct [[gnu::packed]] pmcw {
+        u32 intparm{0};   ///< Interruption parameter.
+        u16 flags{0};     ///< Control flags (E, LM, MM, D, T, V, ISC, etc.).
+        u16 devno{0};     ///< Device number.
+        u8  lpm{0};       ///< Logical path mask.
+        u8  pnom{0};      ///< Path not operational mask.
+        u8  lpum{0};      ///< Last path used mask.
+        u8  pim{0};       ///< Path installed mask.
+        u16 mbi{0};       ///< Measurement block index.
+        u8  pom{0};       ///< Path operational mask.
+        u8  pam{0};       ///< Path available mask.
+        u8  chpid[8]{};   ///< Channel path identifiers (one per path).
+        u32 _reserved{0}; ///< Reserved.
+
+        /// @brief True if subchannel is enabled (E bit — bit 7 of flags).
+        [[nodiscard]] constexpr auto is_enabled() const noexcept -> bool {
+            return (flags & 0x0080) != 0;
+        }
+
+        /// @brief True if multipath mode is active (M bit — bit 5 of flags).
+        [[nodiscard]] constexpr auto is_multipath() const noexcept -> bool {
+            return (flags & 0x0020) != 0;
+        }
+
+        /// @brief Extract ISC (I/O interruption subclass) field (bits 0-2 of flags).
+        [[nodiscard]] constexpr auto subchannel_type() const noexcept -> u8 {
+            return static_cast<u8>((flags >> 13) & 0x07);
+        }
+    };
+
+    static_assert(sizeof(pmcw) == 28, "pmcw must be exactly 28 bytes");
+
+    // -----------------------------------------------------------------------
+    // schib — Subchannel Information Block (52 bytes) — PoP §14.3.2
+    // -----------------------------------------------------------------------
+
+    /// @brief Subchannel Information Block — returned by STSCH, input to MSCH.
+    struct [[gnu::packed]] alignas(4) schib {
+        pmcw pmcw_data{};   ///< Path Management Control Word.
+        scsw scsw_data{};   ///< Subchannel Status Word.
+        u64  mba{0};        ///< Measurement block address.
+        u32  _pad{0};       ///< Padding to 52 bytes.
+    };
+
+    static_assert(sizeof(schib) == 52, "schib must be exactly 52 bytes");
+
+    // -----------------------------------------------------------------------
+    // orb — Operation Request Block (32 bytes) — PoP §14.2.1
+    // -----------------------------------------------------------------------
+
+    /// @brief Operation Request Block — input to SSCH instruction.
+    struct [[gnu::packed]] alignas(4) orb {
+        u32 intparm{0};    ///< Interruption parameter.
+        u32 flags{0};      ///< Key, suspend, streaming, format, prefetch, etc.
+        u64 ccw_addr{0};   ///< CCW address (Format-1: 64-bit).
+        u8  lpm{0};        ///< Logical path mask.
+        u8  _reserved1{0}; ///< Reserved.
+        u16 _reserved2{0}; ///< Reserved.
+        u32 _reserved3{0}; ///< Reserved.
+        u32 _reserved4{0}; ///< Reserved.
+        u32 _reserved5{0}; ///< Reserved.
+
+        /// @brief Set the storage key in bits 4-7 of the flags word.
+        constexpr auto set_key(u8 key) noexcept -> void {
+            flags = (flags & 0x0FFFFFFF) | (static_cast<u32>(key & 0x0F) << 28);
+        }
+
+        /// @brief Set Format-1 bit (bit 8 of flags word).
+        constexpr auto set_format1() noexcept -> void {
+            flags |= 0x00800000;
+        }
+
+        /// @brief Set the CCW program address.
+        constexpr auto set_ccw(u64 addr) noexcept -> void {
+            ccw_addr = addr;
+        }
+    };
+
+    static_assert(sizeof(orb) == 32, "orb must be exactly 32 bytes");
+
+    // -----------------------------------------------------------------------
+    // irb — Interruption Response Block (96 bytes) — PoP §14.3.4
+    // -----------------------------------------------------------------------
+
+    /// @brief Interruption Response Block — output of TSCH instruction.
+    struct [[gnu::packed]] alignas(4) irb {
+        scsw scsw_data{};  ///< Subchannel Status Word.
+        u32  ecw[8]{};     ///< Extended Control Word (device-specific sense data).
+        u32  emw[8]{};     ///< Extended Measurement Word.
+    };
+
+    static_assert(sizeof(irb) == 76, "irb must be exactly 76 bytes");
+
+    // -----------------------------------------------------------------------
+    // subchannel_id — Hardware subchannel identifier — PoP §14.3.1
+    // -----------------------------------------------------------------------
+
+    /// @brief Packed hardware subchannel identifier for SSCH/TSCH/STSCH.
+    ///
+    /// Layout (32 bits, big-endian):
+    ///   cssid(8) | ssid(2) | _reserved(5) | one(1) | sch_no(16)
+    struct [[gnu::packed]] subchannel_id {
+        u32 val{0};
+
+        /// @brief Construct from individual components.
+        [[nodiscard]] static constexpr auto from_parts(u8 cssid, u8 ssid, u16 sch_no) noexcept
+            -> subchannel_id
+        {
+            subchannel_id id{};
+            id.val = (static_cast<u32>(cssid) << 24) |
+                     (static_cast<u32>(ssid & 0x03) << 22) |
+                     (1u << 16) |  // "one" bit must be set
+                     static_cast<u32>(sch_no);
+            return id;
+        }
+
+        /// @brief Extract CSS ID (bits 0-7).
+        [[nodiscard]] constexpr auto cssid() const noexcept -> u8 {
+            return static_cast<u8>(val >> 24);
+        }
+
+        /// @brief Extract subchannel set ID (bits 8-9).
+        [[nodiscard]] constexpr auto ssid() const noexcept -> u8 {
+            return static_cast<u8>((val >> 22) & 0x03);
+        }
+
+        /// @brief Extract subchannel number (bits 16-31).
+        [[nodiscard]] constexpr auto sch_no() const noexcept -> u16 {
+            return static_cast<u16>(val & 0xFFFF);
+        }
+
+        /// @brief Return raw 32-bit value for use in I/O instructions.
+        [[nodiscard]] constexpr auto to_raw() const noexcept -> u32 {
+            return val;
+        }
+    };
+
+    static_assert(sizeof(subchannel_id) == 4, "subchannel_id must be exactly 4 bytes");
+
+    // -----------------------------------------------------------------------
+    // senseid_data — Sense ID response (8 bytes) — PoP §14.5
+    // -----------------------------------------------------------------------
+
+    /// @brief Sense ID response data returned by CCW_CMD_SENSE_ID.
+    struct [[gnu::packed]] senseid_data {
+        u8  _reserved{0};  ///< Reserved (0xFF when valid).
+        u16 cu_type{0};    ///< Control unit type.
+        u8  cu_model{0};   ///< Control unit model.
+        u16 dev_type{0};   ///< Device type.
+        u8  dev_model{0};  ///< Device model.
+    };
+
+    static_assert(sizeof(senseid_data) == 7, "senseid_data must be exactly 7 bytes");
+
+} // namespace arch::s390x::css
+
+} // end export

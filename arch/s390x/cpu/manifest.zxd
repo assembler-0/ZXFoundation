@@ -24,4 +24,6 @@
     skey.cxxm
     ar.cxxm
     linkage.cxxm
+    aste_types.cxxm
+    aste.cxxm
 }

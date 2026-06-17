@@ -36,6 +36,8 @@ import arch.s390x.cpu.smp;
 import arch.s390x.cpu.features;
 import arch.s390x.cpu.irq;
 import arch.s390x.mmu.mmu;
+import arch.s390x.cpu.aste;
+import arch.s390x.css.css;
 import crypto.sha256_types;
 import crypto.sha256;
 import drivers.console.diag;
@@ -211,11 +213,14 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::gate::gate_init();
     zxfoundation::gate::nucleus_handlers::register_nucleus_handlers();
     zxfoundation::portal::portal_init();
+    arch::s390x::cpu::aste::aste_subsystem_init();
 
     zxfoundation::sched::sched_init();
     arch::s390x::cpu::smp::init_bsp();
     pinfo("smp: {} processors started", arch::s390x::cpu::smp::init_aps(*protocol));
     arch::s390x::cpu::smp::ap_release_all();
+
+    arch::s390x::css::css_init();
 
     {
         auto dom_r = zxfoundation::domain::domain_create("sys/bootstrap");
@@ -238,7 +243,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
         zxfoundation::sched::setup_domain_context(
             d,
             zxfoundation::init::bootstrap::bootstrap_entry,
-            nullptr);
+            &zxfoundation::init::boot_protocol);
         zxfoundation::sched::enqueue_domain(d);
     }
 

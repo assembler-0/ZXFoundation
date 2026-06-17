@@ -15,29 +15,23 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw_types;
 import arch.s390x.cpu.psw;
+import arch.s390x.css.css;
+import zxfoundation.memory.hhdm;
 import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.timer;
-
 import zxfoundation.domain.domain_types;
 import zxfoundation.gate.dispatch;
 import lib.error;
 
 /// @brief Program check handler.
-///
-/// Routes faults based on whether the interrupted context was nucleus or domain:
-/// - If interrupted in supervisor state → nucleus bug → panic
-/// - If interrupted in problem state → domain fault → terminate the domain
 extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
-    // Read program interruption code from lowcore offset 0x008E (u16).
     const u16 pgm_code = *reinterpret_cast<const u16*>(0x8EUL);
 
-    // Read translation exception address from lowcore 0x00A8 (u64).
     const u64 trans_exc = *reinterpret_cast<const u64*>(0xA8UL);
 
-    // Check if we were in problem state (PSW bit 15 = PSW_BIT_PSTATE).
     const bool in_problem_state =
         (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
 
@@ -45,7 +39,7 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
         // Nucleus fault — this is a kernel bug.
         zxfoundation::sys::syschk::syschk_fatal(
             lib::kernel_error::from_generic(lib::generic_error::internal_error),
-            "NUCLEUS FAULT: program check {:#06x} at PSW {:#018x}:{:#018x} tex={:#018x}",
+            "program check {:#06x} at PSW {:#018x}:{:#018x} tex={:#018x}",
             static_cast<u32>(pgm_code), frame->psw_mask, frame->psw_addr, trans_exc);
     }
 
@@ -54,15 +48,6 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
     auto* d = reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
 
     if (d) {
-        zxfoundation::sys::printk::perr(
-            "domain: '{}' (id={}) fault: pgm_code={:#06x} addr={:#018x} tex={:#018x}\n",
-            d->name, d->id, static_cast<u32>(pgm_code), frame->psw_addr, trans_exc);
-
-        // Mark domain as dying.  Set need_resched so that the
-        // CHECK_PREEMPT macro in entry.S will call schedule() on
-        // the kernel stack after RESTORE_FRAME unwinds the
-        // interrupt context.  Calling schedule() directly here
-        // would corrupt the async stack (see entry.S comments).
         d->state = zxfoundation::domain::domain_state::dying;
         d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
     } else {
@@ -74,24 +59,16 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
 }
 
 /// @brief External interrupt handler.
-///
-/// Dispatches based on the external interrupt code read from lowcore 0x0086:
-/// - 0x1004: clock comparator → timer subsystem interrupt handler
-/// - 0x1202: external call (IPI) → check need_resched
-/// - 0x1201: emergency signal
 extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
 
-    // Read external interrupt code from lowcore offset 0x0086 (u16).
     const u16 ext_code = *reinterpret_cast<const u16*>(0x86UL);
 
-    // Clock comparator (0x1004) → timer subsystem.
     if (ext_code == 0x1004U) {
         zxfoundation::sys::timer::timer_interrupt();
         return;
     }
 
-    // External call (0x1202) → IPI: CHECK_PREEMPT handles rescheduling.
     if (ext_code == 0x1202U) {
         return;
     }
@@ -103,24 +80,25 @@ extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fr
 }
 
 /// @brief I/O interrupt handler.
-///
-/// Reads the subchannel ID and I/O interrupt word from lowcore.
-/// Phase 6: routes to the owning domain's IRQ gate.
 extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
-    // I/O routing requires CSS multiplexer (domain→subchannel ownership).
-    // Interrupts are acknowledged at the hardware level by the entry stub.
+
+    // Read the subchannel ID word stored by hardware at lowcore offset 0xB8.
+    const u32 sid = *reinterpret_cast<volatile u32*>(
+        zxfoundation::memory::hhdm::phys_to_virt(0xB8));
+
+    // Extract the subchannel number from the lower 16 bits of the SID word.
+    const u16 sch_no = static_cast<u16>(sid & 0xFFFFU);
+
+    zxfoundation::sys::printk::pdebug("io_int: sch=0.0.{:04x}",
+                                      static_cast<u32>(sch_no));
+
+    // Dispatch to the CSS layer for TSCH / IRB processing.
+    arch::s390x::css::css_io_interrupt(sch_no);
 }
 
 /// @brief SVC handler — nucleus call dispatch.
-///
-/// The SVC code (from lowcore 0x008A, loaded by entry.S into r3) selects
-/// the nucleus call handler via the gate dispatch table. Arguments are
-/// passed in GPRs r2-r6, saved in the irq_frame by SAVE_FRAME.
-/// Return value goes in r2.
 extern "C" auto do_svc(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame, u16 svc_code) noexcept -> void {
-    zxfoundation::sys::printk::pinfo(
-        "svc: code={} r2={:#x} r3={:#x}", svc_code, frame->gprs[2], frame->gprs[3]);
     const u64 result = zxfoundation::gate::dispatch::nucleus_dispatch(
         static_cast<u32>(svc_code),
         frame->gprs[2], frame->gprs[3], frame->gprs[4],
@@ -129,8 +107,6 @@ extern "C" auto do_svc(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame, u16 s
 }
 
 /// @brief Machine check handler.
-///
-/// Reads the machine-check interruption code from lowcore and logs it.
 extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
     const u64 mcck_code = *reinterpret_cast<const u64*>(0xE8UL);

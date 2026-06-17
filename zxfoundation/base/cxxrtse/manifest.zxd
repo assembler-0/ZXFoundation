@@ -6,4 +6,5 @@
 
 !files : !compile_group -> [auto] {
     cxxabi.cxxm
+    builtins.cxxm
 }

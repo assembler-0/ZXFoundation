@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    css_types.cxxm
+    css.cxxm
+}

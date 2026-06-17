@@ -1,0 +1,99 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/waitqueue_types.cxxm
+/// @brief Wait queue type definitions — intrusive sleeping wait primitives.
+
+export module zxfoundation.sync.waitqueue_types;
+import zxfoundation.base.types;
+import zxfoundation.locking.qspinlock;
+import lib.list;
+
+export {
+
+namespace zxfoundation::sync {
+
+    // ── Wait flags ───────────────────────────────────────────────────────
+
+    /// @brief Per-waiter behavioural flags (bitfield).
+    enum class wait_flags : u32 {
+        none          = 0,
+        exclusive     = 1U << 0,   ///< Only wake one waiter with this flag.
+        interruptible = 1U << 1,   ///< Waiter can be interrupted (e.g. signal).
+    };
+
+    [[nodiscard]] constexpr auto operator|(wait_flags a, wait_flags b) noexcept -> wait_flags {
+        return static_cast<wait_flags>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(wait_flags a, wait_flags b) noexcept -> wait_flags {
+        return static_cast<wait_flags>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator~(wait_flags f) noexcept -> wait_flags {
+        return static_cast<wait_flags>(~static_cast<u32>(f));
+    }
+    [[nodiscard]] constexpr auto operator!(wait_flags f) noexcept -> bool {
+        return static_cast<u32>(f) == 0;
+    }
+    constexpr auto operator|=(wait_flags& a, wait_flags b) noexcept -> wait_flags& {
+        a = a | b;
+        return a;
+    }
+    constexpr auto operator&=(wait_flags& a, wait_flags b) noexcept -> wait_flags& {
+        a = a & b;
+        return a;
+    }
+
+    // ── Wait result ──────────────────────────────────────────────────────
+
+    /// @brief Outcome of a wait operation.
+    enum class wait_result : u8 {
+        woken       = 0,   ///< Condition was met / explicitly woken.
+        timeout     = 1,   ///< Wait timed out.
+        interrupted = 2,   ///< Wait was interrupted.
+    };
+
+    // ── Wait entry ───────────────────────────────────────────────────────
+
+    /// @brief Intrusive wait queue entry — embedded in the waiter's stack frame.
+    ///
+    /// Each domain that needs to sleep allocates a wait_entry on its kernel
+    /// stack and passes it to prepare_to_wait / finish_wait.  The entry is
+    /// linked into the wait_queue_head's list while active.
+    struct wait_entry {
+        lib::list_node link{};                           ///< Intrusive list linkage.
+        wait_flags     flags{wait_flags::none};          ///< Per-waiter behavioural flags.
+        wait_result    result{wait_result::woken};       ///< Set by the waker.
+        bool           active{false};                    ///< True while linked on a queue.
+        u32            domain_id{0xFFFFFFFFU};           ///< Domain that is sleeping.
+
+        wait_entry() noexcept = default;
+
+        // Non-copyable, non-movable: identity is its address.
+        wait_entry(const wait_entry&)            = delete;
+        wait_entry(wait_entry&&)                 = delete;
+        auto operator=(const wait_entry&)        = delete;
+        auto operator=(wait_entry&&)             = delete;
+    };
+
+    // ── Wait queue head ──────────────────────────────────────────────────
+
+    /// @brief Wait queue — a spinlock-protected list of wait_entry nodes.
+    ///
+    /// Waiters add themselves via prepare_to_wait, then yield.  Wakers
+    /// iterate the list and mark entries as woken.  The caller is
+    /// responsible for rescheduling; wake functions do not reach into the
+    /// scheduler to avoid circular module dependencies.
+    struct wait_queue_head {
+        locking::qspinlock::qspinlock lock{};            ///< Protects the entry list.
+        lib::list_head                entries{};         ///< Linked list of wait_entry nodes.
+
+        wait_queue_head() noexcept = default;
+
+        // Non-copyable, non-movable: identity is its address.
+        wait_queue_head(const wait_queue_head&)          = delete;
+        wait_queue_head(wait_queue_head&&)               = delete;
+        auto operator=(const wait_queue_head&)           = delete;
+        auto operator=(wait_queue_head&&)                = delete;
+    };
+
+} // namespace zxfoundation::sync
+
+} // end export

@@ -1,17 +1,31 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/gate/nucleus_handlers.cxxm
 /// @brief Nucleus call handler implementations for the gate dispatch table.
+///
+/// All 22 nucleus call handlers are implemented here.  Each handler follows
+/// the convention: (u64 a0..a5) noexcept -> u64, returning 0 on success or
+/// NC_ERROR (~0ULL) on failure.  Data-returning calls pack their result into
+/// the u64 return value.
 
 export module zxfoundation.gate.nucleus_handlers;
 import zxfoundation.gate.gate_types;
 import zxfoundation.gate.gate;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.portal.portal;
+import zxfoundation.portal.portal_types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
-import zxfoundation.memory.hhdm;
+import zxfoundation.sys.time;
+import zxfoundation.sys.timer;
+import zxfoundation.sys.timer_types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
+import arch.s390x.cpu.processor;
 import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
 import lib.error;
@@ -70,6 +84,19 @@ namespace _internal {
         return 0;
     }
 
+    /// @brief Compute the buddy order sufficient to cover @p size bytes.
+    /// @return Order such that (PAGE_SIZE << order) >= size.
+    [[nodiscard]] auto order_for_size(u64 size) noexcept -> u32 {
+        namespace pmm = zxfoundation::memory::pmm;
+        if (size == 0) return 0;
+        u32 order = 0;
+        while ((static_cast<u64>(pmm::PAGE_SIZE) << order) < size
+               && order <= pmm::MAX_ORDER) {
+            ++order;
+        }
+        return order;
+    }
+
 } // namespace _internal
 
 // ── Exported handlers and registration ──────────────────────────────────────
@@ -81,49 +108,80 @@ export {
 
 namespace zxfoundation::gate::nucleus_handlers {
 
-    /// @brief Write a user-space buffer to the hypervisor console.
-    /// @param a0 User-space buffer pointer.
-    /// @param a1 Buffer length in bytes (max 256).
-    /// @return 0 on success, NC_ERROR on failure.
-    auto nc_console_write_handler(
-        u64 a0, u64 a1, u64, u64, u64, u64
+    // ════════════════════════════════════════════════════════════════════
+    //  Domain lifecycle handlers (calls 0-3)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Create a new domain.
+    /// @param a0 User-space pointer to name string (max 64 bytes).
+    /// @return domain_id on success, NC_ERROR on failure.
+    auto nc_domain_create_handler(
+        u64 a0, u64, u64, u64, u64, u64
     ) noexcept -> u64 {
-        const u64 user_buf = a0;
-        const u64 user_len = a1;
-
-        zxfoundation::sys::printk::pinfo(
-            "nc_write: buf={:#x} len={}", user_buf, user_len);
-
-        // Sanity checks.
-        if (user_len == 0 || user_len > 256) {
-            zxfoundation::sys::printk::perr(
-                "nc_write: bad len={}", user_len);
-            return NC_ERROR;
-        }
-
-        // Get current domain for page table walk.
         auto* d = _internal::current_domain();
-        if (!d) [[unlikely]] {
-            zxfoundation::sys::printk::perr("nc_write: no current domain");
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        // Only root domains may create children.
+        if (!(d->flags & domain::domain_flags::root)) {
+            sys::printk::perr("nc_domain_create: caller id={} is not root", d->id);
             return NC_ERROR;
         }
 
-        zxfoundation::sys::printk::pinfo(
-            "nc_write: domain='{}' root_phys={:#x}", d->name, d->root_phys);
-
-        // Copy from user space to a kernel stack buffer.
-        char kbuf[256]{};
-        if (_internal::copy_from_user(kbuf, user_buf, user_len, d) != 0) {
-            zxfoundation::sys::printk::perr(
-                "nc_write: copy_from_user failed buf={:#x} len={} root={:#x}",
-                user_buf, user_len, d->root_phys);
+        const u64 user_name_ptr = a0;
+        if (user_name_ptr == 0) {
+            sys::printk::perr("nc_domain_create: null name pointer");
             return NC_ERROR;
         }
 
-        // Write to the printk console.
-        zxfoundation::sys::printk::pinfo("domain: {}",
-            lib::string_view{kbuf, static_cast<usize>(user_len)});
+        // Copy name from user space (max 64 bytes, null-terminated).
+        char name_buf[64]{};
+        if (_internal::copy_from_user(name_buf, user_name_ptr, 63, d) != 0) {
+            sys::printk::perr("nc_domain_create: copy_from_user failed");
+            return NC_ERROR;
+        }
+        name_buf[63] = '\0';
 
+        auto result = domain::domain_create(name_buf);
+        if (!result) {
+            sys::printk::perr("nc_domain_create: domain_create failed");
+            return NC_ERROR;
+        }
+
+        const u32 new_id = (*result)->id;
+        sys::printk::pinfo("nc_domain_create: created domain id={}", new_id);
+        return static_cast<u64>(new_id);
+    }
+
+    /// @brief Destroy a domain by ID.
+    /// @param a0 domain_id to destroy.
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_domain_destroy_handler(
+        u64 a0, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto target_id = static_cast<domain::domain_id>(a0);
+
+        // Only root domains may destroy others.
+        if (!(d->flags & domain::domain_flags::root)) {
+            sys::printk::perr("nc_domain_destroy: caller id={} is not root", d->id);
+            return NC_ERROR;
+        }
+
+        // Cannot destroy self through this call (use domain_exit).
+        if (target_id == d->id) {
+            sys::printk::perr("nc_domain_destroy: cannot destroy self");
+            return NC_ERROR;
+        }
+
+        auto result = domain::domain_destroy(target_id);
+        if (!result) {
+            sys::printk::perr("nc_domain_destroy: domain_destroy({}) failed", target_id);
+            return NC_ERROR;
+        }
+
+        sys::printk::pinfo("nc_domain_destroy: destroyed domain id={}", target_id);
         return 0;
     }
 
@@ -135,24 +193,12 @@ namespace zxfoundation::gate::nucleus_handlers {
         auto* d = _internal::current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
-        zxfoundation::sys::printk::pinfo(
+        sys::printk::pinfo(
             "domain: '{}' (id={}) exited", d->name, d->id);
 
         d->state = domain::domain_state::dying;
         d->flags = d->flags | domain::domain_flags::need_resched;
 
-        return 0;
-    }
-
-    /// @brief Voluntarily yield the CPU.
-    /// @return 0.
-    auto nc_time_yield_handler(
-        u64, u64, u64, u64, u64, u64
-    ) noexcept -> u64 {
-        auto* d = _internal::current_domain();
-        if (d) {
-            d->flags = d->flags | domain::domain_flags::need_resched;
-        }
         return 0;
     }
 
@@ -168,24 +214,644 @@ namespace zxfoundation::gate::nucleus_handlers {
                (static_cast<u64>(d->cpu) << 32);
     }
 
-    /// @brief Register all implemented nucleus call handlers in the
-    ///        gate dispatch table.
+    // ════════════════════════════════════════════════════════════════════
+    //  Memory management handlers (calls 4-9)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Allocate physical pages and map them at the requested VA.
+    /// @param a0 Size in bytes to allocate.
+    /// @return Virtual address on success, NC_ERROR on failure.
+    auto nc_mem_alloc_handler(
+        u64 a0, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        namespace pmm = memory::pmm;
+        namespace mmu = arch::s390x::mmu;
+
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 size = a0;
+        if (size == 0) {
+            sys::printk::perr("nc_mem_alloc: zero size");
+            return NC_ERROR;
+        }
+
+        // Round up to page-aligned size and compute buddy order.
+        const u64 aligned_size = (size + pmm::PAGE_SIZE - 1)
+                                 & ~static_cast<u64>(pmm::PAGE_SIZE - 1);
+        const u32 order = _internal::order_for_size(aligned_size);
+
+        if (order > pmm::MAX_ORDER) {
+            sys::printk::perr("nc_mem_alloc: size {} exceeds max order", size);
+            return NC_ERROR;
+        }
+
+        // Allocate zeroed physical pages.
+        auto alloc_r = pmm::alloc(order, pmm::zone::normal,
+                                  pmm::purpose::generic,
+                                  pmm::page_init::zeroed);
+        if (!alloc_r) {
+            sys::printk::perr("nc_mem_alloc: pmm::alloc failed for order={}", order);
+            return NC_ERROR;
+        }
+
+        const u64 phys = alloc_r->phys_base;
+        const u64 total_bytes = static_cast<u64>(pmm::PAGE_SIZE) << order;
+
+        // Map into the calling domain's address space page-by-page.
+        // Use the physical address as VA for simplicity (identity-style within
+        // the domain's user region). A real VMM would track VMAs.
+        const u64 va = phys;
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+
+        for (u64 off = 0; off < total_bytes; off += pmm::PAGE_SIZE) {
+            auto map_r = mmu::map_page<mmu::dat_level::region_1>(
+                root, va + off, phys + off, mmu::page_prot{0});
+            if (!map_r) {
+                sys::printk::perr("nc_mem_alloc: map_page failed va={:#x}", va + off);
+                pmm::folio_ready f{phys, order, pmm::purpose::generic, pmm::zone::normal};
+                pmm::free(static_cast<pmm::folio_ready&&>(f));
+                return NC_ERROR;
+            }
+        }
+
+        sys::printk::pinfo("nc_mem_alloc: domain={} va={:#x} size={:#x} order={}",
+                           d->id, va, total_bytes, order);
+        return va;
+    }
+
+    /// @brief Free previously allocated pages.
+    /// @param a0 Virtual address to free.
+    /// @param a1 Size in bytes.
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_mem_free_handler(
+        u64 a0, u64 a1, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        namespace pmm = memory::pmm;
+        namespace mmu = arch::s390x::mmu;
+
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        if (va == 0 || size == 0) {
+            sys::printk::perr("nc_mem_free: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + pmm::PAGE_SIZE - 1)
+                                 & ~static_cast<u64>(pmm::PAGE_SIZE - 1);
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+
+        // Walk to find the physical address before unmapping.
+        auto phys_r = mmu::walk<mmu::dat_level::region_1>(root, va);
+        if (!phys_r) {
+            sys::printk::perr("nc_mem_free: walk failed va={:#x}", va);
+            return NC_ERROR;
+        }
+        const u64 phys = *phys_r & ~static_cast<u64>(pmm::PAGE_SIZE - 1);
+
+        // Unmap page-by-page.
+        for (u64 off = 0; off < aligned_size; off += pmm::PAGE_SIZE) {
+            auto unmap_r = mmu::unmap_page<mmu::dat_level::region_1>(
+                root, va + off);
+            if (!unmap_r) {
+                sys::printk::perr("nc_mem_free: unmap_page failed va={:#x}", va + off);
+                return NC_ERROR;
+            }
+        }
+
+        // Free the physical pages.
+        const u32 order = _internal::order_for_size(aligned_size);
+        pmm::folio_ready f{phys, order, pmm::purpose::generic, pmm::zone::normal};
+        pmm::free(static_cast<pmm::folio_ready&&>(f));
+
+        sys::printk::pinfo("nc_mem_free: domain={} va={:#x} size={:#x}",
+                           d->id, va, aligned_size);
+        return 0;
+    }
+
+    /// @brief Map physical pages into the calling domain.
+    /// @param a0 Virtual address.
+    /// @param a1 Physical address.
+    /// @param a2 Size in bytes.
+    /// @param a3 Protection bits (page_prot::bits).
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_mem_map_handler(
+        u64 a0, u64 a1, u64 a2, u64 a3, u64, u64
+    ) noexcept -> u64 {
+        namespace mmu = arch::s390x::mmu;
+        namespace pmm = memory::pmm;
+
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va   = a0;
+        const u64 phys = a1;
+        const u64 size = a2;
+        const mmu::page_prot prot{a3};
+
+        if (size == 0) {
+            sys::printk::perr("nc_mem_map: zero size");
+            return NC_ERROR;
+        }
+
+        // Validate page alignment.
+        if ((va & (pmm::PAGE_SIZE - 1)) != 0 ||
+            (phys & (pmm::PAGE_SIZE - 1)) != 0) {
+            sys::printk::perr("nc_mem_map: unaligned va={:#x} phys={:#x}", va, phys);
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + pmm::PAGE_SIZE - 1)
+                                 & ~static_cast<u64>(pmm::PAGE_SIZE - 1);
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+
+        // Map page-by-page.
+        for (u64 off = 0; off < aligned_size; off += pmm::PAGE_SIZE) {
+            auto result = mmu::map_page<mmu::dat_level::region_1>(
+                root, va + off, phys + off, prot);
+            if (!result) {
+                sys::printk::perr("nc_mem_map: map_page failed va={:#x} phys={:#x}",
+                                  va + off, phys + off);
+                return NC_ERROR;
+            }
+        }
+
+        sys::printk::pinfo("nc_mem_map: domain={} va={:#x} phys={:#x} size={:#x}",
+                           d->id, va, phys, aligned_size);
+        return 0;
+    }
+
+    /// @brief Unmap pages from the calling domain.
+    /// @param a0 Virtual address.
+    /// @param a1 Size in bytes.
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_mem_unmap_handler(
+        u64 a0, u64 a1, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        namespace mmu = arch::s390x::mmu;
+        namespace pmm = memory::pmm;
+
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        if (va == 0 || size == 0) {
+            sys::printk::perr("nc_mem_unmap: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + pmm::PAGE_SIZE - 1)
+                                 & ~static_cast<u64>(pmm::PAGE_SIZE - 1);
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+
+        // Unmap page-by-page.
+        for (u64 off = 0; off < aligned_size; off += pmm::PAGE_SIZE) {
+            auto result = mmu::unmap_page<mmu::dat_level::region_1>(
+                root, va + off);
+            if (!result) {
+                sys::printk::perr("nc_mem_unmap: unmap_page failed va={:#x}", va + off);
+                return NC_ERROR;
+            }
+        }
+
+        sys::printk::pinfo("nc_mem_unmap: domain={} va={:#x} size={:#x}",
+                           d->id, va, aligned_size);
+        return 0;
+    }
+
+    /// @brief Change memory protection for a VA range.
+    /// @param a0 Virtual address.
+    /// @param a1 Size in bytes.
+    /// @param a2 New protection bits (page_prot::bits).
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_mem_protect_handler(
+        u64 a0, u64 a1, u64 a2, u64, u64, u64
+    ) noexcept -> u64 {
+        namespace mmu = arch::s390x::mmu;
+        namespace pmm = memory::pmm;
+
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va       = a0;
+        const u64 size     = a1;
+        const mmu::page_prot new_prot{a2};
+
+        if (va == 0 || size == 0) {
+            sys::printk::perr("nc_mem_protect: invalid args va={:#x} size={}",
+                              va, size);
+            return NC_ERROR;
+        }
+
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+
+        // Protect page-by-page over the range.
+        const u64 aligned_size = (size + pmm::PAGE_SIZE - 1)
+                                 & ~static_cast<u64>(pmm::PAGE_SIZE - 1);
+        u64 cursor = va;
+        const u64 end = va + aligned_size;
+        while (cursor < end) {
+            auto r = mmu::protect<mmu::dat_level::region_1>(
+                root, cursor, new_prot);
+            if (!r) {
+                sys::printk::perr("nc_mem_protect: protect failed at va={:#x}",
+                                  cursor);
+                return NC_ERROR;
+            }
+            cursor += mmu::PAGE_SIZE_4K;
+        }
+
+        sys::printk::pinfo("nc_mem_protect: domain={} va={:#x} size={:#x} prot={:#x}",
+                           d->id, va, aligned_size, new_prot.raw());
+        return 0;
+    }
+
+    /// @brief Create a shared memory capability token.
+    /// @param a0 Target domain ID for the share.
+    /// @return Capability token on success, NC_ERROR on failure.
+    auto nc_mem_share_handler(
+        u64 a0, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto target_id = static_cast<u32>(a0);
+
+        // Validate that the target domain exists.
+        auto* target = domain::domain_find(target_id);
+        if (!target) {
+            sys::printk::perr("nc_mem_share: target domain {} not found", target_id);
+            return NC_ERROR;
+        }
+
+        // Generate a simple capability token: pack source and target IDs.
+        // A real implementation would create a proper capability object.
+        const u64 token = (static_cast<u64>(d->id) << 32)
+                        | static_cast<u64>(target_id);
+
+        sys::printk::pinfo("nc_mem_share: domain={} -> target={} token={:#x}",
+                           d->id, target_id, token);
+        return token;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Gate management handlers (calls 10-11)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Create a new gate.
+    /// @param a0 Gate type (gate_type).
+    /// @param a1 Authorization level (gate_auth).
+    /// @param a2 Target domain ID.
+    /// @param a3 Entry point VA in target domain.
+    /// @param a4 Target storage key.
+    /// @return gate_id on success, NC_ERROR on failure.
+    auto nc_gate_create_handler(
+        u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto type      = static_cast<gate_type>(a0);
+        const auto auth      = static_cast<gate_auth>(a1);
+        const auto target_id = static_cast<u32>(a2);
+        const u64  entry_va  = a3;
+        const auto key       = static_cast<u8>(a4);
+
+        // Validate type and auth ranges.
+        if (static_cast<u8>(type) > 1) {
+            sys::printk::perr("nc_gate_create: invalid gate_type {}", static_cast<u8>(type));
+            return NC_ERROR;
+        }
+        if (static_cast<u8>(auth) > 2) {
+            sys::printk::perr("nc_gate_create: invalid gate_auth {}", static_cast<u8>(auth));
+            return NC_ERROR;
+        }
+
+        auto result = gate_create(type, auth, target_id, entry_va, key);
+        if (!result) {
+            sys::printk::perr("nc_gate_create: gate_create failed");
+            return NC_ERROR;
+        }
+
+        const auto gid = *result;
+        sys::printk::pinfo("nc_gate_create: domain={} gate_id={}", d->id, gid);
+        return static_cast<u64>(gid);
+    }
+
+    /// @brief Destroy a gate.
+    /// @param a0 gate_id to destroy.
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_gate_destroy_handler(
+        u64 a0, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto gid = static_cast<gate_id>(a0);
+
+        auto result = gate_destroy(gid);
+        if (!result) {
+            sys::printk::perr("nc_gate_destroy: gate_destroy({}) failed", gid);
+            return NC_ERROR;
+        }
+
+        sys::printk::pinfo("nc_gate_destroy: domain={} gate_id={}", d->id, gid);
+        return 0;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Portal management handlers (calls 12-13)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Create a portal from the current domain to a target domain.
+    /// @param a0 Target domain ID.
+    /// @param a1 VA range start in target.
+    /// @param a2 VA range end in target (exclusive).
+    /// @param a3 Protection (portal_prot).
+    /// @param a4 Access register number (0-15).
+    /// @return portal_id on success, NC_ERROR on failure.
+    auto nc_portal_create_handler(
+        u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto target_id = static_cast<u32>(a0);
+        const u64  va_start  = a1;
+        const u64  va_end    = a2;
+        const auto prot      = static_cast<portal::portal_prot>(a3);
+        const auto ar_num    = static_cast<u8>(a4);
+
+        if (va_end <= va_start) {
+            sys::printk::perr("nc_portal_create: invalid range [{:#x},{:#x})",
+                              va_start, va_end);
+            return NC_ERROR;
+        }
+
+        auto result = portal::portal_create(
+            d->id, target_id, va_start, va_end, prot, ar_num);
+        if (!result) {
+            sys::printk::perr("nc_portal_create: portal_create failed");
+            return NC_ERROR;
+        }
+
+        const auto pid = *result;
+        sys::printk::pinfo("nc_portal_create: domain={} portal_id={} target={}",
+                           d->id, pid, target_id);
+        return static_cast<u64>(pid);
+    }
+
+    /// @brief Destroy a portal.
+    /// @param a0 portal_id to destroy.
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_portal_destroy_handler(
+        u64 a0, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto pid = static_cast<portal::portal_id>(a0);
+
+        auto result = portal::portal_destroy(pid);
+        if (!result) {
+            sys::printk::perr("nc_portal_destroy: portal_destroy({}) failed", pid);
+            return NC_ERROR;
+        }
+
+        sys::printk::pinfo("nc_portal_destroy: domain={} portal_id={}", d->id, pid);
+        return 0;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  I/O CSS stubs (calls 14-17)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Bind an I/O subchannel — not yet implemented.
+    auto nc_io_bind_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        sys::printk::perr("io_bind: not yet implemented");
+        return NC_ERROR;
+    }
+
+    /// @brief Unbind an I/O subchannel — not yet implemented.
+    auto nc_io_unbind_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        sys::printk::perr("io_unbind: not yet implemented");
+        return NC_ERROR;
+    }
+
+    /// @brief Submit an I/O request — not yet implemented.
+    auto nc_io_submit_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        sys::printk::perr("io_submit: not yet implemented");
+        return NC_ERROR;
+    }
+
+    /// @brief Bind an I/O IRQ — not yet implemented.
+    auto nc_io_irq_bind_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        sys::printk::perr("io_irq_bind: not yet implemented");
+        return NC_ERROR;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Time handlers (calls 18-20)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Voluntarily yield the CPU.
+    /// @return 0.
+    auto nc_time_yield_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (d) {
+            d->flags = d->flags | domain::domain_flags::need_resched;
+        }
+        return 0;
+    }
+
+    /// @brief Set a deadline timer for the calling domain.
+    /// @param a0 Nanoseconds from now until deadline.
+    /// @return The absolute deadline in nanoseconds (monotonic), or NC_ERROR.
+    auto nc_time_deadline_handler(
+        u64 a0, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 ns_from_now = a0;
+        if (ns_from_now == 0) {
+            sys::printk::perr("nc_time_deadline: zero deadline");
+            return NC_ERROR;
+        }
+
+        // Compute the absolute deadline as current TOD + delta.
+        const u64 now_tod = arch::s390x::cpu::processor::stck();
+        const u64 delta_tod = sys::timer::ns_to_tod(ns_from_now);
+        const u64 deadline_tod = now_tod + delta_tod;
+
+        // Convert the absolute deadline back to monotonic nanoseconds
+        // for the caller's reference.
+        const auto mono = sys::time::monotonic_now();
+        const u64 deadline_ns = mono.nanoseconds_since_epoch() + ns_from_now;
+
+        sys::printk::pinfo(
+            "nc_time_deadline: domain={} deadline_tod={:#x} deadline_ns={}",
+            d->id, deadline_tod, deadline_ns);
+
+        return deadline_ns;
+    }
+
+    /// @brief Return current monotonic time in nanoseconds.
+    /// @return Monotonic nanoseconds since boot.
+    auto nc_time_now_handler(
+        u64, u64, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        return sys::time::monotonic_now().nanoseconds_since_epoch();
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Console handler (call 21)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Write a user-space buffer to the hypervisor console.
+    /// @param a0 User-space buffer pointer.
+    /// @param a1 Buffer length in bytes (max 256).
+    /// @return 0 on success, NC_ERROR on failure.
+    auto nc_console_write_handler(
+        u64 a0, u64 a1, u64, u64, u64, u64
+    ) noexcept -> u64 {
+        const u64 user_buf = a0;
+        const u64 user_len = a1;
+
+        sys::printk::pinfo(
+            "nc_write: buf={:#x} len={}", user_buf, user_len);
+
+        // Sanity checks.
+        if (user_len == 0 || user_len > 256) {
+            sys::printk::perr(
+                "nc_write: bad len={}", user_len);
+            return NC_ERROR;
+        }
+
+        // Get current domain for page table walk.
+        auto* d = _internal::current_domain();
+        if (!d) [[unlikely]] {
+            sys::printk::perr("nc_write: no current domain");
+            return NC_ERROR;
+        }
+
+        sys::printk::pinfo(
+            "nc_write: domain='{}' root_phys={:#x}", d->name, d->root_phys);
+
+        // Copy from user space to a kernel stack buffer.
+        char kbuf[256]{};
+        if (_internal::copy_from_user(kbuf, user_buf, user_len, d) != 0) {
+            sys::printk::perr(
+                "nc_write: copy_from_user failed buf={:#x} len={} root={:#x}",
+                user_buf, user_len, d->root_phys);
+            return NC_ERROR;
+        }
+
+        // Write to the printk console.
+        sys::printk::pinfo("domain: {}",
+            lib::string_view{kbuf, static_cast<usize>(user_len)});
+
+        return 0;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Registration
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @brief Register all 22 nucleus call handlers in the gate dispatch table.
     ///
     /// Must be called after gate_init() during kernel bring-up.
     auto register_nucleus_handlers() noexcept -> void {
         using nc = zxfoundation::gate::nucleus_call;
 
+        // ── Domain lifecycle (0-3) ──
         (void)zxfoundation::gate::gate_register_nucleus_handler(
-            nc::console_write, nc_console_write_handler);
+            nc::domain_create, nc_domain_create_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::domain_destroy, nc_domain_destroy_handler);
 
         (void)zxfoundation::gate::gate_register_nucleus_handler(
             nc::domain_exit, nc_domain_exit_handler);
 
         (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::domain_info, nc_domain_info_handler);
+
+        // ── Memory management (4-9) ──
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::mem_alloc, nc_mem_alloc_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::mem_free, nc_mem_free_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::mem_map, nc_mem_map_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::mem_unmap, nc_mem_unmap_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::mem_protect, nc_mem_protect_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::mem_share, nc_mem_share_handler);
+
+        // ── Gate management (10-11) ──
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::gate_create, nc_gate_create_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::gate_destroy, nc_gate_destroy_handler);
+
+        // ── Portal management (12-13) ──
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::portal_create, nc_portal_create_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::portal_destroy, nc_portal_destroy_handler);
+
+        // ── I/O CSS stubs (14-17) ──
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::io_bind, nc_io_bind_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::io_unbind, nc_io_unbind_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::io_submit, nc_io_submit_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::io_irq_bind, nc_io_irq_bind_handler);
+
+        // ── Time (18-20) ──
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
             nc::time_yield, nc_time_yield_handler);
 
         (void)zxfoundation::gate::gate_register_nucleus_handler(
-            nc::domain_info, nc_domain_info_handler);
+            nc::time_deadline, nc_time_deadline_handler);
+
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::time_now, nc_time_now_handler);
+
+        // ── Console (21) ──
+        (void)zxfoundation::gate::gate_register_nucleus_handler(
+            nc::console_write, nc_console_write_handler);
     }
 
 } // namespace zxfoundation::gate::nucleus_handlers

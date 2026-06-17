@@ -1,0 +1,354 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/aste.cxxm
+/// @brief ASTE/ALE table manager — bridges the portal registry with
+///        z/Architecture Access Register Translation hardware
+///        (PoP SA22-7832 §3.8).
+
+export module arch.s390x.cpu.aste;
+import arch.s390x.cpu.aste_types;
+import arch.s390x.cpu.ar;
+import arch.s390x.cpu.processor;
+import zxfoundation.base.types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.sys.printk;
+import arch.s390x.cpu.irq;
+import lib.error;
+import lib.expected;
+import lib.string;
+
+// ── Aliases ────────────────────────────────────────────────────────────────
+
+using namespace arch::s390x::cpu::aste;
+
+using zxfoundation::memory::pmm::alloc;
+using zxfoundation::memory::pmm::zone;
+using zxfoundation::memory::pmm::purpose;
+using zxfoundation::memory::pmm::page_init;
+using zxfoundation::memory::pmm::PAGE_SIZE;
+using zxfoundation::memory::hhdm::phys_to_virt;
+using zxfoundation::sys::printk::pinfo;
+using zxfoundation::sys::printk::perr;
+namespace locking = zxfoundation::locking;
+
+// Type aliases to disambiguate the struct names from the enclosing namespace.
+// Inside namespace arch::s390x::cpu::aste, the name 'aste' refers to the
+// namespace itself, so 'aste::aste' is parsed as a constructor reference.
+using aste_entry = arch::s390x::cpu::aste::aste;
+using ale_entry  = arch::s390x::cpu::aste::ale;
+
+// ── Internal state ─────────────────────────────────────────────────────────
+
+namespace _internal {
+
+    /// @brief Physical address of the ASTE table (MAX_ASTE_ENTRIES × 64 bytes).
+    static u64 g_aste_table_phys{0};
+
+    /// @brief Physical address of the ALE table (MAX_ALE_ENTRIES × 16 bytes).
+    static u64 g_ale_table_phys{0};
+
+    /// @brief Lock protecting all ASTE/ALE table mutations.
+    static locking::qspinlock::qspinlock g_aste_lock{};
+
+    /// @brief Per-slot occupancy for the ASTE table (true = occupied).
+    static bool g_aste_used[MAX_ASTE_ENTRIES]{};
+
+    /// @brief Per-slot occupancy for the ALE table (true = occupied).
+    static bool g_ale_used[MAX_ALE_ENTRIES]{};
+
+    /// @brief Whether the subsystem has been initialized.
+    static bool g_initialized{false};
+
+    // ── Helpers ────────────────────────────────────────────────────────
+
+    /// @brief Return a typed pointer into the ASTE table by index.
+    [[nodiscard]] auto aste_at(u32 idx) noexcept -> aste_entry* {
+        auto base = phys_to_virt(g_aste_table_phys);
+        return reinterpret_cast<aste_entry*>(base) + idx;
+    }
+
+    /// @brief Return a typed pointer into the ALE table by index.
+    [[nodiscard]] auto ale_at(u32 idx) noexcept -> ale_entry* {
+        auto base = phys_to_virt(g_ale_table_phys);
+        return reinterpret_cast<ale_entry*>(base) + idx;
+    }
+
+    /// @brief Linear scan for a free ASTE slot.
+    [[nodiscard]] auto find_free_aste() noexcept -> u32 {
+        for (u32 i = 0; i < MAX_ASTE_ENTRIES; ++i) {
+            if (!g_aste_used[i])
+                return i;
+        }
+        return MAX_ASTE_ENTRIES; // sentinel: no slot found
+    }
+
+    /// @brief Linear scan for a free ALE slot.
+    /// Starts after the reserved range (ALETs 0–ALET_RESERVED_MAX map to
+    /// primary/secondary/home and are never dynamically allocated).
+    [[nodiscard]] auto find_free_ale() noexcept -> u32 {
+        for (u32 i = ALET_RESERVED_MAX + 1; i < MAX_ALE_ENTRIES; ++i) {
+            if (!g_ale_used[i])
+                return i;
+        }
+        return MAX_ALE_ENTRIES; // sentinel: no slot found
+    }
+
+    /// @brief Pages required to hold @p bytes (rounded up).
+    [[nodiscard]] constexpr auto pages_for(u64 bytes) noexcept -> u32 {
+        return static_cast<u32>((bytes + PAGE_SIZE - 1) / PAGE_SIZE);
+    }
+
+    /// @brief Buddy order for a given page count (ceil log2).
+    [[nodiscard]] constexpr auto order_for_pages(u32 n) noexcept -> u32 {
+        u32 order = 0;
+        while ((1U << order) < n)
+            ++order;
+        return order;
+    }
+
+} // namespace _internal
+
+// ── Exported API ───────────────────────────────────────────────────────────
+
+export {
+
+namespace arch::s390x::cpu::aste {
+
+    /// @brief Initialize the ASTE/ALE subsystem.
+    ///
+    /// Allocates a physically-contiguous ASTE table and ALE table from the
+    /// physical memory manager, zeroes them, and marks the subsystem ready.
+    /// Must be called once during kernel bring-up.
+    auto aste_subsystem_init() noexcept -> void {
+        using namespace _internal;
+
+        // ── Allocate ASTE table ────────────────────────────────────────
+        // MAX_ASTE_ENTRIES × 64 bytes = 16 KiB → order 2 (4 pages).
+        constexpr u64 aste_table_size = MAX_ASTE_ENTRIES * sizeof(aste_entry);
+        constexpr u32 aste_pages = pages_for(aste_table_size);
+        constexpr u32 aste_order = order_for_pages(aste_pages);
+
+        auto aste_result = alloc(aste_order, zone::normal,
+                                 purpose::page_table, page_init::zeroed);
+        if (!aste_result) {
+            perr("aste: failed to allocate ASTE table ({} pages)", aste_pages);
+            return;
+        }
+        g_aste_table_phys = aste_result.value().phys_base;
+
+        // ── Allocate ALE table ─────────────────────────────────────────
+        // MAX_ALE_ENTRIES × 16 bytes = 16 KiB → order 2 (4 pages).
+        constexpr u64 ale_table_size = MAX_ALE_ENTRIES * sizeof(ale_entry);
+        constexpr u32 ale_pages = pages_for(ale_table_size);
+        constexpr u32 ale_order = order_for_pages(ale_pages);
+
+        auto ale_result = alloc(ale_order, zone::normal,
+                                purpose::page_table, page_init::zeroed);
+        if (!ale_result) {
+            perr("aste: failed to allocate ALE table ({} pages)", ale_pages);
+            return;
+        }
+        g_ale_table_phys = ale_result.value().phys_base;
+
+        // ── Mark all ASTE/ALE entries as invalid ───────────────────────
+        for (u32 i = 0; i < MAX_ASTE_ENTRIES; ++i) {
+            aste_at(i)->set_invalid(true);
+            g_aste_used[i] = false;
+        }
+
+        for (u32 i = 0; i < MAX_ALE_ENTRIES; ++i) {
+            ale_at(i)->set_invalid(true);
+            g_ale_used[i] = false;
+        }
+
+        g_initialized = true;
+
+        pinfo("aste: subsystem initialized — ASTE table @ {:#x} ({} slots), "
+              "ALE table @ {:#x} ({} slots)",
+              g_aste_table_phys, MAX_ASTE_ENTRIES,
+              g_ale_table_phys,  MAX_ALE_ENTRIES);
+    }
+
+    /// @brief Allocate an ASTE slot and populate it with a target ASCE.
+    ///
+    /// @param target_asce  The Address Space Control Element of the target domain.
+    /// @param auth_index   Authorization Index (AX) for this ASTE.
+    /// @return The ASTE index on success, or an error.
+    [[nodiscard]] auto aste_alloc(
+        u64 target_asce,
+        u16 auth_index
+    ) noexcept -> ::lib::expected<u32, ::lib::kernel_error> {
+        using namespace _internal;
+
+        if (!g_initialized)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+
+        const locking::irq_lock_guard guard{g_aste_lock};
+
+        const u32 idx = find_free_aste();
+        if (idx >= MAX_ASTE_ENTRIES)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_memory(::lib::memory_error::out_of_memory));
+
+        auto* entry = aste_at(idx);
+        entry->clear();
+        entry->set_asce(target_asce);
+        entry->set_authorization_index(auth_index);
+        // Entry is valid (I-bit cleared by clear()).
+
+        g_aste_used[idx] = true;
+
+        pinfo("aste: allocated ASTE slot {} — ASCE={:#x} AX={}",
+              idx, target_asce, auth_index);
+
+        return idx;
+    }
+
+    /// @brief Free an ASTE slot, marking it as invalid.
+    ///
+    /// @param aste_index  The ASTE slot index to release.
+    /// @return Success, or an error if the index is invalid.
+    [[nodiscard]] auto aste_free(
+        u32 aste_index
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        using namespace _internal;
+
+        if (!g_initialized)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+
+        if (aste_index >= MAX_ASTE_ENTRIES)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+
+        const locking::irq_lock_guard guard{g_aste_lock};
+
+        if (!g_aste_used[aste_index])
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::not_found));
+
+        auto* entry = aste_at(aste_index);
+        entry->set_invalid(true);
+        g_aste_used[aste_index] = false;
+
+        pinfo("aste: freed ASTE slot {}", aste_index);
+
+        return {};
+    }
+
+    /// @brief Create an ALE that points to the given ASTE.
+    /// @param aste_index  The ASTE slot that this ALE will reference.
+    /// @return The ALET value (ALE slot index) on success, or an error.
+    [[nodiscard]] auto ale_create(
+        u32 aste_index
+    ) noexcept -> ::lib::expected<u32, ::lib::kernel_error> {
+        using namespace _internal;
+
+        if (!g_initialized)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+
+        if (aste_index >= MAX_ASTE_ENTRIES)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+
+        const locking::irq_lock_guard guard{g_aste_lock};
+
+        if (!g_aste_used[aste_index])
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::not_found));
+
+        const u32 ale_idx = find_free_ale();
+        if (ale_idx >= MAX_ALE_ENTRIES)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_memory(::lib::memory_error::out_of_memory));
+
+        // Compute the physical address of the target ASTE entry.
+        const u64 aste_phys = g_aste_table_phys
+                            + static_cast<u64>(aste_index) * sizeof(aste_entry);
+
+        auto* entry = ale_at(ale_idx);
+        entry->clear();
+        entry->set_aste_origin(aste_phys);
+        entry->set_alen(ale_idx);
+        // Entry is valid (I-bit cleared by clear()).
+
+        g_ale_used[ale_idx] = true;
+
+        // Purge the ALB so stale cached translations are discarded.
+        ar::purge_alb();
+
+        pinfo("aste: created ALE slot {} -> ASTE slot {} (phys {:#x})",
+              ale_idx, aste_index, aste_phys);
+
+        // The ALET value IS the ALE slot index.
+        return ale_idx;
+    }
+
+    /// @brief Invalidate an ALE and purge the ALB.
+    ///
+    /// @param alet  The ALET value (ALE slot index) to destroy.
+    /// @return Success, or an error if the ALET is invalid.
+    [[nodiscard]] auto ale_destroy(
+        u32 alet
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        using namespace _internal;
+
+        if (!g_initialized)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+
+        // ALETs 0–ALET_RESERVED_MAX are architecturally reserved.
+        if (alet <= ALET_RESERVED_MAX || alet >= MAX_ALE_ENTRIES)
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+
+        const locking::irq_lock_guard guard{g_aste_lock};
+
+        if (!g_ale_used[alet])
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::not_found));
+
+        auto* entry = ale_at(alet);
+        entry->set_invalid(true);
+        g_ale_used[alet] = false;
+
+        // Purge the ALB so the CPU does not use the now-invalid entry.
+        ar::purge_alb();
+
+        pinfo("aste: destroyed ALE slot {}", alet);
+
+        return {};
+    }
+
+    /// @brief Load the ASN-second-table-entry origin into CR7 for AR-mode
+    ///        translation on this CPU.
+    /// @param aste_origin  Physical address of the ASTE (64-byte aligned).
+    auto aste_load_cr7(u64 aste_origin) noexcept -> void {
+        // CR7 holds the ASN-second-table-entry origin.
+        // The low 6 bits must be zero (64-byte alignment).
+        const u64 cr7_val = aste_origin & ~0x3FULL;
+        processor::ctl_load<7, 7>(cr7_val);
+    }
+
+    /// @brief Return a pointer to the ASTE at the given index.
+    ///
+    /// @param index  The ASTE slot index (0 to MAX_ASTE_ENTRIES-1).
+    /// @return Pointer to the ASTE, or nullptr if the index is out of range
+    ///         or the subsystem is not initialized.
+    [[nodiscard]] auto aste_find(u32 index) noexcept -> aste_entry* {
+        using namespace _internal;
+
+        if (!g_initialized || index >= MAX_ASTE_ENTRIES)
+            return nullptr;
+
+        return aste_at(index);
+    }
+
+} // namespace arch::s390x::cpu::aste
+
+} // end export

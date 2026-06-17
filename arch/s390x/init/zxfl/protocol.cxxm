@@ -87,6 +87,13 @@ namespace arch::s390x::init::zxfl {
         u32  _pad{};
     };
 
+    /// @brief System Modules - (sysmodule=N in parmfile)
+    struct sysmodule {
+        char name[32]{};
+        u64 phys_start{};  ///< Physical start of module
+        u64  size_bytes{};
+    };
+
     /// @brief ZXFoundationLoader boot protocol. (C++-ify)
     struct protocol {
         u32 magic{};
@@ -149,11 +156,7 @@ namespace arch::s390x::init::zxfl {
 
         u32 module_count{};
         u32 _pad8{};
-        struct {
-            char name[32]{};
-            u64 phys_start{};  ///< Physical start of module
-            u64  size_bytes{};
-        } modules[16];
+        sysmodule modules[16];
 
         u64 cksum_table{};
 

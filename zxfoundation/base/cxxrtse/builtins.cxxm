@@ -1,0 +1,168 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/base/cxxrtse/builtins.cxxm
+/// @brief Compiler-RT builtins for freestanding — provides 128-bit integer
+///        runtime functions that clang emits for u128 arithmetic on s390x.
+
+export module zxfoundation.base.cxxrtse.builtins;
+import zxfoundation.base.types;
+
+namespace _internal {
+
+    struct u128_pair {
+        u64 hi{};
+        u64 lo{};
+    };
+
+    /// @brief Split a u128 into high and low 64-bit halves.
+    [[nodiscard]] static auto split(u128 v) noexcept -> u128_pair {
+        union { u128 full; struct { u64 hi; u64 lo; } parts; } u;
+        u.full = v;
+        return {u.parts.hi, u.parts.lo};
+    }
+
+    /// @brief Combine two u64 halves into a u128.
+    [[nodiscard]] static auto combine(u64 hi, u64 lo) noexcept -> u128 {
+        union { u128 full; struct { u64 hi; u64 lo; } parts; } u;
+        u.parts.hi = hi;
+        u.parts.lo = lo;
+        return u.full;
+    }
+
+} // namespace _internal
+
+extern "C" {
+
+/// @brief 128-bit logical shift left.
+auto __ashlti3(u128 a, int b) noexcept -> u128 {
+    if (b == 0) return a;
+
+    auto [hi, lo] = _internal::split(a);
+
+    if (b >= 128) return _internal::combine(0, 0);
+
+    if (b >= 64) {
+        return _internal::combine(lo << (b - 64), 0);
+    }
+
+    // 0 < b < 64
+    const u64 new_hi = (hi << b) | (lo >> (64 - b));
+    const u64 new_lo = lo << b;
+    return _internal::combine(new_hi, new_lo);
+}
+
+/// @brief 128-bit logical shift right.
+auto __lshrti3(u128 a, int b) noexcept -> u128 {
+    if (b == 0) return a;
+
+    auto [hi, lo] = _internal::split(a);
+
+    if (b >= 128) return _internal::combine(0, 0);
+
+    if (b >= 64) {
+        return _internal::combine(0, hi >> (b - 64));
+    }
+
+    // 0 < b < 64
+    const u64 new_hi = hi >> b;
+    const u64 new_lo = (lo >> b) | (hi << (64 - b));
+    return _internal::combine(new_hi, new_lo);
+}
+
+/// @brief 128-bit arithmetic shift right.
+auto __ashrti3(u128 a, int b) noexcept -> u128 {
+    if (b == 0) return a;
+
+    auto [hi, lo] = _internal::split(a);
+    const auto shi = static_cast<long long>(hi);
+
+    if (b >= 128) {
+        const auto fill = static_cast<u64>(shi >> 63);
+        return _internal::combine(fill, fill);
+    }
+
+    if (b >= 64) {
+        return _internal::combine(
+            static_cast<u64>(shi >> 63),
+            static_cast<u64>(shi >> (b - 64)));
+    }
+
+    // 0 < b < 64
+    const u64 new_hi = static_cast<u64>(shi >> b);
+    const u64 new_lo = (lo >> b) | (hi << (64 - b));
+    return _internal::combine(new_hi, new_lo);
+}
+
+auto __udivti3(u128 a, u128 b) noexcept -> u128 {
+    if (b == 0) return 0;
+    if (a < b)  return 0;
+    if (a == b) return 1;
+
+    // Fast path: both fit in 64 bits.
+    auto [ah, al] = _internal::split(a);
+    auto [bh, bl] = _internal::split(b);
+    if (ah == 0 && bh == 0) {
+        return _internal::combine(0, al / bl);
+    }
+
+    // General case: binary long-division using the shift stubs above.
+    u128 quot = 0;
+    u128 rem  = 0;
+    for (int i = 127; i >= 0; --i) {
+        rem = __ashlti3(rem, 1);
+        rem |= __lshrti3(a, i) & 1;
+        if (rem >= b) {
+            rem -= b;
+            quot |= __ashlti3(static_cast<u128>(1), i);
+        }
+    }
+    return quot;
+}
+
+auto __umodti3(u128 a, u128 b) noexcept -> u128 {
+    if (b == 0) return 0;
+    if (a < b)  return a;
+    if (a == b) return 0;
+
+    // Fast path.
+    auto [ah, al] = _internal::split(a);
+    auto [bh, bl] = _internal::split(b);
+    if (ah == 0 && bh == 0) {
+        return _internal::combine(0, al % bl);
+    }
+
+    // General case.
+    u128 rem = 0;
+    for (int i = 127; i >= 0; --i) {
+        rem = __ashlti3(rem, 1);
+        rem |= __lshrti3(a, i) & 1;
+        if (rem >= b) {
+            rem -= b;
+        }
+    }
+    return rem;
+}
+
+/// @brief 128-bit multiply (needed by some codegen paths).
+auto __multi3(u128 a, u128 b) noexcept -> u128 {
+    auto [ah, al] = _internal::split(a);
+    auto [bh, bl] = _internal::split(b);
+
+    // (ah*2^64 + al) * (bh*2^64 + bl)
+    // = ah*bh*2^128 (overflows, discard)
+    //   + (ah*bl + al*bh)*2^64
+    //   + al*bl
+    const u128 lo_lo = static_cast<u128>(al) * static_cast<u128>(bl);
+    const u128 cross = static_cast<u128>(ah) * static_cast<u128>(bl)
+                     + static_cast<u128>(al) * static_cast<u128>(bh);
+
+    auto [ll_hi, ll_lo] = _internal::split(lo_lo);
+    auto [cr_hi, cr_lo] = _internal::split(cross);
+
+    const u64 res_lo = ll_lo;
+    const u64 res_hi = ll_hi + cr_lo;
+    (void)cr_hi; // overflow discarded
+
+    return _internal::combine(res_hi, res_lo);
+}
+
+} // extern "C"

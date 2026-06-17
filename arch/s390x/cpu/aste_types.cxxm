@@ -1,0 +1,174 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/aste_types.cxxm
+/// @brief z/Architecture ASTE/ALE/ALT type definitions for Access Register
+///        Translation (PoP SA22-7832 §3.8).
+
+export module arch.s390x.cpu.aste_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::aste {
+
+    /// @brief Maximum ASTE table entries (one per domain).
+    inline constexpr u32 MAX_ASTE_ENTRIES = 256;
+
+    /// @brief Maximum ALE entries across all access lists.
+    inline constexpr u32 MAX_ALE_ENTRIES = 1024;
+
+    /// @brief Maximum access list tables.
+    inline constexpr u32 MAX_ALT_ENTRIES = 128;
+
+    /// @brief ALETs 0–2 are architecturally reserved (primary, secondary, home).
+    inline constexpr u32 ALET_RESERVED_MAX = 2;
+
+    /// @brief ASN Second Table Entry — 64 bytes, 64-byte aligned.
+    struct [[gnu::packed]] alignas(64) aste {
+        u64 words[8]{};
+
+        // ── Invalid bit (word 0, bit 0 MSB) ────────────────────────────
+
+        /// @brief Test the I-bit (invalid) in word 0.
+        [[nodiscard]] auto is_invalid() const noexcept -> bool {
+            return (words[0] & (1ULL << 63)) != 0;
+        }
+
+        /// @brief Set or clear the I-bit (invalid) in word 0.
+        auto set_invalid(bool inv) noexcept -> void {
+            constexpr u64 i_mask = 1ULL << 63;
+            if (inv)
+                words[0] |= i_mask;
+            else
+                words[0] &= ~i_mask;
+        }
+
+        // ── ASCE (word 1) ──────────────────────────────────────────────
+
+        /// @brief Return the target address space ASCE (word 1).
+        [[nodiscard]] auto asce() const noexcept -> u64 {
+            return words[1];
+        }
+
+        /// @brief Set the target address space ASCE (word 1).
+        auto set_asce(u64 val) noexcept -> void {
+            words[1] = val;
+        }
+
+        // ── ALD — Access-List Designation (word 2) ─────────────────────
+
+        /// @brief Return the Access-List Designation (word 2).
+        [[nodiscard]] auto ald() const noexcept -> u64 {
+            return words[2];
+        }
+
+        /// @brief Set the Access-List Designation (word 2).
+        auto set_ald(u64 val) noexcept -> void {
+            words[2] = val;
+        }
+
+        // ── AX — Authorization Index (word 0, bits 32–47) ─────────────
+
+        /// @brief Return the Authorization Index (AX) from word 0 bits 32–47.
+        [[nodiscard]] auto authorization_index() const noexcept -> u16 {
+            return static_cast<u16>((words[0] >> 16) & 0xFFFFU);
+        }
+
+        /// @brief Set the Authorization Index (AX) in word 0 bits 32–47.
+        auto set_authorization_index(u16 ax) noexcept -> void {
+            words[0] = (words[0] & ~(0xFFFFULL << 16))
+                      | (static_cast<u64>(ax) << 16);
+        }
+
+        /// @brief Zero all words.
+        auto clear() noexcept -> void {
+            for (auto& w : words)
+                w = 0;
+        }
+    };
+
+    static_assert(sizeof(aste) == 64, "ASTE must be exactly 64 bytes (PoP §3.8.4)");
+    static_assert(alignof(aste) == 64, "ASTE must be 64-byte aligned");
+
+    // ── ALE — Access List Entry (PoP §3.8.3) ──────────────────────────────
+    //
+    // 16 bytes (two doublewords).
+    //
+    // Word 0 (u64):
+    //   Bit 0 (MSB)  — I-bit (invalid)
+    //   Bits 1–24    — ALEN (Access-List Entry Number)
+    //   Bits 25–31   — Reserved
+    //   Bits 32–47   — ALEAX (ALE Authorization Index)
+    //   Bits 48–63   — ASTESN (ASTE Sequence Number)
+    //
+    // Word 1 (u64):
+    //   Bits 0–57    — ASTE Origin (real address, 64-byte aligned)
+    //   Bits 58–63   — Reserved (zero, implied by alignment)
+
+    /// @brief Access List Entry — 16 bytes.
+    struct [[gnu::packed]] ale {
+        u64 words[2]{};
+
+        // ── Invalid bit (word 0, bit 0 MSB) ────────────────────────────
+
+        /// @brief Test the I-bit (invalid) in word 0.
+        [[nodiscard]] auto is_invalid() const noexcept -> bool {
+            return (words[0] & (1ULL << 63)) != 0;
+        }
+
+        /// @brief Set or clear the I-bit (invalid) in word 0.
+        auto set_invalid(bool inv) noexcept -> void {
+            constexpr u64 i_mask = 1ULL << 63;
+            if (inv)
+                words[0] |= i_mask;
+            else
+                words[0] &= ~i_mask;
+        }
+
+        // ── ASTE Origin (word 1, bits 0–57) ───────────────────────────
+
+        /// @brief Return the real address of the referenced ASTE.
+        [[nodiscard]] auto aste_origin() const noexcept -> u64 {
+            // Mask out the low 6 bits (64-byte alignment).
+            return words[1] & ~0x3FULL;
+        }
+
+        /// @brief Set the ASTE origin (must be 64-byte aligned).
+        auto set_aste_origin(u64 addr) noexcept -> void {
+            words[1] = addr & ~0x3FULL;
+        }
+
+        // ── ALEN — Access-List Entry Number (word 0, bits 1–24) ────────
+
+        /// @brief Return the Access-List Entry Number (ALEN).
+        [[nodiscard]] auto alen() const noexcept -> u32 {
+            return static_cast<u32>((words[0] >> 39) & 0x00FFFFFFU);
+        }
+
+        /// @brief Set the Access-List Entry Number (ALEN) in word 0, bits 1–24.
+        auto set_alen(u32 val) noexcept -> void {
+            constexpr u64 alen_mask = 0x00FFFFFFULL << 39;
+            words[0] = (words[0] & ~alen_mask)
+                      | ((static_cast<u64>(val) & 0x00FFFFFFU) << 39);
+        }
+
+        /// @brief Zero all words.
+        auto clear() noexcept -> void {
+            words[0] = 0;
+            words[1] = 0;
+        }
+    };
+
+    static_assert(sizeof(ale) == 16, "ALE must be exactly 16 bytes (PoP §3.8.3)");
+
+    // ── ALT header — kernel bookkeeping (not hardware) ─────────────────────
+
+    /// @brief Access List Table header metadata (kernel-side, not hardware).
+    struct alt_header {
+        u64 phys_base{0};   ///< Physical address of the ALE array.
+        u32 capacity{0};    ///< Maximum entries in this access list.
+        u32 count{0};       ///< Current number of live entries.
+    };
+
+} // namespace arch::s390x::cpu::aste
+
+} // end export
