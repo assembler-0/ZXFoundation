@@ -42,8 +42,8 @@
 #define PSW_BIT_IO              0x0200000000000000ULL
 /// External interrupt mask bit.
 #define PSW_BIT_EXT             0x0100000000000000ULL
-/// Machine-check mask bit.
-#define PSW_BIT_MCCK            0x0008000000000000ULL
+/// Machine-check mask bit (PoP bit 13).
+#define PSW_BIT_MCCK            0x0004000000000000ULL
 /// Wait state bit.
 #define PSW_BIT_WAIT            0x0002000000000000ULL
 /// Problem state (user mode) bit.

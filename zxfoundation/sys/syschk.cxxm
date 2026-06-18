@@ -16,6 +16,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.init.zxfl.protocol;
+import zxfoundation.sys.stacktrace;
 import arch.s390x.lib.atomic;
 import lib.error;
 import lib.string_view;
@@ -93,7 +94,7 @@ namespace zxfoundation::sys::syschk {
                 expected, 1U,
                 arch::s390x::lib::atomic::memory_order::seq_cst,
                 arch::s390x::lib::atomic::memory_order::relaxed)) [[unlikely]] {
-            arch::s390x::cpu::psw::load_disabled_wait_psw();
+            arch::s390x::cpu::psw::disabled_wait();
         }
 
         // The physical lowcore IS at address 0x0 — that is architecturally correct.
@@ -123,6 +124,7 @@ namespace zxfoundation::sys::syschk {
 
         pemerg("syschk: {}: {}\n", location.function_name(), msg);
 
+        stacktrace::dump_stack();
 
         if (_internal::g_cpu_map) {
             const u16 self_hw_addr = arch::s390x::cpu::processor::cpu_addr();
@@ -134,7 +136,7 @@ namespace zxfoundation::sys::syschk {
             }
         }
 
-        arch::s390x::cpu::psw::load_disabled_wait_psw();
+        arch::s390x::cpu::psw::disabled_wait();
     }
 
     /// @brief Issue a fatal system check with a formatted message.

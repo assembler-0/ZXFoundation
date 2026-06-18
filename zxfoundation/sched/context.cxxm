@@ -52,7 +52,7 @@ namespace zxfoundation::sched::context {
     ) noexcept -> void {
         if (!irqs_disabled()) [[unlikely]] {
             (void)loc;
-            arch::s390x::cpu::psw::load_disabled_wait_psw();
+            arch::s390x::cpu::psw::disabled_wait();
         }
     }
 
@@ -61,7 +61,7 @@ namespace zxfoundation::sched::context {
     ) noexcept -> void {
         if (in_interrupt()) [[unlikely]] {
             (void)loc;
-            arch::s390x::cpu::psw::load_disabled_wait_psw();
+            arch::s390x::cpu::psw::disabled_wait();
         }
     }
 
@@ -70,7 +70,7 @@ namespace zxfoundation::sched::context {
     ) noexcept -> void {
         if (in_hardirq()) [[unlikely]] {
             (void)loc;
-            arch::s390x::cpu::psw::load_disabled_wait_psw();
+            arch::s390x::cpu::psw::disabled_wait();
         }
     }
 
@@ -79,7 +79,7 @@ namespace zxfoundation::sched::context {
     ) noexcept -> void {
         if (!can_sleep()) [[unlikely]] {
             (void)loc;
-            arch::s390x::cpu::psw::load_disabled_wait_psw();
+            arch::s390x::cpu::psw::disabled_wait();
         }
     }
 

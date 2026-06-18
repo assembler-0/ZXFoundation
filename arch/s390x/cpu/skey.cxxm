@@ -10,19 +10,19 @@ export {
 namespace arch::s390x::cpu::skey {
 
     /// @brief Access control bits occupy the high nibble of the key byte.
-    constexpr u8 SKEY_ACC_MASK       = 0xF0;
+    constexpr u8 SKEY_ACC_MASK       = 0xF0;   ///< PoP bits 0-3.
 
     /// @brief Shift count to position an access-control value into the key byte.
     constexpr u8 SKEY_ACC_SHIFT      = 4;
 
-    /// @brief Fetch-protection bit (bit 4 of the key byte, value 0x08).
+    /// @brief Fetch-protection bit (PoP bit 4 of the key byte, value 0x08).
     constexpr u8 SKEY_FETCH_PROTECT  = 0x08;
 
-    /// @brief Reference bit (bit 5 of the key byte, value 0x04).
+    /// @brief Reference bit (PoP bit 5 of the key byte, value 0x04).
     /// Set by the CPU when the frame is accessed (read or write).
     constexpr u8 SKEY_REF            = 0x04;
 
-    /// @brief Change bit (bit 6 of the key byte, value 0x02).
+    /// @brief Change bit (PoP bit 6 of the key byte, value 0x02).
     /// Set by the CPU when the frame is written.
     constexpr u8 SKEY_CHANGE         = 0x02;
 

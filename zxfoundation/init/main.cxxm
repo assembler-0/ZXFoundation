@@ -11,6 +11,7 @@ import zxfoundation.base.types;
 import zxfoundation.sys.time;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.printk;
+import zxfoundation.sys.watchdog;
 import zxfoundation.base.config;
 import zxfoundation.memory.pmm;
 import zxfoundation.sys.irq.irqdesc_init;
@@ -20,6 +21,7 @@ import zxfoundation.base.cxxrtse.cxxabi;
 import zxfoundation.memory.slub;
 import zxfoundation.rcu.rcu;
 import zxfoundation.memory.kmalloc;
+import zxfoundation.memory.vm;
 import zxfoundation.sched.sched;
 import zxfoundation.init.bootstrap;
 import zxfoundation.domain.domain;
@@ -28,6 +30,7 @@ import zxfoundation.gate.gate;
 import zxfoundation.gate.nucleus_handlers;
 import zxfoundation.portal.portal;
 import arch.s390x.init.zxfl.protocol;
+import arch.s390x.cpu.stfle_types;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
@@ -37,15 +40,20 @@ import arch.s390x.cpu.features;
 import arch.s390x.cpu.irq;
 import arch.s390x.mmu.mmu;
 import arch.s390x.cpu.aste;
+import arch.s390x.cpu.pc;
 import arch.s390x.css.css;
+import arch.s390x.css.ccw_io;
 import crypto.sha256_types;
 import crypto.sha256;
 import drivers.console.diag;
 import lib.span;
 import lib.error;
+import lib.format;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
+using zxfoundation::sys::printk::pnotice;
+using zxfoundation::sys::printk::pdebug;
 
 export {
 
@@ -58,14 +66,13 @@ namespace zxfoundation::init {
 
 } // end export
 
-
 namespace _internal {
 
     using namespace zxfoundation::memory::hhdm;
     using namespace zxfoundation::sys::syschk;
 
     /// @brief Verify the boot protocol magic and binding token.
-    static auto verify_protocol_integrity(const arch::s390x::init::zxfl::protocol& boot) -> void {
+    auto verify_protocol_integrity(const arch::s390x::init::zxfl::protocol& boot) -> void {
         if (boot.magic != arch::s390x::init::zxfl::ZXFL_MAGIC)
             syschk_fatal(
                 lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
@@ -82,7 +89,7 @@ namespace _internal {
     }
 
     /// @brief Validate the loader-written stack frame canary at kernel_stack_top.
-    static auto validate_stack_frame(const arch::s390x::init::zxfl::protocol& boot) -> void {
+    auto validate_stack_frame(const arch::s390x::init::zxfl::protocol& boot) -> void {
         auto bad = [&] [[noreturn]] -> void {
             syschk_fatal(
                 lib::kernel_error::from_init(lib::init_error::code::checksum_mismatch),
@@ -101,7 +108,7 @@ namespace _internal {
     }
 
     /// @brief Re-verify all kernel segment checksums from the HHDM-mapped image.
-    static auto verify_kernel_checksums(const arch::s390x::init::zxfl::protocol& boot) -> void {
+    auto verify_kernel_checksums(const arch::s390x::init::zxfl::protocol& boot) -> void {
         if (!boot.cksum_table) [[unlikely]]
             syschk_fatal(
                 lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
@@ -155,7 +162,7 @@ namespace _internal {
     }
 
     /// @brief Print the kernel banner.
-    static auto banner() -> void {
+    auto banner() -> void {
         pinfo("sys: ZXFoundation (TM) {} - Copyright (c) {} assembler-0. Licensed under the Apache License, Version 2.0.\n",
             zxfoundation::base::config::CONFIG_ZX_RELEASE,
             zxfoundation::base::config::CONFIG_ZX_COPYRIGHT_DATE);
@@ -165,6 +172,25 @@ namespace _internal {
             zxfoundation::base::config::CONFIG_ZX_BUILD_PLATFORM,
             zxfoundation::base::config::CONFIG_ZX_COMPILER_ID,
             zxfoundation::base::config::CONFIG_ZX_BUILD_NUMBER);
+
+        pinfo("hypervisor: {}", arch::s390x::cpu::processor::is_hypervisor() ? "true" : "false");
+    }
+
+    auto launch_bootstrap_domain() -> void  {
+        auto dom_r = zxfoundation::domain::domain_create("sys/bootstrap");
+        if (!dom_r) {
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: cannot create sys/bootstrap domain");
+        }
+        auto* d = *dom_r;
+
+        d->primary_strand.cpu = 0;
+        zxfoundation::sched::setup_domain_context(
+            d,
+            zxfoundation::init::bootstrap::bootstrap_entry,
+            &zxfoundation::init::boot_protocol);
+        zxfoundation::sched::enqueue_domain(d);
     }
 
 } // namespace _internal
@@ -175,11 +201,11 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     const arch::s390x::init::zxfl::protocol* protocol
 ) noexcept -> void {
     if (!protocol) [[unlikely]]
-        arch::s390x::cpu::psw::load_disabled_wait_psw();
+        arch::s390x::cpu::psw::disabled_wait();
 
     zxfoundation::base::cxxrtse::cxxabi::run_global_constructor();
 
-    zxfoundation::sys::printk::initialize();
+    zxfoundation::sys::printk::init();
     zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
 
     _internal::verify_protocol_integrity(*protocol);
@@ -188,9 +214,12 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::init::boot_protocol = *protocol;
 
-    arch::s390x::cpu::lowcore::init_bsp(*protocol);
+    arch::s390x::cpu::features::init(zxfoundation::init::boot_protocol.stfle_fac);
+
+    arch::s390x::cpu::features::enable_hardware_facilities(zxfoundation::init::boot_protocol.cr0_snapshot);
+
+    arch::s390x::cpu::lowcore::init_bsp(zxfoundation::init::boot_protocol);
     arch::s390x::cpu::percpu::init_bsp();
-    arch::s390x::cpu::features::init(protocol->stfle_fac);
 
     zxfoundation::sys::syschk::syschk_init(*protocol);
     zxfoundation::sys::time::initialize(protocol->tod_boot);
@@ -203,6 +232,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::memory::slub::slub_init();
     zxfoundation::memory::kmalloc::kmalloc_init();
+    zxfoundation::memory::vm::vm_init();
 
     zxfoundation::sys::irq::irq_subsystem_init();
     zxfoundation::sys::timer::timer_init();
@@ -215,44 +245,24 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::portal::portal_init();
     arch::s390x::cpu::aste::aste_subsystem_init();
 
+    arch::s390x::cpu::pc::init();
+
     zxfoundation::sched::sched_init();
     arch::s390x::cpu::smp::init_bsp();
-    pinfo("smp: {} processors started", arch::s390x::cpu::smp::init_aps(*protocol));
-    arch::s390x::cpu::smp::ap_release_all();
+    arch::s390x::cpu::smp::init_aps(*protocol);
 
     arch::s390x::css::css_init();
+    arch::s390x::css::ccw_io::css_probe_devices();
 
-    {
-        auto dom_r = zxfoundation::domain::domain_create("sys/bootstrap");
-        if (!dom_r) {
-            perr("sys: failed to create sys/bootstrap domain");
-            zxfoundation::sys::syschk::syschk_fatal(
-                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
-                "sys: cannot create bootstrap domain");
-        }
-        auto* d = *dom_r;
+    arch::s390x::cpu::smp::ap_release_all();
 
-        auto act_r = zxfoundation::domain::domain_activate(d->id);
-        if (!act_r) {
-            zxfoundation::sys::syschk::syschk_fatal(
-                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
-                "sys: cannot activate bootstrap domain");
-        }
-
-        d->cpu = 0;
-        zxfoundation::sched::setup_domain_context(
-            d,
-            zxfoundation::init::bootstrap::bootstrap_entry,
-            &zxfoundation::init::boot_protocol);
-        zxfoundation::sched::enqueue_domain(d);
-    }
+    _internal::launch_bootstrap_domain();
 
     pinfo("sys: core.zxfoundation.nucleus initialization complete");
 
-    while (true) {
-        arch::s390x::cpu::irq::irq_enable();
-        arch::s390x::cpu::processor::cpu_relax();
-        arch::s390x::cpu::irq::irq_disable();
-        zxfoundation::sched::schedule();
-    }
+    arch::s390x::cpu::smp::wait_aps_initialized();
+
+    zxfoundation::sys::watchdog::watchdog_init();
+
+    zxfoundation::sched::sched_idle_enter();
 }

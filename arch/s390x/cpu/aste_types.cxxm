@@ -26,8 +26,6 @@ namespace arch::s390x::cpu::aste {
     struct [[gnu::packed]] alignas(64) aste {
         u64 words[8]{};
 
-        // ── Invalid bit (word 0, bit 0 MSB) ────────────────────────────
-
         /// @brief Test the I-bit (invalid) in word 0.
         [[nodiscard]] auto is_invalid() const noexcept -> bool {
             return (words[0] & (1ULL << 63)) != 0;
@@ -42,8 +40,6 @@ namespace arch::s390x::cpu::aste {
                 words[0] &= ~i_mask;
         }
 
-        // ── ASCE (word 1) ──────────────────────────────────────────────
-
         /// @brief Return the target address space ASCE (word 1).
         [[nodiscard]] auto asce() const noexcept -> u64 {
             return words[1];
@@ -54,8 +50,6 @@ namespace arch::s390x::cpu::aste {
             words[1] = val;
         }
 
-        // ── ALD — Access-List Designation (word 2) ─────────────────────
-
         /// @brief Return the Access-List Designation (word 2).
         [[nodiscard]] auto ald() const noexcept -> u64 {
             return words[2];
@@ -65,8 +59,6 @@ namespace arch::s390x::cpu::aste {
         auto set_ald(u64 val) noexcept -> void {
             words[2] = val;
         }
-
-        // ── AX — Authorization Index (word 0, bits 32–47) ─────────────
 
         /// @brief Return the Authorization Index (AX) from word 0 bits 32–47.
         [[nodiscard]] auto authorization_index() const noexcept -> u16 {
@@ -79,6 +71,61 @@ namespace arch::s390x::cpu::aste {
                       | (static_cast<u64>(ax) << 16);
         }
 
+        /// @brief Return the raw 32-bit Linkage-Table Designation (bytes 24-27).
+        [[nodiscard]] auto ltd_raw() const noexcept -> u32 {
+            return static_cast<u32>(words[3] >> 32);
+        }
+
+        /// @brief Set the raw 32-bit Linkage-Table Designation (bytes 24-27).
+        auto set_ltd_raw(u32 ltd) noexcept -> void {
+            words[3] = (words[3] & 0x00000000FFFFFFFFULL)
+                      | (static_cast<u64>(ltd) << 32);
+        }
+
+        /// @brief Test the subsystem-linkage control bit (V, LTD bit 0).
+        /// Must be 1 for PC/PT instructions to proceed.
+        [[nodiscard]] auto ltd_valid() const noexcept -> bool {
+            return (ltd_raw() >> 31) & 1U;
+        }
+
+        /// @brief Set or clear the V bit in the LTD.
+        auto set_ltd_valid(bool v) noexcept -> void {
+            u32 ltd = ltd_raw();
+            if (v)
+                ltd |= (1U << 31);
+            else
+                ltd &= ~(1U << 31);
+            set_ltd_raw(ltd);
+        }
+
+        /// @brief Return the linkage-table origin as a 31-bit real address.
+        /// LTD bits 1-24 with 7 zeros appended on the right.
+        [[nodiscard]] auto ltd_origin() const noexcept -> u64 {
+            return static_cast<u64>(ltd_raw() & 0x7FFFFF80U);
+        }
+
+        /// @brief Set the linkage-table origin from a 128-byte-aligned real address.
+        /// @pre @p addr must be 128-byte aligned (low 7 bits zero).
+        auto set_ltd_origin(u64 addr) noexcept -> void {
+            u32 ltd = ltd_raw();
+            // Preserve V (bit 31) and LTL (bits 0-6)
+            ltd = (ltd & 0x8000007FU) | (static_cast<u32>(addr) & 0x7FFFFF80U);
+            set_ltd_raw(ltd);
+        }
+
+        /// @brief Return the linkage-table length (LTL, LTD bits 25-31, 7 bits).
+        /// Actual table length = (LTL + 1) × 128 bytes.
+        [[nodiscard]] auto ltd_length() const noexcept -> u8 {
+            return static_cast<u8>(ltd_raw() & 0x7FU);
+        }
+
+        /// @brief Set the linkage-table length (LTL).
+        auto set_ltd_length(u8 ltl) noexcept -> void {
+            u32 ltd = ltd_raw();
+            ltd = (ltd & ~0x7FU) | (static_cast<u32>(ltl) & 0x7FU);
+            set_ltd_raw(ltd);
+        }
+
         /// @brief Zero all words.
         auto clear() noexcept -> void {
             for (auto& w : words)
@@ -89,26 +136,9 @@ namespace arch::s390x::cpu::aste {
     static_assert(sizeof(aste) == 64, "ASTE must be exactly 64 bytes (PoP §3.8.4)");
     static_assert(alignof(aste) == 64, "ASTE must be 64-byte aligned");
 
-    // ── ALE — Access List Entry (PoP §3.8.3) ──────────────────────────────
-    //
-    // 16 bytes (two doublewords).
-    //
-    // Word 0 (u64):
-    //   Bit 0 (MSB)  — I-bit (invalid)
-    //   Bits 1–24    — ALEN (Access-List Entry Number)
-    //   Bits 25–31   — Reserved
-    //   Bits 32–47   — ALEAX (ALE Authorization Index)
-    //   Bits 48–63   — ASTESN (ASTE Sequence Number)
-    //
-    // Word 1 (u64):
-    //   Bits 0–57    — ASTE Origin (real address, 64-byte aligned)
-    //   Bits 58–63   — Reserved (zero, implied by alignment)
-
     /// @brief Access List Entry — 16 bytes.
     struct [[gnu::packed]] ale {
         u64 words[2]{};
-
-        // ── Invalid bit (word 0, bit 0 MSB) ────────────────────────────
 
         /// @brief Test the I-bit (invalid) in word 0.
         [[nodiscard]] auto is_invalid() const noexcept -> bool {
@@ -124,11 +154,8 @@ namespace arch::s390x::cpu::aste {
                 words[0] &= ~i_mask;
         }
 
-        // ── ASTE Origin (word 1, bits 0–57) ───────────────────────────
-
         /// @brief Return the real address of the referenced ASTE.
         [[nodiscard]] auto aste_origin() const noexcept -> u64 {
-            // Mask out the low 6 bits (64-byte alignment).
             return words[1] & ~0x3FULL;
         }
 
@@ -136,8 +163,6 @@ namespace arch::s390x::cpu::aste {
         auto set_aste_origin(u64 addr) noexcept -> void {
             words[1] = addr & ~0x3FULL;
         }
-
-        // ── ALEN — Access-List Entry Number (word 0, bits 1–24) ────────
 
         /// @brief Return the Access-List Entry Number (ALEN).
         [[nodiscard]] auto alen() const noexcept -> u32 {
@@ -159,8 +184,6 @@ namespace arch::s390x::cpu::aste {
     };
 
     static_assert(sizeof(ale) == 16, "ALE must be exactly 16 bytes (PoP §3.8.3)");
-
-    // ── ALT header — kernel bookkeeping (not hardware) ─────────────────────
 
     /// @brief Access List Table header metadata (kernel-side, not hardware).
     struct alt_header {

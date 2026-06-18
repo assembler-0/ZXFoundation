@@ -33,15 +33,22 @@ static arch::s390x::lib::atomic::atomic<u32> g_ap_online{0};
 // Set by BSP after sched_init() completes.  APs spin until this is true.
 static arch::s390x::lib::atomic::atomic<u32> g_sched_ready{0};
 
+// Number of APs that have fully completed sched_init_ap() (including pinfo).
+static arch::s390x::lib::atomic::atomic<u32> g_aps_initialized{0};
+
+// Total number of APs that were started (set by init_aps, read by wait).
+static u32 g_total_aps{0};
+
 extern "C" {
 
 auto ap_entry() -> void;
 auto ap_dat_on() -> void;
 
 [[noreturn]] auto ap_startup() -> void {
-    arch::s390x::cpu::processor::ctl_set_bit<0>(13);  // External-interrupt subclass mask
-    arch::s390x::cpu::processor::ctl_set_bit<0>(14);  // I/O-interrupt subclass mask
-    arch::s390x::cpu::processor::ctl_set_bit<0>(15);  // ASF: address-space-function control
+    arch::s390x::cpu::processor::ctl_set_bit<0>(13);  // CR0.13: external-call submask
+    arch::s390x::cpu::processor::ctl_set_bit<0>(14);  // CR0.14: emergency-signal submask
+    arch::s390x::cpu::processor::ctl_set_bit<0>(15);  // CR0.15: malfunction-alert submask
+    arch::s390x::cpu::processor::ctl_set_bit<0>(52);  // CR0.52: clock-comparator submask
     (void)g_ap_online.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
 
     while (g_sched_ready.load(arch::s390x::lib::atomic::memory_order::acquire) == 0)
@@ -49,6 +56,12 @@ auto ap_dat_on() -> void;
 
     const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
     zxfoundation::sched::sched_init_ap(pcp.cpu_id);
+
+    // Signal BSP that this AP is fully initialized (after pinfo, after rq.online).
+    (void)g_aps_initialized.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
+
+    // Enter the scheduler idle loop (does not return).
+    zxfoundation::sched::sched_idle_enter();
 }
 
 }
@@ -61,7 +74,7 @@ static auto handle_ipi(
     auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
     const u64 bits = pcp.ec_bits.exchange(0, arch::s390x::lib::atomic::memory_order::seq_cst);
     if (bits & arch::s390x::cpu::smp::EC_HALT_BIT)
-        arch::s390x::cpu::psw::load_disabled_wait_psw();
+        arch::s390x::cpu::psw::disabled_wait();
 }
 
 export {
@@ -71,9 +84,10 @@ namespace arch::s390x::cpu::smp {
     auto init_bsp() noexcept -> void {
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, handle_ipi, nullptr, 0);
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   handle_ipi, nullptr, 0);
-        processor::ctl_set_bit<0>(13);  // External-interrupt subclass mask
-        processor::ctl_set_bit<0>(14);  // I/O-interrupt subclass mask
-        processor::ctl_set_bit<0>(15);  // ASF: address-space-function control
+        processor::ctl_set_bit<0>(13);  // CR0.13: external-call submask
+        processor::ctl_set_bit<0>(14);  // CR0.14: emergency-signal submask
+        processor::ctl_set_bit<0>(15);  // CR0.15: malfunction-alert submask
+        processor::ctl_set_bit<0>(52);  // CR0.52: clock-comparator submask
     }
 
     auto init_aps(const init::zxfl::protocol& proto) noexcept
@@ -83,6 +97,16 @@ namespace arch::s390x::cpu::smp {
 
         if (!(proto.flags & init::zxfl::ZXFL_FLAG_SMP) || proto.cpu_count <= 1)
             return 0U;
+
+        // Set BSP's cpu_type and drawer_id from the boot protocol.
+        for (u32 i = 0; i < proto.cpu_count; ++i) {
+            if (proto.cpu_map[i].cpu_addr == proto.bsp_cpu_addr) {
+                auto& bsp_pcp = lowcore::this_cpu_percpu();
+                bsp_pcp.cpu_type  = proto.cpu_map[i].type;
+                bsp_pcp.drawer_id = proto.cpu_map[i].drawer_id;
+                break;
+            }
+        }
 
         const u64 ap_entry_phys =
             zxfoundation::memory::hhdm::virt_to_phys(reinterpret_cast<u64>(ap_entry));
@@ -133,6 +157,7 @@ namespace arch::s390x::cpu::smp {
 
             percpu::init_ap(*lc);
             lc->percpu.drawer_id = ci.drawer_id;
+            lc->percpu.cpu_type  = ci.type;
             lowcore::register_cpu_lowcore(new_cpu_id, lc_phys);
 
             u32 status{0};
@@ -146,12 +171,27 @@ namespace arch::s390x::cpu::smp {
         while (g_ap_online.load(lib::atomic::memory_order::seq_cst) < started)
             processor::cpu_relax();
 
+        if (started != 0) zxfoundation::sys::printk::pinfo("smp: {} cpus started", started);
+        else zxfoundation::sys::printk::pnotice("smp: no processor detected/started");
+
+        g_total_aps = started;
         return started;
     }
 
     /// @brief Signal APs that the scheduler is ready.
     auto ap_release_all() noexcept -> void {
         g_sched_ready.store(1, lib::atomic::memory_order::release);
+    }
+
+    /// @brief Called by each AP after sched_init_ap() completes.
+    auto ap_init_complete() noexcept -> void {
+        (void)g_aps_initialized.fetch_add(1, lib::atomic::memory_order::seq_cst);
+    }
+
+    /// @brief BSP waits until all APs have finished sched_init_ap().
+    auto wait_aps_initialized() noexcept -> void {
+        while (g_aps_initialized.load(lib::atomic::memory_order::seq_cst) < g_total_aps)
+            processor::cpu_relax();
     }
 
 } // namespace arch::s390x::cpu::smp

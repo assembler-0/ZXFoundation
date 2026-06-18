@@ -1,9 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/exec/elf_loader.cxxm
 /// @brief ELF64 loader — loads s390x executables into domain address spaces.
-///
-/// Maps PT_LOAD segments into the domain's page table, sets hardware
-/// storage keys via SSKE for isolation, and sets up a user stack.
 
 export module zxfoundation.exec.elf_loader;
 import zxfoundation.exec.elf_types;
@@ -70,8 +67,6 @@ namespace zxfoundation::exec::_internal {
         if (!r) [[unlikely]]
             return lib::unexpected(r.error());
 
-        // Program hardware storage key on the physical frame.
-        // ACC = domain's storage_key, no fetch-protect for general pages.
         const u8 key_byte = skey::make_skey(d->storage_key, false);
         skey::sske(phys, key_byte);
 
@@ -113,9 +108,6 @@ namespace zxfoundation::exec::_internal {
                     lib::memcpy(page_ptr + page_offset, elf_data + file_offset, copy_len);
                 }
             }
-            // BSS region (memsz > filesz) is already zeroed by page_init::zeroed.
-
-            // Map into domain's page table and set storage key.
             auto map_r = map_and_key(d, va, phys, prot);
             if (!map_r) [[unlikely]]
                 return lib::unexpected(map_r.error());
@@ -153,10 +145,6 @@ export {
 namespace zxfoundation::exec {
 
     /// @brief Load an ELF64 binary into a domain's address space.
-    ///
-    /// Validates the ELF header, maps all PT_LOAD segments with proper
-    /// page protection and storage key enforcement, and sets up a user stack.
-    ///
     /// @param d         Target domain (must have valid root_phys and storage_key).
     /// @param elf_data  Pointer to the ELF binary in kernel memory.
     /// @param elf_size  Size of the ELF binary in bytes.
@@ -222,7 +210,7 @@ namespace zxfoundation::exec {
             return lib::unexpected(stack_r.error());
 
         // Store stack pointer in user regs (r15 = stack top).
-        d->uregs.gprs[15] = *stack_r;
+        d->primary_strand.uregs.gprs[15] = *stack_r;
 
         sys::printk::pdebug("elf: loaded {} segments, entry={:#x}, stack_top={:#x}\n",
             loaded, ehdr.e_entry, *stack_r);

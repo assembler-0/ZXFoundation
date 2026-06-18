@@ -47,6 +47,10 @@ namespace arch::s390x::mmu {
 
         [[nodiscard]] constexpr auto raw() const noexcept -> u64 { return val; }
     };
+    static_assert(sizeof(rste<dat_level::region_1>) == 8, "RSTE must be 8 bytes (PoP Fig 3-18)");
+    static_assert(sizeof(rste<dat_level::region_2>) == 8, "RSTE must be 8 bytes (PoP Fig 3-18)");
+    static_assert(sizeof(rste<dat_level::region_3>) == 8, "RSTE must be 8 bytes (PoP Fig 3-18)");
+    static_assert(sizeof(rste<dat_level::segment>)  == 8, "RSTE must be 8 bytes (PoP Fig 3-19)");
 
     /// @brief Page Table Entry — distinct type from rste<>.
     struct pte {
@@ -57,6 +61,7 @@ namespace arch::s390x::mmu {
 
         [[nodiscard]] constexpr auto raw() const noexcept -> u64 { return val; }
     };
+    static_assert(sizeof(pte) == 8, "PTE must be 8 bytes (PoP Fig 3-20)");
 
     /// @brief Typed handle to a DAT table at a specific level.
     template <dat_level Level>
@@ -85,6 +90,7 @@ namespace arch::s390x::mmu {
 
         [[nodiscard]] constexpr auto raw() const noexcept -> u64 { return val; }
     };
+    static_assert(sizeof(typed_asce<dat_level::region_1>) == 8, "ASCE must be 8 bytes (PoP CR1)");
 
     /// @brief Page protection descriptor — distinct from raw u64.
     struct page_prot {
@@ -122,21 +128,31 @@ namespace arch::s390x::mmu {
     /// @note  Hardware PTE table is 2 KiB; we allocate a full 4 KiB page.
     inline constexpr u32 PTE_ALLOC_ORDER = 0U;
 
-    inline constexpr u32 REGION1_SHIFT = 53U;
-    inline constexpr u32 REGION2_SHIFT = 42U;
-    inline constexpr u32 REGION3_SHIFT = 31U;
-    inline constexpr u32 SEGMENT_SHIFT = 20U;
-    inline constexpr u32 PAGE_SHIFT    = 12U;
+    // ── Virtual address field positions (PoP §3-38, Fig 3-14) ────────────
+    //
+    //  PoP bit layout of a 64-bit virtual address:
+    //    0-10  : RFX — region first index  (11 bits, shift 53)
+    //    11-21 : RSX — region second index (11 bits, shift 42)
+    //    22-32 : RTX — region third index  (11 bits, shift 31)
+    //    33-43 : SX  — segment index       (11 bits, shift 20)
+    //    44-51 : PX  — page index          (8 bits, shift 12)
+    //    52-63 : BX  — byte index          (12 bits)
+    //
+    inline constexpr u32 REGION1_SHIFT = 53U;  ///< RFX: PoP bits 0-10.
+    inline constexpr u32 REGION2_SHIFT = 42U;  ///< RSX: PoP bits 11-21.
+    inline constexpr u32 REGION3_SHIFT = 31U;  ///< RTX: PoP bits 22-32.
+    inline constexpr u32 SEGMENT_SHIFT = 20U;  ///< SX:  PoP bits 33-43.
+    inline constexpr u32 PAGE_SHIFT    = 12U;  ///< PX:  PoP bits 44-51.
 
-    /// @brief VA index mask (11 bits for CRST, 8 bits for PTE).
-    inline constexpr u64 CRST_INDEX_MASK = 0x7FFULL;
-    inline constexpr u64 PTE_INDEX_MASK  = 0xFFULL;
+    /// @brief VA index mask (11 bits for CRST levels, 8 bits for page level).
+    inline constexpr u64 CRST_INDEX_MASK = 0x7FFULL;  ///< 11-bit mask for RFX/RSX/RTX/SX.
+    inline constexpr u64 PTE_INDEX_MASK  = 0xFFULL;   ///< 8-bit mask for PX.
 
-    inline constexpr u64 REGION1_SIZE = 1ULL << REGION1_SHIFT;
-    inline constexpr u64 REGION2_SIZE = 1ULL << REGION2_SHIFT;
-    inline constexpr u64 REGION3_SIZE = 1ULL << REGION3_SHIFT;
-    inline constexpr u64 SEGMENT_SIZE = 1ULL << SEGMENT_SHIFT;
-    inline constexpr u64 PAGE_SIZE_4K = 1ULL << PAGE_SHIFT;
+    inline constexpr u64 REGION1_SIZE = 1ULL << REGION1_SHIFT;  ///< 8 PiB per R1 entry.
+    inline constexpr u64 REGION2_SIZE = 1ULL << REGION2_SHIFT;  ///< 4 TiB per R2 entry.
+    inline constexpr u64 REGION3_SIZE = 1ULL << REGION3_SHIFT;  ///< 2 GiB per R3 entry.
+    inline constexpr u64 SEGMENT_SIZE = 1ULL << SEGMENT_SHIFT;  ///< 1 MiB per segment entry.
+    inline constexpr u64 PAGE_SIZE_4K = 1ULL << PAGE_SHIFT;     ///< 4 KiB per page entry.
 
     /// @brief Extract the virtual-address index for a given DAT level.
     template <dat_level Level>

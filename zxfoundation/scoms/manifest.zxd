@@ -1,0 +1,5 @@
+!files : !compile_group -> [auto] {
+    scoms_types.cxxm
+    scoms_ref.cxxm
+    scoms_table.cxxm
+}

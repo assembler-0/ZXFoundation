@@ -11,17 +11,13 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
+import lib.string_view;
 
 export {
 
 namespace arch::s390x::cpu::percpu {
 
     /// @brief Finish BSP per-CPU initialization.
-    ///
-    /// @note  lowcore::init_bsp() sets the core fields (cpu_id, cpu_addr,
-    ///        prefix_phys, kernel_stack, lock_depth, preempt_count).
-    ///        This function initializes the remaining fields (RCU, IPI, PMM).
-    ///        Call after lowcore::init_bsp() returns.
     auto init_bsp() noexcept -> void {
         s390x_percpu_data& pcp = lowcore::this_cpu_percpu();
 
@@ -31,27 +27,19 @@ namespace arch::s390x::cpu::percpu {
 
         pcp.ipi_pending_count  = 0;
 
-        // Zero pcp_pool (head_phys == 0 is the valid empty-list sentinel for every
-        // pcp_list; no placement-new required because pcp_list is POD).
         for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
             for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
                 pcp.pcp.lists[z][o].head_phys = 0;
                 pcp.pcp.lists[z][o].count     = 0;
                 pcp.pcp.lists[z][o]._pad      = 0;
             }
-        // BSP is always in drawer 0; APs have drawer_id set by smp::init_aps().
         pcp.drawer_id = 0;
 
         pcp.softirq_pending = 0;
     }
 
     /// @brief Finish AP per-CPU initialization.
-    ///
     /// @param lc  HHDM-mapped pointer to the AP's lowcore.
-    ///
-    /// @note  Called from smp::bring_up_ap() AFTER lowcore::init_ap() has set
-    ///        the core fields.  Zeroes the remaining fields that lowcore::init_ap()
-    ///        does not touch.
     auto init_ap(lowcore::zx_lowcore& lc) noexcept -> void {
         s390x_percpu_data& pcp = lc.percpu;
 
@@ -84,6 +72,24 @@ namespace arch::s390x::cpu::percpu {
         const u16 id = *reinterpret_cast<const volatile u16*>(
             zxfoundation::memory::hhdm::phys_to_virt(lowcore::LC_CPU_ID_OFFSET));
         return (id < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) ? id : 0;
+    }
+
+    /// @brief get current cpu's ZXFL_CPU_TYPE_* value
+    [[nodiscard]] inline auto cpu_type() noexcept -> u8 {
+        return this_cpu().cpu_type;
+    }
+
+    /// @brief Return the lowercase short prefix for the current CPU type.
+    /// Used by printk to format e.g. [cp00], [ifl02], [ziip03].
+    [[nodiscard]] inline auto cpu_type_prefix() noexcept -> const char* {
+        switch (this_cpu().cpu_type) {
+            case 1:  return "cp";       // ZXFL_CPU_TYPE_CP
+            case 2:  return "ifl";      // ZXFL_CPU_TYPE_IFL
+            case 3:  return "icf";      // ZXFL_CPU_TYPE_ICF
+            case 4:  return "ziip";     // ZXFL_CPU_TYPE_ZIIP
+            case 5:  return "zaap";     // ZXFL_CPU_TYPE_ZAAP
+            default: return "t?";      // fallback
+        }
     }
 
 } // namespace arch::s390x::cpu::percpu

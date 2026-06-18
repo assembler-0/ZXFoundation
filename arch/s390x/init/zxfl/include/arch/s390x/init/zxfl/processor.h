@@ -185,6 +185,7 @@ static inline const char *arch_cpu_type_to_string(uint8_t type) {
         case ZXFL_CPU_TYPE_IFL: return "IFL";
         case ZXFL_CPU_TYPE_ICF: return "ICF";
         case ZXFL_CPU_TYPE_ZIIP: return "zIIP";
+        case ZXFL_CPU_TYPE_ZAAP: return "zAAP";
         default: return "Unknown";
     }
 }

@@ -1,0 +1,191 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file vm_types.cxxm
+/// @brief Virtual Memory Engine — type definitions.
+
+export module zxfoundation.memory.vm_types;
+import zxfoundation.base.types;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.locking.qspinlock;
+import arch.s390x.lib.atomic;
+import lib.rbtree;
+
+export {
+
+namespace zxfoundation::memory::vm {
+
+    using arch::s390x::lib::atomic::atomic;
+    using arch::s390x::lib::atomic::memory_order;
+
+    /// @brief Page protection flags (combinable).
+    enum class vm_prot : u32 {
+        none  = 0,
+        read  = 1U << 0,
+        write = 1U << 1,
+        exec  = 1U << 2,
+        rw    = read | write,
+        rx    = read | exec,
+        rwx   = read | write | exec,
+    };
+
+    [[nodiscard]] constexpr auto operator|(vm_prot a, vm_prot b) noexcept -> vm_prot {
+        return static_cast<vm_prot>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(vm_prot a, vm_prot b) noexcept -> vm_prot {
+        return static_cast<vm_prot>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator~(vm_prot f) noexcept -> vm_prot {
+        return static_cast<vm_prot>(~static_cast<u32>(f));
+    }
+    [[nodiscard]] constexpr auto operator!(vm_prot f) noexcept -> bool {
+        return static_cast<u32>(f) == 0;
+    }
+    constexpr auto operator|=(vm_prot& a, vm_prot b) noexcept -> vm_prot& {
+        a = a | b;
+        return a;
+    }
+    constexpr auto operator&=(vm_prot& a, vm_prot b) noexcept -> vm_prot& {
+        a = a & b;
+        return a;
+    }
+
+    /// @brief Mapping flags controlling allocation and behavior.
+    enum class vm_flags : u32 {
+        none      = 0,
+        fixed     = 1U << 0,    ///< Map at exact VA.
+        anonymous = 1U << 1,    ///< Demand-paged anonymous memory.
+        physical  = 1U << 2,    ///< Direct physical backing.
+        portal    = 1U << 3,    ///< Shared via portal.
+        stack     = 1U << 4,    ///< Stack region (grows downward).
+        guard     = 1U << 5,    ///< Guard page (fault = kill/signal).
+        pinned    = 1U << 6,    ///< Wired pages (no eviction).
+        dma       = 1U << 7,    ///< DMA-eligible mapping.
+        no_merge  = 1U << 8,    ///< Never merge with neighbors.
+        user      = 1U << 9,    ///< User-space accessible.
+        kernel    = 1U << 10,   ///< Kernel-space mapping.
+    };
+
+    [[nodiscard]] constexpr auto operator|(vm_flags a, vm_flags b) noexcept -> vm_flags {
+        return static_cast<vm_flags>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(vm_flags a, vm_flags b) noexcept -> vm_flags {
+        return static_cast<vm_flags>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator~(vm_flags f) noexcept -> vm_flags {
+        return static_cast<vm_flags>(~static_cast<u32>(f));
+    }
+    [[nodiscard]] constexpr auto operator!(vm_flags f) noexcept -> bool {
+        return static_cast<u32>(f) == 0;
+    }
+    constexpr auto operator|=(vm_flags& a, vm_flags b) noexcept -> vm_flags& {
+        a = a | b;
+        return a;
+    }
+    constexpr auto operator&=(vm_flags& a, vm_flags b) noexcept -> vm_flags& {
+        a = a & b;
+        return a;
+    }
+
+
+    /// @brief Describes how a vm_region obtains its physical memory.
+    enum class vm_backing : u8 {
+        anonymous     = 0,   ///< Demand-paged: allocated on fault.
+        physical      = 1,   ///< Direct physical identity mapping.
+        portal_shared = 2,   ///< Shared through a portal.
+    };
+
+
+    /// @brief A contiguous virtual address region within a domain's address space.
+    struct vm_region {
+        scoms::kobject  ko{};                           ///< SCOMS identity object (offset 0).
+
+        u64             va_start{0};                    ///< Inclusive start VA.
+        u64             va_end{0};                      ///< Exclusive end VA.
+
+        vm_prot        prot{vm_prot::none};           ///< Access protection.
+        vm_flags       flags{vm_flags::none};         ///< Mapping flags.
+        vm_backing     backing{vm_backing::anonymous}; ///< Backing type.
+        u8              _pad0[3]{};                     ///< Alignment padding.
+
+        u64             phys_base{0};                   ///< Physical base (for physical backing).
+        u32             portal_id{~0U};                 ///< Portal ID (for portal backing).
+        u32             owner_domain{~0U};              ///< Owning domain ID.
+
+        atomic<u64>     committed{0};                   ///< Committed page count.
+        atomic<u64>     resident{0};                    ///< Currently-mapped page count.
+
+        lib::rb_node    rb{};                           ///< Red-black tree node.
+
+
+        /// @brief Region size in bytes.
+        [[nodiscard]] constexpr auto size() const noexcept -> u64 {
+            return va_end - va_start;
+        }
+
+        /// @brief Number of 4 KiB pages spanned by this region.
+        [[nodiscard]] constexpr auto page_count() const noexcept -> u64 {
+            return size() >> 12;
+        }
+
+        // Non-copyable, non-movable — identity object.
+        vm_region() noexcept = default;
+        vm_region(const vm_region&)            = delete;
+        auto operator=(const vm_region&)       = delete;
+        vm_region(vm_region&&)                 = delete;
+        auto operator=(vm_region&&)            = delete;
+    };
+
+    static_assert(__builtin_offsetof(vm_region, ko) == 0,
+        "vm_region::ko must be at offset 0 — SCOMS container_of depends on this");
+
+
+    /// @brief Per-domain virtual memory address space.
+    struct vm_space {
+        lib::rb_root_cached                     tree{};             ///< Sorted by va_start.
+        locking::qspinlock::qspinlock           lock{};             ///< Protects tree mutations.
+
+        u64                                     total_mapped{0};    ///< Total mapped bytes.
+        u64                                     total_committed{0}; ///< Total committed pages.
+        u64                                     total_resident{0};  ///< Total resident pages.
+
+        u64                                     brk{0};             ///< Heap break pointer.
+        u64                                     mmap_base{0};       ///< mmap allocation base (top-down).
+
+        u32                                     region_count{0};    ///< Number of active regions.
+        u32                                     max_regions{4096};  ///< Maximum allowed regions.
+
+        // Non-copyable, non-movable.
+        vm_space() noexcept = default;
+        vm_space(const vm_space&)            = delete;
+        auto operator=(const vm_space&)       = delete;
+        vm_space(vm_space&&)                 = delete;
+        auto operator=(vm_space&&)            = delete;
+    };
+
+
+    /// @brief Atomic memory accounting counters for a domain.
+    struct vm_accounting {
+        u64         limit_pages{0};     ///< Commitment limit (0 = unlimited).
+        atomic<u64> committed{0};       ///< Committed page count.
+        atomic<u64> resident{0};        ///< Resident page count.
+        atomic<u64> fault_count{0};     ///< Cumulative page fault count.
+    };
+
+
+    /// @brief User virtual address space starts at 4 MiB.
+    inline constexpr u64 VM_USER_START  = 0x0000'0000'0040'0000ULL;
+
+    /// @brief User virtual address space ends at 512 GiB.
+    inline constexpr u64 VM_USER_END    = 0x0000'0080'0000'0000ULL;
+
+    /// @brief Default mmap base at 256 GiB (top-down growth).
+    inline constexpr u64 VM_MMAP_BASE   = 0x0000'0040'0000'0000ULL;
+
+    /// @brief Stack top sentinel.
+    inline constexpr u64 VM_STACK_TOP   = 0x0000'0080'0000'0000ULL;
+
+    /// @brief Standard page size.
+    inline constexpr u64 VM_PAGE_SIZE   = 4096ULL;
+
+} // namespace zxfoundation::memory::vm
+
+} // end export

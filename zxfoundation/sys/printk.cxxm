@@ -32,7 +32,7 @@ namespace _internal {
 
     printk_state g_state;
 
-    static constexpr char level_tags[] = "XACENWID";
+    static constexpr char level_tags[] = "XACEWNID";
 
 } // namespace _internal
 
@@ -41,8 +41,8 @@ export {
 namespace zxfoundation::sys::printk {
 
     /// @brief Initialize the logging framework.
-    auto initialize() noexcept -> void {
-        _internal::g_state.min_level = log_level::INFO;
+    auto init() noexcept -> void {
+        _internal::g_state.min_level = log_level::DEBUG;
     }
 
     /// @brief Register a new logging backend.
@@ -95,23 +95,26 @@ namespace zxfoundation::sys::printk {
         char buf[512];
         const lib::span s_buf(buf, 512);
 
-        // Format Header: "ZXF-[SSSS.UUUUUU] [cpuNN] L "
+        // Format Header: "ZXF-[(SSSS).UUUUUU] [(type)NN] L "
         const auto now = time::monotonic_now();
         const u64 s = now.nanoseconds_since_epoch() / 1000000000U;
         const u64 us = (now.nanoseconds_since_epoch() % 1000000000U) / 1000U;
         const u16 cpu = arch::s390x::cpu::percpu::cpu_id();
         const char tag = _internal::level_tags[static_cast<u8>(level)];
+        const auto prefix = arch::s390x::cpu::percpu::cpu_type_prefix();
 
         usize offset = 0;
         if (s > 1'000'000'000U) [[unlikely]] {
-            offset = lib::format::format_to(s_buf, "ZXF-[XXXX.xxxxxx] [cpu{}] {} ",
+            offset = lib::format::format_to(s_buf, "ZXF-[(XXXX).xxxxxx] [({}){}] {} ",
+                prefix,
                 lib::format::dec{static_cast<u64>(cpu), 2, true},
                 tag
             );
         } else {
-            offset = lib::format::format_to(s_buf, "ZXF-[{}.{}] [cpu{}] {} ",
+            offset = lib::format::format_to(s_buf, "ZXF-[({}).{}] [({}){}] {} ",
                 lib::format::dec{s, 4, true}, 
                 lib::format::dec{us, 6, true},
+                prefix,
                 lib::format::dec{static_cast<u64>(cpu), 2, true}, 
                 tag
             );
@@ -126,9 +129,6 @@ namespace zxfoundation::sys::printk {
 
         lib::string_view final_msg(buf, offset);
 
-        // ── Critical section: push to ring buffer (fast) ──────────────
-        // Snapshot backends under the lock so we can emit outside it.
-        // The backends list is tiny (≤4) and static after boot.
         lib::static_vector<printk_backend, _internal::MAX_BACKENDS> snap;
         {
             locking::irq_lock_guard guard(_internal::g_state.lock);
@@ -154,11 +154,7 @@ namespace zxfoundation::sys::printk {
                 }
             }
         }
-        // ── End critical section ─────────────────────────────────────────
 
-        // Emit to backends WITHOUT the lock.  DIAG I/O is slow on
-        // Hercules; holding the lock here would serialize all CPUs
-        // through the console and cause non-deterministic boot hangs.
         for (usize i = 0; i < snap.size(); ++i) {
             snap[i].emit(final_msg);
         }

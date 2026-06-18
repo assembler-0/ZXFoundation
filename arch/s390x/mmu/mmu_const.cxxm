@@ -1,6 +1,11 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/mmu/mmu_const.cxxm
 /// @brief Hardware DAT entry bit definitions for z/Architecture.
+///
+/// Bit numbering follows PoP convention: bit 0 is MSB of a u64.
+/// For a u64 value, PoP bit N = value >> (63 - N).
+/// All masks and constants are verified against PoP SA22-7832-13,
+/// Chapter 3 "Storage".
 
 export module arch.s390x.mmu.mmu_const;
 import arch.s390x.mmu.mmu_types;
@@ -10,50 +15,120 @@ export {
 
 namespace arch::s390x::mmu {
 
-    inline constexpr u64 PTE_NOEXEC      = 0x100ULL;   ///< HW no-execute bit.
-    inline constexpr u64 PTE_PROTECT     = 0x200ULL;   ///< HW read-only (store-protect) bit.
-    inline constexpr u64 PTE_INVALID     = 0x400ULL;   ///< HW invalid bit.
-    inline constexpr u64 PTE_LARGE       = 0x800ULL;   ///< Large-page marker (unused for PTE).
-    inline constexpr u64 PTE_ORIGIN_MASK = ~0xFFFULL;  ///< Physical frame [63:12].
+    // ── Page-Table Entry (PTE) bit definitions (PoP §3-51, Fig 3-20) ────
+    //
+    //  Bit layout (PoP bit numbering):
+    //    0-51  : PFRA (Page-Frame Real Address)
+    //    52    : Must be zero (translation-specification exception)
+    //    53    : I  — page-invalid bit
+    //    54    : P  — DAT-protection bit
+    //    55    : IEP — instruction-execution-protection (when enabled)
+    //    56-63 : Unassigned, ignored
+    //
+    inline constexpr u64 PTE_IEP         = 0x100ULL;   ///< PoP bit 55: IEP control.
+    inline constexpr u64 PTE_PROTECT     = 0x200ULL;   ///< PoP bit 54: DAT-protection.
+    inline constexpr u64 PTE_INVALID     = 0x400ULL;   ///< PoP bit 53: page-invalid.
+    inline constexpr u64 PTE_BIT52_ZERO  = 0x800ULL;   ///< PoP bit 52: must be zero in PTE.
+    inline constexpr u64 PTE_ORIGIN_MASK = ~0xFFFULL;  ///< PoP bits 0-51: PFRA.
+
+    /// @brief Alias: IEP bit doubles as no-execute for kernel page_prot.
+    inline constexpr u64 PTE_NOEXEC      = PTE_IEP;
 
     /// @brief Empty (invalid) PTE — used to initialize page tables.
     inline constexpr u64 PTE_EMPTY = PTE_INVALID;
 
-    inline constexpr u64 RSTE_ORIGIN_MASK = ~0xFFFULL; ///< Table/frame origin [63:12].
-    inline constexpr u64 RSTE_PROTECT     = 0x200ULL;  ///< Protection bit.
-    inline constexpr u64 RSTE_NOEXEC      = 0x100ULL;  ///< No-execute bit.
-    inline constexpr u64 RSTE_INVALID     = 0x020ULL;  ///< Invalid bit (bit 58).
-    inline constexpr u64 RSTE_TYPE_MASK   = 0x00CULL;  ///< Type field [3:2].
+    // ── Region/Segment Table Entry (RSTE) bit definitions ───────────────
+    //
+    //  Region-table entries (PoP §3-45, Fig 3-18):
+    //    0-51  : Next-table origin (12 zeros appended)
+    //    52    : Reserved (FC in R3 when EDAT-2 applies — but see below)
+    //    53    : Reserved in R1/R2; FC (format control) in R3 (EDAT-2)
+    //    54    : P  — DAT-protection (EDAT-1)
+    //    55    : IEP (only when FC=1 in R3)
+    //    56-57 : TF — next-table offset
+    //    58    : I  — region-invalid
+    //    59    : CR — common-region (R3 only, EDAT-2)
+    //    60-61 : TT — table type (11=R1, 10=R2, 01=R3)
+    //    62-63 : TL — next-table length
+    //
+    //  Segment-table entries (PoP §3-49, Fig 3-19):
+    //    0-52  : Page-table origin (11 zeros appended) — NOTE: bit 52 included!
+    //    53    : FC — STE-format control (EDAT-1)
+    //    54    : P  — DAT-protection
+    //    55    : IEP (only when FC=1)
+    //    56-57 : Reserved
+    //    58    : I  — segment-invalid
+    //    59    : CS — common-segment
+    //    60-61 : TT — table type (00=segment)
+    //    62-63 : Available for programming
+    //
 
-    inline constexpr u64 RSTE_TYPE_R1 = 0x00CULL;  ///< Region-first table type (0b11).
-    inline constexpr u64 RSTE_TYPE_R2 = 0x008ULL;  ///< Region-second table type (0b10).
-    inline constexpr u64 RSTE_TYPE_R3 = 0x004ULL;  ///< Region-third table type (0b01).
-    inline constexpr u64 RSTE_TYPE_SG = 0x000ULL;  ///< Segment table type (0b00).
+    /// @brief Origin mask for region-table entries: PoP bits 0-51, 12 zeros.
+    inline constexpr u64 RSTE_ORIGIN_MASK    = ~0xFFFULL;
 
-    /// @brief Table length field — full 2048 entries (bits [1:0] = 0b11).
+    /// @brief Origin mask for segment-table PTO: PoP bits 0-52, 11 zeros.
+    ///        The STE page-table origin includes one more bit than CRST origins.
+    inline constexpr u64 STE_PTO_MASK        = ~0x7FFULL;
+
+    inline constexpr u64 RSTE_PROTECT        = 0x200ULL;  ///< PoP bit 54: DAT-protection.
+    inline constexpr u64 RSTE_IEP            = 0x100ULL;  ///< PoP bit 55: IEP (FC=1 only).
+    inline constexpr u64 RSTE_TABLE_OFF_MASK = 0x0C0ULL;  ///< PoP bits 56-57: table offset (TF).
+    inline constexpr u64 RSTE_INVALID        = 0x020ULL;  ///< PoP bit 58: invalid.
+    inline constexpr u64 RSTE_COMMON         = 0x010ULL;  ///< PoP bit 59: CS/CR (common segment/region).
+    inline constexpr u64 RSTE_TYPE_MASK      = 0x00CULL;  ///< PoP bits 60-61: table type (TT).
+
+    /// @brief Alias: IEP bit doubles as no-execute for kernel page_prot.
+    inline constexpr u64 RSTE_NOEXEC         = RSTE_IEP;
+
+    inline constexpr u64 RSTE_TYPE_R1 = 0x00CULL;  ///< TT=11: region-first table.
+    inline constexpr u64 RSTE_TYPE_R2 = 0x008ULL;  ///< TT=10: region-second table.
+    inline constexpr u64 RSTE_TYPE_R3 = 0x004ULL;  ///< TT=01: region-third table.
+    inline constexpr u64 RSTE_TYPE_SG = 0x000ULL;  ///< TT=00: segment table.
+
+    /// @brief Table length — full 2048 entries (PoP bits 62-63 = 0b11).
+    ///        Table size = (TL+1) × 4096 bytes = (TL+1) × 512 entries.
     inline constexpr u64 RSTE_LENGTH_FULL = 0x003ULL;
 
-    /// @brief STE format-control bit (FC=1) — marks a 1 MiB direct mapping.
-    inline constexpr u64 SEG_LARGE         = 0x400ULL;
-    /// @brief 1 MiB-aligned physical address mask for segment large pages.
+    /// @brief STE format-control bit (PoP bit 53) — EDAT-1 1 MiB direct mapping.
+    inline constexpr u64 SEG_FC            = 0x400ULL;
+    /// @brief Alias for SEG_FC.
+    inline constexpr u64 SEG_LARGE         = SEG_FC;
+    /// @brief 1 MiB-aligned SFAA mask: PoP bits 0-43, 20 zeros appended.
     inline constexpr u64 SEG_LARGE_ORIGIN  = ~0xFFFFFULL;
 
-    /// @brief RTTE format-control bit (FC=1) — marks a 2 GiB direct mapping.
-    inline constexpr u64 R3_LARGE          = 0x400ULL;
-    /// @brief 2 GiB-aligned physical address mask for region-3 large pages.
+    /// @brief RTTE format-control bit (PoP bit 53) — EDAT-2 2 GiB direct mapping.
+    inline constexpr u64 R3_FC             = 0x400ULL;
+    /// @brief Alias for R3_FC.
+    inline constexpr u64 R3_LARGE          = R3_FC;
+    /// @brief 2 GiB-aligned RFAA mask: PoP bits 0-32, 31 zeros appended.
     inline constexpr u64 R3_LARGE_ORIGIN   = ~0x7FFFFFFFULL;
 
-    inline constexpr u64 ASCE_ORIGIN_MASK  = ~0xFFFULL;
-    inline constexpr u64 ASCE_PRIVATE      = 0x100ULL;  ///< Private-space control.
-    inline constexpr u64 ASCE_ALT_EVENT    = 0x080ULL;  ///< Storage-alteration event.
-    inline constexpr u64 ASCE_SPACE_SWITCH = 0x040ULL;  ///< Space-switch event.
-    inline constexpr u64 ASCE_REAL_SPACE   = 0x020ULL;  ///< Real-space control.
-    inline constexpr u64 ASCE_TYPE_MASK    = 0x00CULL;
-    inline constexpr u64 ASCE_TYPE_R1      = 0x00CULL;  ///< Region-first table.
-    inline constexpr u64 ASCE_TYPE_R2      = 0x008ULL;  ///< Region-second table.
-    inline constexpr u64 ASCE_TYPE_R3      = 0x004ULL;  ///< Region-third table.
-    inline constexpr u64 ASCE_TYPE_SEG     = 0x000ULL;  ///< Segment table.
-    inline constexpr u64 ASCE_LENGTH_MASK  = 0x003ULL;  ///< Table length.
+    // ── ASCE (Address-Space-Control Element) (PoP §3-42, CR1/CR7/CR13) ──
+    //
+    //  Bit layout (PoP bit numbering):
+    //    0-51  : Table/token origin (12 zeros appended)
+    //    52-53 : Unassigned, ignored
+    //    54    : G  — subspace-group control
+    //    55    : P  — private-space control
+    //    56    : S  — storage-alteration-event control
+    //    57    : X  — space-switch-event control
+    //    58    : R  — real-space control
+    //    59    : Unassigned, ignored
+    //    60-61 : DT — designation type
+    //    62-63 : TL — table length
+    //
+    inline constexpr u64 ASCE_ORIGIN_MASK    = ~0xFFFULL; ///< PoP bits 0-51.
+    inline constexpr u64 ASCE_SUBSPACE_GROUP = 0x200ULL;  ///< PoP bit 54: G.
+    inline constexpr u64 ASCE_PRIVATE        = 0x100ULL;  ///< PoP bit 55: P.
+    inline constexpr u64 ASCE_ALT_EVENT      = 0x080ULL;  ///< PoP bit 56: S.
+    inline constexpr u64 ASCE_SPACE_SWITCH   = 0x040ULL;  ///< PoP bit 57: X.
+    inline constexpr u64 ASCE_REAL_SPACE     = 0x020ULL;  ///< PoP bit 58: R.
+    inline constexpr u64 ASCE_TYPE_MASK      = 0x00CULL;  ///< PoP bits 60-61: DT.
+    inline constexpr u64 ASCE_TYPE_R1        = 0x00CULL;  ///< DT=11: region-first.
+    inline constexpr u64 ASCE_TYPE_R2        = 0x008ULL;  ///< DT=10: region-second.
+    inline constexpr u64 ASCE_TYPE_R3        = 0x004ULL;  ///< DT=01: region-third.
+    inline constexpr u64 ASCE_TYPE_SEG       = 0x000ULL;  ///< DT=00: segment.
+    inline constexpr u64 ASCE_LENGTH_MASK    = 0x003ULL;  ///< PoP bits 62-63: TL.
 
     /// @brief CRST type code for a given dat_level.
     template <dat_level Level>
@@ -123,25 +198,27 @@ namespace arch::s390x::mmu {
         return (phys & PTE_ORIGIN_MASK) | prot.bits;
     }
 
-    /// @brief Construct a 1 MiB large-page segment entry (EDAT-1).
+    /// @brief Construct a 1 MiB large-page segment entry (STE FC=1, EDAT-1).
+    ///        PoP §3-49: When FC=1, bits 62-63 are available for programming
+    ///        (not TL). We set them to zero to keep the entry clean.
     [[nodiscard]] constexpr auto seg_large_make(
         u64 phys, page_prot prot
     ) noexcept -> u64 {
         return (phys & SEG_LARGE_ORIGIN)
              | SEG_LARGE
              | RSTE_TYPE_SG
-             | RSTE_LENGTH_FULL
              | prot.bits;
     }
 
-    /// @brief Construct a 2 GiB large-page region-3 entry (EDAT-2).
+    /// @brief Construct a 2 GiB large-page region-3 entry (RTTE FC=1, EDAT-2).
+    ///        PoP §3-46: When FC=1, bits 56-57 and 62-63 are reserved.
+    ///        We set them to zero.
     [[nodiscard]] constexpr auto r3_large_make(
         u64 phys, page_prot prot
     ) noexcept -> u64 {
         return (phys & R3_LARGE_ORIGIN)
              | R3_LARGE
              | RSTE_TYPE_R3
-             | RSTE_LENGTH_FULL
              | prot.bits;
     }
 

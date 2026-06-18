@@ -71,6 +71,31 @@ static int sigp_sense(uint16_t cpu_addr) {
     return cc;
 }
 
+// PoP CPU-type TLE hw code -> ZXFL constant translation.
+//
+// The hardware CPU type is stored in byte 5 of each CPU-type TLE
+// (the 'cputype' field in struct topology_core). These values come
+// from the SCCB PTYP encoding:
+//
+//   hw 0 = CP    (Central Processor)       -> ZXFL 1
+//   hw 3 = IFL   (Integrated Fac. Linux)   -> ZXFL 2
+//   hw 4 = ICF   (Internal Coupling Fac.)  -> ZXFL 3
+//   hw 5 = zIIP  (z Integrated Info Proc.) -> ZXFL 4
+//
+// Hercules only implements STSI(15, 1, 2) which returns ALL CPU
+// types in one response (matching Linux's approach). Per-type
+// queries with different sel1 values return CC=3.
+static inline uint8_t hw_to_zxfl(uint8_t hw) {
+    switch (hw) {
+        case 0:  return ZXFL_CPU_TYPE_CP;
+        case 2:  return ZXFL_CPU_TYPE_ZAAP;
+        case 3:  return ZXFL_CPU_TYPE_IFL;
+        case 4:  return ZXFL_CPU_TYPE_ICF;
+        case 5:  return ZXFL_CPU_TYPE_ZIIP;
+        default: return ZXFL_CPU_TYPE_UNKNOWN;
+    }
+}
+
 static void detect_smp(zxfl_boot_protocol_t *proto) {
     uint16_t bsp = arch_cpu_addr();
     
@@ -80,87 +105,77 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
     static uint8_t stsi_buf[4096] __attribute__((aligned(4096)));
     int has_topology = 0;
 
-    // Query CPU topology for each CPU type.
-    // sel1 selects the CPU type: 1=CP, 2=IFL, 3=ICF, 4=zIIP (ZXFL_CPU_TYPE_*).
-    // sel2=6 selects the topology-list format (mandatory per PoP).
-    for (uint8_t sel1 = 1; sel1 <= 4; sel1++) {
-        if (stsi(stsi_buf, 15, sel1, 6) == 0) {
-            struct sysinfo_15_1_x *info = (struct sysinfo_15_1_x *)stsi_buf;
-            if (info->length >= sizeof(struct sysinfo_15_1_x)) {
-                has_topology = 1;
+    // Query topology via STSI(15, 1, 2):
+    //   fc=15 (current configuration topology)
+    //   sel1=1 (standard query — returns all types)
+    //   sel2=2 (max nesting level = 2, matching Hercules)
+    if (stsi(stsi_buf, 15, 1, 2) == 0) {
+        struct sysinfo_15_1_x *info = (struct sysinfo_15_1_x *)stsi_buf;
+        if (info->length >= sizeof(struct sysinfo_15_1_x)) {
+            has_topology = 1;
 
-                // Container IDs are updated as the parser descends the TLE tree.
-                // All IDs are normalized from PoP 1-based to 0-based by subtracting 1.
-                uint8_t drawer_id = 0;
-                uint8_t book_id   = 0;
-                uint8_t socket_id = 0;
+            // Container IDs are updated as the parser descends the TLE tree.
+            // All IDs are normalized from PoP 1-based to 0-based by subtracting 1.
+            uint8_t drawer_id = 0;
+            uint8_t book_id   = 0;
+            uint8_t socket_id = 0;
 
-                uint8_t *ptr = (uint8_t *)info->tle;
-                uint8_t *end = (uint8_t *)info + info->length;
+            uint8_t *ptr = (uint8_t *)info->tle;
+            uint8_t *end = (uint8_t *)info + info->length;
 
-                while (ptr + 8 <= end && proto->cpu_count < ZXFL_CPU_MAP_MAX) {
-                    union topology_entry *tle = (union topology_entry *)ptr;
+            while (ptr + 8 <= end && proto->cpu_count < ZXFL_CPU_MAP_MAX) {
+                union topology_entry *tle = (union topology_entry *)ptr;
 
-                    if (tle->nl == 0) {
-                        // Core leaf (topology_core, 16 bytes).
-                        // mask is MSB-first (IBM bit 0 = MSB of 64-bit word):
-                        //   bit k set => CPU at address (origin + k) is present.
-                        if (ptr + 16 > end) break;
+                if (tle->nl == 0) {
+                    // Core leaf (topology_core, 16 bytes).
+                    // mask is MSB-first (IBM bit 0 = MSB of 64-bit word):
+                    //   bit k set => CPU at address (origin + k) is present.
+                    if (ptr + 16 > end) break;
 
-                        uint64_t mask   = tle->cpu.mask;
-                        uint16_t origin = tle->cpu.origin;
+                    uint64_t mask    = tle->cpu.mask;
+                    uint16_t origin  = tle->cpu.origin;
+                    uint8_t  hw_type = tle->cpu.cputype;
 
-                        for (int k = 0; k < 64 && proto->cpu_count < ZXFL_CPU_MAP_MAX; k++) {
-                            if (!((mask >> (63 - k)) & 1ULL)) continue;
+                    for (int k = 0; k < 64 && proto->cpu_count < ZXFL_CPU_MAP_MAX; k++) {
+                        if (!((mask >> (63 - k)) & 1ULL)) continue;
 
-                            uint16_t addr = origin + (uint16_t)k;
+                        uint16_t addr = origin + (uint16_t)k;
 
-                            // Skip CPUs already registered from a previous sel1 pass.
-                            int already_mapped = 0;
-                            for (uint32_t i = 0; i < proto->cpu_count; i++) {
-                                if (proto->cpu_map[i].cpu_addr == addr) {
-                                    already_mapped = 1;
-                                    break;
-                                }
-                            }
-                            if (already_mapped) continue;
+                        // Verify the CPU responds to SIGP Sense (CC=3 means not operational).
+                        if (sigp_sense(addr) == 3) continue;
 
-                            // Verify the CPU responds to SIGP Sense (CC=3 means not operational).
-                            if (sigp_sense(addr) == 3) continue;
+                        zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
+                        ci->cpu_addr  = addr;
+                        ci->type      = hw_to_zxfl(hw_type);
+                        ci->state     = (addr == bsp) ? ZXFL_CPU_ONLINE : ZXFL_CPU_STOPPED;
+                        ci->drawer_id = drawer_id;
+                        ci->book_id   = book_id;
+                        ci->socket_id = socket_id;
+                        ci->chip_id   = socket_id;
+                        ci->thread_id = 0;
+                        ci->numa_node = drawer_id;
 
-                            zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
-                            ci->cpu_addr  = addr;
-                            ci->type      = sel1;
-                            ci->state     = (addr == bsp) ? ZXFL_CPU_ONLINE : ZXFL_CPU_STOPPED;
-                            ci->drawer_id = drawer_id;
-                            ci->book_id   = book_id;
-                            ci->socket_id = socket_id;
-                            ci->chip_id   = socket_id;
-                            ci->thread_id = 0;
-                            ci->numa_node = drawer_id;
-
-                            proto->cpu_count++;
-                        }
-                        ptr += 16;
-                    } else {
-                        switch (tle->nl) {
-                            case 1:
-                                socket_id = (tle->container.id > 0U)
-                                            ? (uint8_t)(tle->container.id - 1U) : 0U;
-                                break;
-                            case 2:
-                                book_id = (tle->container.id > 0U)
-                                          ? (uint8_t)(tle->container.id - 1U) : 0U;
-                                break;
-                            case 3:
-                                drawer_id = (tle->container.id > 0U)
-                                            ? (uint8_t)(tle->container.id - 1U) : 0U;
-                                break;
-                            default:
-                                break;
-                        }
-                        ptr += 8;
+                        proto->cpu_count++;
                     }
+                    ptr += 16;
+                } else {
+                    switch (tle->nl) {
+                        case 1:
+                            socket_id = (tle->container.id > 0U)
+                                        ? (uint8_t)(tle->container.id - 1U) : 0U;
+                            break;
+                        case 2:
+                            book_id = (tle->container.id > 0U)
+                                      ? (uint8_t)(tle->container.id - 1U) : 0U;
+                            break;
+                        case 3:
+                            drawer_id = (tle->container.id > 0U)
+                                        ? (uint8_t)(tle->container.id - 1U) : 0U;
+                            break;
+                        default:
+                            break;
+                    }
+                    ptr += 8;
                 }
             }
         }

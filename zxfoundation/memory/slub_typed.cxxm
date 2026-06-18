@@ -21,13 +21,13 @@ namespace zxfoundation::memory::slub {
     /// @brief Type-safe handle to a kmem_cache.
     template<typename T>
     class typed_slab_cache {
-        kmem_cache_ref_ready impl_{};
+        kmem_cache_ref_active impl_{};
 
     public:
         typed_slab_cache() noexcept = default;
 
         /// @brief Wrap an existing (already-initialized) kmem_cache.
-        explicit typed_slab_cache(kmem_cache_ref_ready c) noexcept : impl_(c) {}
+        explicit typed_slab_cache(kmem_cache_ref_active c) noexcept : impl_(c) {}
 
         // Copyable: multiple handles may reference the same cache.
         typed_slab_cache(const typed_slab_cache&) noexcept = default;

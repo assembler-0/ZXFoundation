@@ -1,0 +1,241 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file vm_txn.cxxm
+/// @brief Transactional VME mapping — commit/rollback semantics.
+
+export module zxfoundation.memory.vm_txn;
+import zxfoundation.memory.vm_types;
+import zxfoundation.memory.vm;
+import zxfoundation.sys.transaction;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.mmu_const;
+import arch.s390x.lib.atomic;
+import zxfoundation.base.types;
+import lib.error;
+import lib.expected;
+import lib.static_vector;
+import lib.util;
+
+export {
+
+namespace zxfoundation::memory::vm {
+
+    /// @brief Record of a single physical page allocation made during a transaction.
+    struct txn_page_record {
+        u64 phys{0};
+        u32 order{0};
+    };
+
+    /// @brief Maximum number of page allocations trackable in a single transaction.
+    inline constexpr u32 VM_TXN_MAX_PAGES = 64U;
+
+    /// @brief Transactional vm_map — ensures atomicity of map + physical allocation.
+    class vm_map_txn : public zxfoundation::transaction<vm_map_txn> {
+        friend class zxfoundation::transaction<vm_map_txn>;
+
+        /// @brief Allocated physical pages to be freed on rollback.
+        lib::static_vector<txn_page_record, VM_TXN_MAX_PAGES> m_pages{};
+
+        /// @brief The VA of the inserted region (0 if none).
+        u64 m_mapped_va{0};
+
+        /// @brief Size of the mapped region.
+        u64 m_mapped_size{0};
+
+        /// @brief The space the region was inserted into.
+        vm_space* m_space{nullptr};
+
+        /// @brief Physical address of the domain's region-1 DAT table.
+        u64 m_root_phys{0};
+
+        /// @brief Rollback: free all allocated pages and remove the region.
+        auto on_rollback() noexcept -> void {
+            using namespace zxfoundation::memory;
+
+            // Free all allocated physical pages.
+            for (usize i = 0; i < m_pages.size(); ++i) {
+                const auto& rec = m_pages[i];
+                pmm::folio_active f{rec.phys, rec.order,
+                                    pmm::purpose::generic, pmm::zone::normal};
+                pmm::free(lib::move(f));
+            }
+            m_pages.clear();
+
+            // Remove the inserted region.
+            if (m_space && m_mapped_va != 0 && m_mapped_size != 0) {
+                // Use vm_unmap to cleanly remove the region.
+                // Ignore errors during rollback — best effort.
+                (void)vm_unmap(*m_space, m_root_phys, m_mapped_va, m_mapped_size);
+            }
+
+            m_mapped_va   = 0;
+            m_mapped_size = 0;
+            m_space       = nullptr;
+        }
+
+    public:
+        vm_map_txn() noexcept = default;
+
+        vm_map_txn(const vm_map_txn&)            = delete;
+        auto operator=(const vm_map_txn&)         = delete;
+
+        /// @brief Record a physical page allocation for rollback tracking.
+        ///
+        /// @param[in] phys   Physical address of the allocated page.
+        /// @param[in] order  Buddy order of the allocation.
+        /// @return true if the record was accepted, false if the
+        ///         internal tracking buffer is full.
+        [[nodiscard]] auto record_page(u64 phys, u32 order) noexcept -> bool {
+            return m_pages.push_back(txn_page_record{phys, order}).has_value();
+        }
+
+        /// @brief Number of pages currently recorded.
+        [[nodiscard]] auto page_count() const noexcept -> u32 {
+            return static_cast<u32>(m_pages.size());
+        }
+
+        /// @brief Access a recorded page by index.
+        [[nodiscard]] auto page_phys(u32 idx) const noexcept -> u64 {
+            return (idx < m_pages.size()) ? m_pages[idx].phys : 0;
+        }
+
+        /// @brief The VA of the mapped region (valid after map_anonymous / map_fixed).
+        [[nodiscard]] auto mapped_va() const noexcept -> u64 {
+            return m_mapped_va;
+        }
+
+        /// @brief The size of the mapped region.
+        [[nodiscard]] auto mapped_size() const noexcept -> u64 {
+            return m_mapped_size;
+        }
+
+        /// @brief Insert an anonymous region via vm_map (top-down gap finder).
+        /// @param[in] space  The domain's VME space.
+        /// @param[in] size   Region size in bytes (page-aligned).
+        /// @param[in] prot   Access protection.
+        /// @param[in] flags  Mapping flags.
+        /// @return  The virtual address on success.
+        [[nodiscard]] auto map_anonymous(
+            vm_space& space,
+            u64 size,
+            vm_prot prot,
+            vm_flags flags
+        ) noexcept -> lib::expected<u64, lib::kernel_error> {
+            m_space = &space;
+
+            auto result = vm_map(space, size, prot, flags);
+            if (!result) return lib::unexpected(result.error());
+
+            m_mapped_va   = *result;
+            m_mapped_size = size;
+            return m_mapped_va;
+        }
+
+        /// @brief Insert a fixed-address region via vm_map_fixed.
+        /// @param[in] space      The domain's VME space.
+        /// @param[in] va         Exact virtual address.
+        /// @param[in] size       Region size in bytes (page-aligned).
+        /// @param[in] prot       Access protection.
+        /// @param[in] flags      Mapping flags.
+        /// @param[in] backing    Backing store type.
+        /// @param[in] phys_base  Physical base for physical backing.
+        /// @return  void on success.
+        [[nodiscard]] auto map_fixed(
+            vm_space& space,
+            u64 va, u64 size,
+            vm_prot prot, vm_flags flags,
+            vm_backing backing, u64 phys_base
+        ) noexcept -> lib::expected<void, lib::kernel_error> {
+            m_space = &space;
+
+            auto result = vm_map_fixed(space, va, size, prot, flags, backing, phys_base);
+            if (!result) return lib::unexpected(result.error());
+
+            m_mapped_va   = va;
+            m_mapped_size = size;
+            return {};
+        }
+
+        /// @brief Execute a full transactional anonymous map with physical
+        ///        page allocation and MMU mapping.
+        /// @param[in] space      The domain's VME space.
+        /// @param[in] root_phys  Physical address of the domain's region-1 table.
+        /// @param[in] size       Region size in bytes (page-aligned).
+        /// @param[in] prot       Access protection.
+        /// @param[in] flags      Mapping flags.
+        /// @return  The virtual address on success.
+        [[nodiscard]] auto execute(
+            vm_space& space,
+            u64 root_phys,
+            u64 size,
+            vm_prot prot,
+            vm_flags flags
+        ) noexcept -> lib::expected<u64, lib::kernel_error> {
+            using namespace zxfoundation::memory;
+            using namespace arch::s390x::mmu;
+
+            // Step 1: Insert region.
+            auto map_result = map_anonymous(space, size, prot, flags);
+            if (!map_result) return lib::unexpected(map_result.error());
+
+            const u64 va = *map_result;
+
+            // Step 2: Allocate physical pages and map them.
+            const bool is_physical = !!(flags & vm_flags::physical);
+            if (is_physical) {
+                const dat_table<dat_level::region_1> root{root_phys};
+                const u64 num_pages = size >> 12;
+
+                // Convert VME protection to MMU page_prot.
+                const bool can_write = !!(prot & vm_prot::write);
+                const bool can_exec  = !!(prot & vm_prot::exec);
+                u64 prot_bits = 0;
+                if (!can_write) prot_bits |= PTE_PROTECT;
+                if (!can_exec)  prot_bits |= PTE_NOEXEC;
+                const page_prot pp{prot_bits};
+
+                for (u64 i = 0; i < num_pages; ++i) {
+                    auto alloc_r = pmm::alloc(0, pmm::zone::normal,
+                        pmm::purpose::generic, pmm::page_init::zeroed);
+                    if (!alloc_r) return lib::unexpected(alloc_r.error());
+
+                    auto embryo = lib::move(*alloc_r);
+                    const u64 phys = embryo.phys_base;
+                    auto active = lib::move(embryo).make_active();
+
+                    // Track for rollback.
+                    if (!record_page(phys, 0)) {
+                        pmm::free(lib::move(active));
+                        return lib::unexpected(lib::kernel_error::from_memory(
+                            lib::memory_error::code::out_of_memory));
+                    }
+
+                    // Map into the domain's page tables.
+                    const u64 page_va = va + (i << 12);
+                    auto map_r = map_page<dat_level::region_1>(root, page_va, phys, pp);
+                    if (!map_r) return lib::unexpected(map_r.error());
+                }
+
+                // Update the region's accounting.
+                auto* rgn = vm_find(space, va);
+                if (rgn) {
+                    rgn->committed.store(num_pages,
+                        arch::s390x::lib::atomic::memory_order::relaxed);
+                    rgn->resident.store(num_pages,
+                        arch::s390x::lib::atomic::memory_order::relaxed);
+                    space.total_committed += num_pages;
+                    space.total_resident  += num_pages;
+                }
+            }
+
+            // Caller must call commit() explicitly.
+            return va;
+        }
+    };
+
+} // namespace zxfoundation::memory::vm
+
+} // end export

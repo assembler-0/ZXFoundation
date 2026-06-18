@@ -1,0 +1,285 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/css/ccw_io.cxxm
+/// @brief CCW I/O engine — synchronous I/O, SENSE ID, and device probing.
+
+export module arch.s390x.css.ccw_io;
+import arch.s390x.css.css_types;
+import arch.s390x.css.css;
+import arch.s390x.css.devmatch;
+import arch.s390x.cpu.irq;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.irq;
+import lib.error;
+import lib.expected;
+import lib.format;
+import lib.string;
+import lib.util;
+
+export {
+
+namespace arch::s390x::css::ccw_io {
+
+    /// @brief Execute a CCW chain synchronously (polling mode).
+    /// @param sch_index  Index into the subchannel table.
+    /// @param ccw_chain  Pointer to CCW chain in DMA31-addressable memory.
+    /// @param ccw_count  Number of CCWs in the chain (logging only).
+    /// @param key        Storage key for the ORB (default 0 = nucleus).
+    /// @param timeout_us Timeout in microseconds (default 5 s).
+    /// @return The IRB captured by the interrupt handler on success,
+    ///         kernel_error on timeout or I/O failure.
+    [[nodiscard]] auto ccw_do_io_sync(
+        u32 sch_index,
+        const ccw1* ccw_chain,
+        [[maybe_unused]] u32 ccw_count,
+        u8 key = 0,
+        u64 timeout_us = 5'000'000
+    ) noexcept -> ::lib::expected<irb, ::lib::kernel_error> {
+        using namespace zxfoundation::sys::printk;
+        using namespace zxfoundation::memory::hhdm;
+        namespace proc = cpu::processor;
+
+        // Validate the subchannel entry.
+        auto* entry = css_get_entry(sch_index);
+        if (!entry) {
+            return ::lib::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+
+        {
+            irb discard{};
+            (void)tsch(entry->schid, discard);
+        }
+
+        namespace irqctl = cpu::irq;
+        const auto saved_irq = irqctl::irq_save_disable();
+
+        // Build the Operation Request Block.
+        orb o{};
+        o.set_format1();
+        o.set_key(key);
+        o.set_cpa(static_cast<u32>(virt_to_phys(reinterpret_cast<u64>(ccw_chain))));
+        o.set_lpm(0xFF); // Try all installed paths.
+
+        pdebug("ccw_io: SSCH sch={} schid={} cpa={} ctrl={}",
+              ::lib::format::dec{static_cast<u64>(sch_index)},
+              ::lib::format::hex{static_cast<u64>(entry->schid.to_raw()), 8, true},
+              ::lib::format::hex{static_cast<u64>(o.cpa), 8, true},
+              ::lib::format::hex{static_cast<u64>(o.ctrl), 8, true});
+
+        constexpr u32 MAX_START_RETRIES = 3;
+        for (u32 retry = 0; retry < MAX_START_RETRIES; ++retry) {
+            const int cc = ssch(entry->schid, o);
+            if (cc == 0) {
+                // I/O started — update state under lock.
+                entry->state = subchannel_state::active;
+                break;
+            }
+
+            // Log the raw CC and subchannel status for diagnostics.
+            schib schib_diag{};
+            const int stsch_cc = stsch(entry->schid, schib_diag);
+
+            pwarn("ccw_io: SSCH cc={} retry={} stsch_cc={} pmcw_flags={} scsw_flags={} dev_st={} sch_st={}",
+                  ::lib::format::dec{static_cast<u64>(cc)},
+                  ::lib::format::dec{static_cast<u64>(retry)},
+                  ::lib::format::dec{static_cast<u64>(stsch_cc)},
+                  ::lib::format::hex{static_cast<u64>(schib_diag.pmcw_data.flags), 4, true},
+                  ::lib::format::hex{static_cast<u64>(schib_diag.scsw_data.flags), 8, true},
+                  ::lib::format::hex{static_cast<u64>(schib_diag.scsw_data.dev_status), 2, true},
+                  ::lib::format::hex{static_cast<u64>(schib_diag.scsw_data.sch_status), 2, true});
+
+            if (retry + 1 == MAX_START_RETRIES) {
+                irqctl::irq_restore(saved_irq);
+                return ::lib::unexpected(
+                    ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
+            }
+
+            // Drain whatever status is pending and retry.
+            irb discard{};
+            (void)tsch(entry->schid, discard);
+        }
+
+        // Calculate timeout deadline in TOD ticks (1 µs = 4096 ticks).
+        const u64 start_tod = proc::stck();
+        const u64 deadline  = start_tod + (timeout_us * 4096ULL);
+
+        irb result_irb{};
+
+        while (true) {
+            proc::cpu_relax();
+
+            const int tcc = tsch(entry->schid, result_irb);
+            if (tcc == 0) {
+                const u8 sc = result_irb.scsw_data.stctl();
+                const u8 ac = result_irb.scsw_data.actl();
+
+                // Store the IRB in the entry for bookkeeping.
+                ::lib::memcpy(&entry->last_irb, &result_irb, sizeof(irb));
+
+                if ((sc & (STCTL_PRIMARY |
+                           STCTL_SECONDARY)) != 0 &&
+                    (ac & (ACTL_DEV_ACTIVE |
+                           ACTL_SCH_ACTIVE)) == 0)
+                {
+                    entry->state = subchannel_state::idle;
+
+                    // Check for I/O errors.
+                    if (result_irb.scsw_data.has_error()) {
+                        pwarn("ccw_io: I/O error sch={} dev_status={} sch_status={} residual={}",
+                              ::lib::format::dec{static_cast<u64>(sch_index)},
+                              ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.dev_status), 2, true},
+                              ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.sch_status), 2, true},
+                              ::lib::format::dec{static_cast<u64>(result_irb.scsw_data.count)});
+                    irqctl::irq_restore(saved_irq);
+                    return ::lib::unexpected(
+                        ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
+                    }
+                    irqctl::irq_restore(saved_irq);
+                    return result_irb;
+                }
+                // Intermediate status — keep polling for final completion.
+            }
+            if (tcc == 3) {
+                entry->state = subchannel_state::idle;
+                irqctl::irq_restore(saved_irq);
+                return ::lib::unexpected(
+                    ::lib::kernel_error::from_driver(::lib::driver_error::not_found));
+            }
+
+            // Timeout check.
+            if (proc::stck() > deadline) {
+                // Try to quiesce the subchannel.
+                (void)csch(entry->schid);
+                // Drain any resulting clear-completion status.
+                irb discard{};
+                (void)tsch(entry->schid, discard);
+                entry->state = subchannel_state::idle;
+                irqctl::irq_restore(saved_irq);
+                return ::lib::unexpected(
+                    ::lib::kernel_error::from_driver(::lib::driver_error::timeout));
+            }
+        }
+    }
+
+    /// @brief Issue SENSE ID on a subchannel to identify the attached device.
+    /// @param sch_index Index into the subchannel table.
+    /// @return senseid_data on success, kernel_error on failure.
+    [[nodiscard]] auto css_sense_id(u32 sch_index) noexcept
+        -> ::lib::expected<senseid_data, ::lib::kernel_error>
+    {
+        using namespace zxfoundation::memory::pmm;
+        using namespace zxfoundation::memory::hhdm;
+
+        // Allocate one DMA31 page for CCW + data buffer.
+        auto page_r = alloc(0, zone::dma31, purpose::device_dma, page_init::zeroed);
+        if (!page_r) {
+            return ::lib::unexpected(page_r.error());
+        }
+
+        auto page = ::lib::move(*page_r);
+        const u64 phys = page.phys_base;
+        const u64 vaddr = phys_to_virt(phys);
+
+        // Place CCW at offset 0, data buffer at offset 256.
+        auto* ccw = reinterpret_cast<ccw1*>(vaddr);
+        auto* buf = reinterpret_cast<senseid_data*>(vaddr + 256);
+
+        ccw[0].cmd       = CCW_CMD_SENSE_ID; // 0xE4
+        ccw[0].flags     = CCW_FLAG_SLI;     // Suppress Length Indication
+        ccw[0].count     = static_cast<u16>(sizeof(senseid_data));
+        ccw[0].data_addr = static_cast<u32>(phys + 256); // 31-bit physical address of buffer.
+
+        auto io_r = ccw_do_io_sync(sch_index, ccw, 1, 0, 500'000);
+
+        senseid_data result{};
+        if (io_r) {
+            ::lib::memcpy(&result, buf, sizeof(senseid_data));
+        }
+
+        free(::lib::move(page).make_active());
+
+        if (!io_r) {
+            return ::lib::unexpected(io_r.error());
+        }
+
+        return result;
+    }
+
+    /// @brief Run SENSE ID on all probed subchannels to populate device type info.
+    auto css_probe_devices() noexcept -> void {
+        using namespace zxfoundation::sys::printk;
+
+        const u32 count = css_subchannel_count();
+        if (count == 0) {
+            pinfo("ccw_io: no subchannels to probe");
+            return;
+        }
+
+        pdebug("ccw_io: probing {} subchannel(s) with SENSE ID",
+              ::lib::format::dec{static_cast<u64>(count)});
+
+        u32 identified = 0;
+
+        for (u32 i = 0; i < count; ++i) {
+            auto sense_r = css_sense_id(i);
+            if (!sense_r) {
+                auto* entry = css_get_entry(i);
+                pnotice("ccw_io: sch[{}] devno={} SENSE ID failed",
+                      ::lib::format::dec{static_cast<u64>(i)},
+                      ::lib::format::hex{static_cast<u64>(entry ? entry->devno : 0xFFFF), 4, true});
+                continue;
+            }
+
+            auto* entry = css_get_entry(i);
+            if (!entry) continue;
+
+            // Store the sense data in the subchannel table entry.
+            ::lib::memcpy(&entry->sense, &(*sense_r), sizeof(senseid_data));
+            ++identified;
+
+            const u16 dev_type = sense_r->dev_type;
+            const u16 cu_type  = sense_r->cu_type;
+
+            // Look up both device and CU types in the device database.
+            namespace dm = arch::s390x::css::devmatch;
+            const auto m = dm::match(dev_type, cu_type);
+
+            if (m.dev_name && m.cu_name) {
+                pinfo("ccw_io: sch[{}] devno={} -> {} ({})",
+                      ::lib::format::dec{static_cast<u64>(i)},
+                      ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
+                      m.dev_name, m.cu_name);
+            } else if (m.dev_name) {
+                pinfo("ccw_io: sch[{}] devno={} -> {} (cu={})",
+                      ::lib::format::dec{static_cast<u64>(i)},
+                      ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
+                      m.dev_name,
+                      ::lib::format::hex{static_cast<u64>(cu_type), 4, true});
+            } else if (m.cu_name) {
+                pinfo("ccw_io: sch[{}] devno={} -> dev={} ({})",
+                      ::lib::format::dec{static_cast<u64>(i)},
+                      ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
+                      ::lib::format::hex{static_cast<u64>(dev_type), 4, true},
+                      m.cu_name);
+            } else {
+                pinfo("ccw_io: sch[{}] devno={} -> dev={} cu={}",
+                      ::lib::format::dec{static_cast<u64>(i)},
+                      ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
+                      ::lib::format::hex{static_cast<u64>(dev_type), 4, true},
+                      ::lib::format::hex{static_cast<u64>(cu_type), 4, true});
+            }
+        }
+
+        pinfo("ccw_io: SENSE ID complete, {}/{} device(s) identified",
+              ::lib::format::dec{static_cast<u64>(identified)},
+              ::lib::format::dec{static_cast<u64>(count)});
+    }
+
+} // namespace ccw_io
+
+} // end export

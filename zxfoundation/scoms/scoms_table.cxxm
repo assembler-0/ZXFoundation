@@ -1,0 +1,240 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/scoms/scoms_table.cxxm
+/// @brief SCOMS — kobject_table<T, N>: unified, generation-counted,
+///        reference-counted kernel object table.
+
+export module zxfoundation.scoms.scoms_table;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_ref;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import arch.s390x.cpu.irq;
+import arch.s390x.lib.atomic;
+import lib.error;
+import lib.expected;
+
+export {
+
+namespace zxfoundation::scoms {
+
+    using base::lifecycle_state;
+    using arch::s390x::lib::atomic::atomic;
+    using arch::s390x::lib::atomic::memory_order;
+
+    /// @brief Generic, generation-counted kernel object table.
+    ///
+    /// @tparam T  Concrete kernel object type.  Must have a `kobject ko`
+    ///            field at offset 0.
+    /// @tparam N  Maximum number of objects (static capacity).
+    template <typename T, u32 N>
+    class kobject_table {
+        // Verify the kobject layout constraint.
+        static_assert(__builtin_offsetof(T, ko) == 0,
+            "T::ko must be at offset 0 for SCOMS kobject_table");
+
+        /// @brief Slot state.  A slot is either FREE (on the free-list)
+        ///        or LIVE (holding an active/embryo/dying object).
+        T       m_slots[N]{};
+
+        /// @brief Free-list: m_next_free[i] = index of the next free slot.
+        u32     m_next_free[N]{};
+
+        /// @brief Head of the free-list (index into m_slots, or ~0U).
+        u32     m_free_head{0};
+
+        /// @brief Number of currently allocated (non-free) slots.
+        atomic<u32> m_count{0};
+
+        /// @brief Protects alloc/release and the free-list.
+        locking::qspinlock::qspinlock m_table_lock{};
+
+        /// @brief Set to true after init() completes.
+        bool    m_initialized{false};
+
+        /// @brief The kobject_type that this table manages.
+        kobject_type m_type{kobject_type::none};
+
+    public:
+        /// @brief Initialize the table.
+        /// @param type  The kobject_type for objects in this table.
+        auto init(kobject_type type) noexcept -> void {
+            m_type = type;
+
+            // Build the free-list.
+            for (u32 i = 0; i < N; ++i) {
+                m_slots[i].ko.id    = KOBJECT_ID_INVALID;
+                m_slots[i].ko.type  = type;
+                m_slots[i].ko.state = lifecycle_state::embryo;
+                m_next_free[i]      = (i + 1 < N) ? (i + 1) : ~0U;
+            }
+
+            m_free_head   = 0;
+            m_count.store(0, memory_order::relaxed);
+            m_initialized = true;
+        }
+
+        /// @brief Allocate a slot, returning an embryo ref.
+        /// @return  An embryo ref on success, or kernel_error if the
+        ///          table is full.
+        [[nodiscard]] auto alloc() noexcept
+            -> lib::expected<kobject_ref<T, lifecycle_state::embryo>, lib::kernel_error>
+        {
+            if (!m_initialized) [[unlikely]]
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+
+            const locking::irq_lock_guard guard{m_table_lock};
+
+            if (m_free_head == ~0U)
+                return lib::unexpected(
+                    lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+
+            const u32 slot = m_free_head;
+            m_free_head = m_next_free[slot];
+            m_next_free[slot] = ~0U;
+
+            T& obj           = m_slots[slot];
+            obj.ko.id        = slot;
+            obj.ko.type      = m_type;
+            obj.ko.state     = lifecycle_state::embryo;
+            obj.ko.ref.count.store(1, memory_order::relaxed);
+            obj.ko.generation += 1;  // Bump generation (ABA prevention).
+
+            (void)m_count.fetch_add(1, memory_order::relaxed);
+
+            return kobject_ref<T, lifecycle_state::embryo>::from_raw_noref(&obj);
+        }
+
+        /// @brief Look up by slot index.
+        [[nodiscard]] auto find_raw(u32 id) noexcept -> T* {
+            if (id >= N) return nullptr;
+            T& obj = m_slots[id];
+            if (obj.ko.id == KOBJECT_ID_INVALID) return nullptr;
+            return &obj;
+        }
+
+        [[nodiscard]] auto find_raw(u32 id) const noexcept -> const T* {
+            if (id >= N) return nullptr;
+            const T& obj = m_slots[id];
+            if (obj.ko.id == KOBJECT_ID_INVALID) return nullptr;
+            return &obj;
+        }
+
+        /// @brief Look up by slot index + generation.
+        [[nodiscard]] auto find_by_gen(u32 id, u32 gen) noexcept -> T* {
+            if (id >= N) return nullptr;
+            T& obj = m_slots[id];
+            if (obj.ko.id == KOBJECT_ID_INVALID) return nullptr;
+            if (obj.ko.generation != gen) return nullptr;
+            return &obj;
+        }
+
+        /// @brief Look up by slot index and acquire a typed ref.
+        /// @return  A ref if the slot is valid, or a null ref.
+        template <lifecycle_state State = lifecycle_state::active>
+        [[nodiscard]] auto acquire_ref(u32 id) noexcept
+            -> kobject_ref<T, State>
+        {
+            T* p = find_raw(id);
+            if (!p) return {};
+            if (p->ko.state != State) return {};
+            return kobject_ref<T, State>{p};
+        }
+
+        /// @brief Release a slot back to the free-list.
+        /// @param id  Slot index to release.
+        /// @return    Success, or kernel_error if the slot is invalid.
+        [[nodiscard]] auto release(u32 id) noexcept
+            -> lib::expected<void, lib::kernel_error>
+        {
+            if (id >= N)
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+
+            const locking::irq_lock_guard guard{m_table_lock};
+
+            T& obj = m_slots[id];
+            if (obj.ko.id == KOBJECT_ID_INVALID)
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::not_found));
+
+            // Invalidate the slot.
+            obj.ko.id    = KOBJECT_ID_INVALID;
+            obj.ko.state = lifecycle_state::embryo;
+
+            // Push onto free-list.
+            m_next_free[id] = m_free_head;
+            m_free_head     = id;
+
+            (void)m_count.fetch_sub(1, memory_order::relaxed);
+
+            return {};
+        }
+
+        /// @brief Destroy all objects matching a predicate.
+        /// @param pred     Predicate: bool(const T&).
+        /// @param cleanup  Optional cleanup: void(T&).  Called before
+        ///                 the slot is released.
+        /// @return Number of objects destroyed.
+        template <typename Pred, typename Cleanup>
+        auto destroy_if(Pred&& pred, Cleanup&& cleanup) noexcept -> u32 {
+            const locking::irq_lock_guard guard{m_table_lock};
+            u32 destroyed = 0;
+
+            for (u32 i = 0; i < N; ++i) {
+                T& obj = m_slots[i];
+                if (obj.ko.id == KOBJECT_ID_INVALID) continue;
+                if (!pred(obj)) continue;
+
+                cleanup(obj);
+
+                obj.ko.id    = KOBJECT_ID_INVALID;
+                obj.ko.state = lifecycle_state::embryo;
+
+                m_next_free[i] = m_free_head;
+                m_free_head    = i;
+
+                (void)m_count.fetch_sub(1, memory_order::relaxed);
+                ++destroyed;
+            }
+
+            return destroyed;
+        }
+
+        /// @brief Destroy all objects matching a predicate (no cleanup).
+        template <typename Pred>
+        auto destroy_if(Pred&& pred) noexcept -> u32 {
+            return destroy_if(
+                static_cast<Pred&&>(pred),
+                [](T&) noexcept {});
+        }
+
+        /// @brief Number of currently allocated (non-free) slots.
+        [[nodiscard]] auto count() const noexcept -> u32 {
+            return m_count.load(memory_order::relaxed);
+        }
+
+        /// @brief Maximum capacity.
+        [[nodiscard]] static constexpr auto capacity() noexcept -> u32 {
+            return N;
+        }
+
+        /// @brief Is the table initialized?
+        [[nodiscard]] auto initialized() const noexcept -> bool {
+            return m_initialized;
+        }
+
+        /// @brief Direct slot access (no validity check — internal use only).
+        [[nodiscard]] auto slot(u32 id) noexcept -> T& {
+            return m_slots[id];
+        }
+        [[nodiscard]] auto slot(u32 id) const noexcept -> const T& {
+            return m_slots[id];
+        }
+    };
+
+} // namespace zxfoundation::scoms
+
+} // end export

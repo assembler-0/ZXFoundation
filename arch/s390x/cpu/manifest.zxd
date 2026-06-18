@@ -26,4 +26,7 @@
     linkage.cxxm
     aste_types.cxxm
     aste.cxxm
+    tx.cxxm
+    uaccess.cxxm
+    pc.cxxm
 }

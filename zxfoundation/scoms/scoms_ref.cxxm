@@ -1,0 +1,176 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/scoms/scoms_ref.cxxm
+/// @brief SCOMS — kobject_ref<T, State>: typestate-tracked, reference-counted
+///        handle to any kernel object.
+
+export module zxfoundation.scoms.scoms_ref;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.scoms.scoms_types;
+
+export {
+
+namespace zxfoundation::scoms {
+
+    using base::lifecycle_state;
+
+    /// @brief Zero-overhead, typestate-tracked, reference-counted handle.
+    ///
+    /// @tparam T      Concrete kernel object type (must have `kobject ko`
+    ///                as first field at offset 0).
+    /// @tparam State  Compile-time lifecycle state this handle represents.
+    template <typename T, lifecycle_state State>
+    class kobject_ref {
+        T* ptr_{nullptr};
+
+    public:
+
+        /// @brief Default — null handle.
+        kobject_ref() noexcept = default;
+
+        /// @brief Acquire a reference to an existing object.
+        explicit kobject_ref(T* p) noexcept : ptr_(p) {
+            if (ptr_) ptr_->ko.ref.get();
+        }
+
+        /// @brief Release the reference.
+        ~kobject_ref() noexcept {
+            if (ptr_) {
+                (void)ptr_->ko.ref.put();
+            }
+        }
+
+        kobject_ref(kobject_ref&& other) noexcept
+            : ptr_(other.ptr_)
+        {
+            other.ptr_ = nullptr;
+        }
+
+        auto operator=(kobject_ref&& other) noexcept -> kobject_ref& {
+            if (this != &other) {
+                if (ptr_) (void)ptr_->ko.ref.put();
+                ptr_ = other.ptr_;
+                other.ptr_ = nullptr;
+            }
+            return *this;
+        }
+
+
+        kobject_ref(const kobject_ref& other) noexcept
+            : ptr_(other.ptr_)
+        {
+            if (ptr_) ptr_->ko.ref.get();
+        }
+
+        auto operator=(const kobject_ref& other) noexcept -> kobject_ref& {
+            if (this != &other) {
+                if (ptr_) (void)ptr_->ko.ref.put();
+                ptr_ = other.ptr_;
+                if (ptr_) ptr_->ko.ref.get();
+            }
+            return *this;
+        }
+
+        /// @brief embryo → active.
+        [[nodiscard]] auto activate() && noexcept
+            -> kobject_ref<T, lifecycle_state::active>
+            requires (State == lifecycle_state::embryo)
+        {
+            ptr_->ko.state = lifecycle_state::active;
+            auto result = kobject_ref<T, lifecycle_state::active>::from_raw_noref(ptr_);
+            ptr_ = nullptr;
+            return result;
+        }
+
+        /// @brief active → suspended.
+        [[nodiscard]] auto suspend() && noexcept
+            -> kobject_ref<T, lifecycle_state::suspended>
+            requires (State == lifecycle_state::active)
+        {
+            ptr_->ko.state = lifecycle_state::suspended;
+            auto result = kobject_ref<T, lifecycle_state::suspended>::from_raw_noref(ptr_);
+            ptr_ = nullptr;
+            return result;
+        }
+
+        /// @brief suspended → active.
+        [[nodiscard]] auto resume() && noexcept
+            -> kobject_ref<T, lifecycle_state::active>
+            requires (State == lifecycle_state::suspended)
+        {
+            ptr_->ko.state = lifecycle_state::active;
+            auto result = kobject_ref<T, lifecycle_state::active>::from_raw_noref(ptr_);
+            ptr_ = nullptr;
+            return result;
+        }
+
+        /// @brief active | suspended → dying.
+        [[nodiscard]] auto begin_destroy() && noexcept
+            -> kobject_ref<T, lifecycle_state::dying>
+            requires (State == lifecycle_state::active ||
+                      State == lifecycle_state::suspended)
+        {
+            ptr_->ko.state = lifecycle_state::dying;
+            auto result = kobject_ref<T, lifecycle_state::dying>::from_raw_noref(ptr_);
+            ptr_ = nullptr;
+            return result;
+        }
+
+        /// @brief embryo → dying (creation aborted before activation).
+        [[nodiscard]] auto abort() && noexcept
+            -> kobject_ref<T, lifecycle_state::dying>
+            requires (State == lifecycle_state::embryo)
+        {
+            ptr_->ko.state = lifecycle_state::dying;
+            auto result = kobject_ref<T, lifecycle_state::dying>::from_raw_noref(ptr_);
+            ptr_ = nullptr;
+            return result;
+        }
+
+
+        [[nodiscard]] auto raw() const noexcept -> T* { return ptr_; }
+        [[nodiscard]] auto operator->() const noexcept -> T* { return ptr_; }
+        [[nodiscard]] auto operator*() const noexcept -> T& { return *ptr_; }
+        [[nodiscard]] explicit operator bool() const noexcept { return ptr_ != nullptr; }
+
+        /// @brief Get the kobject ID (shorthand for ptr_->ko.id).
+        [[nodiscard]] auto id() const noexcept -> u32 {
+            return ptr_ ? ptr_->ko.id : ~0U;
+        }
+
+        /// @brief Get the kobject generation (shorthand for ptr_->ko.generation).
+        [[nodiscard]] auto generation() const noexcept -> u32 {
+            return ptr_ ? ptr_->ko.generation : 0;
+        }
+
+        /// @brief Release ownership WITHOUT decrementing the refcount.
+        [[nodiscard]] auto release() noexcept -> T* {
+            T* p = ptr_;
+            ptr_ = nullptr;
+            return p;
+        }
+
+
+        /// @brief Construct from a raw pointer WITHOUT incrementing the
+        [[nodiscard]] static auto from_raw_noref(T* p) noexcept
+            -> kobject_ref<T, State>
+        {
+            kobject_ref<T, State> r;
+            r.ptr_ = p;
+            return r;
+        }
+
+        /// @brief Construct from a raw pointer, incrementing the refcount.
+        [[nodiscard]] static auto acquire(T* p) noexcept
+            -> kobject_ref<T, State>
+        {
+            return kobject_ref<T, State>{p};
+        }
+    };
+
+    static_assert(sizeof(kobject_ref<kobject, lifecycle_state::embryo>) == 8,
+        "kobject_ref must be a single pointer");
+
+} // namespace zxfoundation::scoms
+
+} // end export

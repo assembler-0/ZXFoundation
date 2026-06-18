@@ -13,180 +13,302 @@ namespace arch::s390x::cpu::linkage {
     constexpr u32 MAX_LINKAGE_ENTRIES     = 128;
 
     /// @brief Maximum number of entry table entries per linkage entry.
-    constexpr u32 MAX_ENTRY_TABLE_ENTRIES = 128;
+    ///        ETL is 6 bits → max 64 units of 128 bytes = 256 entries.
+    constexpr u32 MAX_ENTRY_TABLE_ENTRIES = 256;
 
     /// @brief Decomposed Program-Call number.
     struct pc_number {
-        u8 lx{};  ///< Linkage index (0-127).
-        u8 ex{};  ///< Entry index (0-127).
+        u16 lx{};  ///< Linkage index (12 bits, 0-4095).
+        u8  ex{};  ///< Entry index   (8 bits, 0-255).
 
         /// @brief Compose a raw 20-bit PC number from LX and EX.
         [[nodiscard]] constexpr auto to_raw() const noexcept -> u32 {
-            return (static_cast<u32>(lx) << 12) | static_cast<u32>(ex);
+            return (static_cast<u32>(lx & 0xFFFU) << 8) | static_cast<u32>(ex);
         }
 
         /// @brief Decompose a raw 20-bit PC number.
         [[nodiscard]] static constexpr auto from_raw(u32 raw) noexcept -> pc_number {
             return pc_number{
-                .lx = static_cast<u8>((raw >> 12) & 0xFFU),
-                .ex = static_cast<u8>(raw & 0x7FU)
+                .lx = static_cast<u16>((raw >> 8) & 0xFFFU),
+                .ex = static_cast<u8>(raw & 0xFFU)
             };
         }
     };
 
-    /// @brief Hardware-format Linkage Table Entry (LTE).
-    /// @note Bit positions verified against PoP SA22-7832-13 §5.5.3 (z/Arch 64-bit mode).
-    struct [[gnu::packed]] alignas(8) linkage_table_entry {
-        u64 words[2]{};  ///< Raw hardware doublewords.
-
-        // -- Accessors for word 0 fields --
+    /// @brief Hardware-format Linkage Table Entry (LTE) — 4 bytes.
+    struct [[gnu::packed]] alignas(4) linkage_table_entry {
+        u32 raw{};  ///< Raw hardware word.
 
         /// @brief Test whether this LTE is marked invalid.
         [[nodiscard]] constexpr auto is_invalid() const noexcept -> bool {
-            return (words[0] & (1ULL << 63)) != 0;  // Bit 0 (MSB) = invalid
+            return (raw >> 31) & 1U;  // PoP bit 0 of u32
         }
 
         /// @brief Set or clear the invalid bit.
         constexpr auto set_invalid(bool inv) noexcept -> void {
             if (inv)
-                words[0] |= (1ULL << 63);
+                raw |= (1U << 31);
             else
-                words[0] &= ~(1ULL << 63);
+                raw &= ~(1U << 31);
         }
 
         /// @brief Get the entry-table origin (ETO) as a real address.
-        ///
-        /// The ETO is stored in bits 1-25 of word 0. Extracting and shifting
-        /// left by 6 yields a 64-byte-aligned address.
-        /// @note Verified: ETO in bits 1-25, shifted left 6 → 64-byte aligned.
         [[nodiscard]] constexpr auto entry_table_origin() const noexcept -> u64 {
-            return (words[0] >> 32) & 0x7FFFFFC0ULL;
+            return static_cast<u64>(raw & 0x7FFFFFC0U);
         }
 
         /// @brief Set the entry-table origin from a 64-byte-aligned real address.
-        /// @note Verified: preserves I bit and ETL field during insertion.
+        /// @pre @p eto_addr must be 64-byte aligned (low 6 bits zero).
         constexpr auto set_entry_table_origin(u64 eto_addr) noexcept -> void {
-            // Clear ETO bits, preserve invalid bit and ETL
-            words[0] = (words[0] & 0x800000000000FFFFULL) |
-                       ((eto_addr & 0x7FFFFFC0ULL) << 32);
+            raw = (raw & 0x8000003FU) |
+                  (static_cast<u32>(eto_addr) & 0x7FFFFFC0U);
         }
 
-        /// @brief Get the entry-table length (ETL) — maximum valid EX value.
-        /// Stored in bits 32-38 of word 0 (i.e., bits 0-6 of the low 32 bits).
-        /// @note Verified: ETL in bits 32-38 of word 0 (IBM numbering).
+        /// @brief Get the entry-table length (ETL).
         [[nodiscard]] constexpr auto entry_table_length() const noexcept -> u8 {
-            return static_cast<u8>((words[0] >> 25) & 0x7FU);
+            return static_cast<u8>(raw & 0x3FU);
         }
 
         /// @brief Set the entry-table length.
         constexpr auto set_entry_table_length(u8 etl) noexcept -> void {
-            words[0] = (words[0] & ~(0x7FULL << 25)) |
-                       (static_cast<u64>(etl & 0x7FU) << 25);
+            raw = (raw & ~0x3FU) | (static_cast<u32>(etl) & 0x3FU);
         }
 
         /// @brief Zero-initialize for a fresh entry.
         constexpr auto clear() noexcept -> void {
-            words[0] = 0;
-            words[1] = 0;
+            raw = 0;
         }
     };
 
-    static_assert(sizeof(linkage_table_entry) == 16,
-                  "linkage_table_entry must be exactly 16 bytes");
+    static_assert(sizeof(linkage_table_entry) == 4,
+                  "linkage_table_entry must be exactly 4 bytes (PoP §5.5.3)");
 
-    /// @brief Hardware-format Entry Table Entry (ETE).
-    /// @note Layout verified against PoP SA22-7832-13 §5.5.4 (z/Arch 64-bit ETE, G=1).
-    ///       The 64-bit ETE uses words[1] for the full 64-bit entry address.
-    struct [[gnu::packed]] alignas(8) entry_table_entry {
-        u64 words[4]{};  ///< Raw hardware doublewords.
+    /// @brief Hardware-format Entry Table Entry (ETE) — 32 bytes.
+    struct [[gnu::packed]] alignas(32) entry_table_entry {
+        u32 words[8]{};  ///< Raw hardware words (8 × 4 bytes = 32 bytes).
 
-        // -- Word 0 field accessors --
-
-        /// @brief Get the PSW key for the target (bits 8-11 of word 0).
-        /// Returns the 4-bit key value (not shifted into PSW position).
-        [[nodiscard]] constexpr auto psw_key() const noexcept -> u8 {
-            return static_cast<u8>((words[0] >> 52) & 0x0FU);
+        /// @brief Get the 64-bit entry instruction address (when G=1).
+        [[nodiscard]] constexpr auto entry_address() const noexcept -> u64 {
+            // Combine words 0 and 1, mask off P bit (bit 63), ensure bit 63 = 0
+            const u64 hi = static_cast<u64>(words[0]) << 32;
+            const u64 lo = static_cast<u64>(words[1]) & 0xFFFFFFFEU; // clear P
+            return hi | lo;
         }
 
-        /// @brief Set the PSW key for the target.
-        constexpr auto set_psw_key(u8 key) noexcept -> void {
-            words[0] = (words[0] & ~(0x0FULL << 52)) |
-                       (static_cast<u64>(key & 0x0FU) << 52);
+        /// @brief Set the 64-bit entry instruction address (for G=1 mode).
+        /// @note Preserves the P bit in word 1.
+        constexpr auto set_entry_address(u64 addr) noexcept -> void {
+            words[0] = static_cast<u32>(addr >> 32);
+            // Preserve P bit (bit 31 of word 1), set address bits 32-62
+            words[1] = (words[1] & 0x1U) |
+                       (static_cast<u32>(addr) & 0xFFFFFFFEU);
         }
 
-        /// @brief Test whether this is a stacking PC (S bit).
+        /// @brief Test the problem-state bit (P, bit 63 of ETE = bit 31 of word 1).
+        [[nodiscard]] constexpr auto is_problem_state() const noexcept -> bool {
+            return (words[1] & 0x1U) != 0;
+        }
+
+        /// @brief Set or clear the problem-state bit.
+        constexpr auto set_problem_state(bool p) noexcept -> void {
+            if (p)
+                words[1] |= 0x1U;
+            else
+                words[1] &= ~0x1U;
+        }
+
+        /// @brief Get the Authorization Key Mask (AKM, bits 64-79 = word 2 bits 0-15).
+        [[nodiscard]] constexpr auto akm() const noexcept -> u16 {
+            return static_cast<u16>(words[2] >> 16);
+        }
+
+        /// @brief Set the Authorization Key Mask.
+        constexpr auto set_akm(u16 mask) noexcept -> void {
+            words[2] = (words[2] & 0x0000FFFFU) |
+                       (static_cast<u32>(mask) << 16);
+        }
+
+        /// @brief Get the ASN (bits 80-95 = word 2 bits 16-31).
+        [[nodiscard]] constexpr auto asn() const noexcept -> u16 {
+            return static_cast<u16>(words[2] & 0xFFFFU);
+        }
+
+        /// @brief Set the ASN.
+        constexpr auto set_asn(u16 val) noexcept -> void {
+            words[2] = (words[2] & 0xFFFF0000U) |
+                       static_cast<u32>(val);
+        }
+
+        /// @brief Get the Entry Key Mask (EKM, bits 96-111 = word 3 bits 0-15).
+        [[nodiscard]] constexpr auto ekm() const noexcept -> u16 {
+            return static_cast<u16>(words[3] >> 16);
+        }
+
+        /// @brief Set the Entry Key Mask.
+        constexpr auto set_ekm(u16 mask) noexcept -> void {
+            words[3] = (words[3] & 0x0000FFFFU) |
+                       (static_cast<u32>(mask) << 16);
+        }
+
+        /// @brief Test the PC-type bit (T, bit 128 = word 4 bit 0 MSB).
+        /// T=0: basic PC. T=1: stacking PC.
         [[nodiscard]] constexpr auto is_stacking() const noexcept -> bool {
-            return (words[0] & (1ULL << 50)) != 0;  // Bit 13 from MSB
+            return (words[4] >> 31) & 1U;
         }
 
-        /// @brief Set or clear the stacking bit.
-        constexpr auto set_stacking(bool s) noexcept -> void {
-            if (s)
-                words[0] |= (1ULL << 50);
+        /// @brief Set or clear the stacking bit (T).
+        constexpr auto set_stacking(bool t) noexcept -> void {
+            if (t)
+                words[4] |= (1U << 31);
             else
-                words[0] &= ~(1ULL << 50);
+                words[4] &= ~(1U << 31);
         }
 
-        /// @brief Test whether this is a space-switching PC (C bit).
-        [[nodiscard]] constexpr auto is_space_switching() const noexcept -> bool {
-            return (words[0] & (1ULL << 49)) != 0;  // Bit 14 from MSB
+        /// @brief Test the extended addressing mode bit (G, bit 129 = word 4 bit 1).
+        [[nodiscard]] constexpr auto is_64bit() const noexcept -> bool {
+            return (words[4] >> 30) & 1U;
         }
 
-        /// @brief Set or clear the space-switching bit.
-        constexpr auto set_space_switching(bool c) noexcept -> void {
+        /// @brief Set or clear the G bit.
+        constexpr auto set_64bit(bool g) noexcept -> void {
+            if (g)
+                words[4] |= (1U << 30);
+            else
+                words[4] &= ~(1U << 30);
+        }
+
+        /// @brief Test the PSW-key control bit (K, bit 131 = word 4 bit 3).
+        [[nodiscard]] constexpr auto psw_key_control() const noexcept -> bool {
+            return (words[4] >> 28) & 1U;
+        }
+
+        /// @brief Set or clear the K bit.
+        constexpr auto set_psw_key_control(bool k) noexcept -> void {
+            if (k)
+                words[4] |= (1U << 28);
+            else
+                words[4] &= ~(1U << 28);
+        }
+
+        /// @brief Test the PSW-key-mask control bit (M, bit 132 = word 4 bit 4).
+        [[nodiscard]] constexpr auto psw_key_mask_control() const noexcept -> bool {
+            return (words[4] >> 27) & 1U;
+        }
+
+        /// @brief Set or clear the M bit.
+        constexpr auto set_psw_key_mask_control(bool m) noexcept -> void {
+            if (m)
+                words[4] |= (1U << 27);
+            else
+                words[4] &= ~(1U << 27);
+        }
+
+        /// @brief Test the extended-authorization-index control (E, bit 133 = word 4 bit 5).
+        [[nodiscard]] constexpr auto eax_control() const noexcept -> bool {
+            return (words[4] >> 26) & 1U;
+        }
+
+        /// @brief Set or clear the E bit.
+        constexpr auto set_eax_control(bool e) noexcept -> void {
+            if (e)
+                words[4] |= (1U << 26);
+            else
+                words[4] &= ~(1U << 26);
+        }
+
+        /// @brief Test the address-space-control control (C, bit 134 = word 4 bit 6).
+        /// C=1: set AR mode after PC. C=0: set primary-space mode.
+        [[nodiscard]] constexpr auto asc_control() const noexcept -> bool {
+            return (words[4] >> 25) & 1U;
+        }
+
+        /// @brief Set or clear the C bit.
+        constexpr auto set_asc_control(bool c) noexcept -> void {
             if (c)
-                words[0] |= (1ULL << 49);
+                words[4] |= (1U << 25);
             else
-                words[0] &= ~(1ULL << 49);
+                words[4] &= ~(1U << 25);
         }
 
-        /// @brief Get the authorization index (AX, bits 0-7 of word 0).
-        [[nodiscard]] constexpr auto authorization_index() const noexcept -> u8 {
-            return static_cast<u8>(words[0] >> 56);
+        /// @brief Test the secondary-ASN control (S, bit 135 = word 4 bit 7).
+        [[nodiscard]] constexpr auto secondary_asn_control() const noexcept -> bool {
+            return (words[4] >> 24) & 1U;
         }
 
-        /// @brief Set the authorization index.
-        constexpr auto set_authorization_index(u8 ax) noexcept -> void {
-            words[0] = (words[0] & 0x00FFFFFFFFFFFFFFULL) |
-                       (static_cast<u64>(ax) << 56);
+        /// @brief Set or clear the S bit.
+        constexpr auto set_secondary_asn_control(bool s) noexcept -> void {
+            if (s)
+                words[4] |= (1U << 24);
+            else
+                words[4] &= ~(1U << 24);
         }
 
-        // -- Word 1: entry point address --
+        /// @brief Get the entry key (EK, bits 136-139 = word 4 bits 8-11).
+        /// Used as PSW key if K=1.
+        [[nodiscard]] constexpr auto entry_key() const noexcept -> u8 {
+            return static_cast<u8>((words[4] >> 20) & 0xFU);
+        }
 
-        /// @brief Get the 64-bit entry point address.
+        /// @brief Set the entry key.
+        constexpr auto set_entry_key(u8 key) noexcept -> void {
+            words[4] = (words[4] & ~(0xFU << 20)) |
+                       (static_cast<u32>(key & 0xFU) << 20);
+        }
+
+        /// @brief Get the entry extended authorization index (bits 144-159 = word 4 bits 16-31).
+        [[nodiscard]] constexpr auto entry_eax() const noexcept -> u16 {
+            return static_cast<u16>(words[4] & 0xFFFFU);
+        }
+
+        /// @brief Set the entry extended authorization index.
+        constexpr auto set_entry_eax(u16 eax) noexcept -> void {
+            words[4] = (words[4] & 0xFFFF0000U) |
+                       static_cast<u32>(eax);
+        }
+
+        /// @brief Get the ASTE origin (bits 161-185 = word 5 bits 1-25).
+        [[nodiscard]] constexpr auto aste_origin() const noexcept -> u64 {
+            return static_cast<u64>(words[5] & 0x7FFFFFC0U);
+        }
+
+        /// @brief Set the ASTE origin from a 64-byte-aligned real address.
+        /// @pre @p addr must be 64-byte aligned.
+        constexpr auto set_aste_origin(u64 addr) noexcept -> void {
+            words[5] = (words[5] & 0x8000003FU) |
+                       (static_cast<u32>(addr) & 0x7FFFFFC0U);
+        }
+
+        /// @brief Get the 64-bit entry parameter (bits 192-255, when G=1).
+        [[nodiscard]] constexpr auto entry_parameter() const noexcept -> u64 {
+            return (static_cast<u64>(words[6]) << 32) |
+                   static_cast<u64>(words[7]);
+        }
+
+        /// @brief Set the 64-bit entry parameter (for G=1 mode).
+        constexpr auto set_entry_parameter(u64 param) noexcept -> void {
+            words[6] = static_cast<u32>(param >> 32);
+            words[7] = static_cast<u32>(param);
+        }
+
+        /// @brief Get the 64-bit entry point address (alias for entry_address).
         [[nodiscard]] constexpr auto entry_point() const noexcept -> u64 {
-            return words[1];
+            return entry_address();
         }
 
-        /// @brief Set the 64-bit entry point address.
+        /// @brief Set the 64-bit entry point address (alias for set_entry_address).
         constexpr auto set_entry_point(u64 addr) noexcept -> void {
-            words[1] = addr;
-        }
-
-        // -- Word 2: target ASCE --
-
-        /// @brief Get the ASCE for the target address space.
-        /// Only meaningful for space-switching PCs.
-        [[nodiscard]] constexpr auto target_asce() const noexcept -> u64 {
-            return words[2];
-        }
-
-        /// @brief Set the ASCE for the target address space.
-        constexpr auto set_target_asce(u64 asce) noexcept -> void {
-            words[2] = asce;
+            set_entry_address(addr);
         }
 
         /// @brief Zero-initialize for a fresh entry.
         constexpr auto clear() noexcept -> void {
-            words[0] = 0;
-            words[1] = 0;
-            words[2] = 0;
-            words[3] = 0;
+            for (auto& w : words)
+                w = 0;
         }
     };
 
     static_assert(sizeof(entry_table_entry) == 32,
-                  "entry_table_entry must be exactly 32 bytes");
+                  "entry_table_entry must be exactly 32 bytes (PoP §5.5.4)");
 
 } // namespace arch::s390x::cpu::linkage
 

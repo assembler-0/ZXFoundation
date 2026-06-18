@@ -2,27 +2,29 @@
 /// @file zxfoundation/gate/gate.cxxm
 /// @brief Gate lifecycle management — create, destroy, find, and nucleus
 ///        dispatch table registration.
+///
+/// Uses SCOMS kobject_table for unified lifecycle, refcounting, and
+/// generation-counted slot management.
 
 export module zxfoundation.gate.gate;
 import zxfoundation.gate.gate_types;
 import zxfoundation.domain.domain_types;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_ref;
+import zxfoundation.scoms.scoms_table;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
 import zxfoundation.base.types;
-import arch.s390x.cpu.irq;
+import zxfoundation.base.typestate;
 import lib.error;
 import lib.expected;
 
-using zxfoundation::gate::gate_id;
 using zxfoundation::gate::gate_desc;
 using zxfoundation::gate::gate_type;
 using zxfoundation::gate::gate_auth;
 using zxfoundation::gate::nucleus_call;
 using zxfoundation::gate::nucleus_handler_fn;
 using zxfoundation::gate::nucleus_dispatch_table;
-using zxfoundation::gate::GATE_ID_INVALID;
 using zxfoundation::gate::MAX_GATES;
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
@@ -31,11 +33,15 @@ using zxfoundation::sys::printk::perr;
 
 namespace _internal {
 
-    static gate_desc g_gate_table[MAX_GATES]{};
+    using namespace zxfoundation::scoms;
+    using zxfoundation::base::lifecycle_state;
+
+    /// @brief SCOMS-managed gate table (replaces ad-hoc array + lock + count).
+    static kobject_table<gate_desc, MAX_GATES> g_gate_table{};
+
+    /// @brief Nucleus dispatch table — separate from the SCOMS table because
+    ///        it is indexed by nucleus_call, not by gate slot.
     static nucleus_dispatch_table g_nucleus_dispatch{};
-    static zxfoundation::locking::qspinlock::qspinlock g_gate_lock{};
-    static u32 g_gate_count{0};
-    static bool g_gate_initialized{false};
 
 } // namespace _internal
 
@@ -47,23 +53,17 @@ namespace zxfoundation::gate {
 
     /// @brief Initialize the gate subsystem.
     ///
-    /// Marks the subsystem as initialized.  Must be called once during
-    /// kernel bring-up before any gate_create or gate_register calls.
+    /// Initializes the SCOMS gate table and clears the nucleus dispatch
+    /// table.  Must be called once during kernel bring-up before any
+    /// gate_create or gate_register calls.
     auto gate_init() noexcept -> void {
-        const locking::irq_lock_guard guard{_internal::g_gate_lock};
-
-        // Reset the gate table to a known-good state.
-        for (u32 i = 0; i < MAX_GATES; ++i) {
-            _internal::g_gate_table[i] = gate_desc{};
-        }
+        // Initialize the SCOMS table with the gate type discriminator.
+        _internal::g_gate_table.init(scoms::kobject_type::gate);
 
         // Clear all nucleus dispatch handlers.
         for (u32 i = 0; i < static_cast<u32>(nucleus_call::_count); ++i) {
             _internal::g_nucleus_dispatch.handlers[i] = nullptr;
         }
-
-        _internal::g_gate_count       = 0;
-        _internal::g_gate_initialized = true;
 
         pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
     }
@@ -93,92 +93,81 @@ namespace zxfoundation::gate {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        const locking::irq_lock_guard guard{_internal::g_gate_lock};
-
         _internal::g_nucleus_dispatch.handlers[idx] = handler;
-
-        pinfo("gate: registered nucleus handler for call {}", idx);
         return {};
     }
 
     /// @brief Create a new gate descriptor.
+    ///
+    /// Allocates an embryo slot from the SCOMS table, populates the gate
+    /// fields, activates the object, and returns the kobject ID.
+    ///
     /// @param type             Gate type (nucleus or domain).
     /// @param auth             Authorization policy.
     /// @param target_domain_id Target domain ID.
     /// @param entry_va         Entry-point virtual address in the target domain.
     /// @param target_key       Storage key of the target domain.
-    /// @return                 The allocated gate_id, or an error if the table is full.
+    /// @return                 The allocated slot ID, or an error if the table is full.
     auto gate_create(
         gate_type type,
         gate_auth auth,
         u32       target_domain_id,
         u64       entry_va,
         u8        target_key
-    ) noexcept -> lib::expected<gate_id, lib::kernel_error> {
+    ) noexcept -> lib::expected<u32, lib::kernel_error> {
 
-        const locking::irq_lock_guard guard{_internal::g_gate_lock};
-
-        if (!_internal::g_gate_initialized) {
-            perr("gate: gate_create called before gate_init");
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+        // Allocate an embryo slot from the SCOMS table.
+        auto alloc_result = _internal::g_gate_table.alloc();
+        if (!alloc_result) {
+            perr("gate: gate table full ({} / {})",
+                 _internal::g_gate_table.count(), MAX_GATES);
+            return lib::unexpected(alloc_result.error());
         }
 
-        // Find a free slot.
-        for (u32 i = 0; i < MAX_GATES; ++i) {
-            if (_internal::g_gate_table[i].id == GATE_ID_INVALID) {
-                auto& desc          = _internal::g_gate_table[i];
-                desc.id             = i;
-                desc.type           = type;
-                desc.auth           = auth;
-                desc.target_domain  = target_domain_id;
-                desc.entry_va       = entry_va;
-                desc.target_key     = target_key;
+        auto embryo_ref = static_cast<
+            scoms::kobject_ref<gate_desc, base::lifecycle_state::embryo>&&
+        >(alloc_result.value());
 
-                ++_internal::g_gate_count;
+        // Populate the gate-specific fields.
+        gate_desc& desc   = *embryo_ref;
+        desc.type          = type;
+        desc.auth          = auth;
+        desc.target_domain = target_domain_id;
+        desc.entry_va      = entry_va;
+        desc.target_key    = target_key;
 
-                pinfo("gate: created gate {} (type={}, target_domain={}, entry_va={:#x})",
-                      i,
-                      static_cast<u8>(type),
-                      target_domain_id,
-                      entry_va);
+        const u32 id = desc.ko.id;
 
-                return static_cast<gate_id>(i);
-            }
-        }
+        // Transition embryo → active (compile-time typestate check).
+        auto active_ref = static_cast<
+            scoms::kobject_ref<gate_desc, base::lifecycle_state::embryo>&&
+        >(embryo_ref).activate();
 
-        perr("gate: gate table full ({} / {})", _internal::g_gate_count, MAX_GATES);
-        return lib::unexpected(
-            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        pinfo("gate: created gate {} (type={}, target_domain={}, entry_va={:#x})",
+              id,
+              static_cast<u8>(type),
+              target_domain_id,
+              entry_va);
+
+        // The active_ref drops here, decrementing the refcount to 0.
+        // The slot remains allocated in the table — it is only freed
+        // by an explicit gate_destroy() / release() call.
+        return id;
     }
 
     /// @brief Destroy a gate, freeing its slot.
     ///
-    /// @param id  The gate_id to destroy.
+    /// Releases the slot back to the SCOMS table free-list.
+    ///
+    /// @param id  The gate slot ID to destroy.
     /// @return    Success, or an error if the id is invalid or already free.
-    auto gate_destroy(gate_id id) noexcept
+    auto gate_destroy(u32 id) noexcept
         -> lib::expected<void, lib::kernel_error> {
 
-        if (id >= MAX_GATES) {
-            perr("gate: gate_destroy — id {} out of range", id);
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::out_of_range));
-        }
-
-        const locking::irq_lock_guard guard{_internal::g_gate_lock};
-
-        auto& desc = _internal::g_gate_table[id];
-        if (desc.id == GATE_ID_INVALID) {
-            perr("gate: gate_destroy — gate {} already free", id);
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-
-        // Reset the slot to default state.
-        desc = gate_desc{};
-
-        if (_internal::g_gate_count > 0) {
-            --_internal::g_gate_count;
+        auto result = _internal::g_gate_table.release(id);
+        if (!result) {
+            perr("gate: gate_destroy — id {} failed", id);
+            return lib::unexpected(result.error());
         }
 
         pinfo("gate: destroyed gate {}", id);
@@ -187,37 +176,25 @@ namespace zxfoundation::gate {
 
     /// @brief Destroy all gates owned by a specific domain.
     ///
-    /// Iterates the gate table and resets every slot whose target_domain
-    /// matches @p domain_id.  Called during domain teardown.
+    /// Uses the SCOMS table's destroy_if() to bulk-release every slot
+    /// whose target_domain matches @p domain_id.  Called during domain
+    /// teardown.
     ///
     /// @param domain_id  The domain whose gates should be destroyed.
     auto gate_destroy_for_domain(u32 domain_id) noexcept -> void {
-        const locking::irq_lock_guard guard{_internal::g_gate_lock};
-        for (u32 i = 0; i < MAX_GATES; ++i) {
-            if (_internal::g_gate_table[i].id != GATE_ID_INVALID &&
-                _internal::g_gate_table[i].target_domain == domain_id) {
-                _internal::g_gate_table[i] = gate_desc{};
-                if (_internal::g_gate_count > 0) --_internal::g_gate_count;
-            }
-        }
+        _internal::g_gate_table.destroy_if(
+            [domain_id](const gate_desc& g) noexcept -> bool {
+                return g.target_domain == domain_id;
+            });
     }
 
     /// @brief Look up a gate descriptor by id.
     ///
-    /// @param id  The gate_id to look up.
+    /// @param id  The gate slot ID to look up.
     /// @return    Pointer to the gate_desc, or nullptr if the id is invalid
     ///            or the slot is unused.
-    auto gate_find(gate_id id) noexcept -> gate_desc* {
-        if (id >= MAX_GATES) {
-            return nullptr;
-        }
-
-        auto& desc = _internal::g_gate_table[id];
-        if (desc.id == GATE_ID_INVALID) {
-            return nullptr;
-        }
-
-        return &desc;
+    auto gate_find(u32 id) noexcept -> gate_desc* {
+        return _internal::g_gate_table.find_raw(id);
     }
 
     /// @brief Return a const reference to the nucleus dispatch table.
@@ -229,7 +206,7 @@ namespace zxfoundation::gate {
 
     /// @brief Return the current number of active gates.
     auto gate_count() noexcept -> u32 {
-        return _internal::g_gate_count;
+        return _internal::g_gate_table.count();
     }
 
 } // namespace zxfoundation::gate

@@ -1,0 +1,108 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file watchdog.cxxm
+/// @brief SMP watchdog — detects CPUs stuck without scheduler ticks.
+
+export module zxfoundation.sys.watchdog;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import zxfoundation.sys.timer_types;
+import zxfoundation.sys.timer;
+import zxfoundation.sys.printk;
+import zxfoundation.sys.syschk;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.psw;
+import lib.error;
+
+namespace _internal {
+
+    using namespace zxfoundation::base::config;
+    using namespace zxfoundation::sys::timer;
+    using namespace zxfoundation::sys::printk;
+    using namespace arch::s390x::cpu;
+
+    constexpr u16 WATCHDOG_INTERVAL_SECONDS = 5;
+
+    /// @brief Watchdog check interval: 5 seconds in TOD units.
+    /// TOD runs at 4096 ticks/µs → 5s = 5 × 4096 × 1'000'000.
+    constexpr u64 WATCHDOG_INTERVAL_TOD = WATCHDOG_INTERVAL_SECONDS * 4096ULL * 1'000'000ULL;
+
+    /// @brief Number of consecutive missed heartbeats before warning.
+    constexpr u32 WATCHDOG_MISS_THRESHOLD = 2;
+
+    /// @brief Number of consecutive warnings before fatal panic.
+    constexpr u32 WATCHDOG_FATAL_WARNINGS = 3;
+
+    /// @brief Total misses that trigger a fatal panic.
+    constexpr u32 WATCHDOG_FATAL_THRESHOLD =
+        WATCHDOG_MISS_THRESHOLD + WATCHDOG_FATAL_WARNINGS;
+
+    /// @brief Last-observed heartbeat snapshot per CPU.
+    static u64 g_last_heartbeat[CONFIG_ZX_MAX_CPUS]{};
+
+    /// @brief Consecutive-miss counter per CPU.
+    static u32 g_miss_count[CONFIG_ZX_MAX_CPUS]{};
+
+    /// @brief Timer backing the periodic watchdog check.
+    static kernel_timer g_watchdog_timer{};
+
+    /// @brief Watchdog timer callback — scans all online APs.
+    auto watchdog_check(void*) noexcept -> void {
+
+        for (u32 cpu = 1; cpu < CONFIG_ZX_MAX_CPUS; ++cpu) {
+            auto* pcp = lowcore::cpu_percpu(static_cast<u16>(cpu));
+            if (!pcp) continue;
+
+            const u64 hb = pcp->watchdog_heartbeat;
+
+            if (hb == g_last_heartbeat[cpu]) {
+                ++g_miss_count[cpu];
+                if (g_miss_count[cpu] >= WATCHDOG_FATAL_THRESHOLD) {
+                    zxfoundation::sys::syschk::syschk_fatal(
+                        lib::kernel_error::from_generic(
+                            lib::generic_error::stall),
+                        "watchdog: processor {} hard stall detected "
+                        "(no heartbeat for {}s)",
+                        cpu,
+                        g_miss_count[cpu] * WATCHDOG_INTERVAL_SECONDS);
+                }
+                if (g_miss_count[cpu] >= WATCHDOG_MISS_THRESHOLD) {
+                    palert("watchdog: processor {} appears stuck "
+                          "(heartbeat={}, misses={}/{})",
+                        cpu, hb, g_miss_count[cpu],
+                        WATCHDOG_FATAL_THRESHOLD);
+                }
+            } else {
+                g_miss_count[cpu] = 0;
+                g_last_heartbeat[cpu] = hb;
+            }
+        }
+    }
+
+} // namespace _internal
+
+export {
+
+namespace zxfoundation::sys::watchdog {
+
+    /// @brief Initialize the SMP watchdog subsystem.
+    auto watchdog_init() noexcept -> void {
+        using namespace _internal;
+        using namespace zxfoundation::sys::timer;
+        using namespace zxfoundation::sys::printk;
+
+        auto& t = g_watchdog_timer;
+        t.deadline_tod = arch::s390x::cpu::processor::stck() + WATCHDOG_INTERVAL_TOD;
+        t.interval_tod = WATCHDOG_INTERVAL_TOD;
+        t.callback     = watchdog_check;
+        t.data         = nullptr;
+        t.mode         = timer_mode::periodic;
+        (void)timer_add(t);
+
+        pinfo("watchdog: initialized (interval=5s, threshold={})",
+            WATCHDOG_MISS_THRESHOLD);
+    }
+
+} // namespace zxfoundation::sys::watchdog
+
+} // end export

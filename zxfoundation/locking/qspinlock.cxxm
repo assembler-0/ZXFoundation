@@ -44,6 +44,9 @@ namespace zxfoundation::locking::qspinlock {
 
         /// @brief Encode (cpu_id + 1, node_idx) into a tail value shifted into
         ///        the correct position in the lock word.
+        /// @param[in] cpu_id   Logical CPU ID (0-based).
+        /// @param[in] node_idx MCS node allocation index (0–3).
+        /// @return Encoded tail value suitable for OR-ing into the lock word.
         static constexpr auto encode_tail(const u16 cpu_id, const u32 node_idx) noexcept -> u32 {
             const u32 tail_raw = ((static_cast<u32>(cpu_id) + 1U) << _Q_NODE_BITS)
                                  | (node_idx & _Q_NODE_MASK);
@@ -51,12 +54,16 @@ namespace zxfoundation::locking::qspinlock {
         }
 
         /// @brief Decode the CPU index from a full lock word.
+        /// @param[in] lock_val The full 32-bit lock word.
+        /// @return The logical CPU ID that owns the tail position.
         static constexpr auto decode_tail_cpu(const u32 lock_val) noexcept -> u16 {
             const u32 tail_raw = (lock_val & _Q_TAIL_MASK) >> _Q_TAIL_OFFSET;
             return static_cast<u16>((tail_raw >> _Q_NODE_BITS) - 1U);
         }
 
         /// @brief Decode the node index from a full lock word.
+        /// @param[in] lock_val The full 32-bit lock word.
+        /// @return The MCS node index (0–3) for the tail owner.
         static constexpr auto decode_tail_node(const u32 lock_val) noexcept -> u32 {
             const u32 tail_raw = (lock_val & _Q_TAIL_MASK) >> _Q_TAIL_OFFSET;
             return tail_raw & _Q_NODE_MASK;
@@ -66,8 +73,8 @@ namespace zxfoundation::locking::qspinlock {
         constexpr qspinlock() noexcept = default;
 
         /// @brief Acquire the lock (blocking, SMP-safe).
-        /// @note  Panics via disabled-wait PSW if the IRQs-disabled precondition
-        ///        is not met (context::assert_irqs_disabled).
+        /// @pre Interrupts MUST be disabled (enforced by assert).
+        /// @post The lock is held.  Caller MUST call unlock() exactly once.
         auto lock() noexcept -> void {
             sched::context::assert_irqs_disabled();
 
@@ -87,11 +94,15 @@ namespace zxfoundation::locking::qspinlock {
         }
 
         /// @brief Release the lock.
+        /// @pre The caller holds the lock.
+        /// @post The lock is released.
         auto unlock() noexcept -> void {
             (void)m_val.fetch_and(~_Q_LOCKED_VAL, memory_order::release);
         }
 
         /// @brief Test whether the lock is held (non-deterministic snapshot).
+        /// @return true if the LOCKED bit is set at the time of the load.
+        /// @note This is a snapshot; the lock state may change immediately after.
         [[nodiscard]] auto is_locked() const noexcept -> bool {
             return (m_val.load(memory_order::relaxed) & _Q_LOCKED_VAL) != 0;
         }
@@ -105,17 +116,20 @@ namespace zxfoundation::locking::qspinlock {
         }
 
         /// @brief Release the lock and restore IRQs.
-        /// @param flags  Value returned by lock_irqsave().
+        /// @param[in] flags  Value returned by lock_irqsave().
         auto unlock_irqrestore(const irqflags flags) noexcept -> void {
             unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
         }
 
     private:
-        /// @brief Slow acquisition path handling pending and MCS queue scenarios.
+        /// @brief Slow acquisition path: pending-bit optimization + MCS queue.
+        /// @pre Interrupts disabled, CAS fast path failed.
+        /// @post The lock is held with _Q_LOCKED_VAL set.
         auto lock_slow() noexcept -> void {
             u32 v = m_val.load(memory_order::relaxed);
 
+            // ---- Pending optimization: second-in-line spins directly --------
             if ((v & _Q_LOCKED_MASK) == _Q_LOCKED_VAL && !(v & _Q_TAIL_MASK)) {
                 u32 expected_pending = _Q_LOCKED_VAL;
                 if (m_val.compare_exchange_strong(
@@ -128,7 +142,6 @@ namespace zxfoundation::locking::qspinlock {
                     (void)m_val.fetch_add(_Q_LOCKED_VAL - _Q_PENDING_VAL, memory_order::acquire);
                     return;
                 }
-                // Another thread raced us; fall through to the MCS queue path.
                 v = m_val.load(memory_order::relaxed);
             }
 
@@ -138,7 +151,7 @@ namespace zxfoundation::locking::qspinlock {
             // Claim a node at the current nesting depth.
             const u32 node_idx = pcp.lock_depth;
             if (node_idx >= mcs::MCS_MAX_LOCK_DEPTH)
-                [[unlikely]] arch::s390x::cpu::psw::load_disabled_wait_psw();
+                [[unlikely]] arch::s390x::cpu::psw::disabled_wait();
             pcp.lock_depth++;
 
             mcs::mcs_node* const node = &pcp.qnodes[node_idx];
@@ -163,7 +176,7 @@ namespace zxfoundation::locking::qspinlock {
                 arch::s390x::cpu::lowcore::zx_lowcore* prev_lc =
                     arch::s390x::cpu::lowcore::get_for_cpu(prev_cpu);
                 if (!prev_lc) [[unlikely]]
-                    arch::s390x::cpu::psw::load_disabled_wait_psw();
+                    arch::s390x::cpu::psw::disabled_wait();
 
                 mcs::mcs_node* const prev_node = &prev_lc->percpu.qnodes[prev_idx];
 
@@ -171,10 +184,10 @@ namespace zxfoundation::locking::qspinlock {
 
                 while (node->locked.load(memory_order::acquire))
                     arch::s390x::cpu::processor::cpu_relax();
-            } else {
-                while (m_val.load(memory_order::relaxed) & _Q_LOCKED_MASK)
-                    arch::s390x::cpu::processor::cpu_relax();
             }
+            
+            while (m_val.load(memory_order::relaxed) & _Q_LOCKED_MASK)
+                arch::s390x::cpu::processor::cpu_relax();
 
             u32 expected_solo = my_tail;
             if (m_val.compare_exchange_strong(

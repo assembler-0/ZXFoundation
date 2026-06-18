@@ -7,6 +7,7 @@
 
 export module zxfoundation.init.bootstrap;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.sys.printk;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.domain;
@@ -57,7 +58,7 @@ namespace _internal {
 
         if (!entry_r) [[unlikely]] {
             perr("bootstrap: elf_load failed for user/init");
-            self->state = zxfoundation::domain::domain_state::dying;
+            self->ko.state = zxfoundation::base::lifecycle_state::dying;
             zxfoundation::sched::schedule();
             return;
         }
@@ -66,8 +67,8 @@ namespace _internal {
         pinfo("bootstrap: ELF loaded, entry={:#x}", entry_point);
 
         // Set up user PSW using the standard user-mode mask.
-        self->uregs.psw_mask = arch::s390x::cpu::psw::PSW_MASK_USER;
-        self->uregs.psw_addr = entry_point;
+        self->primary_strand.uregs.psw_mask = arch::s390x::cpu::psw::PSW_MASK_USER;
+        self->primary_strand.uregs.psw_addr = entry_point;
 
         // Enter user mode — this does not return.
         zxfoundation::sched::domain_enter_user(self);
@@ -110,7 +111,7 @@ namespace zxfoundation::init::bootstrap {
             auto* self = static_cast<zxfoundation::domain::domain*>(
                 arch::s390x::cpu::lowcore::current_domain_ptr());
             if (self) {
-                self->state = zxfoundation::domain::domain_state::dying;
+                self->ko.state = zxfoundation::base::lifecycle_state::dying;
             }
             zxfoundation::sched::schedule();
             return;
@@ -128,37 +129,25 @@ namespace zxfoundation::init::bootstrap {
             auto* self = static_cast<zxfoundation::domain::domain*>(
                 arch::s390x::cpu::lowcore::current_domain_ptr());
             if (self) {
-                self->state = zxfoundation::domain::domain_state::dying;
+                self->ko.state = zxfoundation::base::lifecycle_state::dying;
             }
             zxfoundation::sched::schedule();
             return;
         }
         auto* d = *dom_r;
 
-        auto act_r = zxfoundation::domain::domain_activate(d->id);
-        if (!act_r) {
-            perr("bootstrap: failed to activate user/init domain");
-            auto* self = static_cast<zxfoundation::domain::domain*>(
-                arch::s390x::cpu::lowcore::current_domain_ptr());
-            if (self) {
-                self->state = zxfoundation::domain::domain_state::dying;
-            }
-            zxfoundation::sched::schedule();
-            return;
-        }
-
         // ── Prepare module info and wire up the domain context ──────────
         _internal::g_init_module_info.data_virt  = data_virt;
         _internal::g_init_module_info.size_bytes = found->size_bytes;
 
-        d->cpu = 0;
+        d->primary_strand.cpu = 0;
         zxfoundation::sched::setup_domain_context(
             d,
             _internal::init_domain_entry,
             &_internal::g_init_module_info);
         zxfoundation::sched::enqueue_domain(d);
 
-        pinfo("bootstrap: user/init domain created (id={}), enqueued", d->id);
+        pinfo("bootstrap: user/init domain created (id={}), enqueued", d->ko.id);
         }
 
     exit:
@@ -166,7 +155,7 @@ namespace zxfoundation::init::bootstrap {
         auto* self = static_cast<zxfoundation::domain::domain*>(
             arch::s390x::cpu::lowcore::current_domain_ptr());
         if (self) {
-            self->state = zxfoundation::domain::domain_state::dying;
+            self->ko.state = zxfoundation::base::lifecycle_state::dying;
         }
         zxfoundation::sched::schedule();
     }

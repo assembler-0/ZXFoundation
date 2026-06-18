@@ -1,16 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/irq.cxxm
 /// @brief z/Architecture interrupt-mask control.
-///
-/// PSW byte 0 masking instructions:
-///   STNSM src, imm8 — store byte 0, then AND with imm8 (disable bits).
-///   STOSM dst, imm8 — store byte 0, then OR  with imm8 (enable bits).
-///   SSM   src       — load byte 0 from memory (restore arbitrary state).
-///
-/// irq_save_disable/irq_restore contract:
-///   Save via EPSW (full 64-bit mask word).  Restore via SSM using only byte 0
-///   extracted from the saved word — SSM is the only instruction that can
-///   unconditionally restore a "disabled" state; STOSM can only set bits.
 
 export module arch.s390x.cpu.irq;
 import arch.s390x.cpu.irq_types;

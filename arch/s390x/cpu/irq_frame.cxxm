@@ -19,18 +19,22 @@ namespace arch::s390x::cpu::irq {
     constexpr u32 IRQ_FRAME_PSW_ADDR  = 0x88U; ///< = IRQ_FRAME_PSW_MASK + 8.
 
     /// @brief Total size of the interrupt frame in bytes.
-    /// 16 GPRs (128 bytes) + PSW mask (8 bytes) + PSW addr (8 bytes) = 144 = 0x90.
-    constexpr u32 IRQ_FRAME_SIZE      = 0x90U;
+    /// 144 + 64 (ARs) + 4 (FPC) + 4 (pad) + 512 (VRs) = 728 = 0x2D8.
+    constexpr u32 IRQ_FRAME_SIZE      = 0x02D8U;
 
     /// @brief Interrupt frame saved by entry.S on every trap or interrupt.
     struct [[gnu::packed]] alignas(8) arch_s390x_irq_frame {
         u64 gprs[16]{};   ///< General-purpose registers r0–r15 at interrupt time.
         u64 psw_mask{};   ///< Old PSW mask word (hardware-saved in lowcore, copied here).
         u64 psw_addr{};   ///< Old PSW instruction address (hardware-saved, copied here).
+        u32 access_regs[16]{}; ///< Access registers ar0-ar15
+        u32 fpc{};        ///< Floating point control register
+        u32 pad{};        ///< Pad to 8-byte boundary
+        alignas(8) u64 vector_regs[32][2]{}; ///< Vector registers v0-v31
     };
 
     static_assert(sizeof(arch_s390x_irq_frame) == IRQ_FRAME_SIZE,
-        "arch_s390x_irq_frame size must be IRQ_FRAME_SIZE (0x90 = 144 bytes)");
+        "arch_s390x_irq_frame size must be IRQ_FRAME_SIZE (0x2D8 = 728 bytes)");
     static_assert(__builtin_offsetof(arch_s390x_irq_frame, psw_mask) == IRQ_FRAME_PSW_MASK,
         "IRQ_FRAME_PSW_MASK offset mismatch");
     static_assert(__builtin_offsetof(arch_s390x_irq_frame, psw_addr) == IRQ_FRAME_PSW_ADDR,

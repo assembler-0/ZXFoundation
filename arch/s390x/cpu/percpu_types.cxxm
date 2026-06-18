@@ -40,16 +40,6 @@ namespace arch::s390x::cpu::percpu {
         u8      in_rcu_read_side{};    ///< Non-zero if inside rcu_read_lock().
         u8      _pad1[7]{};            ///< Pad to u64 alignment.
 
-        /// @brief Per-CPU RCU callback pending list.
-        ///
-        /// Head of a singly-linked list of rcu_head objects waiting for
-        /// a grace period to complete before their callbacks are invoked.
-        /// Stored as void* to avoid a circular module import between
-        /// percpu_types and rcu_types; cast to rcu_head* at call sites.
-        ///
-        /// Protected by: single-CPU ownership (only written by the owning
-        /// CPU under preempt_disable).  Callbacks are drained by the
-        /// per-CPU tick handler when the pending grace period has elapsed.
         void*   rcu_pending_cbs{nullptr};    ///< Head of pending rcu_head list (rcu_head*).
         u64     rcu_pending_gp{0};           ///< Grace period at which pending_cbs mature.
         u32     rcu_pending_count{0};        ///< Number of callbacks pending.
@@ -60,19 +50,13 @@ namespace arch::s390x::cpu::percpu {
 
         u64     ap_stack_phys{};       ///< Physical address of AP's initial stack top.
 
-        /// @brief Per-CPU page cache (PCP).  Zero-init == valid empty state.
-        ///
-        /// Accessed with local IRQs disabled (no spinlock on the PCP itself).
-        /// The buddy zone lock is taken only during bulk refill and drain.
         pcp_pool pcp{};
 
-        /// @brief CPU topology drawer_id (0-based, from STSI 15.1.x).
-        ///
-        /// Copied from zxfl::cpu_info::drawer_id during AP init.
-        /// Used as the cache-affinity NUMA hint written into frame_desc::numa_node
-        /// at allocation time.  Advisory only — s390x memory is physically flat.
         u8      drawer_id{0};
-        u8      _pad_drawer[7]{};
+        u8      cpu_type{0};           ///< ZXFL_CPU_TYPE_* for this CPU (CP, IFL, zIIP, etc.)
+        u8      _pad_drawer[6]{};
+
+        u64     watchdog_heartbeat{0}; ///< Monotonic counter bumped by scheduler_tick().
     };
 
     static_assert(__builtin_offsetof(s390x_percpu_data, cpu_id) == 8,

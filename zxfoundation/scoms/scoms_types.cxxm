@@ -1,0 +1,123 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/scoms/scoms_types.cxxm
+/// @brief SCOMS — Scalable Object Management System — core types.
+
+export module zxfoundation.scoms.scoms_types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.locking.qspinlock;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace zxfoundation::scoms {
+
+    using base::lifecycle_state;
+    using arch::s390x::lib::atomic::atomic;
+    using arch::s390x::lib::atomic::memory_order;
+
+    /// @brief Discriminates the concrete type behind a kobject pointer.
+    enum class kobject_type : u8 {
+        none       = 0,
+        domain     = 1,
+        gate       = 2,
+        portal     = 3,
+        vm_region  = 4,
+        io_binding = 5,
+        capability = 6,
+        timer_obj  = 7,
+    };
+
+    /// @brief ASCII name for each kobject type (debug/printk).
+    [[nodiscard]] constexpr auto kobject_type_name(kobject_type t) noexcept
+        -> const char*
+    {
+        switch (t) {
+            case kobject_type::none:       return "none";
+            case kobject_type::domain:     return "domain";
+            case kobject_type::gate:       return "gate";
+            case kobject_type::portal:     return "portal";
+            case kobject_type::vm_region:  return "vm_region";
+            case kobject_type::io_binding: return "io_binding";
+            case kobject_type::capability: return "capability";
+            case kobject_type::timer_obj:  return "timer_obj";
+            default:                       return "unknown";
+        }
+    }
+
+    /// @brief Saturating atomic reference count.
+    struct kref {
+        atomic<u32> count{1};
+
+        /// @brief Increment the reference count.
+        auto get() noexcept -> void {
+            const u32 prev = count.fetch_add(1U, memory_order::relaxed);
+            // Overflow guard: if prev was already saturated, trap.
+            if (prev >= 0x7FFF'FFFEU) [[unlikely]] {
+                __builtin_trap();
+            }
+        }
+
+        /// @brief Decrement the reference count.
+        /// @return true if this was the LAST reference (count hit 0).
+        [[nodiscard]] auto put() noexcept -> bool {
+            const u32 prev = count.fetch_sub(1U, memory_order::release);
+            if (prev == 0U) [[unlikely]] {
+                __builtin_trap();
+            }
+            if (prev == 1U) {
+                atomic<u32> fence_dummy{0};
+                (void)fence_dummy.load(memory_order::acquire);
+                return true;
+            }
+            return false;
+        }
+
+        /// @brief Read the current count (advisory — racy by definition).
+        [[nodiscard]] auto read() const noexcept -> u32 {
+            return count.load(memory_order::relaxed);
+        }
+
+        /// @brief Check if exactly one reference remains.
+        [[nodiscard]] auto is_one() const noexcept -> bool {
+            return count.load(memory_order::acquire) == 1U;
+        }
+    };
+
+    static_assert(sizeof(kref) == 4, "kref must be exactly 4 bytes");
+
+    /// @brief The kernel object header — embedded at offset 0 of every
+    ///        SCOMS-managed resource.
+    struct kobject {
+        u32                                  id{~0U};
+        kobject_type                         type{kobject_type::none};
+        lifecycle_state                      state{lifecycle_state::embryo};
+        u8                                   _pad0[2]{};
+        kref                                 ref{};
+        u32                                  generation{0};
+        locking::qspinlock::qspinlock        lock{};
+        u32                                  _reserved{0};
+
+        kobject() noexcept = default;
+
+        // Non-copyable, non-movable — identity object.
+        kobject(const kobject&)            = delete;
+        auto operator=(const kobject&)     = delete;
+        kobject(kobject&&)                 = delete;
+        auto operator=(kobject&&)          = delete;
+    };
+
+    static_assert(sizeof(kobject) == 24, "kobject must be exactly 24 bytes");
+    static_assert(__builtin_offsetof(kobject, id)         ==  0);
+    static_assert(__builtin_offsetof(kobject, type)       ==  4);
+    static_assert(__builtin_offsetof(kobject, state)      ==  5);
+    static_assert(__builtin_offsetof(kobject, ref)        ==  8);
+    static_assert(__builtin_offsetof(kobject, generation) == 12);
+    static_assert(__builtin_offsetof(kobject, lock)       == 16);
+
+    /// @brief Sentinel value for an unassigned kobject slot.
+    constexpr u32 KOBJECT_ID_INVALID = ~0U;
+
+} // namespace zxfoundation::scoms
+
+} // end export

@@ -29,8 +29,8 @@ target_compile_options(core.zxfoundation.nucleus.pass1 PRIVATE
     -fno-stack-protector
     -pipe
     -mno-packed-stack
-    -msoft-float
-    -mno-vx
+    -mhard-float
+    -mvx
     -fno-exceptions
     -fno-rtti
     -nostdlib

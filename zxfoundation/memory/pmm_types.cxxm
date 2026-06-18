@@ -159,7 +159,7 @@ namespace zxfoundation::memory::pmm {
         "pcp_pool layout mismatch");
 
     /// @brief Move-only, typestate-tracked physical memory allocation.
-    template <lifecycle_state State = lifecycle_state::fresh>
+    template <lifecycle_state State = lifecycle_state::embryo>
     class folio : public typestate<State> {
     public:
         u64     phys_base{0};
@@ -179,18 +179,18 @@ namespace zxfoundation::memory::pmm {
         }
         [[nodiscard]] explicit operator bool() const noexcept { return phys_base != 0; }
 
-        /// @brief Advance fresh → ready, consuming this folio.
-        /// @note  Only available on fresh folios (requires clause).
-        [[nodiscard]] auto make_ready() && noexcept -> folio<lifecycle_state::ready>
-            requires (State == lifecycle_state::fresh) {
-            folio<lifecycle_state::ready> r{ phys_base, order, use, mem_zone };
+        /// @brief Advance embryo → active, consuming this folio.
+        /// @note  Only available on embryo folios (requires clause).
+        [[nodiscard]] auto make_active() && noexcept -> folio<lifecycle_state::active>
+            requires (State == lifecycle_state::embryo) {
+            folio<lifecycle_state::active> r{ phys_base, order, use, mem_zone };
             phys_base = 0;
             return r;
         }
     };
 
-    using folio_fresh = folio<lifecycle_state::fresh>;
-    using folio_ready = folio<lifecycle_state::ready>;
+    using folio_embryo = folio<lifecycle_state::embryo>;
+    using folio_active = folio<lifecycle_state::active>;
 
 } // namespace zxfoundation::memory::pmm
 

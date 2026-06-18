@@ -20,30 +20,37 @@ import zxfoundation.sched.context;
 namespace _internal {
 
     /// @brief Encapsulates a Hercules-compatible DIAG 8 message.
-    /// @note Hercules requires a specific EBCDIC "MSG * " prefix for hypervisor logs.
+    /// @note Uses MSGNOH (Message No Header) to avoid the
+    ///       "MSG FROM LPAR:" prefix that Hercules prepends to MSG output.
     class hercules_message {
         static constexpr usize MAX_CAPACITY = 256;
-        static constexpr usize PREFIX_SIZE  = 6;
+        static constexpr usize PREFIX_SIZE  = 9;   // "MSGNOH * " = 9 bytes
 
-        // Pre-built EBCDIC "MSG * " (CP037)
-        static constexpr u8 EBCDIC_M  = 0xD4U;
-        static constexpr u8 EBCDIC_S  = 0xE2U;
-        static constexpr u8 EBCDIC_G  = 0xC7U;
-        static constexpr u8 EBCDIC_SP = 0x40U;
-        static constexpr u8 EBCDIC_ST = 0x5CU;
+        // Pre-built EBCDIC "MSGNOH * " (CP037)
+        static constexpr u8 EBCDIC_M  = 0xD4U;  // M
+        static constexpr u8 EBCDIC_S  = 0xE2U;  // S
+        static constexpr u8 EBCDIC_G  = 0xC7U;  // G
+        static constexpr u8 EBCDIC_N  = 0xD5U;  // N
+        static constexpr u8 EBCDIC_O  = 0xD6U;  // O
+        static constexpr u8 EBCDIC_H  = 0xC8U;  // H
+        static constexpr u8 EBCDIC_SP = 0x40U;  // space
+        static constexpr u8 EBCDIC_ST = 0x5CU;  // *
 
         char m_data[MAX_CAPACITY]{};
         usize m_total_len{PREFIX_SIZE};
 
     public:
-        /// @brief Constructs a message with the mandatory Hercules prefix.
+        /// @brief Constructs a message with the MSGNOH prefix.
         constexpr hercules_message() noexcept {
-            m_data[0] = static_cast<char>(EBCDIC_M);
-            m_data[1] = static_cast<char>(EBCDIC_S);
-            m_data[2] = static_cast<char>(EBCDIC_G);
-            m_data[3] = static_cast<char>(EBCDIC_SP);
-            m_data[4] = static_cast<char>(EBCDIC_ST);
-            m_data[5] = static_cast<char>(EBCDIC_SP);
+            m_data[0] = static_cast<char>(EBCDIC_M);   // M
+            m_data[1] = static_cast<char>(EBCDIC_S);   // S
+            m_data[2] = static_cast<char>(EBCDIC_G);   // G
+            m_data[3] = static_cast<char>(EBCDIC_N);   // N
+            m_data[4] = static_cast<char>(EBCDIC_O);   // O
+            m_data[5] = static_cast<char>(EBCDIC_H);   // H
+            m_data[6] = static_cast<char>(EBCDIC_SP);  // ' '
+            m_data[7] = static_cast<char>(EBCDIC_ST);  // *
+            m_data[8] = static_cast<char>(EBCDIC_SP);  // ' '
         }
 
         /// @brief Transcribes an ASCII string into the EBCDIC message buffer.

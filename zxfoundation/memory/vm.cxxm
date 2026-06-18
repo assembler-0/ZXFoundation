@@ -1,0 +1,706 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file vm.cxxm
+/// @brief Virtual Memory Engine — core operations.
+
+export module zxfoundation.memory.vm;
+import zxfoundation.memory.vm_types;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.memory.slub;
+import zxfoundation.memory.slub_typed;
+import zxfoundation.memory.slub_types;
+import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.mmu_const;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.sys.printk;
+import zxfoundation.sys.printk_types;
+import zxfoundation.sys.syschk;
+import zxfoundation.base.types;
+import arch.s390x.lib.atomic;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.skey;
+import lib.error;
+import lib.expected;
+import lib.rbtree;
+import lib.util;
+
+namespace zxfoundation::memory::vm::_internal {
+
+    using namespace zxfoundation::memory;
+    using arch::s390x::lib::atomic::memory_order;
+
+    static slub::typed_slab_cache<vm_region> g_region_cache{};
+    static bool g_vme_initialized{false};
+
+    /// @brief Convert rb_node* to the containing vm_region*.
+    [[nodiscard]] inline auto region_of(lib::rb_node* node) noexcept -> vm_region* {
+        return lib::container_of<vm_region, lib::rb_node, &vm_region::rb>(node);
+    }
+
+    [[nodiscard]] inline auto region_of(const lib::rb_node* node) noexcept -> const vm_region* {
+        return lib::container_of<vm_region, lib::rb_node, &vm_region::rb>(node);
+    }
+
+    /// @brief Insert a vm_region into the rb-tree, keyed by va_start.
+    /// @return true on success, false if an overlapping region was found.
+    auto rb_insert_region(vm_space& space, vm_region* rgn) noexcept -> bool {
+        lib::rb_node** link  = &space.tree.root.node;
+        lib::rb_node*  parent = nullptr;
+        bool leftmost = true;
+
+        while (*link) {
+            parent = *link;
+            const auto* cur = region_of(parent);
+
+            if (rgn->va_start < cur->va_start) {
+                link = &parent->left;
+            } else if (rgn->va_start >= cur->va_end) {
+                link = &parent->right;
+                leftmost = false;
+            } else {
+                // Overlapping region — reject insertion.
+                return false;
+            }
+        }
+
+        lib::rb_link_node(&rgn->rb, parent, link);
+        lib::rb_insert_color_cached(&rgn->rb, space.tree, leftmost);
+        return true;
+    }
+
+    /// @brief Remove a vm_region from the rb-tree and free it to the slab.
+    auto rb_remove_and_free(vm_space& space, vm_region* rgn) noexcept -> void {
+        lib::rb_erase_cached(&rgn->rb, space.tree);
+        space.total_mapped -= rgn->size();
+        space.region_count -= 1;
+        g_region_cache.dealloc(rgn);
+    }
+
+    /// @brief Convert VME protection to MMU page_prot.
+    [[nodiscard]] auto prot_to_mmu(vm_prot prot) noexcept
+        -> arch::s390x::mmu::page_prot
+    {
+        using namespace arch::s390x::mmu;
+
+        const bool can_write = !!(prot & vm_prot::write);
+        const bool can_exec  = !!(prot & vm_prot::exec);
+
+        u64 bits = 0;
+        if (!can_write) bits |= PTE_PROTECT;
+        if (!can_exec)  bits |= PTE_NOEXEC;
+
+        return page_prot{bits};
+    }
+
+    /// @brief Allocate a vm_region from the slab, initialize it, and return.
+    [[nodiscard]] auto alloc_region(
+        u64 va_start, u64 va_end,
+        vm_prot prot, vm_flags flags,
+        vm_backing backing, u64 phys_base
+    ) noexcept -> lib::expected<vm_region*, lib::kernel_error> {
+        auto result = g_region_cache.alloc();
+        if (!result) return lib::unexpected(result.error());
+
+        vm_region* rgn = *result;
+        // Placement-construct (the slab returns uninitialized memory).
+        ::new(static_cast<void*>(rgn)) vm_region{};
+
+        rgn->ko.type  = scoms::kobject_type::vm_region;
+        rgn->va_start = va_start;
+        rgn->va_end   = va_end;
+        rgn->prot     = prot;
+        rgn->flags    = flags;
+        rgn->backing  = backing;
+        rgn->phys_base = phys_base;
+
+        return rgn;
+    }
+
+    /// @brief Map physical pages for a region [va_start, va_end) using identity phys_base.
+    auto map_physical_range(
+        u64 root_phys,
+        u64 va_start, u64 va_end,
+        u64 phys_base,
+        arch::s390x::mmu::page_prot pp
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        using namespace arch::s390x::mmu;
+        const dat_table<dat_level::region_1> root{root_phys};
+        u64 va   = va_start;
+        u64 phys = phys_base;
+        while (va < va_end) {
+            auto r = map_page<dat_level::region_1>(root, va, phys, pp);
+            if (!r) return lib::unexpected(r.error());
+            va   += VM_PAGE_SIZE;
+            phys += VM_PAGE_SIZE;
+        }
+        return {};
+    }
+
+    /// @brief Unmap pages in [va, va+size) from DAT and optionally free physical pages.
+    auto unmap_range_pages(
+        u64 root_phys,
+        u64 va_start, u64 va_end,
+        bool free_phys
+    ) noexcept -> void {
+        using namespace arch::s390x::mmu;
+        const dat_table<dat_level::region_1> root{root_phys};
+        u64 va = va_start;
+        while (va < va_end) {
+            auto r = unmap_page<dat_level::region_1>(root, va);
+            if (r && free_phys) {
+                const u64 phys = *r;
+                if (phys) {
+                    pmm::folio_active f{phys, 0, pmm::purpose::generic, pmm::zone::normal};
+                    pmm::free(lib::move(f));
+                }
+            }
+            va += VM_PAGE_SIZE;
+        }
+    }
+
+    /// @brief Read committed count from a vm_region (handles atomic).
+    [[nodiscard]] inline auto read_committed(const vm_region& rgn) noexcept -> u64 {
+        return rgn.committed.load(memory_order::relaxed);
+    }
+
+    /// @brief Read resident count from a vm_region (handles atomic).
+    [[nodiscard]] inline auto read_resident(const vm_region& rgn) noexcept -> u64 {
+        return rgn.resident.load(memory_order::relaxed);
+    }
+
+    /// @brief Store committed count in a vm_region.
+    inline auto store_committed(vm_region& rgn, u64 val) noexcept -> void {
+        rgn.committed.store(val, memory_order::relaxed);
+    }
+
+    /// @brief Store resident count in a vm_region.
+    inline auto store_resident(vm_region& rgn, u64 val) noexcept -> void {
+        rgn.resident.store(val, memory_order::relaxed);
+    }
+
+    /// @brief Atomically add to committed.
+    inline auto add_committed(vm_region& rgn, u64 delta) noexcept -> void {
+        (void)rgn.committed.fetch_add(delta, memory_order::relaxed);
+    }
+
+    /// @brief Atomically add to resident.
+    inline auto add_resident(vm_region& rgn, u64 delta) noexcept -> void {
+        (void)rgn.resident.fetch_add(delta, memory_order::relaxed);
+    }
+
+} // namespace zxfoundation::memory::vm::_internal
+
+export {
+
+namespace zxfoundation::memory::vm {
+
+    /// @brief Initialize the VME subsystem (create slab cache for vm_region).
+    auto vm_init() noexcept -> void {
+        using namespace _internal;
+        using namespace zxfoundation::memory::slub;
+
+        if (g_vme_initialized) return;
+
+        auto result = typed_slab_cache<vm_region>::create(
+            "vm_region", slub_flags::none);
+        if (!result)
+            sys::syschk::syschk_fatal(
+                result.error(),
+                "vm: failed to create vm_region slab cache");
+
+        g_region_cache = *result;
+        g_vme_initialized = true;
+    }
+
+    /// @brief Initialize a per-domain VME address space.
+    auto vm_space_init(vm_space& space) noexcept -> void {
+        space.tree       = {};
+        space.total_mapped    = 0;
+        space.total_committed = 0;
+        space.total_resident  = 0;
+        space.brk        = 0;
+        space.mmap_base  = VM_MMAP_BASE;
+        space.region_count = 0;
+    }
+
+    /// @brief O(log n) lookup: find the vm_region containing VA.
+    /// @return Pointer to the region, or nullptr if no region contains va.
+    [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region* {
+        lib::rb_node* node = space.tree.root.node;
+        while (node) {
+            const auto* rgn = _internal::region_of(node);
+            if (va < rgn->va_start) {
+                node = node->left;
+            } else if (va >= rgn->va_end) {
+                node = node->right;
+            } else {
+                return const_cast<vm_region*>(rgn);
+            }
+        }
+        return nullptr;
+    }
+
+    /// @brief Top-down scan from mmap_base for a gap of at least size bytes.
+    /// @param[in] space  The address space to scan.
+    /// @param[in] size   Required gap size (must be page-aligned).
+    /// @param[in] align  Alignment requirement (must be power of 2).
+    /// @return  The base VA of the gap on success.
+    [[nodiscard]] auto vm_find_gap(
+        const vm_space& space, u64 size, u64 align
+    ) noexcept -> lib::expected<u64, lib::kernel_error> {
+        if (size == 0)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+
+        // Alignment mask (align must be power of 2).
+        const u64 align_mask = align ? (align - 1) : 0;
+
+        // Start search from mmap_base downward.
+        u64 gap_end = space.mmap_base;
+
+        // Walk the tree in reverse order (rightmost → leftmost).
+        lib::rb_node* node = space.tree.root.node;
+        lib::rb_node* candidate = nullptr;
+
+        // Find the rightmost region whose va_start < gap_end.
+        while (node) {
+            const auto* rgn = _internal::region_of(node);
+            if (rgn->va_start < gap_end) {
+                candidate = node;
+                node = node->right;
+            } else {
+                node = node->left;
+            }
+        }
+
+        // Now walk backward (via rb_prev) looking for gaps.
+        while (candidate) {
+            const auto* rgn = _internal::region_of(candidate);
+
+            // The gap above this region is [rgn->va_end, gap_end).
+            if (gap_end > rgn->va_end) {
+                // Align downward within the gap.
+                const u64 aligned_start = (gap_end - size) & ~align_mask;
+                if (aligned_start >= rgn->va_end && aligned_start >= VM_USER_START) {
+                    return aligned_start;
+                }
+            }
+
+            // Move gap_end down to below this region.
+            gap_end = rgn->va_start;
+            candidate = lib::rb_prev(candidate);
+        }
+
+        // Check the gap below the leftmost region, down to VM_USER_START.
+        if (gap_end > VM_USER_START) {
+            const u64 aligned_start = (gap_end - size) & ~align_mask;
+            if (aligned_start >= VM_USER_START && (aligned_start + size) <= gap_end) {
+                return aligned_start;
+            }
+        }
+
+        return lib::unexpected(lib::kernel_error::from_memory(
+            lib::memory_error::code::out_of_memory));
+    }
+
+    /// @brief Try to merge rgn with its predecessor and/or successor.
+    auto vm_try_merge(vm_space& space, vm_region* rgn) noexcept -> void {
+        using namespace _internal;
+
+        if (!!(rgn->flags & vm_flags::no_merge)) return;
+
+        lib::rb_node* next_node = lib::rb_next(&rgn->rb);
+        if (next_node) {
+            auto* next = region_of(next_node);
+            if (rgn->va_end == next->va_start &&
+                rgn->prot    == next->prot &&
+                rgn->flags   == next->flags &&
+                rgn->backing == next->backing &&
+                !(next->flags & vm_flags::no_merge))
+            {
+                bool can_merge = true;
+                if (rgn->backing == vm_backing::physical) {
+                    // Physical ranges must be contiguous.
+                    const u64 expected_phys = rgn->phys_base + rgn->size();
+                    can_merge = (next->phys_base == expected_phys);
+                }
+                if (can_merge) {
+                    // Absorb successor into rgn.
+                    rgn->va_end = next->va_end;
+                    const u64 nc = read_committed(*next);
+                    const u64 nr = read_resident(*next);
+                    add_committed(*rgn, nc);
+                    add_resident(*rgn, nr);
+                    rb_remove_and_free(space, next);
+                }
+            }
+        }
+
+        lib::rb_node* prev_node = lib::rb_prev(&rgn->rb);
+        if (prev_node) {
+            auto* prev = region_of(prev_node);
+            if (prev->va_end == rgn->va_start &&
+                prev->prot    == rgn->prot &&
+                prev->flags   == rgn->flags &&
+                prev->backing == rgn->backing &&
+                !(prev->flags & vm_flags::no_merge))
+            {
+                bool can_merge = true;
+                if (prev->backing == vm_backing::physical) {
+                    const u64 expected_phys = prev->phys_base + prev->size();
+                    can_merge = (rgn->phys_base == expected_phys);
+                }
+                if (can_merge) {
+                    // Absorb rgn into predecessor.
+                    prev->va_end = rgn->va_end;
+                    const u64 rc = read_committed(*rgn);
+                    const u64 rr = read_resident(*rgn);
+                    add_committed(*prev, rc);
+                    add_resident(*prev, rr);
+                    rb_remove_and_free(space, rgn);
+                }
+            }
+        }
+    }
+
+    /// @brief Split rgn at split_va into [rgn->va_start, split_va) and [split_va, old_end).
+    /// @return Pointer to the new region [split_va, old_end) on success.
+    [[nodiscard]] auto vm_split(
+        vm_space& space, vm_region* rgn, u64 split_va
+    ) noexcept -> lib::expected<vm_region*, lib::kernel_error> {
+        using namespace _internal;
+
+        if (split_va <= rgn->va_start || split_va >= rgn->va_end)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+        if ((split_va & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::alignment_error));
+
+        // Allocate a new region for the upper half.
+        const u64 old_end = rgn->va_end;
+        const u64 old_size = rgn->size();
+        const u64 upper_size = old_end - split_va;
+        const u64 lower_size = split_va - rgn->va_start;
+
+        // Compute proportional split of committed / resident pages.
+        const u64 upper_pages = upper_size >> 12;
+        const u64 total_pages = old_size >> 12;
+
+        const u64 orig_committed = read_committed(*rgn);
+        const u64 orig_resident  = read_resident(*rgn);
+
+        u64 upper_committed = 0;
+        u64 upper_resident  = 0;
+        if (total_pages > 0) {
+            upper_committed = (orig_committed * upper_pages) / total_pages;
+            upper_resident  = (orig_resident  * upper_pages) / total_pages;
+        }
+
+        // Compute physical base for the upper half (physical backing).
+        u64 upper_phys = 0;
+        if (rgn->backing == vm_backing::physical) {
+            upper_phys = rgn->phys_base + lower_size;
+        }
+
+        auto new_result = alloc_region(
+            split_va, old_end, rgn->prot, rgn->flags,
+            rgn->backing, upper_phys);
+        if (!new_result) return lib::unexpected(new_result.error());
+
+        vm_region* new_rgn = *new_result;
+        new_rgn->portal_id     = rgn->portal_id;
+        new_rgn->owner_domain  = rgn->owner_domain;
+        store_committed(*new_rgn, upper_committed);
+        store_resident(*new_rgn, upper_resident);
+
+        // Truncate the original region.
+        rgn->va_end = split_va;
+        store_committed(*rgn, orig_committed - upper_committed);
+        store_resident(*rgn, orig_resident - upper_resident);
+
+        // Insert the new region.
+        if (!rb_insert_region(space, new_rgn)) {
+            g_region_cache.dealloc(new_rgn);
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::region_overlap));
+        }
+        space.region_count += 1;
+
+        return new_rgn;
+    }
+
+    /// @brief Map a region of size bytes with given protection and flags.
+    /// @return The virtual address of the mapped region on success.
+    [[nodiscard]] auto vm_map(
+        vm_space& space,
+        u64 size, vm_prot prot, vm_flags flags
+    ) noexcept -> lib::expected<u64, lib::kernel_error> {
+        using namespace _internal;
+
+        if (size == 0 || (size & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+
+        if (space.region_count >= space.max_regions)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::out_of_memory));
+
+        auto gap = vm_find_gap(space, size, VM_PAGE_SIZE);
+        if (!gap) return lib::unexpected(gap.error());
+        const u64 va = *gap;
+
+        auto rgn_r = alloc_region(va, va + size, prot, flags,
+            vm_backing::anonymous, 0);
+        if (!rgn_r) return lib::unexpected(rgn_r.error());
+        vm_region* rgn = *rgn_r;
+
+        if (!rb_insert_region(space, rgn)) {
+            g_region_cache.dealloc(rgn);
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::region_overlap));
+        }
+
+        space.total_mapped += size;
+        space.region_count += 1;
+
+        vm_try_merge(space, rgn);
+
+        return va;
+    }
+
+    /// @brief Map at an exact VA with specified backing.
+    [[nodiscard]] auto vm_map_fixed(
+        vm_space& space,
+        u64 va, u64 size,
+        vm_prot prot, vm_flags flags,
+        vm_backing backing, u64 phys_base
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        using namespace _internal;
+
+        if (size == 0 || (size & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+        if ((va & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::alignment_error));
+        if (space.region_count >= space.max_regions)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::out_of_memory));
+
+        auto rgn_r = alloc_region(va, va + size, prot, flags, backing, phys_base);
+        if (!rgn_r) return lib::unexpected(rgn_r.error());
+        vm_region* rgn = *rgn_r;
+
+        if (!rb_insert_region(space, rgn)) {
+            g_region_cache.dealloc(rgn);
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::region_overlap));
+        }
+
+        space.total_mapped += size;
+        space.region_count += 1;
+
+        if (backing == vm_backing::physical && phys_base != 0) {
+            const u64 num_pages = size >> 12;
+            store_committed(*rgn, num_pages);
+            store_resident(*rgn, num_pages);
+            space.total_committed += num_pages;
+            space.total_resident  += num_pages;
+        }
+
+        vm_try_merge(space, rgn);
+
+        return {};
+    }
+
+    /// @brief Unmap pages in [va, va+size), splitting partially-overlapping
+    ///        regions, removing fully-covered regions, and freeing physical pages.
+    [[nodiscard]] auto vm_unmap(
+        vm_space& space,
+        u64 root_phys,
+        u64 va, u64 size
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        using namespace _internal;
+
+        if (size == 0 || (size & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+        if ((va & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::alignment_error));
+
+        const u64 unmap_end = va + size;
+
+        // Find the first region that could overlap [va, unmap_end).
+        lib::rb_node* node = space.tree.root.node;
+        lib::rb_node* first_overlap = nullptr;
+
+        while (node) {
+            const auto* rgn = region_of(node);
+            if (unmap_end <= rgn->va_start) {
+                node = node->left;
+            } else if (va >= rgn->va_end) {
+                node = node->right;
+            } else {
+                // Overlaps — but find the leftmost overlapping region.
+                first_overlap = node;
+                node = node->left;
+            }
+        }
+
+        if (!first_overlap) return {};
+
+        // Walk forward from first_overlap, processing each overlapping region.
+        node = first_overlap;
+        while (node) {
+            auto* rgn = region_of(node);
+            lib::rb_node* next = lib::rb_next(node);
+
+            if (rgn->va_start >= unmap_end) break;
+
+            if (rgn->va_start < va) {
+                auto split_r = vm_split(space, rgn, va);
+                if (!split_r) return lib::unexpected(split_r.error());
+                node = &((*split_r)->rb);
+                continue;
+            }
+
+            if (rgn->va_end > unmap_end) {
+                auto split_r = vm_split(space, rgn, unmap_end);
+                if (!split_r) return lib::unexpected(split_r.error());
+            }
+
+            const bool free_phys = (rgn->backing == vm_backing::anonymous);
+            unmap_range_pages(root_phys, rgn->va_start, rgn->va_end, free_phys);
+
+            space.total_committed -= read_committed(*rgn);
+            space.total_resident  -= read_resident(*rgn);
+
+            rb_remove_and_free(space, rgn);
+
+            node = next;
+        }
+
+        return {};
+    }
+
+    /// @brief Change protection bits for [va, va+size).
+    [[nodiscard]] auto vm_protect(
+        vm_space& space,
+        u64 root_phys,
+        u64 va, u64 size, vm_prot new_prot
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        using namespace _internal;
+        using namespace arch::s390x::mmu;
+
+        if (size == 0 || (size & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::invalid_arg));
+        if ((va & (VM_PAGE_SIZE - 1)) != 0)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::code::alignment_error));
+
+        const u64 prot_end = va + size;
+
+        // Convert vm_prot to hardware page_prot.
+        u64 hw_bits = 0;
+        if (!(new_prot & vm_prot::write))
+            hw_bits |= PTE_PROTECT;   // Read-only
+        if (!(new_prot & vm_prot::exec))
+            hw_bits |= PTE_NOEXEC;    // No-execute
+        const page_prot hw_prot{hw_bits};
+        const dat_table<dat_level::region_1> root{root_phys};
+
+        // Find overlapping regions and update protection.
+        lib::rb_node* node = space.tree.root.node;
+        lib::rb_node* first_overlap = nullptr;
+
+        while (node) {
+            const auto* rgn = region_of(node);
+            if (prot_end <= rgn->va_start) {
+                node = node->left;
+            } else if (va >= rgn->va_end) {
+                node = node->right;
+            } else {
+                first_overlap = node;
+                node = node->left;
+            }
+        }
+
+        if (!first_overlap)
+            return lib::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::code::not_found));
+
+        node = first_overlap;
+        while (node) {
+            auto* rgn = region_of(node);
+            if (rgn->va_start >= prot_end) break;
+
+            // Split at start boundary if needed.
+            if (rgn->va_start < va) {
+                auto split_r = vm_split(space, rgn, va);
+                if (!split_r) return lib::unexpected(split_r.error());
+                node = &((*split_r)->rb);
+                continue;
+            }
+
+            // Split at end boundary if needed.
+            if (rgn->va_end > prot_end) {
+                auto split_r = vm_split(space, rgn, prot_end);
+                if (!split_r) return lib::unexpected(split_r.error());
+                // rgn is now [rgn->va_start, prot_end), process it.
+            }
+
+            // Update VMA protection.
+            rgn->prot = new_prot;
+
+            // Update DAT PTEs for mapped pages in this region.
+            for (u64 cursor = rgn->va_start; cursor < rgn->va_end; cursor += VM_PAGE_SIZE) {
+                // Only update if a mapping exists (ignore unmapped demand pages).
+                (void)protect<dat_level::region_1>(root, cursor, hw_prot);
+            }
+
+            lib::rb_node* next = lib::rb_next(node);
+            // Try to merge after protection change.
+            vm_try_merge(space, rgn);
+            node = next;
+        }
+
+        return {};
+    }
+
+
+    /// @brief Destroy all regions in a VME space, freeing region descriptors.
+    auto vm_destroy_space(vm_space& space) noexcept -> void {
+        using namespace _internal;
+
+        lib::rb_node* node = space.tree.leftmost;
+        while (node) {
+            auto* rgn = region_of(node);
+            lib::rb_node* next = lib::rb_next(node);
+
+            // Erase from tree.
+            lib::rb_erase_cached(node, space.tree);
+
+            // Free the region descriptor.
+            g_region_cache.dealloc(rgn);
+
+            node = next;
+        }
+
+        // Reset accounting.
+        space.tree           = {};
+        space.total_mapped    = 0;
+        space.total_committed = 0;
+        space.total_resident  = 0;
+        space.region_count    = 0;
+    }
+
+} // namespace zxfoundation::memory::vm
+
+} // end export

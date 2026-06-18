@@ -20,15 +20,19 @@ namespace arch::s390x::css {
     inline constexpr u16 MAX_SCHID = 0xFFFF;
 
     // -----------------------------------------------------------------------
-    // CCW flag bits — PoP §14.1.2
+    // CCW flag bits — PoP §15 "Commands and Flags for CCWs"
+    //   Format-1 flags byte is at byte 1 (PoP bits 8-15 of word 0):
+    //   8=CD, 9=CC, 10=SLI, 11=SKIP, 12=PCI, 13=IDA, 14=S, 15=MIDA
     // -----------------------------------------------------------------------
 
-    inline constexpr u8 CCW_FLAG_CC      = 0x40; ///< Command chaining.
-    inline constexpr u8 CCW_FLAG_SLI     = 0x20; ///< Suppress length indication.
-    inline constexpr u8 CCW_FLAG_SKIP    = 0x08; ///< Skip data transfer.
-    inline constexpr u8 CCW_FLAG_PCI     = 0x04; ///< Program-controlled interruption.
-    inline constexpr u8 CCW_FLAG_IDA     = 0x02; ///< Indirect data addressing.
-    inline constexpr u8 CCW_FLAG_SUSPEND = 0x01; ///< Suspend channel program.
+    inline constexpr u8 CCW_FLAG_CD      = 0x80; ///< Chain data (PoP bit 8).
+    inline constexpr u8 CCW_FLAG_CC      = 0x40; ///< Command chaining (PoP bit 9).
+    inline constexpr u8 CCW_FLAG_SLI     = 0x20; ///< Suppress length indication (PoP bit 10).
+    inline constexpr u8 CCW_FLAG_SKIP    = 0x10; ///< Skip data transfer (PoP bit 11).
+    inline constexpr u8 CCW_FLAG_PCI     = 0x08; ///< Program-controlled interruption (PoP bit 12).
+    inline constexpr u8 CCW_FLAG_IDA     = 0x04; ///< Indirect data addressing (PoP bit 13).
+    inline constexpr u8 CCW_FLAG_SUSPEND = 0x02; ///< Suspend channel program (PoP bit 14).
+    inline constexpr u8 CCW_FLAG_MIDA    = 0x01; ///< Modified IDA (PoP bit 15).
 
     // -----------------------------------------------------------------------
     // CCW command codes — PoP §14.1.1
@@ -71,41 +75,65 @@ namespace arch::s390x::css {
     // -----------------------------------------------------------------------
     // SCSW function control bits — PoP §14.3.5
     // -----------------------------------------------------------------------
-
-    inline constexpr u8 FCTL_START = 0x4; ///< Start function.
-    inline constexpr u8 FCTL_HALT  = 0x2; ///< Halt function.
-    inline constexpr u8 FCTL_CLEAR = 0x1; ///< Clear function.
-
     // -----------------------------------------------------------------------
-    // SCSW status control bits — PoP §14.3.5
+    // SCSW function control bits — PoP Chapter 16
+    //   FC field: bits 17-19 of word 0 → extracted as 3-bit value
+    //   Bit 17=Start, 18=Halt, 19=Clear
+    //   In extracted u8: Start=0x4, Halt=0x2, Clear=0x1
     // -----------------------------------------------------------------------
 
-    inline constexpr u8 STCTL_STATUS_PEND = 0x4; ///< Status pending.
-    inline constexpr u8 STCTL_PRIMARY     = 0x2; ///< Primary status.
-    inline constexpr u8 STCTL_SECONDARY   = 0x1; ///< Secondary status.
+    inline constexpr u8 FCTL_START = 0x4; ///< Start function (PoP bit 17).
+    inline constexpr u8 FCTL_HALT  = 0x2; ///< Halt function (PoP bit 18).
+    inline constexpr u8 FCTL_CLEAR = 0x1; ///< Clear function (PoP bit 19).
 
     // -----------------------------------------------------------------------
-    // SCSW activity control bits — PoP §14.3.5
+    // SCSW status control bits — PoP Chapter 16
+    //   SC field: bits 27-31 of word 0 → extracted as 5-bit value
+    //   Bit 27=Alert, 28=Intermediate, 29=Primary,
+    //   30=Secondary, 31=StatusPending
     // -----------------------------------------------------------------------
 
-    inline constexpr u8 ACTL_SUSPENDED  = 0x40; ///< Suspended.
-    inline constexpr u8 ACTL_DEV_ACTIVE = 0x08; ///< Device active.
-    inline constexpr u8 ACTL_SCH_ACTIVE = 0x04; ///< Subchannel active.
+    inline constexpr u8 STCTL_ALERT        = 0x10; ///< Alert status (PoP bit 27).
+    inline constexpr u8 STCTL_INTERMEDIATE = 0x08; ///< Intermediate status (PoP bit 28).
+    inline constexpr u8 STCTL_PRIMARY      = 0x04; ///< Primary status (PoP bit 29).
+    inline constexpr u8 STCTL_SECONDARY    = 0x02; ///< Secondary status (PoP bit 30).
+    inline constexpr u8 STCTL_STATUS_PEND  = 0x01; ///< Status pending (PoP bit 31).
 
     // -----------------------------------------------------------------------
-    // ccw1 — Format-1 Channel Command Word (16 bytes) — PoP §14.1
+    // SCSW activity control bits — PoP Chapter 16
+    //   AC field: bits 20-26 of word 0 → extracted as 7-bit value
+    //   Bit 20=Resume, 21=StartPending, 22=HaltPending, 23=ClearPending,
+    //   24=SchActive, 25=DevActive, 26=Suspended
     // -----------------------------------------------------------------------
 
-    /// @brief Format-1 CCW: 16 bytes, big-endian, used with Format-1 ORB.
+    inline constexpr u8 ACTL_RESUME_PEND = 0x40; ///< Resume pending (PoP bit 20).
+    inline constexpr u8 ACTL_START_PEND  = 0x20; ///< Start pending (PoP bit 21).
+    inline constexpr u8 ACTL_HALT_PEND   = 0x10; ///< Halt pending (PoP bit 22).
+    inline constexpr u8 ACTL_CLEAR_PEND  = 0x08; ///< Clear pending (PoP bit 23).
+    inline constexpr u8 ACTL_SCH_ACTIVE  = 0x04; ///< Subchannel active (PoP bit 24).
+    inline constexpr u8 ACTL_DEV_ACTIVE  = 0x02; ///< Device active (PoP bit 25).
+    inline constexpr u8 ACTL_SUSPENDED   = 0x01; ///< Suspended (PoP bit 26).
+
+    // -----------------------------------------------------------------------
+    // ccw1 — Format-1 Channel Command Word (8 bytes) — PoP §15 "Channel-Command Word"
+    // -----------------------------------------------------------------------
+
+    /// @brief Format-1 CCW: 8 bytes, big-endian, used with Format-1 ORB.
+    ///
+    /// Layout (PoP Figure 15-x "Format-1 CCW"):
+    ///   Word 0: Cmd_Code(0-7) | Flags(8-15) | Count(16-31)
+    ///   Word 1: 0(32) | Data_Address(33-63)
+    ///
+    /// Flags byte bits (PoP bit numbering, Format-1):
+    ///   8=CD, 9=CC, 10=SLI, 11=SKIP, 12=PCI, 13=IDA, 14=S, 15=MIDA
     struct [[gnu::packed]] ccw1 {
-        u8  cmd{};          ///< Command code.
-        u8  flags{};        ///< Flag byte (CC, SLI, SKIP, PCI, IDA, SUSPEND).
-        u16 count{};        ///< Byte count.
-        u32 _reserved{0};   ///< Reserved, must be zero.
-        u64 data_addr{};    ///< 64-bit data address.
+        u8  cmd{};          ///< Byte 0: Command code.
+        u8  flags{};        ///< Byte 1: Flag byte (CD, CC, SLI, SKIP, PCI, IDA, S, MIDA).
+        u16 count{};        ///< Bytes 2-3: Byte count.
+        u32 data_addr{};    ///< Bytes 4-7: Data address (31-bit, bit 0 must be zero).
     };
 
-    static_assert(sizeof(ccw1) == 16, "ccw1 must be exactly 16 bytes");
+    static_assert(sizeof(ccw1) == 8, "ccw1 must be exactly 8 bytes (PoP Format-1 CCW)");
 
     // -----------------------------------------------------------------------
     // scsw — Subchannel Status Word (12 bytes) — PoP §14.3.5
@@ -113,35 +141,38 @@ namespace arch::s390x::css {
 
     /// @brief Subchannel Status Word — packed status from TSCH.
     ///
-    /// Word 0 contains key, flags, function/activity/status control fields.
-    /// Stored as u32 with accessor methods for the individual bit fields.
+    /// PoP Chapter 16 "Command-Mode SCSW":
+    ///   Word 0: Key(0-3) S(4) L(5) CC(6-7) F(8) P(9) I(10) X(11) U(12)
+    ///           Z(13) E(14) N(15) 0(16) FC(17-19) AC(20-26) SC(27-31)
+    ///   Word 1: CCW Address (0-31)
+    ///   Word 2: DevStatus(0-7) SchStatus(8-15) Count(16-31)
+    ///
+    /// On big-endian s390x, PoP bit N maps to u32 bit position (31 - N).
     struct [[gnu::packed]] scsw {
-        u32 flags{0};       ///< Word 0: key(4), control bits, fctl(3), actl(7), stctl(3).
-        u32 ccw_addr{0};    ///< CCW address.
-        u8  dev_status{0};  ///< Device status byte.
-        u8  sch_status{0};  ///< Subchannel status byte.
-        u16 count{0};       ///< Residual byte count.
+        u32 flags{0};       ///< Word 0: key(4), control bits, FC(3), AC(7), SC(5).
+        u32 ccw_addr{0};    ///< Word 1: CCW address.
+        u8  dev_status{0};  ///< Word 2 bits 0-7: Device status byte.
+        u8  sch_status{0};  ///< Word 2 bits 8-15: Subchannel status byte.
+        u16 count{0};       ///< Word 2 bits 16-31: Residual byte count.
 
-        /// @brief Extract function control field (bits 21-23 of word 0).
+        /// @brief Extract function control field (PoP bits 17-19 of word 0).
+        /// FC bits: 17=Start, 18=Halt, 19=Clear.
         [[nodiscard]] constexpr auto fctl() const noexcept -> u8 {
-            return static_cast<u8>((flags >> 8) & 0x07);
+            return static_cast<u8>((flags >> 12) & 0x07);
         }
 
-        /// @brief Extract activity control field (bits 24-30 of word 0).
+        /// @brief Extract activity control field (PoP bits 20-26 of word 0).
+        /// AC bits: 20=Resume, 21=Start, 22=Halt, 23=Clear,
+        ///          24=SchActive, 25=DevActive, 26=Suspended.
         [[nodiscard]] constexpr auto actl() const noexcept -> u8 {
-            return static_cast<u8>((flags >> 1) & 0x7F);
+            return static_cast<u8>((flags >> 5) & 0x7F);
         }
 
-        /// @brief Extract status control field (bits 29-31 of word 0).
-        ///
-        /// Note: stctl occupies the lowest 3 bits that are not consumed by the
-        /// zero padding bit. The field sits at bits [5:7] of the last byte in
-        /// word 0 when viewed in IBM bit order; in host u32 layout this is
-        /// (flags >> 5) & 0x07 with the zero bit at bit 4.
-        ///
-        /// Corrected mapping: IBM bits 26-28 → host bits 5..3.
+        /// @brief Extract status control field (PoP bits 27-31 of word 0).
+        /// SC bits: 27=Alert, 28=Intermediate, 29=Primary,
+        ///          30=Secondary, 31=StatusPending.
         [[nodiscard]] constexpr auto stctl() const noexcept -> u8 {
-            return static_cast<u8>((flags >> 5) & 0x07);
+            return static_cast<u8>(flags & 0x1F);
         }
 
         /// @brief True if status is solicited (primary status pending).
@@ -220,9 +251,10 @@ namespace arch::s390x::css {
             return (flags & 0x0020) != 0;
         }
 
-        /// @brief Extract ISC (I/O interruption subclass) field (bits 0-2 of flags).
-        [[nodiscard]] constexpr auto subchannel_type() const noexcept -> u8 {
-            return static_cast<u8>((flags >> 13) & 0x07);
+        /// @brief Extract ISC (I/O interruption subclass code, bits 2-4 of word 1).
+        /// In the u16 flags field on big-endian: positions 13-11.
+        [[nodiscard]] constexpr auto isc() const noexcept -> u8 {
+            return static_cast<u8>((flags >> 11) & 0x07);
         }
     };
 
@@ -247,30 +279,40 @@ namespace arch::s390x::css {
     // -----------------------------------------------------------------------
 
     /// @brief Operation Request Block — input to SSCH instruction.
+    ///
+    /// PoP §14.3.3 / Linux arch/s390/include/asm/cio.h.
+    /// Word 1 layout (big-endian, bit 0 = MSB):
+    ///   key(0-3) | S(4) | C(5) | M(6) | Y(7) | F(8) | P(9) | I(10) |
+    ///   A(11) | U(12) | _(13) | H(14) | T(15) | LPM(16-23) |
+    ///   L(24) | _(25-30) | X(31)
     struct [[gnu::packed]] alignas(4) orb {
-        u32 intparm{0};    ///< Interruption parameter.
-        u32 flags{0};      ///< Key, suspend, streaming, format, prefetch, etc.
-        u64 ccw_addr{0};   ///< CCW address (Format-1: 64-bit).
-        u8  lpm{0};        ///< Logical path mask.
-        u8  _reserved1{0}; ///< Reserved.
-        u16 _reserved2{0}; ///< Reserved.
-        u32 _reserved3{0}; ///< Reserved.
-        u32 _reserved4{0}; ///< Reserved.
-        u32 _reserved5{0}; ///< Reserved.
+        u32 intparm{0};    ///< Word 0: Interruption parameter.
+        u32 ctrl{0};       ///< Word 1: Key + control flags + LPM + ILS.
+        u32 cpa{0};        ///< Word 2: Channel Program Address (31-bit).
+        u32 _reserved3{0}; ///< Word 3: CSS priority (reserved for us).
+        u32 _reserved4{0}; ///< Word 4.
+        u32 _reserved5{0}; ///< Word 5.
+        u32 _reserved6{0}; ///< Word 6.
+        u32 _reserved7{0}; ///< Word 7.
 
-        /// @brief Set the storage key in bits 4-7 of the flags word.
+        /// @brief Set the storage key in bits 0-3 of word 1.
         constexpr auto set_key(u8 key) noexcept -> void {
-            flags = (flags & 0x0FFFFFFF) | (static_cast<u32>(key & 0x0F) << 28);
+            ctrl = (ctrl & 0x0FFFFFFFU) | (static_cast<u32>(key & 0x0FU) << 28);
         }
 
-        /// @brief Set Format-1 bit (bit 8 of flags word).
+        /// @brief Set Format-1 CCW bit (bit 8 of word 1).
         constexpr auto set_format1() noexcept -> void {
-            flags |= 0x00800000;
+            ctrl |= 0x00800000U;
         }
 
-        /// @brief Set the CCW program address.
-        constexpr auto set_ccw(u64 addr) noexcept -> void {
-            ccw_addr = addr;
+        /// @brief Set the Logical Path Mask (bits 16-23 of word 1).
+        constexpr auto set_lpm(u8 lpm) noexcept -> void {
+            ctrl = (ctrl & 0xFFFF00FFU) | (static_cast<u32>(lpm) << 8);
+        }
+
+        /// @brief Set the Channel Program Address (word 2, 31-bit physical).
+        constexpr auto set_cpa(u32 addr) noexcept -> void {
+            cpa = addr & 0x7FFFFFFFU;
         }
     };
 
@@ -281,48 +323,55 @@ namespace arch::s390x::css {
     // -----------------------------------------------------------------------
 
     /// @brief Interruption Response Block — output of TSCH instruction.
+    /// Layout: SCSW(12) + ESW(20) + ECW(32) + EMW(32) = 96 bytes.
     struct [[gnu::packed]] alignas(4) irb {
-        scsw scsw_data{};  ///< Subchannel Status Word.
-        u32  ecw[8]{};     ///< Extended Control Word (device-specific sense data).
-        u32  emw[8]{};     ///< Extended Measurement Word.
+        scsw scsw_data{};  ///< Subchannel Status Word (12 bytes).
+        u32  esw[5]{};     ///< Extended Status Word (20 bytes) — PoP §14.3.5.
+        u32  ecw[8]{};     ///< Extended Control Word — device sense data (32 bytes).
+        u32  emw[8]{};     ///< Extended Measurement Word (32 bytes).
     };
 
-    static_assert(sizeof(irb) == 76, "irb must be exactly 76 bytes");
+    static_assert(sizeof(irb) == 96, "irb must be exactly 96 bytes (PoP §14.3.4)");
 
     // -----------------------------------------------------------------------
-    // subchannel_id — Hardware subchannel identifier — PoP §14.3.1
+    // subchannel_id — Subsystem-Identification Word — PoP §14 "I/O-Instruction Formats"
     // -----------------------------------------------------------------------
 
-    /// @brief Packed hardware subchannel identifier for SSCH/TSCH/STSCH.
+    /// @brief Subsystem-Identification Word (SID) for I/O instructions.
     ///
-    /// Layout (32 bits, big-endian):
-    ///   cssid(8) | ssid(2) | _reserved(5) | one(1) | sch_no(16)
+    /// PoP GR1 format (lower 32 bits):
+    ///   With MSS facility:
+    ///     Bits 32-44: must be zero (13 bits)
+    ///     Bits 45-46: SSID (subchannel-set identifier, 2 bits)
+    ///     Bit 47:     must be 1
+    ///     Bits 48-63: subchannel number (16 bits)
+    ///   Without MSS facility:
+    ///     Bits 32-47: 0x0001
+    ///     Bits 48-63: subchannel number
+    ///
+    /// In u32 (big-endian): 0000000000000_SS_1_NNNNNNNNNNNNNNNN
     struct [[gnu::packed]] subchannel_id {
         u32 val{0};
 
-        /// @brief Construct from individual components.
-        [[nodiscard]] static constexpr auto from_parts(u8 cssid, u8 ssid, u16 sch_no) noexcept
+        /// @brief Construct from SSID and subchannel number.
+        [[nodiscard]] static constexpr auto from_parts(
+            [[maybe_unused]] u8 cssid, u8 ssid, u16 sch_no) noexcept
             -> subchannel_id
         {
             subchannel_id id{};
-            id.val = (static_cast<u32>(cssid) << 24) |
-                     (static_cast<u32>(ssid & 0x03) << 22) |
-                     (1u << 16) |  // "one" bit must be set
-                     static_cast<u32>(sch_no);
+            // cssid is not part of the SID word per PoP — ignored.
+            id.val = (static_cast<u32>(ssid & 0x03) << 17) |  // SSID at bits 45-46
+                     (1u << 16) |                               // "one" bit at bit 47
+                     static_cast<u32>(sch_no);                  // sch_no at bits 48-63
             return id;
         }
 
-        /// @brief Extract CSS ID (bits 0-7).
-        [[nodiscard]] constexpr auto cssid() const noexcept -> u8 {
-            return static_cast<u8>(val >> 24);
-        }
-
-        /// @brief Extract subchannel set ID (bits 8-9).
+        /// @brief Extract subchannel set ID (bits 45-46 → u32 positions 18-17).
         [[nodiscard]] constexpr auto ssid() const noexcept -> u8 {
-            return static_cast<u8>((val >> 22) & 0x03);
+            return static_cast<u8>((val >> 17) & 0x03);
         }
 
-        /// @brief Extract subchannel number (bits 16-31).
+        /// @brief Extract subchannel number (bits 48-63 → u32 positions 15-0).
         [[nodiscard]] constexpr auto sch_no() const noexcept -> u16 {
             return static_cast<u16>(val & 0xFFFF);
         }

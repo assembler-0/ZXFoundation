@@ -34,13 +34,8 @@ using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
 namespace locking = zxfoundation::locking;
 
-// Type aliases to disambiguate the struct names from the enclosing namespace.
-// Inside namespace arch::s390x::cpu::aste, the name 'aste' refers to the
-// namespace itself, so 'aste::aste' is parsed as a constructor reference.
-using aste_entry = arch::s390x::cpu::aste::aste;
-using ale_entry  = arch::s390x::cpu::aste::ale;
-
-// ── Internal state ─────────────────────────────────────────────────────────
+using aste_entry = aste;
+using ale_entry  = ale;
 
 namespace _internal {
 
@@ -61,8 +56,6 @@ namespace _internal {
 
     /// @brief Whether the subsystem has been initialized.
     static bool g_initialized{false};
-
-    // ── Helpers ────────────────────────────────────────────────────────
 
     /// @brief Return a typed pointer into the ASTE table by index.
     [[nodiscard]] auto aste_at(u32 idx) noexcept -> aste_entry* {
@@ -86,8 +79,6 @@ namespace _internal {
     }
 
     /// @brief Linear scan for a free ALE slot.
-    /// Starts after the reserved range (ALETs 0–ALET_RESERVED_MAX map to
-    /// primary/secondary/home and are never dynamically allocated).
     [[nodiscard]] auto find_free_ale() noexcept -> u32 {
         for (u32 i = ALET_RESERVED_MAX + 1; i < MAX_ALE_ENTRIES; ++i) {
             if (!g_ale_used[i])
@@ -118,15 +109,9 @@ export {
 namespace arch::s390x::cpu::aste {
 
     /// @brief Initialize the ASTE/ALE subsystem.
-    ///
-    /// Allocates a physically-contiguous ASTE table and ALE table from the
-    /// physical memory manager, zeroes them, and marks the subsystem ready.
-    /// Must be called once during kernel bring-up.
     auto aste_subsystem_init() noexcept -> void {
         using namespace _internal;
 
-        // ── Allocate ASTE table ────────────────────────────────────────
-        // MAX_ASTE_ENTRIES × 64 bytes = 16 KiB → order 2 (4 pages).
         constexpr u64 aste_table_size = MAX_ASTE_ENTRIES * sizeof(aste_entry);
         constexpr u32 aste_pages = pages_for(aste_table_size);
         constexpr u32 aste_order = order_for_pages(aste_pages);
@@ -139,8 +124,6 @@ namespace arch::s390x::cpu::aste {
         }
         g_aste_table_phys = aste_result.value().phys_base;
 
-        // ── Allocate ALE table ─────────────────────────────────────────
-        // MAX_ALE_ENTRIES × 16 bytes = 16 KiB → order 2 (4 pages).
         constexpr u64 ale_table_size = MAX_ALE_ENTRIES * sizeof(ale_entry);
         constexpr u32 ale_pages = pages_for(ale_table_size);
         constexpr u32 ale_order = order_for_pages(ale_pages);
@@ -153,7 +136,6 @@ namespace arch::s390x::cpu::aste {
         }
         g_ale_table_phys = ale_result.value().phys_base;
 
-        // ── Mark all ASTE/ALE entries as invalid ───────────────────────
         for (u32 i = 0; i < MAX_ASTE_ENTRIES; ++i) {
             aste_at(i)->set_invalid(true);
             g_aste_used[i] = false;
@@ -173,7 +155,6 @@ namespace arch::s390x::cpu::aste {
     }
 
     /// @brief Allocate an ASTE slot and populate it with a target ASCE.
-    ///
     /// @param target_asce  The Address Space Control Element of the target domain.
     /// @param auth_index   Authorization Index (AX) for this ASTE.
     /// @return The ASTE index on success, or an error.
@@ -329,14 +310,11 @@ namespace arch::s390x::cpu::aste {
     ///        translation on this CPU.
     /// @param aste_origin  Physical address of the ASTE (64-byte aligned).
     auto aste_load_cr7(u64 aste_origin) noexcept -> void {
-        // CR7 holds the ASN-second-table-entry origin.
-        // The low 6 bits must be zero (64-byte alignment).
         const u64 cr7_val = aste_origin & ~0x3FULL;
         processor::ctl_load<7, 7>(cr7_val);
     }
 
     /// @brief Return a pointer to the ASTE at the given index.
-    ///
     /// @param index  The ASTE slot index (0 to MAX_ASTE_ENTRIES-1).
     /// @return Pointer to the ASTE, or nullptr if the index is out of range
     ///         or the subsystem is not initialized.

@@ -9,7 +9,14 @@
 
 /// @brief Enter user mode by loading the prepared return frame.
 ///   %r2 = frame_base (stack pointer with GPRs + PSW laid out)
+///   %r3 = user_regs* (pointer to the domain's user_regs containing ARs/VRs)
 __domain_enter_user_asm:
+    lam     %a0, %a15, 144(%r3)
+    lfpc    208(%r3)
+    // Restore Vector Registers
+    vlm     %v0, %v15, 216(%r3)
+    vlm     %v16, %v31, 472(%r3)
+
     lgr     %r15, %r2
     jg      ret_to_user
 

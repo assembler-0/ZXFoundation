@@ -131,7 +131,7 @@ namespace zxfoundation::memory::slub {
         u32          objects_per_slab{0};
         u32          cpu_partial{SLUB_CPU_PARTIAL_DEFAULT};
         slub_flags   flags{slub_flags::none};
-        lifecycle_state state{lifecycle_state::fresh};
+        lifecycle_state state{lifecycle_state::embryo};
 
         u64          random_seq{0};
 
@@ -156,19 +156,19 @@ namespace zxfoundation::memory::slub {
         kmem_cache(kmem_cache&&)                     = delete;
         auto operator=(kmem_cache&&)                 = delete;
 
-        /// @brief Activate: transition fresh → ready after full initialisation.
-        /// @pre state == fresh.
+        /// @brief Activate: transition embryo → active after full initialisation.
+        /// @pre state == embryo.
         auto activate() noexcept -> void {
-            __builtin_expect(state == lifecycle_state::fresh, 1)
+            __builtin_expect(state == lifecycle_state::embryo, 1)
                 ? (void)0
                 : __builtin_trap();
-            state = lifecycle_state::ready;
+            state = lifecycle_state::active;
         }
 
-        /// @brief Begin teardown: transition ready → dying.
-        /// @pre state == ready.
+        /// @brief Begin teardown: transition active → dying.
+        /// @pre state == active.
         auto begin_destroy() noexcept -> void {
-            __builtin_expect(state == lifecycle_state::ready, 1)
+            __builtin_expect(state == lifecycle_state::active, 1)
                 ? (void)0
                 : __builtin_trap();
             state = lifecycle_state::dying;
@@ -176,7 +176,7 @@ namespace zxfoundation::memory::slub {
 
         /// @brief Return true if the cache is accepting allocations.
         [[nodiscard]] auto ready() const noexcept -> bool {
-            return state == lifecycle_state::ready;
+            return state == lifecycle_state::active;
         }
     };
 
@@ -197,25 +197,25 @@ namespace zxfoundation::memory::slub {
         [[nodiscard]] auto operator*() const noexcept -> kmem_cache& { return *ptr_; }
         [[nodiscard]] explicit operator bool() const noexcept { return ptr_ != nullptr; }
 
-        /// @brief Transition fresh -> ready. Only valid on fresh refs.
-        [[nodiscard]] auto activate() noexcept -> kmem_cache_ref<lifecycle_state::ready>
-            requires (State == lifecycle_state::fresh)
+        /// @brief Transition embryo -> active. Only valid on embryo refs.
+        [[nodiscard]] auto activate() noexcept -> kmem_cache_ref<lifecycle_state::active>
+            requires (State == lifecycle_state::embryo)
         {
             ptr_->activate();
-            return kmem_cache_ref<lifecycle_state::ready>{ptr_};
+            return kmem_cache_ref<lifecycle_state::active>{ptr_};
         }
 
-        /// @brief Transition ready -> dying. Only valid on ready refs.
+        /// @brief Transition active -> dying. Only valid on active refs.
         [[nodiscard]] auto begin_destroy() noexcept -> kmem_cache_ref<lifecycle_state::dying>
-            requires (State == lifecycle_state::ready)
+            requires (State == lifecycle_state::active)
         {
             ptr_->begin_destroy();
             return kmem_cache_ref<lifecycle_state::dying>{ptr_};
         }
     };
 
-    using kmem_cache_ref_fresh = kmem_cache_ref<lifecycle_state::fresh>;
-    using kmem_cache_ref_ready = kmem_cache_ref<lifecycle_state::ready>;
+    using kmem_cache_ref_embryo = kmem_cache_ref<lifecycle_state::embryo>;
+    using kmem_cache_ref_active = kmem_cache_ref<lifecycle_state::active>;
 
 } // namespace zxfoundation::memory::slub
 

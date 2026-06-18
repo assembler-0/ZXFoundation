@@ -1,11 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/clkcomp.cxxm
 /// @brief z/Architecture Clock Comparator — raw hardware accessors.
-///
-/// Provides direct access to the SCKC (Set Clock Comparator) and STCKC
-/// (Store Clock Comparator) instructions.  All higher-level tick arming
-/// and periodic re-arming is handled by the timer subsystem
-/// (zxfoundation.sys.timer).
 
 export module arch.s390x.cpu.clkcomp;
 import zxfoundation.base.types;

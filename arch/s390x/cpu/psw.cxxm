@@ -24,11 +24,27 @@ namespace arch::s390x::cpu::psw {
         __builtin_unreachable();
     }
 
-    [[noreturn]] auto load_disabled_wait_psw() noexcept -> void {
+    [[noreturn]] auto disabled_wait() noexcept -> void {
         alignas(8) static constexpr zx_psw halt = {
             .mask = PSW_MASK_DISABLED_WAIT, .addr = PSW_STD_HALT_ADDR
         };
         load_psw(halt);
+    }
+
+    /// @brief Enter enabled-wait state — the z/Architecture idle primitive.
+    auto enabled_wait() noexcept -> void {
+        alignas(8) zx_psw wait_psw = {
+            .mask = PSW_MASK_ENABLED_WAIT, .addr = 0
+        };
+        __asm__ volatile(
+            "   larl  1,0f\n"         // r1 = address of label '0:'
+            "   stg   1,8(%[psw])\n"   // store as PSW instruction address
+            "   lpswe 0(%[psw])\n"     // enter enabled wait (atomic)
+            "0:\n"                     // resume point after interrupt
+            :
+            : [psw] "a"(&wait_psw)
+            : "memory", "cc", "1"
+        );
     }
 
     auto write_psw_to_lowcore(u64 lc_offset, u64 mask, u64 addr) noexcept -> void {

@@ -42,6 +42,14 @@ __zx_start_kernel64:
     lg      %r15, ZXFL_OFFSET_KERNEL_STACK_TOP(%r2) // kernel_stack_top from boot protocol
     aghi    %r15, -160                     // 160-byte register save area
 
+    // Enable AFP (bit 45) and Vector (bit 46) in CR0 before entering C++
+    stctg   %c0, %c0, 0(%r15)
+    lg      %r1, 0(%r15)
+    iilf    %r0, 0x00060000
+    ogr     %r1, %r0
+    stg     %r1, 0(%r15)
+    lctlg   %c0, %c0, 0(%r15)
+
     // Zero out backchain and r14 save area to terminate unwinder gracefully
     sgr     %r0, %r0
     stg     %r0, 0(%r15)

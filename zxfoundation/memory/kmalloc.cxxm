@@ -24,7 +24,7 @@ namespace zxfoundation::memory::kmalloc::_internal {
         8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
     };
 
-    static slub::kmem_cache_ref_ready g_caches[KMALLOC_NUM_SIZES]{};
+    static slub::kmem_cache_ref_active g_caches[KMALLOC_NUM_SIZES]{};
     static bool g_initialized{false};
 
     /// @brief Names for each size-class cache (diagnostic use only).
@@ -117,7 +117,7 @@ namespace zxfoundation::memory::kmalloc {
     }
 
     /// @brief Return the kmem_cache for the Nth bucket, or nullptr.
-    [[nodiscard]] auto kmalloc_cache(u32 idx) noexcept -> slub::kmem_cache_ref_ready {
+    [[nodiscard]] auto kmalloc_cache(u32 idx) noexcept -> slub::kmem_cache_ref_active {
         using namespace _internal;
         if (!g_initialized || idx >= KMALLOC_NUM_SIZES) return {};
         return g_caches[idx];

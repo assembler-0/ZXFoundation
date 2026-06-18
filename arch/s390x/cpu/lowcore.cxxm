@@ -1,10 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/lowcore.cxxm
 /// @brief Lowcore (prefix area) management: access, initialization, and AP setup.
-///
-/// HHDM access: the prefix register maps physical 0x0 → this CPU's lowcore.
-/// DAT on:  get_current() = hhdm(0x0)     — zero instructions overhead.
-/// DAT off: get_current_phys() = (zx_lowcore*)(0x0)
 
 export module arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.percpu_types;

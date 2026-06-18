@@ -4,6 +4,7 @@
 
 export module arch.s390x.cpu.sigp;
 import arch.s390x.cpu.sigp_types;
+import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
 
 export {
@@ -45,6 +46,9 @@ namespace arch::s390x::cpu::sigp {
         int cc;
         do {
             cc = sigp_issue(cpu_addr, order, parm, status);
+            if (cc == SIGP_CC_BUSY) {
+                processor::cpu_relax();
+            }
         } while (cc == SIGP_CC_BUSY);
         return cc;
     }

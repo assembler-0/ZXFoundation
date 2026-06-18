@@ -1,4 +1,4 @@
 !files : !compile_group -> [auto] {
-    entry.S
+    entry.S !compile_options -> [ -mvx -march=z13 ]
     trap.cxxm
 }

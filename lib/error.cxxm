@@ -126,6 +126,7 @@ namespace lib {
             unknown         = 6,  ///< Unknown error.
             out_of_range    = 7,  ///< Index or address is outside valid bounds.
             uninitialized   = 8,  ///< Uninitialized.
+            stall           = 9,  ///< CPU or subsystem stall detected (watchdog).
         };
     }
 
@@ -334,6 +335,7 @@ namespace lib {
                     case generic_error::unknown:         return "unknown";
                     case generic_error::out_of_range:    return "out_of_range";
                     case generic_error::uninitialized:   return "uninitialized";
+                    case generic_error::stall:           return "stall";
                     default: return "?";
                 }
             default:

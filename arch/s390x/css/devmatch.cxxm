@@ -1,0 +1,228 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file devmatch.cxxm
+/// @brief z/Architecture CCW device identification database.
+
+export module arch.s390x.css.devmatch;
+import zxfoundation.base.types;
+
+namespace arch::s390x::css::devmatch::_internal {
+
+    /// @brief Device class — broad categorization for policy/driver binding.
+    enum class dev_class : u8 {
+        console,        ///< Line-mode console (3215)
+        display,        ///< Block-mode display terminal (3270 family)
+        dasd_eckd,      ///< Count-Key-Data DASD (3380, 3390)
+        dasd_fba,       ///< Fixed-Block-Architecture DASD (9336, 0671)
+        tape,           ///< Magnetic tape (3480, 3490, 3590)
+        printer,        ///< Impact/laser printer
+        reader,         ///< Card reader
+        punch,          ///< Card punch
+        network,        ///< OSA-Express / HiperSockets / CTC
+        crypto,         ///< Crypto Express adapter
+        ctc,            ///< Channel-to-channel
+        virtio,         ///< virtio-ccw (KVM/QEMU)
+        unknown,        ///< Unrecognised
+    };
+
+    /// @brief Single entry in the device-type or control-unit-type table.
+    struct dev_entry {
+        u16         type;       ///< 4-digit IBM type number.
+        dev_class   cls;        ///< Broad class.
+        const char* name;       ///< Human-readable short name.
+    };
+
+    static constexpr dev_entry device_types[] = {
+        { 0x2501, dev_class::reader,     "2501 card reader"           },
+        { 0x2540, dev_class::reader,     "2540 card reader/punch"     },
+
+        { 0x1403, dev_class::printer,    "1403 line printer"          },
+        { 0x3211, dev_class::printer,    "3211 line printer"          },
+
+        { 0x3215, dev_class::console,    "3215 line-mode console"     },
+        { 0x3270, dev_class::display,    "3270 display"               },
+        { 0x3277, dev_class::display,    "3277 display"               },
+        { 0x3278, dev_class::display,    "3278 display"               },
+        { 0x3279, dev_class::display,    "3279 color display"         },
+
+        { 0x3505, dev_class::reader,     "3505 card reader"           },
+        { 0x3525, dev_class::punch,      "3525 card punch"            },
+
+        { 0x3380, dev_class::dasd_eckd,  "3380 CKD DASD"             },
+        { 0x3390, dev_class::dasd_eckd,  "3390 ECKD DASD"            },
+
+        { 0x0671, dev_class::dasd_fba,   "0671 FBA DASD"             },
+        { 0x9336, dev_class::dasd_fba,   "9336 FBA DASD"             },
+
+        { 0x3420, dev_class::tape,       "3420 tape"                  },
+        { 0x3480, dev_class::tape,       "3480 tape cartridge"        },
+        { 0x3490, dev_class::tape,       "3490 tape cartridge"        },
+        { 0x3590, dev_class::tape,       "3590 high-perf tape"       },
+
+        { 0x3088, dev_class::ctc,        "3088 CTC adapter"          },
+
+        { 0x1731, dev_class::network,    "OSA-Express"               },
+        { 0x1732, dev_class::network,    "OSA-Express (data)"        },
+
+        { 0x2104, dev_class::crypto,     "Crypto Express EP11"       },
+        { 0x2105, dev_class::crypto,     "Crypto Express CCA"        },
+
+        { 0x3832, dev_class::virtio,     "virtio-ccw transport"      },
+    };
+
+    static constexpr u32 NUM_DEVICE_TYPES =
+        sizeof(device_types) / sizeof(device_types[0]);
+
+    static constexpr dev_entry cu_types[] = {
+        { 0x1750, dev_class::dasd_eckd,  "DS8000 storage ctrl"       },
+        { 0x2105, dev_class::dasd_eckd,  "2105 ESS storage ctrl"     },
+        { 0x2107, dev_class::dasd_eckd,  "2107 ESS storage ctrl"     },
+        { 0x3880, dev_class::dasd_eckd,  "3880 storage ctrl"         },
+        { 0x3990, dev_class::dasd_eckd,  "3990 storage ctrl"         },
+
+        { 0x6310, dev_class::dasd_fba,   "6310 FBA ctrl"             },
+        { 0x9343, dev_class::dasd_fba,   "9343 FBA ctrl"             },
+
+        { 0x3174, dev_class::display,    "3174 terminal ctrl"        },
+        { 0x3274, dev_class::display,    "3274 terminal ctrl"        },
+
+        { 0x3215, dev_class::console,    "3215 console ctrl"         },
+
+        { 0x3480, dev_class::tape,       "3480 tape ctrl"            },
+        { 0x3490, dev_class::tape,       "3490 tape ctrl"            },
+        { 0x3590, dev_class::tape,       "3590 tape ctrl"            },
+
+        { 0x3088, dev_class::ctc,        "3088 CTC ctrl"             },
+
+        { 0x1731, dev_class::network,    "OSA-Express ctrl"          },
+        { 0x1732, dev_class::network,    "OSA-Express data ctrl"     },
+
+        { 0x2104, dev_class::crypto,     "Crypto Express EP11 ctrl"  },
+        { 0x2105, dev_class::crypto,     "Crypto Express CCA ctrl"   },
+
+        { 0x3832, dev_class::virtio,     "virtio-ccw ctrl"           },
+    };
+
+    static constexpr u32 NUM_CU_TYPES =
+        sizeof(cu_types) / sizeof(cu_types[0]);
+
+    static constexpr const char* class_names[] = {
+        "console",       // console
+        "display",       // display
+        "dasd-eckd",     // dasd_eckd
+        "dasd-fba",      // dasd_fba
+        "tape",          // tape
+        "printer",       // printer
+        "reader",        // reader
+        "punch",         // punch
+        "network",       // network
+        "crypto",        // crypto
+        "ctc",           // ctc
+        "virtio",        // virtio
+        "unknown",       // unknown
+    };
+
+} // namespace arch::s390x::css::devmatch::_internal
+
+export {
+
+namespace arch::s390x::css::devmatch {
+
+    using namespace _internal;
+
+    /// @brief Result of a device lookup.
+    struct match_result {
+        const char* dev_name;   ///< Human-readable device name, or nullptr.
+        const char* cu_name;    ///< Human-readable control-unit name, or nullptr.
+        dev_class   cls;        ///< Best-guess device class (from dev or cu).
+    };
+
+    /// @brief Look up a device type by its IBM 4-digit code.
+    /// @return Device name string, or nullptr if unknown.
+    [[nodiscard]] constexpr auto lookup_device(u16 dev_type) noexcept -> const char* {
+        for (u32 i = 0; i < NUM_DEVICE_TYPES; ++i) {
+            if (device_types[i].type == dev_type)
+                return device_types[i].name;
+        }
+        return nullptr;
+    }
+
+    /// @brief Look up a control-unit type by its IBM 4-digit code.
+    /// @return CU name string, or nullptr if unknown.
+    [[nodiscard]] constexpr auto lookup_cu(u16 cu_type) noexcept -> const char* {
+        for (u32 i = 0; i < NUM_CU_TYPES; ++i) {
+            if (cu_types[i].type == cu_type)
+                return cu_types[i].name;
+        }
+        return nullptr;
+    }
+
+    /// @brief Get the device class for a device type.
+    [[nodiscard]] constexpr auto device_class_of(u16 dev_type) noexcept -> dev_class {
+        for (u32 i = 0; i < NUM_DEVICE_TYPES; ++i) {
+            if (device_types[i].type == dev_type)
+                return device_types[i].cls;
+        }
+        return dev_class::unknown;
+    }
+
+    /// @brief Get the device class for a control-unit type.
+    [[nodiscard]] constexpr auto cu_class_of(u16 cu_type) noexcept -> dev_class {
+        for (u32 i = 0; i < NUM_CU_TYPES; ++i) {
+            if (cu_types[i].type == cu_type)
+                return cu_types[i].cls;
+        }
+        return dev_class::unknown;
+    }
+
+    /// @brief Get a human-readable name for a device class.
+    [[nodiscard]] constexpr auto class_name(dev_class cls) noexcept -> const char* {
+        const auto idx = static_cast<u8>(cls);
+        if (idx < sizeof(class_names) / sizeof(class_names[0]))
+            return class_names[idx];
+        return "unknown";
+    }
+
+    /// @brief Combined lookup: match both device type and control-unit type.
+    [[nodiscard]] constexpr auto match(u16 dev_type, u16 cu_type) noexcept -> match_result {
+        match_result r{ nullptr, nullptr, dev_class::unknown };
+
+        for (u32 i = 0; i < NUM_DEVICE_TYPES; ++i) {
+            if (device_types[i].type == dev_type) {
+                r.dev_name = device_types[i].name;
+                r.cls      = device_types[i].cls;
+                break;
+            }
+        }
+
+        for (u32 i = 0; i < NUM_CU_TYPES; ++i) {
+            if (cu_types[i].type == cu_type) {
+                r.cu_name = cu_types[i].name;
+                if (r.cls == dev_class::unknown)
+                    r.cls = cu_types[i].cls;
+                break;
+            }
+        }
+
+        return r;
+    }
+
+    /// @brief Check if a device+CU combination is a DASD.
+    [[nodiscard]] constexpr auto is_dasd(u16 dev_type, u16 cu_type) noexcept -> bool {
+        const auto cls = match(dev_type, cu_type).cls;
+        return cls == dev_class::dasd_eckd || cls == dev_class::dasd_fba;
+    }
+
+    /// @brief Check if a device+CU combination is a console/terminal.
+    [[nodiscard]] constexpr auto is_terminal(u16 dev_type, u16 cu_type) noexcept -> bool {
+        const auto cls = match(dev_type, cu_type).cls;
+        return cls == dev_class::console || cls == dev_class::display;
+    }
+
+    /// @brief Check if a device+CU combination is a network adapter.
+    [[nodiscard]] constexpr auto is_network(u16 dev_type, u16 cu_type) noexcept -> bool {
+        return match(dev_type, cu_type).cls == dev_class::network;
+    }
+
+} // namespace arch::s390x::css::devmatch
+
+} // end export

@@ -28,9 +28,6 @@ namespace zxfoundation::memory::slub::_internal {
     using namespace pmm;
 
     /// @brief Static pool of kmem_cache objects.
-    ///
-    /// Using a static array avoids the bootstrap problem of needing SLUB
-    /// to allocate a kmem_cache.  All slots start in the fresh state.
     static kmem_cache  g_cache_table[SLUB_MAX_CACHES]{};
     static u32               g_cache_count{0};
     static locking::qspinlock::qspinlock g_cache_table_lock{};
@@ -134,7 +131,7 @@ namespace zxfoundation::memory::slub::_internal {
         auto result = pmm::alloc(cache.order, zone::normal, purpose::slab);
         if (!result) [[unlikely]] return nullptr;
 
-        folio_ready folio = static_cast<folio_fresh&&>(*result).make_ready();
+        folio_active folio = static_cast<folio_embryo&&>(*result).make_active();
         const u64 phys    = folio.phys_base;
         auto* sh = reinterpret_cast<slab_header*>(hhdm::phys_to_virt(phys));
 
@@ -355,7 +352,7 @@ namespace zxfoundation::memory::slub {
         u32          object_size,
         u32          align,
         slub_flags   flags = slub_flags::none
-    ) noexcept -> lib::expected<kmem_cache_ref_ready, lib::kernel_error> {
+    ) noexcept -> lib::expected<kmem_cache_ref_active, lib::kernel_error> {
         using namespace _internal;
         using namespace pmm;
 
@@ -416,11 +413,11 @@ namespace zxfoundation::memory::slub {
         slot.cpu_partial      = SLUB_CPU_PARTIAL_DEFAULT;
 
 
-        // Typestate transition: fresh → ready via kmem_cache_ref.
+        // Typestate transition: embryo → active via kmem_cache_ref.
         // Only then is the count bumped so the slot becomes visible
         // to kmem_get_cache() iterators.
-        kmem_cache_ref_fresh fresh_ref{&slot};
-        auto ready_ref = fresh_ref.activate();
+        kmem_cache_ref_embryo embryo_ref{&slot};
+        auto ready_ref = embryo_ref.activate();
         ++g_cache_count;
         return ready_ref;
     }

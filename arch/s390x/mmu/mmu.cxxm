@@ -57,7 +57,7 @@ namespace arch::s390x::mmu::_internal {
 
         auto rollback() noexcept -> void {
             for (u32 i = 0; i < count; ++i) {
-                pmm::folio_ready f{entries[i].phys, entries[i].order,
+                pmm::folio_active f{entries[i].phys, entries[i].order,
                                    pmm::purpose::page_table, pmm::zone::normal};
                 pmm::free(::lib::move(f));
             }
@@ -516,7 +516,7 @@ namespace arch::s390x::mmu {
         if (!tbl.valid()) return;
         constexpr u32 order = (Level == dat_level::page)
             ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
-        zxfoundation::memory::pmm::folio_ready f{
+        zxfoundation::memory::pmm::folio_active f{
             tbl.origin_phys, order,
             zxfoundation::memory::pmm::purpose::page_table,
             zxfoundation::memory::pmm::zone::normal};
@@ -544,9 +544,6 @@ namespace arch::s390x::mmu {
     ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
         auto result = _internal::map_page_impl(
             root.origin_phys, Root, virt, phys, prot);
-        // Defense-in-depth: flush even for new mappings.
-        // (s390x TLB never caches failed translations, so strictly
-        //  unnecessary, but we flush to guard against microcode errata.)
         return result;
     }
 

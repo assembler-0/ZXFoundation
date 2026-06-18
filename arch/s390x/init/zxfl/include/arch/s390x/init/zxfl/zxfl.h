@@ -60,11 +60,12 @@
 #define ZXFL_CPU_STOPPED        0x02U   ///< CPU is stopped (AP, ready for SIGP)
 #define ZXFL_CPU_UNKNOWN        0x00U   ///< State could not be determined
 
-/// @brief CPU type values in zxfl_cpu_info_t::type (matches STSI 15 sel1).
+/// @brief CPU type values in zxfl_cpu_info_t::type (ZXFL-internal, NOT PoP hw codes).
 #define ZXFL_CPU_TYPE_CP        1U   ///< General-purpose CP
 #define ZXFL_CPU_TYPE_IFL       2U   ///< Integrated Facility for Linux
 #define ZXFL_CPU_TYPE_ICF       3U   ///< Internal Coupling Facility
 #define ZXFL_CPU_TYPE_ZIIP      4U   ///< zIIP
+#define ZXFL_CPU_TYPE_ZAAP      5U   ///< zAAP (z/Arch Application Assist Processor)
 #define ZXFL_CPU_TYPE_UNKNOWN   0xFFU   ///< Unknown type
 
 /// @brief Physical lowcore address (always 0 on z/Architecture).

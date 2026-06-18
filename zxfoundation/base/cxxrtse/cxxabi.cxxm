@@ -53,7 +53,7 @@ auto __cxa_atexit(void (*destructor)(void*), void* obj, void* dso) -> int {
     atexit_lock();
     const bool ok = g_atexit_table.push_back({ destructor, obj, dso }).has_value();
     atexit_unlock();
-    if (!ok) [[unlikely]] arch::s390x::cpu::psw::load_disabled_wait_psw();
+    if (!ok) [[unlikely]] arch::s390x::cpu::psw::disabled_wait();
     return 0;
 }
 
@@ -88,7 +88,7 @@ auto __cxa_guard_acquire(unsigned long long* g) -> int {
     }
 
     while (!(__atomic_load_n(g, __ATOMIC_ACQUIRE) & GUARD_INITIALIZED))
-        ;
+        __asm__ volatile("diag 0,0,0x44" ::: "memory");
     return 0;
 }
 

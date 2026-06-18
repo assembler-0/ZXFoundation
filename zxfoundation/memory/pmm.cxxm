@@ -334,7 +334,6 @@ namespace zxfoundation::memory::pmm {
         table_phys = (table_phys + PAGE_SIZE - 1) & ~static_cast<u64>(PAGE_SIZE - 1);
 
         g_frame_table = reinterpret_cast<frame_desc*>(hhdm::phys_to_virt(table_phys));
-        lib::memset(g_frame_table, 0, table_pages << PAGE_SHIFT);
 
         push_resv(align_resv({ table_phys, table_phys + (table_pages << PAGE_SHIFT) }));
         {
@@ -498,13 +497,13 @@ namespace zxfoundation::memory::pmm {
         /// @param[in] z      Zone constraint.
         /// @param[in] p      Semantic purpose annotation.
         /// @param[in] init   Initialization policy.
-        /// @return folio_fresh on success, kernel_error on failure.
+        /// @return folio_embryo on success, kernel_error on failure.
         [[nodiscard]] auto alloc(
             u32       order,
             zone      z,
             purpose   p    = purpose::generic,
             page_init init = page_init::uninitialized
-        ) noexcept -> lib::expected<folio_fresh, lib::kernel_error> {
+        ) noexcept -> lib::expected<folio_embryo, lib::kernel_error> {
             using namespace _internal;
 
             if (committed() || m_count >= TXN_MAX)
@@ -546,7 +545,7 @@ namespace zxfoundation::memory::pmm {
                             0, static_cast<u64>(PAGE_SIZE) << order);
 
             m_slots[m_count++] = { phys, order, z, p };
-            return folio_fresh{ phys, order, p, z };
+            return folio_embryo{ phys, order, p, z };
         }
 
         [[nodiscard]] auto count() const noexcept -> u32 { return m_count; }
@@ -562,13 +561,13 @@ namespace zxfoundation::memory::pmm {
     /// @param[in] z      Zone constraint.
     /// @param[in] p      Semantic purpose annotation.
     /// @param[in] init   Initialization policy.
-    /// @return folio_fresh on success, kernel_error on failure.
+    /// @return folio_embryo on success, kernel_error on failure.
     [[nodiscard]] auto alloc(
         u32       order,
         zone      z,
         purpose   p    = purpose::generic,
         page_init init = page_init::uninitialized
-    ) noexcept -> lib::expected<folio_fresh, lib::kernel_error> {
+    ) noexcept -> lib::expected<folio_embryo, lib::kernel_error> {
         using namespace _internal;
 
         if (sched::context::in_mcck())
@@ -621,13 +620,13 @@ namespace zxfoundation::memory::pmm {
             lib::memset(reinterpret_cast<void*>(hhdm::phys_to_virt(phys)),
                         0, static_cast<u64>(PAGE_SIZE) << order);
 
-        return folio_fresh{ phys, order, p, z };
+        return folio_embryo{ phys, order, p, z };
     }
 
 
     /// @brief Return a folio to the allocator.
     /// @param[in] f  The folio to free.  Must not be empty.
-    auto free(folio_ready f) noexcept -> void {
+    auto free(folio_active f) noexcept -> void {
         if (!f) return;
         using namespace _internal;
 

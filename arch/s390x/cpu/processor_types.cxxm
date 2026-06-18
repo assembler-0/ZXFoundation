@@ -27,6 +27,26 @@ namespace arch::s390x::cpu::processor {
     /// @brief Per-CPU no-DAT (nodat) stack size.
     constexpr usize S390X_NODAT_STACK_SIZE = 0x2000; // 8 KiB
 
+    /// @brief Offset of the callee-saved GPR save area within a stack frame.
+    /// r6 is at SF_GPRS+0, r7 at SF_GPRS+8, ..., r14 at SF_GPRS+64, r15 at SF_GPRS+72.
+    constexpr usize SF_GPRS = 48;
+
+    /// @brief Offset of saved r14 (return address) within a stack frame.
+    constexpr usize SF_RETADDR = 112; // SF_GPRS + 8*8
+
+    /// @brief s390x ELF ABI stack frame — 160-byte save area at r15.
+    /// Layout per SA22-7832 §6.2, -mno-packed-stack, -mbackchain.
+    struct s390x_stack_frame {
+        u64 back_chain;      // offset   0: pointer to caller's frame (0 = end)
+        u64 eos;             // offset   8: end-of-stack marker / glue
+        u64 glue[4];         // offset  16: compiler glue area (4 × 8 = 32)
+        u64 gprs[10];        // offset  48: saved r6–r15 (callee-saved)
+                             // gprs[8]  = r14 = return address  (offset 112)
+                             // gprs[9]  = r15 = saved SP         (offset 120)
+        u64 fp_area[4];      // offset 128: FP save area (unused under -msoft-float)
+    };
+    static_assert(sizeof(s390x_stack_frame) == S390X_STACK_FRAME_SIZE);
+
 } // namespace arch::s390x::cpu::processor
 
 } // end export

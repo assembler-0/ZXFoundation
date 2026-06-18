@@ -142,7 +142,7 @@ struct topology_core {
 	unsigned char :5;
 	unsigned char d:1;
 	unsigned char pp:2;
-	unsigned char reserved1;
+	unsigned char cputype;          /* PoP CPU type (0=CP, 3=IFL, 4=ICF, 5=zIIP) */
 	unsigned short origin;
 	unsigned long mask;
 };

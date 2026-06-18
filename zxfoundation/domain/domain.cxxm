@@ -2,13 +2,23 @@
 /// @file zxfoundation/domain/domain.cxxm
 /// @brief Domain lifecycle management — create, destroy, activate, find, reap.
 ///
+/// Migrated to SCOMS: the global domain table is now a
+/// `kobject_table<domain, MAX_DOMAINS>`.  Domain creation uses a
+/// transactional pattern (`domain_create_txn`) to guarantee that partial
+/// failures are fully rolled back without leaking resources.
+///
 /// Each domain owns a z/Architecture address space (region-1 ASCE in CR1),
 /// a hardware storage key for access-control isolation, and a kernel stack.
-/// This module manages the global domain table and the lifecycle transitions
-/// between embryo → active → dying → (freed slot).
+/// This module manages the lifecycle transitions between
+/// embryo → active → dying → (released slot).
 
 export module zxfoundation.domain.domain;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_ref;
+import zxfoundation.scoms.scoms_table;
+import zxfoundation.sys.transaction;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
@@ -17,6 +27,7 @@ import zxfoundation.locking.lock;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
 import zxfoundation.base.types;
+import zxfoundation.memory.vm;
 
 import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
@@ -36,17 +47,13 @@ namespace zxfoundation::domain::_internal {
     /// @brief Buddy order for kernel stack allocation: 2^2 = 4 pages.
     static constexpr u32 DOMAIN_KERNEL_STACK_ORDER = 2;
 
-    /// @brief The global domain table — statically allocated.
-    static domain g_domain_table[MAX_DOMAINS]{};
-
-    /// @brief Protects g_domain_table, g_domain_count, and g_key_used.
-    static locking::qspinlock::qspinlock g_domain_lock{};
-
-    /// @brief Number of currently live domains (embryo + active + dying).
-    static u32 g_domain_count{0};
-
-    /// @brief Set to true after domain_init() completes.
-    static bool g_domain_initialized{false};
+    /// @brief The global domain table — SCOMS kobject_table.
+    ///
+    /// Replaces the old g_domain_table[MAX_DOMAINS], g_domain_lock,
+    /// g_domain_count, and g_domain_initialized.  The table provides
+    /// its own lock, free-list allocation, generation counting, and
+    /// atomic slot count.
+    static scoms::kobject_table<domain, MAX_DOMAINS> g_domain_table{};
 
     /// @brief Storage key allocation bitmap.
     /// Index is the 4-bit ACC value (0-15).  true = key is in use.
@@ -57,7 +64,6 @@ namespace zxfoundation::domain::_internal {
     /// @brief Allocate a free storage key from the user range.
     ///
     /// Scans SKEY_USER_BASE..SKEY_USER_MAX for an unused key.
-    /// Caller must hold g_domain_lock.
     ///
     /// @return The 4-bit access-control key number on success.
     [[nodiscard]] auto alloc_storage_key() noexcept
@@ -75,13 +81,157 @@ namespace zxfoundation::domain::_internal {
     }
 
     /// @brief Return a storage key to the free pool.
-    ///
-    /// Caller must hold g_domain_lock.
     auto free_storage_key(u8 key) noexcept -> void {
         if (key >= SKEY_USER_BASE && key <= SKEY_USER_MAX) {
             g_key_used[key] = false;
         }
     }
+
+    // ── Domain creation transaction ─────────────────────────────────────
+
+    /// @brief Transactional domain creation.
+    ///
+    /// Tracks all tentative allocations (table slot, storage key, root
+    /// page table, kernel stack) so that on_rollback() can release them
+    /// in reverse order if any step fails or the transaction is not
+    /// committed.
+    class domain_create_txn : public zxfoundation::transaction<domain_create_txn> {
+        friend class zxfoundation::transaction<domain_create_txn>;
+
+        u32  m_slot{~0U};
+        u8   m_skey{0};
+        u64  m_root_phys{0};
+        u64  m_stack_phys{0};
+
+        bool m_has_slot{false};
+        bool m_has_skey{false};
+        bool m_has_root{false};
+        bool m_has_stack{false};
+
+        /// @brief Rollback handler — releases resources in reverse allocation order.
+        ///
+        /// Called automatically by the transaction base destructor if
+        /// commit() was never called.
+        auto on_rollback() noexcept -> void {
+            namespace pmm  = zxfoundation::memory::pmm;
+            namespace mmu  = arch::s390x::mmu;
+
+            // 4. Free kernel stack (allocated last).
+            if (m_has_stack && m_stack_phys != 0) {
+                pmm::folio_active stack_folio{
+                    m_stack_phys, DOMAIN_KERNEL_STACK_ORDER,
+                    pmm::purpose::stack, pmm::zone::dma31};
+                pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
+            }
+
+            // 3. Free root page table.
+            if (m_has_root && m_root_phys != 0) {
+                mmu::dat_table<mmu::dat_level::region_1> root_tbl{m_root_phys};
+                mmu::table_free<mmu::dat_level::region_1>(root_tbl);
+            }
+
+            // 2. Free storage key.
+            if (m_has_skey) {
+                free_storage_key(m_skey);
+            }
+
+            // 1. Release table slot (allocated first).
+            if (m_has_slot) {
+                (void)g_domain_table.release(m_slot);
+            }
+        }
+
+    public:
+        /// @brief Execute the domain creation.
+        ///
+        /// Performs all allocations transactionally:
+        ///   1. Allocate a table slot → embryo ref
+        ///   2. Allocate a storage key
+        ///   3. Allocate a region-1 root page table
+        ///   4. Allocate a kernel stack
+        ///   5. Populate domain fields
+        ///   6. Commit the transaction
+        ///   7. Activate the domain (embryo → active)
+        ///
+        /// If any step fails, the destructor fires on_rollback() which
+        /// releases all resources allocated so far.
+        ///
+        /// @param[in] name  Human-readable name (must remain valid for
+        ///                   the domain's lifetime).
+        /// @return Pointer to the activated domain, or kernel_error.
+        [[nodiscard]] auto execute(const char* name) noexcept
+            -> lib::expected<domain*, lib::kernel_error>
+        {
+            namespace pmm  = zxfoundation::memory::pmm;
+            namespace hhdm = zxfoundation::memory::hhdm;
+            namespace mmu  = arch::s390x::mmu;
+
+            // 1. Allocate a table slot.
+            auto slot_result = g_domain_table.alloc();
+            if (!slot_result)
+                return lib::unexpected(slot_result.error());
+
+            auto embryo_ref = *slot_result;
+            m_slot     = embryo_ref.id();
+            m_has_slot = true;
+
+            // 2. Allocate a storage key.
+            auto key_result = alloc_storage_key();
+            if (!key_result)
+                return lib::unexpected(key_result.error());
+            m_skey     = *key_result;
+            m_has_skey = true;
+
+            // 3. Allocate region-1 root page table.
+            auto table_result = mmu::crst_alloc<mmu::dat_level::region_1>();
+            if (!table_result)
+                return lib::unexpected(table_result.error());
+            auto root_table = *table_result;
+            m_root_phys = root_table.origin_phys;
+            m_has_root  = true;
+
+            // 4. Allocate kernel stack (order 2 = 4 pages, zeroed).
+            auto stack_result = pmm::alloc(
+                DOMAIN_KERNEL_STACK_ORDER,
+                pmm::zone::dma31,
+                pmm::purpose::stack,
+                pmm::page_init::zeroed);
+            if (!stack_result)
+                return lib::unexpected(stack_result.error());
+            m_stack_phys = stack_result->phys_base;
+            m_has_stack  = true;
+
+            // 5. Populate domain fields.
+            domain* d       = embryo_ref.raw();
+            d->name         = name;
+            d->flags        = domain_flags::none;
+            d->storage_key  = m_skey;
+            d->root_phys    = m_root_phys;
+
+            auto asce = mmu::asce_build<mmu::dat_level::region_1>(root_table);
+            d->asce         = asce;
+
+            d->primary_strand.kstack_base  = hhdm::phys_to_virt(m_stack_phys);
+            d->primary_strand.kstack_top   = d->primary_strand.kstack_base + DOMAIN_KERNEL_STACK_SIZE;
+            d->primary_strand.ksp          = d->primary_strand.kstack_top;  // Initial: empty stack, grows downward.
+            d->primary_strand.on_rq        = false;
+            d->primary_strand.cpu          = 0;
+            d->primary_strand.owner        = d;  // Back-pointer: strand → owning domain.
+            d->gate_count   = 0;
+            d->portal_count = 0;
+
+            // Initialize the per-domain virtual memory space.
+            zxfoundation::memory::vm::vm_space_init(d->vm_space);
+
+            // 6. Commit the transaction — disarms on_rollback().
+            commit();
+
+            // 7. Activate: embryo → active.
+            d->ko.state = scoms::lifecycle_state::active;
+
+            return d;
+        }
+    };
 
 } // namespace zxfoundation::domain::_internal
 
@@ -93,15 +243,16 @@ namespace zxfoundation::domain {
 
     /// @brief Initialize the domain subsystem.
     ///
-    /// Must be called once during boot, before any domain_create() calls.
-    /// Reserves storage key 0 for the nucleus.
+    /// Initializes the SCOMS domain table and reserves storage key 0
+    /// for the nucleus.  Must be called once during boot, before any
+    /// domain_create() calls.
     auto domain_init() noexcept -> void {
         using namespace _internal;
 
+        g_domain_table.init(scoms::kobject_type::domain);
+
         // Key 0 is permanently reserved for the nucleus.
         g_key_used[SKEY_NUCLEUS] = true;
-
-        g_domain_initialized = true;
 
         sys::printk::pinfo("domain: subsystem initialized, max_domains={}\n",
                            MAX_DOMAINS);
@@ -109,21 +260,21 @@ namespace zxfoundation::domain {
 
     /// @brief Create a new domain.
     ///
-    /// Allocates a storage key, a region-1 root page table, builds the ASCE,
-    /// and allocates a kernel stack. The domain starts in the embryo state.
+    /// Uses a transactional pattern to allocate a table slot, storage key,
+    /// root page table, and kernel stack.  If any allocation fails, all
+    /// prior allocations are automatically rolled back.
+    ///
+    /// The domain is activated (embryo → active) before being returned.
     ///
     /// @param[in] name  Human-readable name (pointer must remain valid for
     ///                   the domain's lifetime).
-    /// @return Pointer to the newly initialized domain, or kernel_error.
+    /// @return Pointer to the newly created and activated domain, or kernel_error.
     [[nodiscard]] auto domain_create(const char* name) noexcept
         -> lib::expected<domain*, lib::kernel_error>
     {
         using namespace _internal;
-        namespace pmm  = zxfoundation::memory::pmm;
-        namespace hhdm = zxfoundation::memory::hhdm;
-        namespace mmu  = arch::s390x::mmu;
 
-        if (!g_domain_initialized)
+        if (!g_domain_table.initialized())
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::uninitialized));
 
@@ -131,98 +282,30 @@ namespace zxfoundation::domain {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        domain* result_ptr = nullptr;
-        u32 result_slot = 0;
-        u8  result_skey = 0;
+        domain_create_txn txn;
+        auto result = txn.execute(name);
 
-        {
-            const locking::irq_lock_guard guard{g_domain_lock};
+        if (result) {
+            sys::printk::pinfo("domain: created id={} name=\"{}\" skey={}\n",
+                               (*result)->ko.id, name, (*result)->storage_key);
+        }
 
-            // 1. Find a free slot.
-            u32 slot = DOMAIN_ID_INVALID;
-            for (u32 i = 0; i < MAX_DOMAINS; ++i) {
-                if (g_domain_table[i].id == DOMAIN_ID_INVALID) {
-                    slot = i;
-                    break;
-                }
-            }
-            if (slot == DOMAIN_ID_INVALID)
-                return lib::unexpected(
-                    lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
-
-            // 2. Allocate a storage key.
-            auto key_result = alloc_storage_key();
-            if (!key_result)
-                return lib::unexpected(key_result.error());
-            const u8 skey = *key_result;
-
-            // 3. Allocate region-1 root page table.
-            auto table_result = mmu::crst_alloc<mmu::dat_level::region_1>();
-            if (!table_result) {
-                free_storage_key(skey);
-                return lib::unexpected(table_result.error());
-            }
-            auto root_table = *table_result;
-
-            // 4. Build ASCE from root table.
-            auto asce = mmu::asce_build<mmu::dat_level::region_1>(root_table);
-
-            // 5. Allocate kernel stack (order 2 = 4 pages, zeroed).
-            auto stack_result = pmm::alloc(
-                DOMAIN_KERNEL_STACK_ORDER,
-                pmm::zone::dma31,
-                pmm::purpose::stack,
-                pmm::page_init::zeroed);
-            if (!stack_result) {
-                free_storage_key(skey);
-                mmu::table_free<mmu::dat_level::region_1>(root_table);
-                return lib::unexpected(stack_result.error());
-            }
-            const u64 stack_phys = stack_result->phys_base;
-
-            // 6. Populate the domain slot.
-            domain& d       = g_domain_table[slot];
-            d.id            = slot;
-            d.name          = name;
-            d.state         = domain_state::embryo;
-            d.flags         = domain_flags::none;
-            d.asce          = asce;
-            d.root_phys     = root_table.origin_phys;
-            d.storage_key   = skey;
-            d.kstack_base   = hhdm::phys_to_virt(stack_phys);
-            d.kstack_top    = d.kstack_base + DOMAIN_KERNEL_STACK_SIZE;
-            d.ksp           = d.kstack_top; // initial: empty stack, grows downward
-            d.on_rq         = false;
-            d.cpu           = 0;
-            d.gate_count    = 0;
-            d.portal_count  = 0;
-
-            // 7. Bookkeeping.
-            ++g_domain_count;
-
-            result_ptr  = &d;
-            result_slot = slot;
-            result_skey = skey;
-        } // lock released here
-
-        sys::printk::pinfo("domain: created id={} name=\"{}\" skey={}\n",
-                           result_slot, name, result_skey);
-
-        return result_ptr;
+        return result;
     }
 
     /// @brief Destroy a domain and release all its resources.
     ///
     /// Performs full teardown:
     ///   1. Validates the domain ID and checks the slot is live.
-    ///   2. If the domain is on a run queue, dequeues it.
-    ///   3. Marks the domain as dying.
-    ///   4. Destroys all gates owned by this domain.
-    ///   5. Destroys all portals involving this domain.
-    ///   6. Frees the kernel stack via PMM.
-    ///   7. Frees the root page table via MMU.
-    ///   8. Frees the storage key.
-    ///   9. Resets the slot for reuse.
+    ///   2. Marks the domain as dying.
+    ///   3. Frees the kernel stack via PMM.
+    ///   4. Frees the root page table via MMU.
+    ///   5. Frees the storage key.
+    ///   6. Releases the table slot back to the SCOMS kobject_table.
+    ///
+    /// NOTE: Gate, portal, and scheduler cleanup is performed by the
+    /// caller (domain_reap in sched.cxxm) BEFORE calling domain_destroy.
+    /// This avoids circular module dependencies.
     ///
     /// @param[in] id  Domain ID to destroy.
     /// @return Success or kernel_error on invalid ID.
@@ -238,57 +321,52 @@ namespace zxfoundation::domain {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        const locking::irq_lock_guard guard{g_domain_lock};
-
-        domain& d = g_domain_table[id];
-        if (d.id == DOMAIN_ID_INVALID)
+        domain* d = g_domain_table.find_raw(id);
+        if (!d)
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
 
         // Mark as dying.
-        d.state = domain_state::dying;
+        d->ko.state = scoms::lifecycle_state::dying;
 
-        // NOTE: Gate, portal, and scheduler cleanup is performed by the
-        // caller (domain_reap in sched.cxxm) BEFORE calling domain_destroy.
-        // This avoids circular module dependencies.
+        sys::printk::pinfo("domain: destroying id={} name=\"{}\"\n", id, d->name);
 
         // Free kernel stack.
-        if (d.kstack_base != 0) {
-            const u64 stack_phys = hhdm::virt_to_phys(d.kstack_base);
-            pmm::folio_ready stack_folio{
+        if (d->primary_strand.kstack_base != 0) {
+            const u64 stack_phys = hhdm::virt_to_phys(d->primary_strand.kstack_base);
+            pmm::folio_active stack_folio{
                 stack_phys, DOMAIN_KERNEL_STACK_ORDER,
                 pmm::purpose::stack, pmm::zone::dma31};
-            pmm::free(static_cast<pmm::folio_ready&&>(stack_folio));
+            pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
         }
 
         // Free root page table.
-        if (d.root_phys != 0) {
-            mmu::dat_table<mmu::dat_level::region_1> root_tbl{d.root_phys};
+        if (d->root_phys != 0) {
+            mmu::dat_table<mmu::dat_level::region_1> root_tbl{d->root_phys};
             mmu::table_free<mmu::dat_level::region_1>(root_tbl);
         }
 
         // Free storage key.
-        free_storage_key(d.storage_key);
+        free_storage_key(d->storage_key);
 
-        sys::printk::pinfo("domain: destroyed id={} name=\"{}\"\n", id, d.name);
+        // Reset domain fields before releasing the slot.
+        d->name         = "";
+        d->flags        = domain_flags::none;
+        d->asce         = {};
+        d->root_phys    = 0;
+        d->storage_key  = 0;
+        d->primary_strand.kstack_base  = 0;
+        d->primary_strand.kstack_top   = 0;
+        d->primary_strand.ksp          = 0;
+        d->primary_strand.on_rq        = false;
+        d->primary_strand.cpu          = 0;
+        d->gate_count   = 0;
+        d->portal_count = 0;
 
-        // Reset the slot to defaults.
-        d.id           = DOMAIN_ID_INVALID;
-        d.name         = "";
-        d.state        = domain_state::embryo;
-        d.flags        = domain_flags::none;
-        d.asce         = {};
-        d.root_phys    = 0;
-        d.storage_key  = 0;
-        d.kstack_base  = 0;
-        d.kstack_top   = 0;
-        d.ksp          = 0;
-        d.on_rq        = false;
-        d.cpu          = 0;
-        d.gate_count   = 0;
-        d.portal_count = 0;
-
-        --g_domain_count;
+        // Release the table slot back to the free-list.
+        auto release_result = g_domain_table.release(id);
+        if (!release_result)
+            return lib::unexpected(release_result.error());
 
         return {};
     }
@@ -303,12 +381,14 @@ namespace zxfoundation::domain {
     ///
     /// @param[in,out] d  The dying domain to reap.
     auto domain_reap(domain& d) noexcept -> void {
-        if (d.id == DOMAIN_ID_INVALID) return;
-        if (d.state != domain_state::dying) return;
+        using namespace _internal;
 
-        sys::printk::pinfo("domain: reaping id={} name=\"{}\"\n", d.id, d.name);
+        if (d.ko.id == scoms::KOBJECT_ID_INVALID) return;
+        if (d.ko.state != scoms::lifecycle_state::dying) return;
 
-        (void)domain_destroy(d.id);
+        sys::printk::pinfo("domain: reaping id={} name=\"{}\"\n", d.ko.id, d.name);
+
+        (void)domain_destroy(d.ko.id);
     }
 
     /// @brief Look up a domain by ID.
@@ -318,15 +398,7 @@ namespace zxfoundation::domain {
     ///         the ID is out of range.
     [[nodiscard]] auto domain_find(domain_id id) noexcept -> domain* {
         using namespace _internal;
-
-        if (id >= MAX_DOMAINS)
-            return nullptr;
-
-        domain& d = g_domain_table[id];
-        if (d.id == DOMAIN_ID_INVALID)
-            return nullptr;
-
-        return &d;
+        return g_domain_table.find_raw(id);
     }
 
     /// @brief Activate a domain: transition from embryo → active.
@@ -342,25 +414,18 @@ namespace zxfoundation::domain {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        const char* dname = nullptr;
+        domain* d = g_domain_table.find_raw(id);
+        if (!d)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
 
-        {
-            const locking::irq_lock_guard guard{g_domain_lock};
+        if (d->ko.state != scoms::lifecycle_state::embryo)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-            domain& d = g_domain_table[id];
-            if (d.id == DOMAIN_ID_INVALID)
-                return lib::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::not_found));
+        d->ko.state = scoms::lifecycle_state::active;
 
-            if (d.state != domain_state::embryo)
-                return lib::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-
-            d.state = domain_state::active;
-            dname = d.name;
-        }
-
-        sys::printk::pinfo("domain: activated id={} name=\"{}\"\n", id, dname);
+        sys::printk::pinfo("domain: activated id={} name=\"{}\"\n", id, d->name);
 
         return {};
     }
@@ -368,7 +433,7 @@ namespace zxfoundation::domain {
     /// @brief Return the current number of live domains.
     [[nodiscard]] auto domain_count() noexcept -> u32 {
         using namespace _internal;
-        return g_domain_count;
+        return g_domain_table.count();
     }
 
 } // namespace zxfoundation::domain

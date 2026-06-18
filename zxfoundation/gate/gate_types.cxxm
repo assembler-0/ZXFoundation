@@ -2,19 +2,18 @@
 /// @file zxfoundation/gate/gate_types.cxxm
 /// @brief Gate subsystem types — hardware-mediated cross-domain entry points
 ///        using the z/Architecture PC (Program Call) instruction.
+///
+/// The gate_desc embeds a SCOMS kobject at offset 0, providing unified
+/// lifecycle management, reference counting, and generation-based ABA
+/// prevention for every gate in the system.
 
 export module zxfoundation.gate.gate_types;
 import zxfoundation.base.types;
+import zxfoundation.scoms.scoms_types;
 
 export {
 
 namespace zxfoundation::gate {
-
-    /// @brief Strongly-typed gate identifier.
-    using gate_id = u32;
-
-    /// @brief Sentinel value for an invalid / unassigned gate.
-    constexpr gate_id GATE_ID_INVALID = 0xFFFF'FFFFU;
 
     /// @brief Maximum number of gates in the system.
     constexpr u32 MAX_GATES = 512U;
@@ -94,17 +93,22 @@ namespace zxfoundation::gate {
     ///
     /// Describes the target domain, entry point, type, and authorization
     /// policy for a single PC-mediated cross-domain call.
+    ///
+    /// The kobject header at offset 0 provides lifecycle state, atomic
+    /// refcount, generation counter, and per-object lock.
     struct gate_desc {
-        gate_id   id{GATE_ID_INVALID};
+        scoms::kobject ko{};              ///< FIRST field — lifecycle + refcount.
         gate_type type{gate_type::nucleus};
         gate_auth auth{gate_auth::any};
-        u8        target_key{0};       ///< Storage key of target domain (for keyed auth).
+        u8        target_key{0};          ///< Storage key of target domain (for keyed auth).
         u8        _pad0{0};
-        u32       target_domain{0};    ///< Domain ID of the target (0 = nucleus).
-        u64       entry_va{0};         ///< Entry point virtual address in target domain.
+        u32       target_domain{0};       ///< Domain ID of the target (0 = nucleus).
+        u64       entry_va{0};            ///< Entry point virtual address in target domain.
 
         gate_desc() noexcept = default;
     };
+
+    static_assert(__builtin_offsetof(gate_desc, ko) == 0);
 
     // -----------------------------------------------------------------
     // Nucleus call dispatch

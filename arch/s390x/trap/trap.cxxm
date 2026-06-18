@@ -1,29 +1,26 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/trap/trap.cxxm
-/// @brief C++ interrupt handlers called from entry.S via brasl.
-///
-/// Each handler receives an irq_frame* in %r2 (the first C parameter).
-/// The frame was saved by the SAVE_FRAME macro in entry.S.
-///
-/// SVC handling is now a thin dispatch through the nucleus gate dispatch
-/// table. Handler logic lives in zxfoundation.gate.nucleus_handlers.
+/// @brief C++ interrupt handlers.
 
 export module arch.s390x.trap.trap;
-
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw_types;
 import arch.s390x.cpu.psw;
 import arch.s390x.css.css;
-import zxfoundation.memory.hhdm;
 import arch.s390x.cpu.processor;
+import zxfoundation.memory.hhdm;
+import zxfoundation.memory.fault;
+import zxfoundation.memory.vm_types;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.timer;
+import zxfoundation.sys.stacktrace;
 import zxfoundation.domain.domain_types;
 import zxfoundation.gate.dispatch;
+import zxfoundation.base.typestate;
 import lib.error;
 
 /// @brief Program check handler.
@@ -36,25 +33,78 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
         (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
 
     if (!in_problem_state) {
-        // Nucleus fault — this is a kernel bug.
+        // ---- Transaction constraint exception (0x0218) ----------------------
+        // A non-constrained TX abort (e.g., VL inside TBEGIN/TEND) generates
+        // a program interrupt with code 0x0218.  The CPU has already aborted
+        // the transaction and set CC != 0 in the old PSW.  The TBEGIN retry
+        // loop in qspinlock::tx_try_lock() handles this transparently.
+        //
+        // We MUST NOT call syschk_fatal here because:
+        //   syschk_fatal → pemerg → printk → qspinlock::lock → tx_try_lock
+        //   → TBEGIN → constraint exception → do_pgm_check → syschk_fatal
+        //   → infinite recursion → stack overflow → operation exception storm.
+        //
+        // Also handle bare transaction abort (0x0200) for completeness.
+        constexpr u16 PGM_TX_CONSTRAINT = 0x0218;
+        constexpr u16 PGM_TX_ABORT      = 0x0200;
+        if (pgm_code == PGM_TX_CONSTRAINT || pgm_code == PGM_TX_ABORT) {
+            // Transaction was already aborted by hardware.
+            // Return to the instruction following the outermost TBEGIN
+            // (which the CPU has already set in the old PSW with CC != 0).
+            return;
+        }
+
+        // All other nucleus faults — this is a kernel bug.
+        zxfoundation::sys::stacktrace::dump_stack_from_irq(frame);
         zxfoundation::sys::syschk::syschk_fatal(
             lib::kernel_error::from_generic(lib::generic_error::internal_error),
             "program check {:#06x} at PSW {:#018x}:{:#018x} tex={:#018x}",
             static_cast<u32>(pgm_code), frame->psw_mask, frame->psw_addr, trans_exc);
     }
 
-    // Domain fault — terminate the faulting domain.
+    // Domain fault — get the faulting domain.
     auto* lc = arch::s390x::cpu::lowcore::get_current();
     auto* d = reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
 
+    // Check if this is a translation exception (page fault).
+    const bool is_translation_exception =
+        pgm_code == 0x0010 ||  // Segment translation
+        pgm_code == 0x0011 ||  // Page translation
+        pgm_code == 0x0004 ||  // Protection
+        pgm_code == 0x0039 ||  // Region first translation
+        pgm_code == 0x003A ||  // Region second translation
+        pgm_code == 0x003B;    // Region third translation
+
+    if (is_translation_exception && d) {
+        const u64 fault_va = trans_exc & ~0xFFFULL; // Page-align
+        const bool is_write = (pgm_code == 0x0004); // Protection = store
+        const bool is_exec  = false; // TODO: detect from TEA bits
+
+        auto action = zxfoundation::memory::vm::handle_page_fault(
+            d->vm_space,
+            d->root_phys,
+            d->storage_key,
+            fault_va,
+            is_write,
+            is_exec);
+
+        if (action == zxfoundation::memory::vm::fault_action::resolved ||
+            action == zxfoundation::memory::vm::fault_action::stack_grew) {
+            return; // Fault handled, resume user execution.
+        }
+        // Fall through to domain kill for guard_hit / killed.
+    }
+
+    // Unhandled fault — terminate the faulting domain.
     if (d) {
-        d->state = zxfoundation::domain::domain_state::dying;
+        zxfoundation::sys::stacktrace::dump_stack_from_irq(frame);
+        d->ko.state = zxfoundation::base::lifecycle_state::dying;
         d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
     } else {
         zxfoundation::sys::printk::perr(
             "domain fault: pgm_code={:#06x} addr={:#018x} (no current domain)\n",
             static_cast<u32>(pgm_code), frame->psw_addr);
-        arch::s390x::cpu::psw::load_disabled_wait_psw();
+        arch::s390x::cpu::psw::disabled_wait();
     }
 }
 
@@ -90,9 +140,6 @@ extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fra
     // Extract the subchannel number from the lower 16 bits of the SID word.
     const u16 sch_no = static_cast<u16>(sid & 0xFFFFU);
 
-    zxfoundation::sys::printk::pdebug("io_int: sch=0.0.{:04x}",
-                                      static_cast<u32>(sch_no));
-
     // Dispatch to the CSS layer for TSCH / IRB processing.
     arch::s390x::css::css_io_interrupt(sch_no);
 }
@@ -111,6 +158,6 @@ extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* f
     (void)frame;
     const u64 mcck_code = *reinterpret_cast<const u64*>(0xE8UL);
     if (mcck_code != 0) {
-        zxfoundation::sys::printk::perr("mcck: interruption code={:#018x}\n", mcck_code);
+        zxfoundation::sys::printk::pcrit("mcck: interruption code={:#018x}\n", mcck_code);
     }
 }

@@ -44,6 +44,7 @@ namespace arch::s390x::init::zxfl {
     constexpr auto ZXFL_CPU_TYPE_IFL     = 2U;
     constexpr auto ZXFL_CPU_TYPE_ICF     = 3U;
     constexpr auto ZXFL_CPU_TYPE_ZIIP    = 4U;
+    constexpr auto ZXFL_CPU_TYPE_ZAAP    = 5U;
     constexpr auto ZXFL_CPU_TYPE_UNKNOWN = 0xFFU;
 
     constexpr auto ZXFL_LOWCORE_PHYS  = 0x0ULL;
@@ -174,6 +175,39 @@ namespace arch::s390x::init::zxfl {
     static_assert(__builtin_offsetof(protocol, cpu_map) == 440U,
         "cpu_map offset mismatch — cpu_info size changed?");
 
+    /// @brief Pretty-print a ZXFL memory region type.
+    [[nodiscard]] auto mem_type_str(u32 type) noexcept -> const char* {
+        switch (type) {
+            case ZXFL_MEM_USABLE:   return "usable";
+            case ZXFL_MEM_RESERVED: return "reserved";
+            case ZXFL_MEM_LOADER:   return "loader";
+            case ZXFL_MEM_KERNEL:   return "kernel";
+            default:                                          return "unknown";
+        }
+    }
+
+    /// @brief Pretty-print a ZXFL CPU state.
+    [[nodiscard]] auto cpu_state_str(u8 state) noexcept -> const char* {
+        switch (state) {
+            case ZXFL_CPU_ONLINE:  return "online";
+            case ZXFL_CPU_STOPPED: return "stopped";
+            default:                                         return "unknown";
+        }
+    }
+
+    /// @brief Pretty-print a ZXFL CPU type.
+    [[nodiscard]] auto cpu_type_str(u8 type) noexcept -> const char* {
+        switch (type) {
+            case ZXFL_CPU_TYPE_CP:      return "CP";
+            case ZXFL_CPU_TYPE_IFL:     return "IFL";
+            case ZXFL_CPU_TYPE_ICF:     return "ICF";
+            case ZXFL_CPU_TYPE_ZIIP:    return "zIIP";
+            case ZXFL_CPU_TYPE_ZAAP:    return "zAAP";
+            case ZXFL_CPU_TYPE_UNKNOWN: return "unknown";
+            default:                    return "?";
+        }
+    }
+    
 } // namespace arch::s390x::init::zxfl
 
 namespace arch::s390x::init::zxvl {

@@ -1,6 +1,17 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/base/typestate.cxxm
 /// @brief Typestate carrier — compile-time lifecycle enforcement.
+///
+/// Unified lifecycle states used by ALL kernel subsystems through SCOMS.
+/// The same state machine applies to domains, gates, portals, vm_regions,
+/// folios, and slab caches.
+///
+/// State transitions:
+///
+///   embryo ──┬──► active ◄──► suspended
+///            │       │            │
+///            │       ▼            │
+///            └──► dying ◄────────┘
 
 export module zxfoundation.base.typestate;
 import zxfoundation.base.types;
@@ -9,17 +20,28 @@ export {
 
 namespace zxfoundation::base {
 
-    /// @brief Lifecycle states for typestate-tracked resources.
+    /// @brief Unified lifecycle states for ALL typestate-tracked resources.
+    ///
+    /// Every SCOMS-managed object, every folio, and every slab cache
+    /// uses exactly these four states.  No subsystem may define its own.
     enum class lifecycle_state : u8 {
-        fresh     = 0, ///< Allocated, fields not yet initialized.
-        ready     = 1, ///< Fully initialized and usable.
-        suspended = 2, ///< Temporarily inactive.
-        dying     = 3, ///< Teardown in progress.
+        embryo    = 0, ///< Allocated, fields being populated. Not usable yet.
+        active    = 1, ///< Fully initialized, accepting operations.
+        suspended = 2, ///< Temporarily inactive (blocked, quiesced).
+        dying     = 3, ///< Teardown in progress. No new operations.
     };
+
+    /// @brief Backward-compatible aliases for subsystems still using
+    ///        the old naming convention during migration.
+    ///
+    /// These will be removed once all subsystems are migrated.
+    /// DO NOT use in new code.
+    inline constexpr lifecycle_state lifecycle_fresh = lifecycle_state::embryo;
+    inline constexpr lifecycle_state lifecycle_ready = lifecycle_state::active;
 
     /// @brief Zero-overhead typestate carrier.
     /// @tparam State  Current lifecycle state.
-    template <lifecycle_state State = lifecycle_state::fresh>
+    template <lifecycle_state State = lifecycle_state::embryo>
     class typestate {
     public:
         static constexpr lifecycle_state state = State;
@@ -54,8 +76,8 @@ namespace zxfoundation::base {
     [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept
         -> const char* {
         switch (s) {
-            case lifecycle_state::fresh:     return "fresh";
-            case lifecycle_state::ready:     return "ready";
+            case lifecycle_state::embryo:    return "embryo";
+            case lifecycle_state::active:    return "active";
             case lifecycle_state::suspended: return "suspended";
             case lifecycle_state::dying:     return "dying";
             default:                         return "unknown";

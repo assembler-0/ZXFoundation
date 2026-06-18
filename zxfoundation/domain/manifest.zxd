@@ -1,4 +1,5 @@
 !files : !compile_group -> [auto] {
+    strand_types.cxxm
     domain_types.cxxm
     domain.cxxm
 }

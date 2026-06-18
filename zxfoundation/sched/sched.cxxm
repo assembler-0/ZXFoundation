@@ -7,10 +7,12 @@ import zxfoundation.sched.sched_fair;
 import zxfoundation.sched.sched_idle;
 import zxfoundation.sched.sched_domain;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
 import zxfoundation.gate.gate;
 import zxfoundation.portal.portal;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.base.config;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sys.printk;
@@ -25,6 +27,7 @@ import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import lib.error;
 import lib.format;
+import arch.s390x.lib.atomic;
 
 extern "C" auto __switch_to_asm(
     zxfoundation::domain::domain* prev,
@@ -42,6 +45,9 @@ namespace _internal {
     /// @brief Static storage for the BSP scheduler tick timer.
     static zxfoundation::sys::timer::kernel_timer g_bsp_tick_timer{};
 
+    /// @brief Static storage for AP scheduler tick timers (indexed by cpu_id).
+    static zxfoundation::sys::timer::kernel_timer g_ap_tick_timers[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
     /// @brief Try to steal a domain from the busiest CPU.
     /// @param local_rq  Caller's run_queue (lock held on entry, held on return).
     /// @return Stolen domain, or nullptr.
@@ -54,7 +60,9 @@ namespace _internal {
         for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
             auto& rq = g_rqs[i];
             if (&rq == &local_rq) continue;
-            if (!rq.idle) continue;
+            // Only steal from fully-initialized CPUs.  The online flag
+            // is set last (after idle domain + timer setup) under rq.lock.
+            if (rq.online.load(arch::s390x::lib::atomic::memory_order::acquire) == 0) continue;
 
             if (rq.nr_running > max_running) {
                 max_running = rq.nr_running;
@@ -81,11 +89,11 @@ namespace _internal {
                 stolen = fair::rb_node_to_domain(last);
 
                 fair::dequeue(*busiest, *stolen);
-                stolen->cpu = local_rq.cpu_id;
+                stolen->primary_strand.cpu = local_rq.cpu_id;
 
-                stolen->sched.vruntime = local_rq.min_vruntime;
-                stolen->sched.deadline = stolen->sched.vruntime +
-                    (stolen->sched.slice * 1024 / stolen->sched.weight);
+                stolen->primary_strand.sched.vruntime = local_rq.min_vruntime;
+                stolen->primary_strand.sched.deadline = stolen->primary_strand.sched.vruntime +
+                    (stolen->primary_strand.sched.slice * 1024 / stolen->primary_strand.sched.weight);
             }
         }
 
@@ -103,10 +111,8 @@ namespace zxfoundation::sched {
     using zxfoundation::domain::domain;
     using zxfoundation::domain::domain_id;
     using zxfoundation::domain::domain_flags;
-    using zxfoundation::domain::domain_state;
+    using zxfoundation::base::lifecycle_state;
     using zxfoundation::domain::run_queue;
-
-    // ── Re-exports from sub-modules ─────────────────────────────────────
 
     using domain_ctx::domain_entry_fn;
     using domain_ctx::setup_domain_context;
@@ -125,7 +131,7 @@ namespace zxfoundation::sched {
 
     /// @brief Enqueue a domain on its assigned CPU's run queue.
     auto enqueue_domain(domain* d) noexcept -> void {
-        auto& rq = cpu_rq(d->cpu);
+        auto& rq = cpu_rq(d->primary_strand.cpu);
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         rq.lock.lock();
         fair::enqueue(rq, *d);
@@ -135,15 +141,13 @@ namespace zxfoundation::sched {
 
     /// @brief Dequeue a domain from its run queue.
     auto dequeue_domain(domain* d) noexcept -> void {
-        auto& rq = cpu_rq(d->cpu);
+        auto& rq = cpu_rq(d->primary_strand.cpu);
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         rq.lock.lock();
         fair::dequeue(rq, *d);
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
     }
-
-    // ── Core scheduler ──────────────────────────────────────────────────
 
     /// @brief Core scheduling function — pick next domain and switch.
     auto schedule() noexcept -> void {
@@ -158,7 +162,7 @@ namespace zxfoundation::sched {
         if (prev) {
             prev->flags &= ~domain_flags::need_resched;
 
-            if (prev->state == domain_state::active && !prev->on_rq
+            if (prev->ko.state == lifecycle_state::active && !prev->primary_strand.on_rq
                 && prev != rq.idle) {
                 fair::enqueue(rq, *prev);
             }
@@ -186,7 +190,7 @@ namespace zxfoundation::sched {
             return;
         }
 
-        if (next != rq.idle && next->on_rq) {
+        if (next != rq.idle && next->primary_strand.on_rq) {
             fair::dequeue(rq, *next);
         }
 
@@ -206,15 +210,19 @@ namespace zxfoundation::sched {
         arch::s390x::cpu::irq::irq_restore(flags);
 
         if (switched_from &&
-            switched_from->state == domain_state::dying &&
+            switched_from->ko.state == lifecycle_state::dying &&
             (switched_from->flags & domain_flags::idle) == domain_flags::none) {
-            zxfoundation::gate::gate_destroy_for_domain(switched_from->id);
-            zxfoundation::portal::portal_destroy_for_domain(switched_from->id);
+            zxfoundation::gate::gate_destroy_for_domain(switched_from->ko.id);
+            zxfoundation::portal::portal_destroy_for_domain(switched_from->ko.id);
             zxfoundation::domain::domain_reap(*switched_from);
         }
     }
 
-    // ── Tick / preemption ────────────────────────────────────────────────
+
+    /// @brief Bump this CPU's watchdog heartbeat counter.
+    auto watchdog_heartbeat_bump() noexcept -> void {
+        arch::s390x::cpu::lowcore::this_cpu_percpu().watchdog_heartbeat++;
+    }
 
     /// @brief Called from the tick handler on each timer interrupt.
     auto scheduler_tick() noexcept -> void {
@@ -226,11 +234,14 @@ namespace zxfoundation::sched {
         auto* curr = rq.curr;
         if (!curr || curr == rq.idle) {
             rq.lock.unlock();
+            watchdog_heartbeat_bump();
             return;
         }
 
         fair::tick(rq, *curr);
         rq.lock.unlock();
+
+        watchdog_heartbeat_bump();
     }
 
     /// @brief Check if the current domain has need_resched set.
@@ -254,14 +265,11 @@ namespace zxfoundation::sched {
         return _internal::g_sched_initialized;
     }
 
-    // ── Initialization ──────────────────────────────────────────────────
 
     /// @brief Initialize the scheduler on the BSP (CPU 0).
     auto sched_init() noexcept -> void {
         using namespace _internal;
         using namespace zxfoundation::sys::printk;
-
-        pinfo("sched: initializing scheduler");
 
         for (u32 i = 0; i < base::config::CONFIG_ZX_MAX_CPUS; ++i) {
             g_rqs[i].cpu_id = static_cast<u16>(i);
@@ -280,10 +288,10 @@ namespace zxfoundation::sched {
 
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
         lc.current_domain = reinterpret_cast<u64>(idle_dom);
-        lc.kernel_stack = idle_dom->kstack_top;
+        lc.kernel_stack = idle_dom->primary_strand.kstack_top;
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         pcp.current_domain = reinterpret_cast<u64>(idle_dom);
-        pcp.kernel_stack = idle_dom->kstack_top;
+        pcp.kernel_stack = idle_dom->primary_strand.kstack_top;
 
         // Create BSP periodic scheduler tick timer.
         {
@@ -300,13 +308,16 @@ namespace zxfoundation::sched {
             (void)timer_add(t);
         }
 
+        rq.online.store(1, arch::s390x::lib::atomic::memory_order::release);
         g_sched_initialized = true;
 
-        pinfo("sched: idle/0 id={}, scheduler ready", idle_dom->id);
+        pinfo("sched: idle/0 id={}, scheduler ready", idle_dom->ko.id);
     }
 
     /// @brief Initialize the scheduler on an AP.
-    [[noreturn]] auto sched_init_ap(u16 cpu_id) noexcept -> void {
+    /// @note Returns after init is complete.  Caller enters the idle loop
+    ///       via sched_idle_loop() after any post-init signalling.
+    auto sched_init_ap(u16 cpu_id) noexcept -> void {
         using namespace _internal;
         using namespace zxfoundation::sys::printk;
 
@@ -320,29 +331,23 @@ namespace zxfoundation::sched {
         idle_dom->name = "idle/N";
 
         auto& rq = g_rqs[cpu_id];
-        rq.idle = idle_dom;
-        rq.curr = idle_dom;
 
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
         lc.current_domain = reinterpret_cast<u64>(idle_dom);
-        lc.kernel_stack = idle_dom->kstack_top;
+        lc.kernel_stack = idle_dom->primary_strand.kstack_top;
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         pcp.current_domain = reinterpret_cast<u64>(idle_dom);
-        pcp.kernel_stack = idle_dom->kstack_top;
-
-        pinfo("sched: cpu{} online, idle id={}", cpu_id, idle_dom->id);
+        pcp.kernel_stack = idle_dom->primary_strand.kstack_top;
 
         // Initialize timer subsystem for this AP and create tick timer.
         {
             using namespace zxfoundation::sys::timer;
             timer_init_ap(cpu_id);
 
-            static kernel_timer ap_tick_timers[base::config::CONFIG_ZX_MAX_CPUS]{};
-            auto& t = ap_tick_timers[cpu_id];
+            auto& t = _internal::g_ap_tick_timers[cpu_id];
             t.deadline_tod = arch::s390x::cpu::processor::stck() + TICK_INTERVAL_TOD;
             t.interval_tod = TICK_INTERVAL_TOD;
             t.callback     = [](void*) noexcept -> void {
-                zxfoundation::sys::time::tick_advance_wall(TICK_INTERVAL_NS);
                 zxfoundation::sched::scheduler_tick();
             };
             t.data         = nullptr;
@@ -350,12 +355,24 @@ namespace zxfoundation::sched {
             (void)timer_add(t);
         }
 
-        // Enter the scheduler idle loop.
+        {
+            const auto ap_flags = arch::s390x::cpu::irq::irq_save_disable();
+            rq.lock.lock();
+            rq.idle = idle_dom;
+            rq.curr = idle_dom;
+            rq.online.store(1, arch::s390x::lib::atomic::memory_order::release);
+            rq.lock.unlock();
+            arch::s390x::cpu::irq::irq_restore(ap_flags);
+        }
+
+        pinfo("sched: processor {} online, idle id={}", cpu_id, idle_dom->ko.id);
+    }
+
+    /// @brief Enter the scheduler idle loop (does not return).
+    [[noreturn]] auto sched_idle_enter() noexcept -> void {
         while (true) {
-            arch::s390x::cpu::irq::irq_enable();
-            arch::s390x::cpu::processor::cpu_relax();
-            arch::s390x::cpu::irq::irq_disable();
             schedule();
+            arch::s390x::cpu::psw::enabled_wait();
         }
     }
 

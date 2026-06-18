@@ -1,0 +1,209 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file fault.cxxm
+/// @brief page fault handler.
+
+export module zxfoundation.memory.fault;
+import zxfoundation.memory.vm_types;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.mmu_const;
+import arch.s390x.cpu.skey;
+import arch.s390x.lib.atomic;
+import zxfoundation.sys.printk;
+import zxfoundation.sys.printk_types;
+import zxfoundation.base.types;
+import lib.error;
+import lib.rbtree;
+import lib.util;
+
+export {
+
+namespace zxfoundation::memory::vm {
+
+    /// @brief Outcome of a page fault resolution.
+    enum class fault_action : u8 {
+        resolved    = 0,   ///< Fault resolved — page mapped, resume execution.
+        killed      = 1,   ///< Unrecoverable fault — domain must be killed.
+        guard_hit   = 2,   ///< Fault on a guard page.
+        stack_grew  = 3,   ///< Stack region was extended downward.
+    };
+
+    /// @brief Handle a page fault for a domain at fault_va.
+    /// @param[in] space        The domain's VME address space.
+    /// @param[in] root_phys    Physical address of the domain's region-1 DAT table.
+    /// @param[in] storage_key  4-bit storage key for the domain (0-15).
+    /// @param[in] fault_va     The faulting virtual address.
+    /// @param[in] is_write     True if the fault was a store operation.
+    /// @param[in] is_exec      True if the fault was an instruction fetch.
+    /// @return The resolution action.
+    [[nodiscard]] auto handle_page_fault(
+        vm_space& space,
+        u64 root_phys,
+        u8 storage_key,
+        u64 fault_va,
+        bool is_write,
+        bool is_exec
+    ) noexcept -> fault_action {
+        using namespace arch::s390x::mmu;
+        using namespace zxfoundation::memory;
+
+        auto* rgn = vm_find(space, fault_va);
+
+        if (!rgn) {
+            lib::rb_node* node = space.tree.root.node;
+            vm_region* nearest_above = nullptr;
+
+            while (node) {
+                auto* candidate = lib::container_of<vm_region, lib::rb_node,
+                    &vm_region::rb>(node);
+                if (fault_va < candidate->va_start) {
+                    nearest_above = candidate;
+                    node = node->left;
+                } else {
+                    node = node->right;
+                }
+            }
+
+            if (nearest_above &&
+                !!(nearest_above->flags & vm_flags::stack) &&
+                fault_va >= (nearest_above->va_start - VM_PAGE_SIZE))
+            {
+                const u64 new_start = nearest_above->va_start - VM_PAGE_SIZE;
+
+                // Refuse to grow below the user VA floor.
+                if (new_start < VM_USER_START) {
+                    return fault_action::killed;
+                }
+
+                // Check that the new page doesn't overlap an existing region.
+                if (vm_find(space, new_start)) {
+                    return fault_action::killed;
+                }
+
+                // Allocate a zeroed page.
+                auto alloc_r = pmm::alloc(0, pmm::zone::normal,
+                    pmm::purpose::generic, pmm::page_init::zeroed);
+                if (!alloc_r) return fault_action::killed;
+
+                auto embryo = lib::move(*alloc_r);
+                const u64 phys = embryo.phys_base;
+                auto active = lib::move(embryo).make_active();
+
+                // Map the page into the domain's DAT tables.
+                const dat_table<dat_level::region_1> root{root_phys};
+
+                // Convert protection to MMU page_prot.
+                const bool can_write = !!(nearest_above->prot & vm_prot::write);
+                const bool can_exec  = !!(nearest_above->prot & vm_prot::exec);
+                u64 prot_bits = 0;
+                if (!can_write) prot_bits |= PTE_PROTECT;
+                if (!can_exec)  prot_bits |= PTE_NOEXEC;
+                const page_prot pp{prot_bits};
+
+                auto map_r = map_page<dat_level::region_1>(root, new_start, phys, pp);
+                if (!map_r) {
+                    // Free the page and kill.
+                    pmm::free(lib::move(active));
+                    return fault_action::killed;
+                }
+
+                arch::s390x::cpu::skey::sske(phys,
+                    arch::s390x::cpu::skey::make_skey(storage_key, false));
+
+                // Extend the region downward.
+                nearest_above->va_start = new_start;
+                (void)nearest_above->resident.fetch_add(1,
+                    arch::s390x::lib::atomic::memory_order::relaxed);
+                (void)nearest_above->committed.fetch_add(1,
+                    arch::s390x::lib::atomic::memory_order::relaxed);
+                space.total_mapped   += VM_PAGE_SIZE;
+                space.total_resident += 1;
+                space.total_committed += 1;
+
+                return fault_action::stack_grew;
+            }
+
+            // No region and no stack growth possible → killed.
+            return fault_action::killed;
+        }
+
+        // ── Step 3: Guard page check ─────────────────────────────────────
+        if (!!(rgn->flags & vm_flags::guard)) {
+            return fault_action::guard_hit;
+        }
+
+        // ── Step 4: Protection check ─────────────────────────────────────
+        if (is_write && !(rgn->prot & vm_prot::write)) {
+            // Write to read-only region.
+            return fault_action::killed;
+        }
+        if (is_exec && !(rgn->prot & vm_prot::exec)) {
+            // Execute on no-execute region.
+            return fault_action::killed;
+        }
+
+        // ── Step 5: Resolve by backing type ──────────────────────────────
+
+        if (rgn->backing == vm_backing::anonymous) {
+            // ── Anonymous: demand-page — allocate zeroed physical page ────
+            auto alloc_r = pmm::alloc(0, pmm::zone::normal,
+                pmm::purpose::generic, pmm::page_init::zeroed);
+            if (!alloc_r) return fault_action::killed;
+
+            auto embryo = lib::move(*alloc_r);
+            const u64 phys = embryo.phys_base;
+            auto active = lib::move(embryo).make_active();
+
+            // Map into domain's page tables.
+            const dat_table<dat_level::region_1> root{root_phys};
+
+            // Convert VME prot → MMU page_prot.
+            const bool can_write = !!(rgn->prot & vm_prot::write);
+            const bool can_exec  = !!(rgn->prot & vm_prot::exec);
+            u64 prot_bits = 0;
+            if (!can_write) prot_bits |= PTE_PROTECT;
+            if (!can_exec)  prot_bits |= PTE_NOEXEC;
+            const page_prot pp{prot_bits};
+
+            // Align fault_va to page boundary for the mapping.
+            const u64 page_va = fault_va & ~(VM_PAGE_SIZE - 1);
+
+            auto map_r = map_page<dat_level::region_1>(root, page_va, phys, pp);
+            if (!map_r) {
+                pmm::free(lib::move(active));
+                return fault_action::killed;
+            }
+
+            // Set the hardware storage key for this frame via SSKE.
+            arch::s390x::cpu::skey::sske(phys,
+                arch::s390x::cpu::skey::make_skey(storage_key, false));
+
+            // Update accounting.
+            (void)rgn->resident.fetch_add(1,
+                arch::s390x::lib::atomic::memory_order::relaxed);
+            (void)rgn->committed.fetch_add(1,
+                arch::s390x::lib::atomic::memory_order::relaxed);
+            space.total_resident  += 1;
+            space.total_committed += 1;
+
+            return fault_action::resolved;
+        }
+
+        if (rgn->backing == vm_backing::physical) {
+            sys::printk::perr(
+                "VME: page fault on physical-backed region at VA {:#018x} — kernel bug",
+                fault_va);
+            return fault_action::killed;
+        }
+
+        // Portal-shared or unknown backing — not handled, kill domain.
+        return fault_action::killed;
+    }
+
+} // namespace zxfoundation::memory::vm
+
+} // end export

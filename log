@@ -1,0 +1,249 @@
+17:04:50 HHC00109E set_thread_priority( 5 ) failed: Operation not permitted
+17:04:50 HHC00007I Previous message from function 'impl' at impl.c(1341)
+17:04:50 HHC00110W Defaulting all threads to priority 1
+17:04:50 HHC00007I Previous message from function 'impl' at impl.c(1345)
+17:04:50 HHC01413I Hercules version 4.9.1.1-SDL-gee86c4d
+17:04:50 HHC01414I (C) Copyright 1999-2025 by Roger Bowler, Jan Jaeger, and others
+17:04:50 HHC01417I ** The SDL 4.x Hyperion version of Hercules **
+17:04:50 HHC01415I Build date: Jun 16 2026 at 09:01:26
+17:04:50 HHC01417I Built with: GCC 16.1.1 20260430
+17:04:50 HHC01417I Build type: GNU/Linux x86_64 host architecture build
+17:04:50 HHC01417I Modes: S/370 ESA/390 z/Arch
+17:04:50 HHC01417I Max CPU Engines: 128
+17:04:50 HHC01417I Using   shared libraries
+17:04:50 HHC01417I Using   setresuid() for setting privileges
+17:04:50 HHC01417I Using   POSIX threads Threading Model
+17:04:50 HHC01417I Using   Error-Checking Mutex Locking Model
+17:04:50 HHC01417I With    Shared Devices support
+17:04:50 HHC01417I With    Dynamic loading support
+17:04:50 HHC01417I With    External GUI support
+17:04:50 HHC01417I With    IPV6 support
+17:04:50 HHC01417I With    HTTP Server support
+17:04:50 HHC01417I With    sqrtl support
+17:04:50 HHC01417I With    Signal handling
+17:04:50 HHC01417I With    Watchdog monitoring
+17:04:50 HHC01417I With    CCKD BZIP2 support
+17:04:50 HHC01417I With    HET BZIP2 support
+17:04:50 HHC01417I With    ZLIB support
+17:04:50 HHC01417I With    Regular Expressions support
+17:04:50 HHC01417I Without Object REXX support
+17:04:50 HHC01417I Without Regina REXX support
+17:04:50 HHC01417I With    Automatic Operator support
+17:04:50 HHC01417I Without National Language Support
+17:04:50 HHC01417I With    CCKD64 Support
+17:04:50 HHC01417I With    Transactional-Execution Facility support
+17:04:50 HHC01417I With    "Optimized" instructions
+17:04:50 HHC01417I With    OPTION_USE_SKAIP_AS_LOCK
+17:04:50 HHC01417I With    OPTION_SIE2BK_FLD_COPY
+17:04:50 HHC01417I With    OPTION_IODELAY_KLUDGE
+17:04:50 HHC01417I With    OPTION_MVS_TELNET_WORKAROUND
+17:04:50 HHC01417I With    OPTION_SIE_PURGE_DAT_ALWAYS
+17:04:50 HHC01417I With    OPTION_NOASYNC_SF_CMDS
+17:04:50 HHC01417I Machine dependent assists: cmpxchg1 cmpxchg4 cmpxchg8 cmpxchg16 hatomics=C11
+17:04:50 HHC01417I Running on: Interstellar (Linux-7.0.12-zen1-1-zen x86_64) MP=16
+17:04:50 HHC01417I Built with crypto external package version 1.0.0.53-g9ac5840
+17:04:50 HHC01417I Built with decNumber external package version 3.68.0.103-g9951845
+17:04:50 HHC01417I Built with SoftFloat external package version 3.5.0.107-ge053494
+17:04:50 HHC01417I Built with telnet external package version 1.0.0.64-g384b254
+17:04:50 HHC00100I Thread id 00007fd20701e7c0, prio -1, name 'impl_thread' started
+17:04:50 HHC00100I Thread id 00007fd206ce86c0, prio -1, name 'logger_thread' started
+17:04:50 HHC00018W Hercules is NOT running in elevated mode
+17:04:50 HHC00007I Previous message from function 'impl' at impl.c(1435)
+17:04:50 HHC00150I Crypto module loaded (C) Copyright 2003-2025 by Bernard van der Helm & Juergen Winkelmann
+17:04:50 HHC00151I Activated facility: Message Security Assist
+17:04:50 HHC00151I Activated facility: Message Security Assist Extension 1, 2, 3, 4, 5 and 7
+17:04:50 HHC00100I Thread id 00007fd206bad6c0, prio -1, name 'watchdog_thread' started
+17:04:50 HHC00111I Thread CPU Time IS available (_POSIX_THREAD_CPUTIME=0)
+17:04:50 HHC00100I Thread id 00007fd2068a96c0, prio -1, name 'Processor CP00' started
+17:04:50 HHC00100I Thread id 00007fd2067a86c0, prio -1, name 'timer_thread' started
+17:04:50 HHC00811I Processor CP00: architecture mode z/Arch
+17:04:50 HHC02204I ARCHLVL        set to z/Arch
+17:04:50 HHC02204I CPUMODEL       set to 3931
+17:04:50 HHC02204I LPARNUM        set to 1
+17:04:50 HHC02204I LPARNAME       set to ZXF
+17:04:50 HHC02204I PLANT          set to ZZ
+17:04:50 HHC02205E Invalid argument hardware-model = <z16>; argument contains an invalid character (0-9 and uppercase A-Z only)
+17:04:50 HHC00007I Previous message from function 'stsi_model_cmd' at hsccmd.c(5231)
+17:04:50 HHC01441E Config file[6] hercules.cnf: error processing statement: MODEL z16
+17:04:50 HHC00007I Previous message from function 'process_config' at script.c(431)
+17:04:50 HHC02204I MANUFACTURER   set to IBM
+17:04:50 HHC17003I MAIN     storage is 4G (mainsize); storage is not locked
+17:04:50 HHC00100I Thread id 00007fd206aac6c0, prio -1, name 'Processor CP01' started
+17:04:50 HHC00811I Processor CP01: architecture mode z/Arch
+17:04:50 HHC00100I Thread id 00007fd2069ab6c0, prio -1, name 'Processor CP02' started
+17:04:50 HHC00811I Processor CP02: architecture mode z/Arch
+17:04:50 HHC00100I Thread id 00007fd204ea16c0, prio -1, name 'Processor CP03' started
+17:04:50 HHC00811I Processor CP03: architecture mode z/Arch
+17:04:50 HHC02204I NUMCPU         set to 4
+17:04:50 HHC02204I MAXCPU         set to 8
+17:04:50 HHC00827I Processor CP00: engine 00 type 0 set: CP
+17:04:50 HHC00827I Processor CP01: engine 01 type 0 set: CP
+17:04:50 HHC00827I Processor AP02: engine 02 type 2 set: AP
+17:04:50 HHC00827I Processor IP03: engine 03 type 5 set: IP
+17:04:50 HHC00827I Processor CP04: engine 04 type 0 set: CP
+17:04:50 HHC00827I Processor CP05: engine 05 type 0 set: CP
+17:04:50 HHC00827I Processor CP06: engine 06 type 0 set: CP
+17:04:50 HHC00827I Processor CP07: engine 07 type 0 set: CP
+17:04:50 HHC02204I ENGINES        set to 2*CP,1*AP,1*IP
+17:04:50 HHC02204I DIAG8CMD       set to ENABLE  NOECHO
+HHC02204I PANOPT         set to NAMEONLY RATE=50 MSGCOLOR=NO TITLE=ZXFoundation
+HHC02204I LOGOPT         set to NODATESTAMP NOTIMESTAMP
+HHC02204I CNSLPORT       set to 3270
+HHC00414I 0:0100 CCKD file sysres.3390: model 3390-2 cu 2107 cyls 2226 heads 15 tracks 33390 trklen 56832
+HHC00100I Thread id 00007fd2045886c0, prio -1, name 'console_connect' started
+HHC01024I Waiting for console connections on port 3270
+HHC00811I Processor CP00: architecture mode ESA/390
+HHC00811I Processor CP01: architecture mode ESA/390
+HHC00811I Processor IP03: architecture mode ESA/390
+HHC00811I Processor AP02: architecture mode ESA/390
+HHC00814I Processor CP00: SIGP Set architecture mode            (12) CP00, PARM 00000002: CC 0
+HHC17736W TXF: TIMERINT 50 is too small; using default of 400 instead
+HHC00007I Previous message from function 'txf_set_timerint' at transact.c(2587)
+HHC00811I Processor CP00: architecture mode z/Arch
+HHC00100I Thread id 00007fd2044876c0, prio -1, name 'rubato_thread' started
+ 17:04:50  * MSG FROM ZXF: zxfl00: ZXFoundationLoader (TM) 26h1 - Copyright (c) 2026 assembler-0. Licensed under the Apache License, Version 2.0.
+ 17:04:50  * MSG FROM ZXF: zxfl00: core.zxfoundationloader00.sys initializing
+ 17:04:50  * MSG FROM ZXF: zxfl00: launching core.zxfoundationloader01.sys
+ 17:04:50  * MSG FROM ZXF: zxfl01: ZXFoundationLoader - core.zxfoundationloader01.sys
+ 17:04:50  * MSG FROM ZXF: eckd: unknown device type, attempting rdc
+ 17:04:50  * MSG FROM ZXF: zxfl01: ipl device: eckd
+ 17:04:50  * MSG FROM ZXF: zxfl01: preparing core.zxfoundation.nucleus
+HHC00107I Starting thread cckd_ra(), active=0, started=0, max=2
+HHC00100I Thread id 00007fd2042856c0, prio -1, name 'cckd_ra thread 1' started
+HHC00107I Starting thread cckd_ra() from cckd_ra(), active=1, started=1, max=2
+HHC00100I Thread id 00007fd2041846c0, prio -1, name 'cckd_ra thread 2' started
+ 17:04:51  * MSG FROM ZXF: zxvl: inspecting nucleus
+ 17:04:51  * MSG FROM ZXF: zxvl: all nucleus checksums verified
+ 17:04:51  * MSG FROM ZXF: zxfl01: nucleus verified
+ 17:04:51  * MSG FROM ZXF: zxfl01: loading module ZXF.INIT
+ 17:04:51  * MSG FROM ZXF: zxfl01: detecting system (stsi/smp/tod)
+HHC00811I Processor CP01: architecture mode z/Arch
+HHC00811I Processor AP02: architecture mode z/Arch
+HHC00811I Processor IP03: architecture mode z/Arch
+ 17:04:51  * MSG FROM ZXF: zxfl01: memory detected via sclp: 0000000100000000 bytes
+ 17:04:51  * MSG FROM ZXF: zxfl01: enabling DAT and jumping to kernel
+ZXF-[XXXX.xxxxxx] [cpu00] I sys: nucleus checksums verified (6 segments)
+ZXF-[0000.441672] [cpu00] I sys: ZXFoundation (TM) 26h1 - Copyright (c) 2026 assembler-0. Licensed under the Apache License, Version 2.0.
+ZXF-[0000.441742] [cpu00] I sys: built on Jun 18 2026 16:58:50 - Linux@7.0.12-zen1-1-zen::x86_64 with Clang 22.1.6. build no #449
+ZXF-[0000.441815] [cpu00] I hypervisor: false
+ZXF-[0000.441858] [cpu00] D zxfl: protocol.magic          = 5a58464c
+ZXF-[0000.441901] [cpu00] D zxfl: protocol.version        = 4
+ZXF-[0000.441939] [cpu00] D zxfl: protocol.flags          = 0000007f
+ZXF-[0000.441977] [cpu00] D zxfl: protocol.binding_token  = 56063c1a4e286ae0
+ZXF-[0000.442017] [cpu00] D zxfl: flags.SMP       = yes
+ZXF-[0000.442052] [cpu00] D zxfl: flags.MEM_MAP   = yes
+ZXF-[0000.442086] [cpu00] D zxfl: flags.CMDLINE   = yes
+ZXF-[0000.442118] [cpu00] D zxfl: flags.LOWCORE   = yes
+ZXF-[0000.442151] [cpu00] D zxfl: flags.STFLE     = yes
+ZXF-[0000.442183] [cpu00] D zxfl: flags.SYSINFO   = yes
+ZXF-[0000.442219] [cpu00] D zxfl: flags.TOD       = yes
+ZXF-[0000.442270] [cpu00] D zxfl: ƒÌ½ƒÌ½ loader ƒÌ½ƒÌ½
+ZXF-[0000.442307] [cpu00] D zxfl: loader.version   = 1.0
+ZXF-[0000.442375] [cpu00] D zxfl: loader.timestamp = 10222b5a
+ZXF-[0000.442411] [cpu00] D zxfl: loader.build_id  = 0000000000000000
+ZXF-[0000.442449] [cpu00] D zxfl: ƒÌ½ƒÌ½ ipl device ƒÌ½ƒÌ½
+ZXF-[0000.442483] [cpu00] D zxfl: ipl.schid     = 00010003
+ZXF-[0000.442517] [cpu00] D zxfl: ipl.dev_type  = 2107
+ZXF-[0000.442551] [cpu00] D zxfl: ipl.dev_model = 00e8
+ZXF-[0000.442584] [cpu00] D zxfl: ƒÌ½ƒÌ½ kernel ƒÌ½ƒÌ½
+ZXF-[0000.442616] [cpu00] D zxfl: kernel.phys_start    = 0000000000100000
+ZXF-[0000.442654] [cpu00] D zxfl: kernel.phys_end      = 0000000000330000
+ZXF-[0000.442692] [cpu00] D zxfl: kernel.entry         = ffff800000100040
+ZXF-[0000.442735] [cpu00] D zxfl: kernel.stack_top     = ffff800000038e70
+ZXF-[0000.442774] [cpu00] D zxfl: kernel.pgtbl_pool_end = 0000000002010000
+ZXF-[0000.442813] [cpu00] D zxfl: kernel.size          = 2240 KiB
+ZXF-[0000.442853] [cpu00] D zxfl: ƒÌ½ƒÌ½ memory map (3 regions, 4094 MiB total) ƒÌ½ƒÌ½
+ZXF-[0000.442902] [cpu00] D zxfl:   [0] 0000000000000000-0000000000100000 reserved (1 MiB, node 0)
+ZXF-[0000.442955] [cpu00] D zxfl:   [1] 0000000000100000-0000000000200000 loader (1 MiB, node 0)
+ZXF-[0000.443005] [cpu00] D zxfl:   [2] 0000000000200000-0000000100000000 usable (4094 MiB, node 0)
+ZXF-[0000.443057] [cpu00] D zxfl: ƒÌ½ƒÌ½ cpu topology (4 cpus, bsp_addr=0000) ƒÌ½ƒÌ½
+ZXF-[0000.443104] [cpu00] D zxfl:   cpu[0] addr=0000 type=CP state=online drawer=0 book=0 socket=0 chip=0 thread=0 node=0
+ZXF-[0000.443171] [cpu00] D zxfl:   cpu[1] addr=0001 type=CP state=stopped drawer=0 book=0 socket=0 chip=0 thread=0 node=0
+ZXF-[0000.443235] [cpu00] D zxfl:   cpu[2] addr=0002 type=unknown state=stopped drawer=0 book=0 socket=0 chip=0 thread=0 node=0
+ZXF-[0000.443300] [cpu00] D zxfl:   cpu[3] addr=0003 type=zIIP state=stopped drawer=0 book=0 socket=0 chip=0 thread=0 node=0
+ZXF-[0000.443368] [cpu00] D zxfl: ƒÌ½ƒÌ½ stfle facilities (4 dwords) ƒÌ½ƒÌ½
+ZXF-[0000.443411] [cpu00] D zxfl:   stfle[0] = f3f6fffbfcfdfc64
+ZXF-[0000.443447] [cpu00] D zxfl:   stfle[1] = 205cc80000000000
+ZXF-[0000.443484] [cpu00] D zxfl:   stfle[2] = 4300488004000000
+ZXF-[0000.443519] [cpu00] D zxfl:   stfle[3] = c300000000000000
+ZXF-[0000.443554] [cpu00] D zxfl: ƒÌ½ƒÌ½ system identification ƒÌ½ƒÌ½
+ZXF-[0000.443591] [cpu00] D zxfl: sysinfo.manufacturer = IBM
+ZXF-[0000.443629] [cpu00] D zxfl: sysinfo.type         = 393
+ZXF-[0000.443664] [cpu00] D zxfl: sysinfo.model        = EMULATOR
+ZXF-[0000.443701] [cpu00] D zxfl: sysinfo.sequence     = 000000000000000
+ZXF-[0000.443741] [cpu00] D zxfl: sysinfo.plant        = ZZ
+ZXF-[0000.443776] [cpu00] D zxfl: sysinfo.lpar_name    = ZXF
+ZXF-[0000.443811] [cpu00] D zxfl: sysinfo.lpar_number  = 1
+ZXF-[0000.443844] [cpu00] D zxfl: sysinfo.cpus_total   = 128
+ZXF-[0000.443877] [cpu00] D zxfl: sysinfo.cpus_config  = 4
+ZXF-[0000.443910] [cpu00] D zxfl: sysinfo.cpus_standby = 4
+ZXF-[0000.443943] [cpu00] D zxfl: sysinfo.capability   = 1
+ZXF-[0000.443975] [cpu00] D zxfl: ƒÌ½ƒÌ½ control registers ƒÌ½ƒÌ½
+ZXF-[0000.444012] [cpu00] D zxfl: cr0  = 0000000000800060
+ZXF-[0000.444047] [cpu00] D zxfl: cr1  = 000000000004400f
+ZXF-[0000.444081] [cpu00] D zxfl: cr13 = 000000000004400f
+ZXF-[0000.444114] [cpu00] D zxfl: lowcore.phys = 0000000002000000
+ZXF-[0000.444151] [cpu00] D zxfl: cmdline (28 bytes) = syssize=0 sysmodule=ZXF.INIT
+ZXF-[0000.444193] [cpu00] D zxfl: tod_boot = e2d94975a9dfa8a5
+ZXF-[0000.444229] [cpu00] D zxfl: modules (1)
+ZXF-[0000.444260] [cpu00] D zxfl:   [0] "ZXF.INIT" phys=000000000032e000 size=8192 bytes
+ZXF-[0000.647770] [cpu00] I timer: subsystem initialized (heap capacity=256)
+ZXF-[0000.647858] [cpu00] I domain: subsystem initialized, max_domains=256
+ZXF-[0000.647935] [cpu00] I gate: subsystem initialized (512 slots)
+ZXF-[0000.648023] [cpu00] I portal: subsystem initialized (max 1024 portals)
+ZXF-[0000.648739] [cpu00] I aste: subsystem initialized ƒ½Ì ASTE table @ 0xffc3c000 (256 slots), ALE table @ 0xffc38000 (1024 slots)
+ZXF-[0000.648859] [cpu00] I pc: linkage subsystem initialized ƒ½Ì 22 entries, ASTE @ 0x301f000, LT @ 0x301e000, ET @ 0x301d000
+ZXF-[0000.648968] [cpu00] I sched: idle/0 id=0, scheduler ready
+HHC00814I Processor CP00: SIGP Initial CPU reset                (0B) CP01, PARM 0000000000000000: CC 0
+HHC00814I Processor CP00: SIGP Set prefix                       (0D) CP01, PARM 0000000003060000: CC 0
+HHC00814I Processor CP00: SIGP Initial CPU reset                (0B) AP02, PARM 0000000000000000: CC 0
+HHC00814I Processor CP00: SIGP Set prefix                       (0D) AP02, PARM 0000000003062000: CC 2
+HHC00814I Processor CP00: SIGP Set prefix                       (0D) AP02, PARM 0000000003062000: CC 0
+HHC00814I Processor CP00: SIGP Initial CPU reset                (0B) IP03, PARM 0000000000000000: CC 0
+HHC00814I Processor CP00: SIGP Set prefix                       (0D) IP03, PARM 000000000307C000: CC 2
+HHC00814I Processor CP00: SIGP Set prefix                       (0D) IP03, PARM 000000000307C000: CC 0
+ZXF-[0000.649211] [cpu00] I smp: 3 cpus started
+ZXF-[0000.649251] [cpu00] I css: starting subchannel probe (cssid=0, ssid=0)
+ZXF-[0000.649301] [cpu00] I css: found subchannel 0.0.0000 devno=0009
+ZXF-[0000.649351] [cpu00] I css: 0.0.0001 enable did not take effect, skipping
+ZXF-[0000.649399] [cpu00] I css: found subchannel 0.0.0002 devno=001f
+ZXF-[0000.649444] [cpu00] I css: found subchannel 0.0.0003 devno=0100
+ZXF-[0000.657704] [cpu00] I css: probe complete, 3 subchannel(s) registered
+ZXF-[0000.657769] [cpu00] D ccw_io: probing 3 subchannel(s) with SENSE ID
+ZXF-[0000.657830] [cpu00] D ccw_io: SSCH sch=0 schid=00010000 cpa=0301c000 ctrl=0080ff00
+ZXF-[0000.657916] [cpu00] I ccw_io: sch[0] devno=0009 -> 3215 line-mode console (3215 console ctrl)
+ZXF-[0000.657979] [cpu00] D ccw_io: SSCH sch=1 schid=00010002 cpa=0301c000 ctrl=0080ff00
+ZXF-[0000.658062] [cpu00] I ccw_io: sch[1] devno=001f -> 3278 display (3274 terminal ctrl)
+ZXF-[0000.658122] [cpu00] D ccw_io: SSCH sch=2 schid=00010003 cpa=0301c000 ctrl=0080ff00
+ZXF-[0000.658232] [cpu00] I ccw_io: sch[2] devno=0100 -> 3390 ECKD DASD (2107 ESS storage ctrl)
+ZXF-[0000.658282] [cpu00] I ccw_io: SENSE ID complete, 3/3 device(s) identified
+ZXF-[0000.658367] [cpu00] I domain: created id=0 name="sys/bootstrap" skey=8
+ZXF-[0000.658385] [cpu02] I timer: AP cpu2 timer heap ready
+ZXF-[0000.658425] [cpu03] I timer: AP cpu3 timer heap ready
+ZXF-[0000.658434] [cpu00] I sys: core.zxfoundation.nucleus initialization complete
+ZXF-[0000.658469] [cpu02] I sched: cpu2 online, idle id=0
+HHC01603I exit
+HHC01420I Begin Hercules shutdown
+HHC01421I Shutdown: Panel cleanup complete
+HHC01423I Calling termination routines
+HHC00101I Thread id 00007fd2068a96c0, prio -1, name 'Processor CP00' ended
+HHC00101I Thread id 00007fd206aac6c0, prio -1, name 'Processor CP01' ended
+HHC00101I Thread id 00007fd206bad6c0, prio -1, name 'watchdog_thread' ended
+HHC00101I Thread id 00007fd2069ab6c0, prio -1, name 'Processor CP02' ended
+HHC00101I Thread id 00007fd204ea16c0, prio -1, name 'Processor CP03' ended
+HHC00101I Thread id 00007fd2045886c0, prio -1, name 'console_connect' ended
+HHC00333I 0:0100   32/64       size free  nbr st   reads  writes l2reads    hits switches
+HHC00334I 0:0100                                                      readaheads   misses
+HHC00335I 0:0100 ------------------------------------------------------------------------
+HHC00336I 0:0100 [*] 32 00000518229 000% 0001    0000044 0000000 0000002 0000041  0000048
+HHC00337I 0:0100                                                         0000037  0000000
+HHC00338I 0:0100 sysres.3390
+HHC00339I 0:0100 [0] 32 00000518229 000% 0001 rw 0000044 0000000 0000002
+HHC00101I Thread id 00007fd2042856c0, prio -1, name 'cckd_ra thread 1' ended
+HHC00101I Thread id 00007fd2041846c0, prio -1, name 'cckd_ra thread 2' ended
+HHC01427I Main storage released
+HHC01427I Expanded storage released
+HHC01422I Configuration released
+HHC00101I Thread id 00007fd2044876c0, prio -1, name 'rubato_thread' ended
+HHC00101I Thread id 00007fd2067a86c0, prio -1, name 'timer_thread' ended
+HHC00101I Thread id 00007fd20701e7c0, prio -1, name 'panel_display' ended

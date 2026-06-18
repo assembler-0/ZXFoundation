@@ -1,13 +1,15 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/domain/domain_types.cxxm
-/// @brief Domain subsystem types — the central DGN entity.
+/// @brief Domain subsystem types — the central DGP entity.
 
 export module zxfoundation.domain.domain_types;
 import zxfoundation.base.types;
-import zxfoundation.base.typestate;
-import zxfoundation.locking.qspinlock;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.domain.strand_types;
 import arch.s390x.mmu.mmu_types;
 import arch.s390x.lib.atomic;
+import zxfoundation.memory.vm_types;
+import zxfoundation.locking.qspinlock;
 import lib.rbtree;
 import lib.list;
 
@@ -38,14 +40,6 @@ namespace zxfoundation::domain {
     /// @brief Last user-assignable storage key.
     constexpr u8 SKEY_USER_MAX  = 15U;
 
-    /// @brief Lifecycle state of a domain.
-    enum class domain_state : u8 {
-        embryo  = 0,   ///< Being created, not yet runnable.
-        active  = 1,   ///< Fully initialized, schedulable.
-        blocked = 2,   ///< Waiting on a gate call or I/O.
-        dying   = 3,   ///< Teardown in progress.
-    };
-
     /// @brief Per-domain flags (bitfield).
     enum class domain_flags : u32 {
         none         = 0,
@@ -75,60 +69,48 @@ namespace zxfoundation::domain {
         return a;
     }
 
-    /// @brief Per-domain EEVDF scheduling entity parameters.
-    struct sched_params {
-        u64 vruntime{0};      ///< Virtual runtime (TOD clock ticks).
-        u64 deadline{0};      ///< Virtual deadline.
-        u64 slice{0};         ///< Time slice.
-        i64 lag{0};           ///< Lag = fair_vruntime - vruntime.
-        u32 weight{1024};     ///< Nice-derived weight (1024 = default).
-    };
-
     struct run_queue;
     struct sched_class;
 
-    /// @brief User-mode register save area for domain entry/exit.
-    /// they are restored.
-    struct user_regs {
-        u64 gprs[16]{};           // General purpose registers r0-r15
-        u64 psw_mask{0};          // User PSW mask word
-        u64 psw_addr{0};          // User PSW instruction address
-        u32 access_regs[16]{};    // Access registers ar0-ar15
-        u64 fp_regs[16]{};        // Floating point registers f0-f15
-        u32 fpc{0};               // Floating point control register
-    };
-
-    /// @brief The domain struct — the central entity of the DGN kernel.
+    /// @brief The domain struct — the central entity of the DGP kernel.
+    ///
+    /// A domain is the unit of isolation: it owns an address space, gates,
+    /// portals, and one or more strands of execution.
+    ///
+    /// The primary_strand is embedded directly in the domain struct for
+    /// single-stranded domains (Phase 1). The assembly context switch
+    /// accesses strand fields through the domain pointer at compile-time
+    /// known offsets.
     struct domain {
-        domain_id                                                       id{DOMAIN_ID_INVALID};
+        // ── offset 0 ──  SCOMS kobject header (24 bytes)
+        scoms::kobject                                                  ko{};
+
+        // ── offset 24 ── Human-readable name (8 bytes)
         const char*                                                     name{""};
 
-        domain_state                                                    state{domain_state::embryo};
+        // ── offset 32 ── Flags + storage key + padding (16 bytes)
         domain_flags                                                    flags{domain_flags::none};
-
-        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce{};
-        u64                                                             root_phys{0};
         u8                                                              storage_key{0};
+        u8                                                              _pad0[3]{};
+        u64                                                             root_phys{0};
 
-        sched_params                                                    sched{};
-        lib::rb_node                                                    sched_rb{};
+        // ── offset 48 ── Primary strand (embedded execution context)
+        //    Contains: sched_params, kstack_base/top/ksp, uregs, sched_rb
+        //    The scheduler operates on &primary_strand directly.
+        strand                                                          primary_strand{};
 
-        u64                                                             kstack_base{0};
-        u64                                                             kstack_top{0};
-        u64                                                             ksp{0};
+        // ── Address space control element (8 bytes)
+        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce{};
 
-        bool                                                            on_rq{false};
-        u16                                                             cpu{0};
-
+        // ── Domain-level metadata (not per-strand)
         u32                                                             gate_count{0};
         u32                                                             portal_count{0};
 
+        // ── List node for global domain list
         lib::list_node                                                  domain_list{};
-        lib::list_node                                                  sched_link{};
 
-        locking::qspinlock::qspinlock                                   lock{};
-
-        user_regs                                                       uregs{};
+        // ── Per-domain VM state
+        memory::vm::vm_space                                            vm_space{};
 
         domain() noexcept = default;
         domain(const domain&)            = delete;
@@ -137,25 +119,22 @@ namespace zxfoundation::domain {
         auto operator=(domain&&)         = delete;
     };
 
-    static_assert(__builtin_offsetof(domain, kstack_top) == 120,
-        "domain::kstack_top must be at offset 120 — __switch_to_asm depends on this");
+    // ── Assembly-critical offset verification ────────────────────────────
+    //
+    // The context switch assembly (__switch_to_asm) accesses strand fields
+    // through the domain pointer. These offsets MUST match the #defines in
+    // switch_to.S.
 
-    static_assert(__builtin_offsetof(domain, ksp) == 128,
-        "domain::ksp must be at offset 128 — __switch_to_asm depends on this");
+    static_assert(__builtin_offsetof(domain, ko) == 0,
+        "domain::ko must be at offset 0 — kobject layout constraint");
 
-    static_assert(__builtin_offsetof(domain, id) == 0,
-        "domain::id must be at offset 0");
+    static_assert(__builtin_offsetof(domain, primary_strand) == 48,
+        "domain::primary_strand must be at offset 48");
 
-    static_assert(__builtin_offsetof(domain, kstack_base) == 112,
-        "domain::kstack_base must be at offset 112");
-
-    static_assert(__builtin_offsetof(domain, sched) == 48,
-        "domain::sched must be at offset 48");
-
-    /// @brief Per-CPU run queue — schedules domains (not tasks).
+    /// @brief Per-CPU run queue — schedules strands (execution contexts).
     struct run_queue {
         locking::qspinlock::qspinlock   lock{};          ///< Protects all run_queue mutations.
-        u32                             nr_running{0};   ///< Total runnable domains on this CPU.
+        u32                             nr_running{0};   ///< Total runnable strands on this CPU.
 
         domain*                         curr{nullptr};   ///< Currently running domain.
         domain*                         idle{nullptr};   ///< This CPU's idle domain.
@@ -170,6 +149,11 @@ namespace zxfoundation::domain {
 
         u16                             cpu_id{0};       ///< Logical CPU ID this run_queue belongs to.
 
+        /// @brief Set to 1 when this CPU's run queue is fully initialized
+        ///        (idle domain set, timer armed, ready for work-stealing).
+        ///        Written last under rq.lock; read by try_steal_domain_locked().
+        arch::s390x::lib::atomic::atomic<u32> online{0};
+
         run_queue() noexcept = default;
         run_queue(const run_queue&)            = delete;
         auto operator=(const run_queue&)       = delete;
@@ -177,7 +161,7 @@ namespace zxfoundation::domain {
         auto operator=(run_queue&&)            = delete;
     };
 
-    /// @brief Scheduler class — vtable of typed function pointers operating on domains.
+    /// @brief Scheduler class — vtable of typed function pointers.
     struct sched_class {
         void    (*enqueue_domain)(run_queue& rq, domain& d);    ///< Add domain to the run queue.
         void    (*dequeue_domain)(run_queue& rq, domain& d);    ///< Remove domain from the run queue.

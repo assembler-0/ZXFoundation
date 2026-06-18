@@ -60,7 +60,8 @@ namespace arch::s390x::cpu::psw {
 
     /// @brief Kernel DAT-on mask with interrupts enabled (normal execution).
     constexpr u64 PSW_MASK_KERNEL_ENABLED =
-        PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_ARCH_BITS | PSW_ASC_HOME;
+        PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_BIT_MCCK |
+        PSW_ARCH_BITS | PSW_ASC_HOME;
 
     /// @brief User-mode PSW mask for entering a domain in problem state.
     ///
@@ -80,6 +81,14 @@ namespace arch::s390x::cpu::psw {
 
     /// @brief Disabled-wait PSW mask: wait state, no interrupts, 64-bit.
     constexpr u64 PSW_MASK_DISABLED_WAIT = PSW_BIT_WAIT | PSW_ARCH_BITS;
+
+    /// @brief Enabled-wait PSW mask: wait state WITH all interrupts enabled.
+    /// Used by the idle loop — LPSWE atomically enables interrupts and
+    /// enters wait state, so no interrupt window can be missed.
+    /// DAT on + I/O + EXT + MCCK + WAIT + 64-bit + home space.
+    constexpr u64 PSW_MASK_ENABLED_WAIT =
+        PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_BIT_MCCK |
+        PSW_BIT_WAIT | PSW_ARCH_BITS | PSW_ASC_HOME;
 
     /// @brief Standard halt address (appears in disabled-wait PSW during normal shutdown).
     constexpr u64 PSW_STD_HALT_ADDR  = 0x0000000000DEAD00ULL;

@@ -1,0 +1,194 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/uaccess.cxxm
+/// @brief z/Architecture user-space access
+
+export module arch.s390x.cpu.uaccess;
+import arch.s390x.cpu.features;
+import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import zxfoundation.base.types;
+import zxfoundation.memory.hhdm;
+import lib.algorithm;
+import lib.string;
+
+namespace arch::s390x::cpu::uaccess::_internal {
+
+    /// OAC: use PSW ASC (= HOME for kernel).  K=0,A=0 ⇒ 0x0000.
+    inline constexpr u32 OAC_HOME    = 0x0000U;
+
+    /// OAC: explicit primary space.  A=1, AS=00 ⇒ 0x0001.
+    inline constexpr u32 OAC_PRIMARY = 0x0001U;
+
+    /// GR0 for copy_from_user: dest=HOME, src=PRIMARY.
+    /// Bits 32-47 = OAC₁ = 0x0000, bits 48-63 = OAC₂ = 0x0001.
+    inline constexpr u64 GR0_FROM_USER =
+        (static_cast<u64>(OAC_HOME) << 16) | OAC_PRIMARY;   // 0x0000'0001
+
+    /// GR0 for copy_to_user: dest=PRIMARY, src=HOME.
+    /// Bits 32-47 = OAC₁ = 0x0001, bits 48-63 = OAC₂ = 0x0000.
+    inline constexpr u64 GR0_TO_USER =
+        (static_cast<u64>(OAC_PRIMARY) << 16) | OAC_HOME;   // 0x0001'0000
+
+    inline constexpr u64 MVCOS_MAX_CHUNK = 4096ULL;
+
+    /// @brief Fallback copy from user space via manual page-table walk.
+    [[nodiscard]]
+    static auto dat_copy_from_user(void* dst, u64 src, u64 len,
+                                          u64 root_phys) noexcept -> i32 {
+        namespace hhdm = zxfoundation::memory::hhdm;
+
+        auto* out = static_cast<u8*>(dst);
+        const mmu::dat_table<mmu::dat_level::region_1> root{root_phys};
+
+        u64 copied = 0;
+        while (copied < len) {
+            const u64 user_va  = src + copied;
+            const u64 page_off = user_va & 0xFFFULL;
+            const u64 chunk    = ::lib::min(len - copied,
+                                            mmu::PAGE_SIZE_4K - page_off);
+
+            auto phys_r = mmu::walk<mmu::dat_level::region_1>(root, user_va);
+            if (!phys_r) [[unlikely]]
+                return -1;
+
+            const auto* page_ptr = reinterpret_cast<const u8*>(
+                hhdm::phys_to_virt(*phys_r));
+
+            ::lib::memcpy(out + copied, page_ptr, chunk);
+            copied += chunk;
+        }
+        return 0;
+    }
+
+    /// @brief Fallback copy to user space via manual page-table walk.
+    [[nodiscard]]
+    static auto dat_copy_to_user(u64 dst, const void* src, u64 len,
+                                        u64 root_phys) noexcept -> i32 {
+        namespace hhdm = zxfoundation::memory::hhdm;
+
+        const auto* in = static_cast<const u8*>(src);
+        const mmu::dat_table<mmu::dat_level::region_1> root{root_phys};
+
+        u64 copied = 0;
+        while (copied < len) {
+            const u64 user_va  = dst + copied;
+            const u64 page_off = user_va & 0xFFFULL;
+            const u64 chunk    = ::lib::min(len - copied,
+                                            mmu::PAGE_SIZE_4K - page_off);
+
+            auto phys_r = mmu::walk<mmu::dat_level::region_1>(root, user_va);
+            if (!phys_r) [[unlikely]]
+                return -1;
+
+            auto* page_ptr = reinterpret_cast<u8*>(
+                hhdm::phys_to_virt(*phys_r));
+
+            ::lib::memcpy(page_ptr, in + copied, chunk);
+            copied += chunk;
+        }
+        return 0;
+    }
+
+} // namespace arch::s390x::cpu::uaccess::_internal
+
+export {
+
+namespace arch::s390x::cpu::uaccess {
+
+    using namespace _internal;
+
+    /// @brief Execute a single MVCOS instruction.
+    /// @param dst   First-operand address (destination).
+    /// @param src   Second-operand address (source).
+    /// @param len   True length in R3.
+    /// @param oac   OAC pair to load into GR0 (low 32 bits used).
+    /// @return CC value: 0 = done, 3 = partial (len updated with remainder).
+    [[nodiscard]] auto mvcos(void* dst, const void* src,
+                               u64& len, u64 oac) noexcept -> i32 {
+        i32 cc;
+        __asm__ volatile(
+            "   lgr   0,%[oac]\n"
+            "   .insn ssf,0xc80000000000,%[dst],%[src],%[len]\n"
+            "   ipm   %[cc]\n"
+            "   srl   %[cc],28\n"
+            : [cc]  "=d" (cc),
+              [len] "+d" (len),
+              [dst] "+Q" (*(static_cast<char*>(dst)))
+            : [src] "Q"  (*(static_cast<const char*>(src))),
+              [oac] "d"  (oac)
+            : "cc", "0", "memory"
+        );
+        return cc;
+    }
+
+
+    /// @brief Copy len bytes using MVCOS with a given OAC pair.
+    ///        Loops in 4 KiB chunks when len > 4096 (CC 3 path).
+    /// @return 0 on success, -1 on access exception.
+    [[nodiscard]] auto mvcos_copy(void* dst, const void* src,
+                                  u64 len, u64 oac) noexcept -> i32 {
+        auto* d = static_cast<u8*>(dst);
+        auto* s = static_cast<const u8*>(src);
+
+        while (len > 0) {
+            u64 chunk = len;
+            i32 cc = mvcos(d, s, chunk, oac);
+
+            if (cc == 0) {
+                break;
+            }
+            if (cc == 3) {
+                d   += MVCOS_MAX_CHUNK;
+                s   += MVCOS_MAX_CHUNK;
+                len  = chunk;
+                continue;
+            }
+            return -1;
+        }
+        return 0;
+    }
+
+    /// @brief Copy from user space (PRIMARY) to kernel space (HOME).
+    /// @param dst        Kernel-space destination buffer.
+    /// @param src        User-space source virtual address.
+    /// @param len        Number of bytes to copy.
+    /// @param root_phys  Physical address of the domain's region-1 table
+    ///                   (only used on the fallback path).
+    /// @return           0 on success, -1 on translation/access failure.
+    [[nodiscard]] auto copy_from_user(void* dst, u64 src, u64 len,
+                                             u64 root_phys) noexcept -> i32 {
+        if (len == 0) [[unlikely]]
+            return 0;
+
+        if (features::has(features::facility::mvcos)) {
+            return mvcos_copy(dst,
+                              reinterpret_cast<const void*>(src),
+                              len, GR0_FROM_USER);
+        }
+
+        return dat_copy_from_user(dst, src, len, root_phys);
+    }
+
+    /// @brief Copy from kernel space (HOME) to user space (PRIMARY).
+    /// @param dst        User-space destination virtual address.
+    /// @param src        Kernel-space source buffer.
+    /// @param len        Number of bytes to copy.
+    /// @param root_phys  Physical address of the domain's region-1 table
+    ///                   (only used on the fallback path).
+    /// @return           0 on success, -1 on translation/access failure.
+    [[nodiscard]] auto copy_to_user(u64 dst, const void* src, u64 len,
+                                           u64 root_phys) noexcept -> i32 {
+        if (len == 0) [[unlikely]]
+            return 0;
+
+        if (features::has(features::facility::mvcos)) {
+            return mvcos_copy(reinterpret_cast<void*>(dst),
+                              src, len, GR0_TO_USER);
+        }
+
+        return dat_copy_to_user(dst, src, len, root_phys);
+    }
+
+} // namespace arch::s390x::cpu::uaccess
+
+} // end export

@@ -4,6 +4,7 @@
 
 export module zxfoundation.sched.sched_domain;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.processor;
@@ -13,8 +14,8 @@ import lib.util;
 import lib.string;
 
 extern "C" {
-    /// @brief Assembly stub: sets r15 = frame_base, jumps to ret_to_user.
-    [[noreturn]] auto __domain_enter_user_asm(u64 frame_base) noexcept -> void;
+    /// @brief Assembly stub: sets r15 = frame_base, loads ARs/VRs, jumps to ret_to_user.
+    [[noreturn]] auto __domain_enter_user_asm(u64 frame_base, zxfoundation::domain::user_regs* uregs) noexcept -> void;
 
     /// @brief Assembly trampoline for first entry into a new domain.
     [[noreturn]] auto domain_trampoline() noexcept -> void;
@@ -30,7 +31,6 @@ namespace zxfoundation::sched::domain_ctx {
     using domain_entry_fn = auto (*)(void*) noexcept -> void;
 
     /// @brief Set up the initial kernel stack frame for a new domain so that
-    ///        __switch_to_asm can context-switch into it.
     /// @param d      Domain with valid kstack_top.
     /// @param entry  Function to run when the domain is first scheduled.
     /// @param arg    Argument passed in r6 to the entry function.
@@ -41,10 +41,12 @@ namespace zxfoundation::sched::domain_ctx {
     ) noexcept -> void {
         static constexpr u64 FRAME_SIZE = 160;
         static constexpr u64 SF_GPRS    = 48;
+        static constexpr u64 SWITCH_VR_SIZE = 128;
 
-        const u64 sp = d->kstack_top - FRAME_SIZE;
+        const u64 sp = d->primary_strand.kstack_top - FRAME_SIZE;
+        const u64 ksp = sp - SWITCH_VR_SIZE;
 
-        lib::memset(reinterpret_cast<void*>(sp), 0, FRAME_SIZE);
+        lib::memset(reinterpret_cast<void*>(ksp), 0, FRAME_SIZE + SWITCH_VR_SIZE);
 
         auto* frame = reinterpret_cast<u64*>(sp + SF_GPRS);
         frame[0] = reinterpret_cast<u64>(arg);                    // r6  = arg
@@ -52,7 +54,7 @@ namespace zxfoundation::sched::domain_ctx {
         frame[8] = reinterpret_cast<u64>(&domain_trampoline);     // r14 = trampoline
         frame[9] = sp;                                            // r15 = stack pointer
 
-        d->ksp = sp;
+        d->primary_strand.ksp = ksp;
     }
 
     /// @brief Enter user mode for a domain — first-time entry path.
@@ -64,24 +66,24 @@ namespace zxfoundation::sched::domain_ctx {
         const u64 user_asce = d->asce.val;
         arch::s390x::cpu::processor::ctl_load<1, 1>(user_asce);
 
-        d->uregs.psw_mask |=
+        d->primary_strand.uregs.psw_mask |=
             (static_cast<u64>(d->storage_key) << arch::s390x::cpu::psw::PSW_KEY_SHIFT);
 
         static constexpr u64 RET_FRAME_SIZE = 0x90;
-        const u64 frame_base = d->kstack_top - RET_FRAME_SIZE;
+        const u64 frame_base = d->primary_strand.kstack_top - RET_FRAME_SIZE;
         auto* gprs = reinterpret_cast<u64*>(frame_base);
         auto* psw  = reinterpret_cast<u64*>(frame_base + 0x80);
 
         for (u32 i = 0; i < 16; ++i)
-            gprs[i] = d->uregs.gprs[i];
+            gprs[i] = d->primary_strand.uregs.gprs[i];
 
-        psw[0] = d->uregs.psw_mask;
-        psw[1] = d->uregs.psw_addr;
+        psw[0] = d->primary_strand.uregs.psw_mask;
+        psw[1] = d->primary_strand.uregs.psw_addr;
 
         lc->current_domain = reinterpret_cast<u64>(d);
-        lc->kernel_stack   = d->kstack_top;
+        lc->kernel_stack   = d->primary_strand.kstack_top;
 
-        __domain_enter_user_asm(frame_base);
+        __domain_enter_user_asm(frame_base, &d->primary_strand.uregs);
     }
 
 } // namespace zxfoundation::sched::domain_ctx

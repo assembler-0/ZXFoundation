@@ -7,4 +7,8 @@
     slub.cxxm
     slub_typed.cxxm
     kmalloc.cxxm
+    vm_types.cxxm
+    vm.cxxm
+    vm_txn.cxxm
+    fault.cxxm
 }
