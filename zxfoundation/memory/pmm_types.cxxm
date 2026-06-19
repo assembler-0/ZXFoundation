@@ -9,9 +9,6 @@ import zxfoundation.memory.hhdm;
 import lib.util;
 import arch.s390x.lib.atomic;
 
-using arch::s390x::lib::atomic::atomic;
-using arch::s390x::lib::atomic::memory_order;
-
 export {
 
 namespace zxfoundation::memory::pmm {
@@ -99,7 +96,7 @@ namespace zxfoundation::memory::pmm {
         u8  flags{0};
         u8  numa_node{0};   ///< Drawer_id of the CPU that allocated this frame. Advisory only.
         u8  _r0{0};
-        atomic<u16> refcount{0};    ///< Accessed exclusively via __atomic_* builtins in pmm.cxxm.
+        arch::s390x::lib::atomic::atomic<u16> refcount{0};    ///< Accessed exclusively via __atomic_* builtins in pmm.cxxm.
         u16 _r1{0};
         u64 storage_key{0}; ///< Reserved for future s390x storage-key / protection use.
 
@@ -131,7 +128,7 @@ namespace zxfoundation::memory::pmm {
             flags       = fl;
             numa_node   = numa;
             _r0         = 0;
-            refcount.store(0, memory_order::relaxed);
+            refcount.store(0, arch::s390x::lib::atomic::memory_order::relaxed);
             _r1         = 0;
             storage_key = 0;
         }
