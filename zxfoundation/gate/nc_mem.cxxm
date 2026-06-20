@@ -1,0 +1,303 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nc_mem.cxxm
+/// @brief Memory namespace dispatch handler — Pure DGP with s390x storage-key HW enforcement.
+
+export module zxfoundation.gate.nc_mem;
+import zxfoundation.gate.gate_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.vm_types;
+import zxfoundation.base.types;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
+import zxfoundation.sys.printk;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.uaccess;
+import arch.s390x.cpu.skey;
+import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_types;
+import lib.error;
+import lib.expected;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+using zxfoundation::domain::domain;
+using zxfoundation::sys::cap::cap_token;
+using zxfoundation::sys::cap::cap_rights;
+using zxfoundation::sys::cap::cap_type;
+
+namespace __mem_detail {
+
+    namespace vm = zxfoundation::memory::vm;
+    namespace mmu = arch::s390x::mmu;
+    namespace pmm = zxfoundation::memory::pmm;
+    namespace skey = arch::s390x::cpu::skey;
+
+    static constexpr u64 PAGE_SIZE = 4096ULL;
+
+    [[nodiscard]] auto current_domain() noexcept -> domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain*>(lc->current_domain);
+    }
+
+    /// @brief Validate a cap token authorizes memory mapping into the current domain.
+    /// The token must be of type cap_type::domain with cap_rights::map,
+    /// referencing the current domain (self-map authority).
+    [[nodiscard]] auto validate_map_authority(cap_token token, domain* self) noexcept -> bool {
+        auto d_r = zxfoundation::sys::cap::cap_validate<domain>(token, cap_rights::map);
+        if (!d_r) {
+            zxfoundation::sys::printk::perr("mem_map: cap validation failed — no map authority");
+            return false;
+        }
+        if ((*d_r)->ko.id != self->ko.id) {
+            zxfoundation::sys::printk::perr("mem_map: token domain {} != self {}", (*d_r)->ko.id, self->ko.id);
+            return false;
+        }
+        return true;
+    }
+
+    /// @brief Set the hardware storage key for a physical page range to a domain's key.
+    /// Uses SSKE (non-quiescing) for performance; sets access-control bits only,
+    /// reference/change bits are managed by hardware.
+    auto set_pages_key(u64 phys_start, u64 len, u8 domain_key) noexcept -> void {
+        const u8 key_byte = skey::make_skey(domain_key, false);
+        const u64 end = phys_start + len;
+        for (u64 p = phys_start & ~(PAGE_SIZE - 1); p < end; p += PAGE_SIZE) {
+            skey::sske_nq(p, key_byte);
+        }
+    }
+
+    auto nc_mem_alloc(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 size = a0;
+        if (size == 0) {
+            zxfoundation::sys::printk::perr("mem_alloc: zero size");
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        auto result = vm::vm_map(
+            d->vm_space, aligned_size,
+            vm::vm_prot::rw,
+            vm::vm_flags::anonymous);
+
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_alloc: vm_map failed for size={:#x}", aligned_size);
+            return NC_ERROR;
+        }
+
+        return *result;
+    }
+
+    auto nc_mem_free(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        if (va == 0 || size == 0) {
+            zxfoundation::sys::printk::perr("mem_free: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_free: vm_unmap failed va={:#x}", va);
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    /// @brief Map physical memory with capability-gated authorization + storage key
+    ///        hardware enforcement.
+    /// a0 = cap_token (map authority), a1 = VA, a2 = phys, a3 = size, a4 = prot
+    auto nc_mem_map(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        // Validate map authority — caller must hold a domain token with map right.
+        if (!validate_map_authority(cap_token{a0}, d)) {
+            zxfoundation::sys::printk::perr("mem_map: no map authority for domain {}", d->ko.id);
+            return NC_ERROR;
+        }
+
+        const u64 va        = a1;
+        const u64 phys      = a2;
+        const u64 size      = a3;
+        const u64 prot_bits = a4;
+
+        if (size == 0) {
+            zxfoundation::sys::printk::perr("mem_map: zero size");
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        vm::vm_prot prot = vm::vm_prot::read;
+        if (prot_bits & 0x2) prot = prot | vm::vm_prot::write;
+        if (prot_bits & 0x4) prot = prot | vm::vm_prot::exec;
+
+        auto vm_r = vm::vm_map_fixed(
+            d->vm_space, va, aligned_size,
+            prot, vm::vm_flags::none,
+            vm::vm_backing::physical, phys);
+
+        if (!vm_r) {
+            zxfoundation::sys::printk::perr("mem_map: vm_map_fixed failed va={:#x}", va);
+            return NC_ERROR;
+        }
+
+        // Set hardware storage keys for the mapped pages.
+        set_pages_key(phys, aligned_size, d->storage_key);
+
+        const mmu::dat_table<mmu::dat_level::region_1> root{d->root_phys};
+        for (u64 off = 0; off < aligned_size; off += PAGE_SIZE) {
+            auto map_r = mmu::map_page<mmu::dat_level::region_1>(
+                root, va + off, phys + off, mmu::page_prot{prot_bits});
+            if (!map_r) {
+                zxfoundation::sys::printk::perr("mem_map: map_page failed va={:#x}", va + off);
+                return NC_ERROR;
+            }
+        }
+
+        return 0;
+    }
+
+    auto nc_mem_unmap(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        if (va == 0 || size == 0) {
+            zxfoundation::sys::printk::perr("mem_unmap: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_unmap: vm_unmap failed va={:#x}", va);
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_mem_protect(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va        = a0;
+        const u64 size      = a1;
+        const u64 prot_bits = a2;
+
+        if (va == 0 || size == 0) {
+            zxfoundation::sys::printk::perr("mem_protect: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        vm::vm_prot new_prot = vm::vm_prot::none;
+        if (prot_bits & 0x1) new_prot = new_prot | vm::vm_prot::read;
+        if (prot_bits & 0x2) new_prot = new_prot | vm::vm_prot::write;
+        if (prot_bits & 0x4) new_prot = new_prot | vm::vm_prot::exec;
+
+        auto result = vm::vm_protect(d->vm_space, d->root_phys, va, aligned_size, new_prot);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_protect: vm_protect failed at va={:#x}", va);
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    /// @brief Share memory between domains with storage-key-mediated isolation.
+    /// a0 = source cap_token (domain token with share right), a1 = target domain ID
+    auto nc_mem_share(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        // Validate that caller holds a domain capability for the current domain
+        // with at least cap_rights::delegate (authority to share/export memory).
+        auto* self = current_domain();
+        if (!self) [[unlikely]] return NC_ERROR;
+
+        {
+            auto v_r = zxfoundation::sys::cap::cap_validate<domain>(
+                cap_token{a0}, cap_rights::delegate);
+            if (!v_r) {
+                zxfoundation::sys::printk::perr("mem_share: cap validation failed");
+                return NC_ERROR;
+            }
+            if ((*v_r)->ko.id != self->ko.id) {
+                zxfoundation::sys::printk::perr("mem_share: token domain mismatch");
+                return NC_ERROR;
+            }
+        }
+
+        const auto target_id = static_cast<u32>(a1);
+
+        auto* target = zxfoundation::domain::domain_find(target_id);
+        if (!target) {
+            zxfoundation::sys::printk::perr("mem_share: target domain {} not found", target_id);
+            return NC_ERROR;
+        }
+
+        // Acquire a capability token for the target domain with read+write rights,
+        // which the caller can use to access shared memory regions set with the
+        // target's storage key.
+        auto token_r = zxfoundation::sys::cap::cap_acquire(
+            cap_type::domain,
+            static_cast<u16>(target_id),
+            cap_rights::read | cap_rights::write);
+        if (!token_r) {
+            zxfoundation::sys::printk::perr("mem_share: cap_acquire for target failed");
+            return NC_ERROR;
+        }
+
+        return token_r->raw;
+    }
+
+} // namespace __mem_detail
+
+export {
+
+namespace zxfoundation::gate::nc_mem {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::gate::mem_op;
+
+        switch (static_cast<mem_op>(op)) {
+        case mem_op::alloc:
+            return __mem_detail::nc_mem_alloc(a0, a1, a2, a3, a4);
+        case mem_op::free:
+            return __mem_detail::nc_mem_free(a0, a1, a2, a3, a4);
+        case mem_op::map:
+            return __mem_detail::nc_mem_map(a0, a1, a2, a3, a4);
+        case mem_op::unmap:
+            return __mem_detail::nc_mem_unmap(a0, a1, a2, a3, a4);
+        case mem_op::protect:
+            return __mem_detail::nc_mem_protect(a0, a1, a2, a3, a4);
+        case mem_op::share:
+            return __mem_detail::nc_mem_share(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("mem_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+} // namespace zxfoundation::gate::nc_mem
+
+} // end export

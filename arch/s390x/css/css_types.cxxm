@@ -9,21 +9,11 @@ export {
 
 namespace arch::s390x::css {
 
-    // -----------------------------------------------------------------------
-    // Subchannel limits
-    // -----------------------------------------------------------------------
-
     /// @brief Maximum number of subchannels in the subchannel number space.
     inline constexpr u32 MAX_SUBCHANNELS = 65536;
 
     /// @brief Maximum valid subchannel number (0-based).
     inline constexpr u16 MAX_SCHID = 0xFFFF;
-
-    // -----------------------------------------------------------------------
-    // CCW flag bits — PoP §15 "Commands and Flags for CCWs"
-    //   Format-1 flags byte is at byte 1 (PoP bits 8-15 of word 0):
-    //   8=CD, 9=CC, 10=SLI, 11=SKIP, 12=PCI, 13=IDA, 14=S, 15=MIDA
-    // -----------------------------------------------------------------------
 
     inline constexpr u8 CCW_FLAG_CD      = 0x80; ///< Chain data (PoP bit 8).
     inline constexpr u8 CCW_FLAG_CC      = 0x40; ///< Command chaining (PoP bit 9).
@@ -34,10 +24,6 @@ namespace arch::s390x::css {
     inline constexpr u8 CCW_FLAG_SUSPEND = 0x02; ///< Suspend channel program (PoP bit 14).
     inline constexpr u8 CCW_FLAG_MIDA    = 0x01; ///< Modified IDA (PoP bit 15).
 
-    // -----------------------------------------------------------------------
-    // CCW command codes — PoP §14.1.1
-    // -----------------------------------------------------------------------
-
     inline constexpr u8 CCW_CMD_NOP         = 0x03; ///< No operation.
     inline constexpr u8 CCW_CMD_BASIC_SENSE = 0x04; ///< Basic sense.
     inline constexpr u8 CCW_CMD_TIC         = 0x08; ///< Transfer in channel.
@@ -45,10 +31,6 @@ namespace arch::s390x::css {
     inline constexpr u8 CCW_CMD_WRITE       = 0x01; ///< Write.
     inline constexpr u8 CCW_CMD_CONTROL     = 0x03; ///< Control.
     inline constexpr u8 CCW_CMD_SENSE_ID    = 0xE4; ///< Sense ID.
-
-    // -----------------------------------------------------------------------
-    // Device status bits — PoP §14.3.5
-    // -----------------------------------------------------------------------
 
     inline constexpr u8 DEV_STAT_ATTN = 0x80; ///< Attention.
     inline constexpr u8 DEV_STAT_MOD  = 0x40; ///< Status modifier.
@@ -59,10 +41,6 @@ namespace arch::s390x::css {
     inline constexpr u8 DEV_STAT_UC   = 0x02; ///< Unit check.
     inline constexpr u8 DEV_STAT_UX   = 0x01; ///< Unit exception.
 
-    // -----------------------------------------------------------------------
-    // Subchannel status bits — PoP §14.3.5
-    // -----------------------------------------------------------------------
-
     inline constexpr u8 SCH_STAT_PCI  = 0x80; ///< Program-controlled interruption.
     inline constexpr u8 SCH_STAT_INCL = 0x40; ///< Incorrect length.
     inline constexpr u8 SCH_STAT_PROG = 0x20; ///< Program check.
@@ -72,39 +50,15 @@ namespace arch::s390x::css {
     inline constexpr u8 SCH_STAT_ICC  = 0x02; ///< Interface control check.
     inline constexpr u8 SCH_STAT_CC   = 0x01; ///< Chaining check.
 
-    // -----------------------------------------------------------------------
-    // SCSW function control bits — PoP §14.3.5
-    // -----------------------------------------------------------------------
-    // -----------------------------------------------------------------------
-    // SCSW function control bits — PoP Chapter 16
-    //   FC field: bits 17-19 of word 0 → extracted as 3-bit value
-    //   Bit 17=Start, 18=Halt, 19=Clear
-    //   In extracted u8: Start=0x4, Halt=0x2, Clear=0x1
-    // -----------------------------------------------------------------------
-
     inline constexpr u8 FCTL_START = 0x4; ///< Start function (PoP bit 17).
     inline constexpr u8 FCTL_HALT  = 0x2; ///< Halt function (PoP bit 18).
     inline constexpr u8 FCTL_CLEAR = 0x1; ///< Clear function (PoP bit 19).
-
-    // -----------------------------------------------------------------------
-    // SCSW status control bits — PoP Chapter 16
-    //   SC field: bits 27-31 of word 0 → extracted as 5-bit value
-    //   Bit 27=Alert, 28=Intermediate, 29=Primary,
-    //   30=Secondary, 31=StatusPending
-    // -----------------------------------------------------------------------
 
     inline constexpr u8 STCTL_ALERT        = 0x10; ///< Alert status (PoP bit 27).
     inline constexpr u8 STCTL_INTERMEDIATE = 0x08; ///< Intermediate status (PoP bit 28).
     inline constexpr u8 STCTL_PRIMARY      = 0x04; ///< Primary status (PoP bit 29).
     inline constexpr u8 STCTL_SECONDARY    = 0x02; ///< Secondary status (PoP bit 30).
     inline constexpr u8 STCTL_STATUS_PEND  = 0x01; ///< Status pending (PoP bit 31).
-
-    // -----------------------------------------------------------------------
-    // SCSW activity control bits — PoP Chapter 16
-    //   AC field: bits 20-26 of word 0 → extracted as 7-bit value
-    //   Bit 20=Resume, 21=StartPending, 22=HaltPending, 23=ClearPending,
-    //   24=SchActive, 25=DevActive, 26=Suspended
-    // -----------------------------------------------------------------------
 
     inline constexpr u8 ACTL_RESUME_PEND = 0x40; ///< Resume pending (PoP bit 20).
     inline constexpr u8 ACTL_START_PEND  = 0x20; ///< Start pending (PoP bit 21).
@@ -114,18 +68,7 @@ namespace arch::s390x::css {
     inline constexpr u8 ACTL_DEV_ACTIVE  = 0x02; ///< Device active (PoP bit 25).
     inline constexpr u8 ACTL_SUSPENDED   = 0x01; ///< Suspended (PoP bit 26).
 
-    // -----------------------------------------------------------------------
-    // ccw1 — Format-1 Channel Command Word (8 bytes) — PoP §15 "Channel-Command Word"
-    // -----------------------------------------------------------------------
-
     /// @brief Format-1 CCW: 8 bytes, big-endian, used with Format-1 ORB.
-    ///
-    /// Layout (PoP Figure 15-x "Format-1 CCW"):
-    ///   Word 0: Cmd_Code(0-7) | Flags(8-15) | Count(16-31)
-    ///   Word 1: 0(32) | Data_Address(33-63)
-    ///
-    /// Flags byte bits (PoP bit numbering, Format-1):
-    ///   8=CD, 9=CC, 10=SLI, 11=SKIP, 12=PCI, 13=IDA, 14=S, 15=MIDA
     struct [[gnu::packed]] ccw1 {
         u8  cmd{};          ///< Byte 0: Command code.
         u8  flags{};        ///< Byte 1: Flag byte (CD, CC, SLI, SKIP, PCI, IDA, S, MIDA).
@@ -135,19 +78,7 @@ namespace arch::s390x::css {
 
     static_assert(sizeof(ccw1) == 8, "ccw1 must be exactly 8 bytes (PoP Format-1 CCW)");
 
-    // -----------------------------------------------------------------------
-    // scsw — Subchannel Status Word (12 bytes) — PoP §14.3.5
-    // -----------------------------------------------------------------------
-
     /// @brief Subchannel Status Word — packed status from TSCH.
-    ///
-    /// PoP Chapter 16 "Command-Mode SCSW":
-    ///   Word 0: Key(0-3) S(4) L(5) CC(6-7) F(8) P(9) I(10) X(11) U(12)
-    ///           Z(13) E(14) N(15) 0(16) FC(17-19) AC(20-26) SC(27-31)
-    ///   Word 1: CCW Address (0-31)
-    ///   Word 2: DevStatus(0-7) SchStatus(8-15) Count(16-31)
-    ///
-    /// On big-endian s390x, PoP bit N maps to u32 bit position (31 - N).
     struct [[gnu::packed]] scsw {
         u32 flags{0};       ///< Word 0: key(4), control bits, FC(3), AC(7), SC(5).
         u32 ccw_addr{0};    ///< Word 1: CCW address.
@@ -222,10 +153,6 @@ namespace arch::s390x::css {
 
     static_assert(sizeof(scsw) == 12, "scsw must be exactly 12 bytes");
 
-    // -----------------------------------------------------------------------
-    // pmcw — Path Management Control Word (28 bytes) — PoP §14.3.3
-    // -----------------------------------------------------------------------
-
     /// @brief Path Management Control Word — subchannel configuration.
     struct [[gnu::packed]] pmcw {
         u32 intparm{0};   ///< Interruption parameter.
@@ -260,10 +187,6 @@ namespace arch::s390x::css {
 
     static_assert(sizeof(pmcw) == 28, "pmcw must be exactly 28 bytes");
 
-    // -----------------------------------------------------------------------
-    // schib — Subchannel Information Block (52 bytes) — PoP §14.3.2
-    // -----------------------------------------------------------------------
-
     /// @brief Subchannel Information Block — returned by STSCH, input to MSCH.
     struct [[gnu::packed]] alignas(4) schib {
         pmcw pmcw_data{};   ///< Path Management Control Word.
@@ -273,10 +196,6 @@ namespace arch::s390x::css {
     };
 
     static_assert(sizeof(schib) == 52, "schib must be exactly 52 bytes");
-
-    // -----------------------------------------------------------------------
-    // orb — Operation Request Block (32 bytes) — PoP §14.2.1
-    // -----------------------------------------------------------------------
 
     /// @brief Operation Request Block — input to SSCH instruction.
     ///
@@ -318,10 +237,6 @@ namespace arch::s390x::css {
 
     static_assert(sizeof(orb) == 32, "orb must be exactly 32 bytes");
 
-    // -----------------------------------------------------------------------
-    // irb — Interruption Response Block (96 bytes) — PoP §14.3.4
-    // -----------------------------------------------------------------------
-
     /// @brief Interruption Response Block — output of TSCH instruction.
     /// Layout: SCSW(12) + ESW(20) + ECW(32) + EMW(32) = 96 bytes.
     struct [[gnu::packed]] alignas(4) irb {
@@ -333,23 +248,7 @@ namespace arch::s390x::css {
 
     static_assert(sizeof(irb) == 96, "irb must be exactly 96 bytes (PoP §14.3.4)");
 
-    // -----------------------------------------------------------------------
-    // subchannel_id — Subsystem-Identification Word — PoP §14 "I/O-Instruction Formats"
-    // -----------------------------------------------------------------------
-
     /// @brief Subsystem-Identification Word (SID) for I/O instructions.
-    ///
-    /// PoP GR1 format (lower 32 bits):
-    ///   With MSS facility:
-    ///     Bits 32-44: must be zero (13 bits)
-    ///     Bits 45-46: SSID (subchannel-set identifier, 2 bits)
-    ///     Bit 47:     must be 1
-    ///     Bits 48-63: subchannel number (16 bits)
-    ///   Without MSS facility:
-    ///     Bits 32-47: 0x0001
-    ///     Bits 48-63: subchannel number
-    ///
-    /// In u32 (big-endian): 0000000000000_SS_1_NNNNNNNNNNNNNNNN
     struct [[gnu::packed]] subchannel_id {
         u32 val{0};
 
@@ -384,10 +283,6 @@ namespace arch::s390x::css {
 
     static_assert(sizeof(subchannel_id) == 4, "subchannel_id must be exactly 4 bytes");
 
-    // -----------------------------------------------------------------------
-    // senseid_data — Sense ID response (8 bytes) — PoP §14.5
-    // -----------------------------------------------------------------------
-
     /// @brief Sense ID response data returned by CCW_CMD_SENSE_ID.
     struct [[gnu::packed]] senseid_data {
         u8  _reserved{0};  ///< Reserved (0xFF when valid).
@@ -398,6 +293,13 @@ namespace arch::s390x::css {
     };
 
     static_assert(sizeof(senseid_data) == 7, "senseid_data must be exactly 7 bytes");
+
+    /// @brief Type Boundary Constant — documents the CSS↔I/O isolation barrier.
+    /// CSS types are privileged and MUST NOT be imported into the public I/O layer
+    /// (io_types/io/nc_io). The I/O layer communicates with CSS exclusively through
+    /// opaque handles (u16 dev_no). This string is a compile-time invariant marker.
+    inline constexpr const char* CSS_IO_BOUNDARY =
+        "CSS-IO-BOUNDARY: css types are privileged - only opaque dev_no crosses into io";
 
 } // namespace arch::s390x::css
 

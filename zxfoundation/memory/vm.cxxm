@@ -446,6 +446,8 @@ namespace zxfoundation::memory::vm {
             return lib::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::code::invalid_arg));
 
+        const locking::irq_lock_guard guard{space.lock};
+
         if (space.region_count >= space.max_regions)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::out_of_memory));
@@ -488,6 +490,9 @@ namespace zxfoundation::memory::vm {
         if ((va & (VM_PAGE_SIZE - 1)) != 0)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::alignment_error));
+
+        const locking::irq_lock_guard guard{space.lock};
+
         if (space.region_count >= space.max_regions)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::out_of_memory));
@@ -533,6 +538,8 @@ namespace zxfoundation::memory::vm {
         if ((va & (VM_PAGE_SIZE - 1)) != 0)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::alignment_error));
+
+        const locking::irq_lock_guard guard{space.lock};
 
         const u64 unmap_end = va + size;
 
@@ -604,6 +611,8 @@ namespace zxfoundation::memory::vm {
         if ((va & (VM_PAGE_SIZE - 1)) != 0)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::alignment_error));
+
+        const locking::irq_lock_guard guard{space.lock};
 
         const u64 prot_end = va + size;
 
@@ -678,6 +687,8 @@ namespace zxfoundation::memory::vm {
     /// @brief Destroy all regions in a VME space, freeing region descriptors.
     auto vm_destroy_space(vm_space& space) noexcept -> void {
         using namespace _internal;
+
+        const locking::irq_lock_guard guard{space.lock};
 
         lib::rb_node* node = space.tree.leftmost;
         while (node) {

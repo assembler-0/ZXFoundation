@@ -1,0 +1,42 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/sys/time.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.sys.time",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/sys/time.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.locking.seqlock"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.processor"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.irq"
+        },
+        {
+          "logical-name": "arch.s390x.lib.atomic"
+        },
+        {
+          "logical-name": "lib.expected"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.compare"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

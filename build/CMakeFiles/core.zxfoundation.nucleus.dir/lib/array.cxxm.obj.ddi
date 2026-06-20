@@ -1,0 +1,36 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/lib/array.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "lib.array",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/lib/array.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "lib.concepts"
+        },
+        {
+          "logical-name": "lib.expected"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.util"
+        },
+        {
+          "logical-name": "lib.compare"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

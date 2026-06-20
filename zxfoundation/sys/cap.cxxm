@@ -1,0 +1,356 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/cap.cxxm
+/// @brief Capability management — acquire, release, derive, and validate
+///        capability tokens for the DGP kernel's authorization model.
+
+export module zxfoundation.sys.cap;
+import zxfoundation.sys.cap_types;
+import zxfoundation.base.types;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_table;
+import zxfoundation.scoms.scoms_ref;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.gate.gate_types;
+import zxfoundation.gate.gate;
+import zxfoundation.portal.portal_types;
+import zxfoundation.portal.portal;
+import zxfoundation.memory.vm_types;
+import zxfoundation.sys.printk;
+import lib.error;
+import lib.expected;
+import lib.format;
+import lib.pair;
+
+export {
+
+namespace zxfoundation::sys::cap {
+
+    using namespace zxfoundation::scoms;
+    using namespace zxfoundation::sys::printk;
+
+    // ── Forward declarations ─────────────────────────────────────────────
+
+    /// @brief Acquire a capability token for a given resource.
+    /// @param[in]  type     Resource type to acquire.
+    /// @param[in]  obj_id   Object ID in the type's SCOMS table.
+    /// @param[in]  rights   Desired access rights.
+    /// @return  cap_token on success, kernel_error on failure.
+    /// @note  The returned token includes the current generation counter of
+    ///        the object, which prevents use-after-free (ABA) races.
+    /// @note  This function increments the object's reference count. Call
+    ///        cap_release to decrement.
+    [[nodiscard]] auto cap_acquire(
+        cap_type   type,
+        u16        obj_id,
+        cap_rights rights
+    ) noexcept -> lib::expected<cap_token, lib::kernel_error>;
+
+    /// @brief Release a previously acquired capability.
+    /// @param[in]  token  The capability token to release.
+    /// @return  Success, or kernel_error if the token is invalid.
+    /// @note  Decrements the underlying object's reference count.  The token
+    ///        is invalidated (not usable after this call, even if the refcount
+    ///        does not reach zero).
+    /// @warning  Double-release is detected via generation counter mismatch
+    ///           and returns an error.  The kernel does not trap on double-
+    ///           release — it returns an error code.
+    [[nodiscard]] auto cap_release(cap_token token) noexcept
+        -> lib::expected<void, lib::kernel_error>;
+
+    /// @brief Validate a capability token and return the underlying object.
+    /// @tparam     T      Expected kobject type (domain, gate_desc, etc.).
+    /// @param[in]  token  The capability token to validate.
+    /// @param[in]  needed Rights required for the intended operation.
+    /// @return  Pointer to the validated object, or kernel_error.
+    /// @note  This is the hot path: called on every gate/portal/memory operation.
+    ///        It checks:
+    ///          - Token type matches T's kobject_type.
+    ///          - Generation matches the object's current generation.
+    ///          - Object state is not dying.
+    ///          - Token has the required rights.
+    /// @note  Does NOT increment the refcount — the caller already holds a
+    ///        reference via cap_acquire.
+    template <typename T>
+    [[nodiscard]] auto cap_validate(cap_token token, cap_rights needed) noexcept
+        -> lib::expected<T*, lib::kernel_error>;
+
+    /// @brief Validate a capability token without a concrete type parameter
+    ///        (for user-facing nc_cap_validate).  Checks:
+    ///          - Token is non-null.
+    ///          - Object still exists (generation check).
+    ///          - Object state is not dying.
+    ///          - Token has the required rights.
+    /// @note  Unlike cap_validate<T>, this does NOT return the object pointer —
+    ///        it only returns success/failure.
+    [[nodiscard]] auto cap_validate_generic(
+        cap_token   token,
+        cap_rights  needed
+    ) noexcept -> lib::expected<void, lib::kernel_error>;
+
+} // namespace zxfoundation::sys::cap
+
+} // end export
+
+// ── Implementation ──────────────────────────────────────────────────────────
+
+namespace zxfoundation::sys::cap::_internal {
+
+    using namespace zxfoundation::domain;
+    using namespace zxfoundation::gate;
+    using namespace zxfoundation::portal;
+
+    /// @brief Retrieve a kobject* and its generation from any SCOMS table.
+    /// @param[in]  type    cap_type discriminator.
+    /// @param[in]  obj_id  Object ID.
+    /// @return  Pair of (kobject*, generation) or error.
+    [[nodiscard]] auto lookup_kobject(
+        cap_type type, u16 obj_id
+    ) noexcept -> lib::expected<lib::pair<kobject*, u32>, lib::kernel_error> {
+
+        const u32 id = static_cast<u32>(obj_id);
+
+        switch (type) {
+            case cap_type::domain: {
+                auto* d = zxfoundation::domain::domain_find(id);
+                if (!d) return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::not_found));
+                return lib::pair<kobject*, u32>{&d->ko, d->ko.generation};
+            }
+
+            case cap_type::gate: {
+                auto* g = zxfoundation::gate::gate_find(id);
+                if (!g) return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::not_found));
+                return lib::pair<kobject*, u32>{&g->ko, g->ko.generation};
+            }
+
+            case cap_type::portal: {
+                auto* p = zxfoundation::portal::portal_find(id);
+                if (!p) return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::not_found));
+                return lib::pair<kobject*, u32>{&p->ko, p->ko.generation};
+            }
+
+            default:
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+    }
+
+    /// @brief Validate that the token's type has sufficient rights for an operation.
+    [[nodiscard]] auto check_rights(cap_token token, cap_rights needed) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        if ((token.rights() & needed) == cap_rights::none) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        return {};
+    }
+
+} // namespace zxfoundation::sys::cap::_internal
+
+export {
+
+namespace zxfoundation::sys::cap {
+
+    [[nodiscard]] auto cap_acquire(
+        cap_type   type,
+        u16        obj_id,
+        cap_rights rights
+    ) noexcept -> lib::expected<cap_token, lib::kernel_error> {
+
+        auto result = _internal::lookup_kobject(type, obj_id);
+        if (!result) {
+            perr("cap_acquire: type={} id={} not found",
+                 cap_type_name(type), static_cast<u32>(obj_id));
+            return lib::unexpected(result.error());
+        }
+
+        auto [ko, gen] = *result;
+
+        // Increment the reference count.
+        ko->ref.get();
+
+        const cap_token token = cap_token::make(type, obj_id, static_cast<u16>(gen), rights);
+
+        pdebug("cap_acquire: type={} id={} gen={} rights={:#x} token={:#016x}",
+               cap_type_name(type), static_cast<u32>(obj_id),
+               static_cast<u32>(gen), static_cast<u16>(rights), token.raw);
+
+        return token;
+    }
+
+    [[nodiscard]] auto cap_release(cap_token token) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        // Look up the object to verify generation.
+        auto result = _internal::lookup_kobject(token.type(), token.object_id());
+        if (!result) {
+            perr("cap_release: type={} id={} — object not found",
+                 cap_type_name(token.type()), static_cast<u32>(token.object_id()));
+            return lib::unexpected(result.error());
+        }
+
+        auto [ko, gen] = *result;
+
+        // Generation mismatch: the object was recycled since the token was acquired.
+        if (gen != static_cast<u32>(token.generation())) {
+            perr("cap_release: type={} id={} — generation mismatch (token={}, actual={})",
+                 cap_type_name(token.type()), static_cast<u32>(token.object_id()),
+                 static_cast<u32>(token.generation()), gen);
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+
+        // Decrement the reference count.
+        const bool last = ko->ref.put();
+
+        pdebug("cap_release: type={} id={} gen={} last={}",
+               cap_type_name(token.type()), static_cast<u32>(token.object_id()),
+               static_cast<u32>(token.generation()), last);
+
+        return {};
+    }
+
+    [[nodiscard]] auto cap_validate_generic(
+        cap_token token, cap_rights needed
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto rights_check = _internal::check_rights(token, needed);
+        if (!rights_check) return lib::unexpected(rights_check.error());
+
+        auto result = _internal::lookup_kobject(token.type(), token.object_id());
+        if (!result) {
+            return lib::unexpected(result.error());
+        }
+
+        auto [ko, gen] = *result;
+
+        if (gen != static_cast<u32>(token.generation())) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (ko->state == lifecycle_state::dying) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+
+        return {};
+    }
+
+    // Template specialization for each supported concrete type.
+
+    template <>
+    [[nodiscard]] auto cap_validate<zxfoundation::domain::domain>(
+        cap_token token, cap_rights needed
+    ) noexcept -> lib::expected<zxfoundation::domain::domain*, lib::kernel_error> {
+
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (token.type() != cap_type::domain) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto rights_check = _internal::check_rights(token, needed);
+        if (!rights_check) return lib::unexpected(rights_check.error());
+
+        auto* d = zxfoundation::domain::domain_find(static_cast<u32>(token.object_id()));
+        if (!d) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (d->ko.generation != static_cast<u32>(token.generation())) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (d->ko.state == lifecycle_state::dying) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+        return d;
+    }
+
+    template <>
+    [[nodiscard]] auto cap_validate<zxfoundation::gate::gate_desc>(
+        cap_token token, cap_rights needed
+    ) noexcept -> lib::expected<zxfoundation::gate::gate_desc*, lib::kernel_error> {
+
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (token.type() != cap_type::gate) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto rights_check = _internal::check_rights(token, needed);
+        if (!rights_check) return lib::unexpected(rights_check.error());
+
+        auto* g = zxfoundation::gate::gate_find(static_cast<u32>(token.object_id()));
+        if (!g) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (g->ko.generation != static_cast<u32>(token.generation())) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (g->ko.state == lifecycle_state::dying) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+        return g;
+    }
+
+    template <>
+    [[nodiscard]] auto cap_validate<zxfoundation::portal::portal_desc>(
+        cap_token token, cap_rights needed
+    ) noexcept -> lib::expected<zxfoundation::portal::portal_desc*, lib::kernel_error> {
+
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (token.type() != cap_type::portal) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto rights_check = _internal::check_rights(token, needed);
+        if (!rights_check) return lib::unexpected(rights_check.error());
+
+        auto* p = zxfoundation::portal::portal_find(static_cast<u32>(token.object_id()));
+        if (!p) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (p->ko.generation != static_cast<u32>(token.generation())) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (p->ko.state == lifecycle_state::dying) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+        return p;
+    }
+
+} // namespace zxfoundation::sys::cap
+
+} // end export

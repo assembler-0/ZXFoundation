@@ -1,0 +1,207 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nc_sys.cxxm
+/// @brief System namespace dispatch handler.
+
+export module zxfoundation.gate.nc_sys;
+import zxfoundation.gate.gate_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.sys.printk;
+import zxfoundation.sys.time;
+import zxfoundation.sys.timer;
+import zxfoundation.sys.timer_types;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
+import zxfoundation.sys.service;
+import zxfoundation.base.types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.uaccess;
+import lib.error;
+import lib.expected;
+import lib.string;
+import lib.string_view;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+using zxfoundation::domain::domain;
+using zxfoundation::domain::domain_flags;
+
+namespace __sys_detail {
+
+    [[nodiscard]] auto current_domain() noexcept -> domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain*>(lc->current_domain);
+    }
+
+    auto copy_from_user(void* dst, u64 src, u64 len, domain* d) noexcept -> i32 {
+        return arch::s390x::cpu::uaccess::copy_from_user(
+            dst, src, len, d->root_phys);
+    }
+
+    auto nc_time_yield(u64, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (d) {
+            d->flags = d->flags | domain_flags::need_resched;
+        }
+        return 0;
+    }
+
+    auto nc_time_deadline(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 ns_from_now = a0;
+        if (ns_from_now == 0) {
+            zxfoundation::sys::printk::perr("time_deadline: zero deadline");
+            return NC_ERROR;
+        }
+
+        const auto mono = zxfoundation::sys::time::monotonic_now();
+        const u64 deadline_ns = mono.nanoseconds_since_epoch() + ns_from_now;
+
+        return deadline_ns;
+    }
+
+    auto nc_time_now(u64, u64, u64, u64, u64) noexcept -> u64 {
+        return zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
+    }
+
+    auto nc_console_write(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        const u64 user_buf = a0;
+        const u64 user_len = a1;
+
+        if (user_len == 0 || user_len > 256) {
+            zxfoundation::sys::printk::perr("console_write: bad len={}", user_len);
+            return NC_ERROR;
+        }
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] {
+            zxfoundation::sys::printk::perr("console_write: no current domain");
+            return NC_ERROR;
+        }
+
+        char kbuf[256]{};
+        if (copy_from_user(kbuf, user_buf, user_len, d) != 0) {
+            zxfoundation::sys::printk::perr(
+                "console_write: copy_from_user failed buf={:#x} len={} root={:#x}",
+                user_buf, user_len, d->root_phys);
+            return NC_ERROR;
+        }
+
+        zxfoundation::sys::printk::pinfo("console_write: {}",
+            lib::string_view{kbuf, static_cast<usize>(user_len)});
+
+        return 0;
+    }
+
+    auto nc_service_register(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::service;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 name_user_ptr = a0;
+        const zxfoundation::sys::cap::cap_token token{a1};
+
+        if (name_user_ptr == 0) {
+            zxfoundation::sys::printk::perr("service_register: null name");
+            return NC_ERROR;
+        }
+
+        char name_buf[64]{};
+        if (copy_from_user(name_buf, name_user_ptr, 63, d) != 0) {
+            zxfoundation::sys::printk::perr("service_register: copy_from_user failed");
+            return NC_ERROR;
+        }
+        name_buf[63] = '\0';
+
+        auto result = service_register(name_buf, token, d->ko.id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("service_register: failed for \"{}\"", name_buf);
+            return NC_ERROR;
+        }
+
+        return static_cast<u64>(*result);
+    }
+
+    auto nc_service_lookup(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::service;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 name_user_ptr = a0;
+
+        if (name_user_ptr == 0) {
+            zxfoundation::sys::printk::perr("service_lookup: null name");
+            return NC_ERROR;
+        }
+
+        char name_buf[64]{};
+        if (copy_from_user(name_buf, name_user_ptr, 63, d) != 0) {
+            zxfoundation::sys::printk::perr("service_lookup: copy_from_user failed");
+            return NC_ERROR;
+        }
+        name_buf[63] = '\0';
+
+        auto result = service_lookup(name_buf);
+        if (!result) {
+            zxfoundation::sys::printk::perr("service_lookup: \"{}\" not found", name_buf);
+            return NC_ERROR;
+        }
+
+        return result->raw;
+    }
+
+    auto nc_service_unregister(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::service;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto service_id = static_cast<u32>(a0);
+
+        auto result = service_unregister(service_id, d->ko.id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("service_unregister: id={} failed", service_id);
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+} // namespace __sys_detail
+
+export {
+
+namespace zxfoundation::gate::nc_sys {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::gate::sys_op;
+
+        switch (static_cast<sys_op>(op)) {
+        case sys_op::time_yield:
+            return __sys_detail::nc_time_yield(a0, a1, a2, a3, a4);
+        case sys_op::time_deadline:
+            return __sys_detail::nc_time_deadline(a0, a1, a2, a3, a4);
+        case sys_op::time_now:
+            return __sys_detail::nc_time_now(a0, a1, a2, a3, a4);
+        case sys_op::console_write:
+            return __sys_detail::nc_console_write(a0, a1, a2, a3, a4);
+        case sys_op::service_register:
+            return __sys_detail::nc_service_register(a0, a1, a2, a3, a4);
+        case sys_op::service_lookup:
+            return __sys_detail::nc_service_lookup(a0, a1, a2, a3, a4);
+        case sys_op::service_unregister:
+            return __sys_detail::nc_service_unregister(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("sys_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+} // namespace zxfoundation::gate::nc_sys
+
+} // end export

@@ -1,0 +1,42 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/base/cxxrtse/cxxabi.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.base.cxxrtse.cxxabi",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/base/cxxrtse/cxxabi.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.syschk"
+        },
+        {
+          "logical-name": "zxfoundation.locking.qspinlock"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.static_vector"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.processor"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.psw"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

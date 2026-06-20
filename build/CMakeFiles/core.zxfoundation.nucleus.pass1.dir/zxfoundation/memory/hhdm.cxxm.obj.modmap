@@ -1,0 +1,5 @@
+-x c++-module
+-fmodule-output="CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation.memory.hhdm.pcm"
+-fmodule-file="zxfoundation.base.types=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation.base.types.pcm"
+-fmodule-file="zxfoundation.memory.hhdm_types=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation.memory.hhdm_types.pcm"
+-fmodule-file="lib.compare=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/lib.compare.pcm"

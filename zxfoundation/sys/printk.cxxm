@@ -4,6 +4,7 @@
 
 export module zxfoundation.sys.printk;
 import zxfoundation.base.types;
+import zxfoundation.base.config;
 import zxfoundation.sys.printk_types;
 import zxfoundation.sys.time;
 import zxfoundation.locking.qspinlock;
@@ -40,13 +41,10 @@ export {
 
 namespace zxfoundation::sys::printk {
 
-    /// @brief Initialize the logging framework.
     auto init() noexcept -> void {
         _internal::g_state.min_level = log_level::DEBUG;
     }
 
-    /// @brief Register a new logging backend.
-    /// @param[in] backend Reference to the backend structure (must be persistent).
     auto register_backend(const printk_backend& backend) noexcept -> void {
         if (!backend.emit) return;
         locking::irq_lock_guard guard(_internal::g_state.lock);
@@ -57,16 +55,10 @@ namespace zxfoundation::sys::printk {
         (void)_internal::g_state.backends.push_back(b);
     }
 
-    /// @brief Set the global minimum log level.
-    /// @param[in] level The new minimum level.
     auto set_min_level(const log_level level) noexcept -> void {
         _internal::g_state.min_level = level;
     }
 
-    /// @brief Read logs from the circular buffer.
-    /// @param[out] dest  Destination buffer.
-    /// @param[in]  consume  If true, remove read bytes from the buffer.
-    /// @return Number of bytes read.
     auto read_logs(lib::span<u8> dest, bool consume) noexcept -> usize {
         locking::irq_lock_guard guard(_internal::g_state.lock);
         if (consume) {
@@ -76,26 +68,17 @@ namespace zxfoundation::sys::printk {
         }
     }
 
-    /// @brief Get the current size of the log buffer.
-    /// @return Number of bytes currently stored.
     auto log_size() noexcept -> usize {
         return _internal::g_state.log_buffer.size();
     }
 
-    /// @brief The main kernel logging function.
-    /// @param[in] level  Log level.
-    /// @param[in] fmt    Format string.
-    /// @param[in] args   Formatting arguments.
     template <typename... Args>
     auto printk(log_level level, lib::string_view fmt, Args&&... args) noexcept -> void {
-        if (static_cast<u8>(level) > static_cast<u8>(_internal::g_state.min_level)) {
+        if (static_cast<u8>(level) > static_cast<u8>(_internal::g_state.min_level))
             return;
-        }
 
         char buf[512];
-        const lib::span s_buf(buf, 512);
 
-        // Format Header: "ZXF-[(SSSS).UUUUUU] [(type)NN] L "
         const auto now = time::monotonic_now();
         const u64 s = now.nanoseconds_since_epoch() / 1000000000U;
         const u64 us = (now.nanoseconds_since_epoch() % 1000000000U) / 1000U;
@@ -105,22 +88,22 @@ namespace zxfoundation::sys::printk {
 
         usize offset = 0;
         if (s > 1'000'000'000U) [[unlikely]] {
-            offset = lib::format::format_to(s_buf, "ZXF-[(XXXX).xxxxxx] [({}){}] {} ",
+            offset = lib::format::format_to({buf, 512}, "ZXF-[(XXXX).xxxxxx] [({}){}] {} ",
                 prefix,
                 lib::format::dec{static_cast<u64>(cpu), 2, true},
                 tag
             );
         } else {
-            offset = lib::format::format_to(s_buf, "ZXF-[({}).{}] [({}){}] {} ",
-                lib::format::dec{s, 4, true}, 
+            offset = lib::format::format_to({buf, 512}, "ZXF-[({}).{}] [({}){}] {} ",
+                lib::format::dec{s, 4, true},
                 lib::format::dec{us, 6, true},
                 prefix,
-                lib::format::dec{static_cast<u64>(cpu), 2, true}, 
+                lib::format::dec{static_cast<u64>(cpu), 2, true},
                 tag
             );
         }
-        
-        offset += lib::format::format_to(s_buf.subspan(offset), fmt, lib::forward<Args>(args)...);
+
+        offset += lib::format::format_to({buf + offset, 512 - offset}, fmt, lib::forward<Args>(args)...);
 
         if (offset < 511 && (offset == 0 || buf[offset-1] != '\n')) {
             buf[offset++] = '\n';
@@ -133,21 +116,23 @@ namespace zxfoundation::sys::printk {
         {
             locking::irq_lock_guard guard(_internal::g_state.lock);
 
-            lib::span<const u8> to_push(reinterpret_cast<const u8*>(final_msg.data()), final_msg.size());
+            lib::span<const u8> to_push(
+                reinterpret_cast<const u8*>(final_msg.data()), final_msg.size());
 
             while (to_push.size() > 0) {
                 usize written = _internal::g_state.log_buffer.push(to_push);
                 if (written == to_push.size()) break;
 
                 u8 discard[1024];
-                (void)_internal::g_state.log_buffer.pop({discard, lib::min(static_cast<usize>(sizeof(discard)), _internal::g_state.log_buffer.size())});
+                (void)_internal::g_state.log_buffer.pop(
+                    {discard, lib::min(static_cast<usize>(sizeof(discard)),
+                                       _internal::g_state.log_buffer.size())});
 
                 if (written > 0) {
                     to_push = to_push.subspan(written);
                 }
             }
 
-            // Snapshot active backends.
             for (usize i = 0; i < _internal::g_state.backends.size(); ++i) {
                 if (_internal::g_state.backends[i].active) {
                     (void)snap.push_back(_internal::g_state.backends[i]);

@@ -1,0 +1,51 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation/sys/timer.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.sys.timer",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/sys/timer.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.sys.timer_types"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.processor"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.clkcomp"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.irq"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.lowcore"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        },
+        {
+          "logical-name": "lib.min_heap"
+        },
+        {
+          "logical-name": "lib.expected"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.format"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

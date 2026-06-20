@@ -12,4 +12,9 @@
     timer_types.cxxm
     timer.cxxm
     watchdog.cxxm
+    cap_types.cxxm
+    cap.cxxm
+    service.cxxm
+    io_types.cxxm
+    io.cxxm
 }

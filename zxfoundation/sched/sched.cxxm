@@ -9,6 +9,7 @@ import zxfoundation.sched.sched_domain;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
+import zxfoundation.domain.signal;
 import zxfoundation.gate.gate;
 import zxfoundation.portal.portal;
 import zxfoundation.base.types;
@@ -208,6 +209,9 @@ namespace zxfoundation::sched {
         auto* switched_from = __switch_to_asm(prev, next);
 
         arch::s390x::cpu::irq::irq_restore(flags);
+
+        // Deliver pending signals to the newly scheduled domain.
+        zxfoundation::domain::signal::signal_deliver_all(*rq.curr);
 
         if (switched_from &&
             switched_from->ko.state == lifecycle_state::dying &&

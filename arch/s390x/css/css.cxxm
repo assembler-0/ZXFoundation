@@ -11,6 +11,10 @@ import zxfoundation.locking.lock;
 import zxfoundation.sys.printk;
 import zxfoundation.sync.waitqueue_types;
 import zxfoundation.sync.waitqueue;
+import zxfoundation.domain.domain;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.signal;
+import zxfoundation.domain.signal_types;
 import arch.s390x.cpu.irq;
 import arch.s390x.lib.atomic;
 import lib.error;
@@ -442,6 +446,17 @@ namespace arch::s390x::css {
 
         // Wake anyone waiting on this subchannel's I/O completion.
         zxfoundation::sync::wake_up(entry.io_wait);
+
+        // Signal the owner domain about the I/O completion.
+        if (entry.owner_domain != 0xFFFFFFFF) {
+            auto* d = zxfoundation::domain::domain_find(
+                static_cast<zxfoundation::domain::domain_id>(entry.owner_domain));
+            if (d) {
+                zxfoundation::domain::signal::signal_enqueue(
+                    *d, zxfoundation::domain::signal::signal_kind::io,
+                    entry.schid.sch_no());
+            }
+        }
     }
 
     /// @brief Find a subchannel by SENSE-ID device type and model.

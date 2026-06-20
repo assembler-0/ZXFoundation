@@ -1,0 +1,141 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nc_io.cxxm
+/// @brief I/O namespace dispatch handler.
+
+export module zxfoundation.gate.nc_io;
+import zxfoundation.gate.gate_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.sys.io_types;
+import zxfoundation.sys.io;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.uaccess;
+import lib.error;
+import lib.expected;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+using zxfoundation::domain::domain;
+
+namespace __io_detail {
+
+    [[nodiscard]] auto current_domain() noexcept -> domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain*>(lc->current_domain);
+    }
+
+    auto copy_from_user(void* dst, u64 src, u64 len, domain* d) noexcept -> i32 {
+        return arch::s390x::cpu::uaccess::copy_from_user(
+            dst, src, len, d->root_phys);
+    }
+
+    auto nc_io_bind(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::io;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        // a0 carries the opaque device number (CSS-IO boundary).
+        const u16 dev_no = static_cast<u16>(a0 & 0xFFFFU);
+
+        zxfoundation::sys::cap::cap_token token{};
+        auto result = io_bind(dev_no, d->ko.id, token);
+        if (!result) {
+            zxfoundation::sys::printk::perr("io_bind: failed for dev_no={:#06x}",
+                                           dev_no);
+            return NC_ERROR;
+        }
+
+        return token.raw;
+    }
+
+    auto nc_io_unbind(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::io;
+
+        const zxfoundation::sys::cap::cap_token token{a0};
+
+        auto result = io_unbind(token);
+        if (!result) {
+            zxfoundation::sys::printk::perr("io_unbind: unbind failed");
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_io_submit(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::io;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const zxfoundation::sys::cap::cap_token token{a0};
+        const u64 orb_user_ptr = a1;
+
+        if (orb_user_ptr == 0) {
+            zxfoundation::sys::printk::perr("io_submit: null orb pointer");
+            return NC_ERROR;
+        }
+
+        zxfoundation::sys::io::user_orb orb_kern{};
+        if (copy_from_user(&orb_kern, orb_user_ptr, sizeof(orb_kern), d) != 0) {
+            zxfoundation::sys::printk::perr("io_submit: copy_from_user failed");
+            return NC_ERROR;
+        }
+
+        auto result = io_submit(token, &orb_kern);
+        if (!result) {
+            zxfoundation::sys::printk::perr("io_submit: io_submit failed");
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_io_irq_bind(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::io;
+
+        const zxfoundation::sys::cap::cap_token token{a0};
+        const auto gate_id = static_cast<u32>(a1);
+
+        auto result = io_irq_bind(token, gate_id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("io_irq_bind: irq bind failed");
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+} // namespace __io_detail
+
+export {
+
+namespace zxfoundation::gate::nc_io {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::gate::io_op;
+
+        switch (static_cast<io_op>(op)) {
+        case io_op::bind:
+            return __io_detail::nc_io_bind(a0, a1, a2, a3, a4);
+        case io_op::unbind:
+            return __io_detail::nc_io_unbind(a0, a1, a2, a3, a4);
+        case io_op::submit:
+            return __io_detail::nc_io_submit(a0, a1, a2, a3, a4);
+        case io_op::irq_bind:
+            return __io_detail::nc_io_irq_bind(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("io_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+} // namespace zxfoundation::gate::nc_io
+
+} // end export

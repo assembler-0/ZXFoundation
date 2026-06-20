@@ -1,0 +1,66 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation/sys/io.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.sys.io",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/sys/io.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.sys.io_types"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_table"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_ref"
+        },
+        {
+          "logical-name": "zxfoundation.sys.cap_types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.cap"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        },
+        {
+          "logical-name": "zxfoundation.memory.pmm"
+        },
+        {
+          "logical-name": "zxfoundation.memory.pmm_types"
+        },
+        {
+          "logical-name": "zxfoundation.memory.hhdm"
+        },
+        {
+          "logical-name": "arch.s390x.css.css"
+        },
+        {
+          "logical-name": "arch.s390x.css.css_types"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.expected"
+        },
+        {
+          "logical-name": "lib.format"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

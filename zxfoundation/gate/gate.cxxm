@@ -1,7 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/gate/gate.cxxm
-/// @brief Gate lifecycle management — create, destroy, find, and nucleus
-///        dispatch table registration.
+/// @brief Gate lifecycle management — create, destroy, find gates.
 ///
 /// Uses SCOMS kobject_table for unified lifecycle, refcounting, and
 /// generation-counted slot management.
@@ -22,9 +21,6 @@ import lib.expected;
 using zxfoundation::gate::gate_desc;
 using zxfoundation::gate::gate_type;
 using zxfoundation::gate::gate_auth;
-using zxfoundation::gate::nucleus_call;
-using zxfoundation::gate::nucleus_handler_fn;
-using zxfoundation::gate::nucleus_dispatch_table;
 using zxfoundation::gate::MAX_GATES;
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
@@ -36,12 +32,8 @@ namespace _internal {
     using namespace zxfoundation::scoms;
     using zxfoundation::base::lifecycle_state;
 
-    /// @brief SCOMS-managed gate table (replaces ad-hoc array + lock + count).
+    /// @brief SCOMS-managed gate table.
     static kobject_table<gate_desc, MAX_GATES> g_gate_table{};
-
-    /// @brief Nucleus dispatch table — separate from the SCOMS table because
-    ///        it is indexed by nucleus_call, not by gate slot.
-    static nucleus_dispatch_table g_nucleus_dispatch{};
 
 } // namespace _internal
 
@@ -53,48 +45,11 @@ namespace zxfoundation::gate {
 
     /// @brief Initialize the gate subsystem.
     ///
-    /// Initializes the SCOMS gate table and clears the nucleus dispatch
-    /// table.  Must be called once during kernel bring-up before any
-    /// gate_create or gate_register calls.
+    /// Initializes the SCOMS gate table.  Must be called once during kernel
+    /// bring-up before any gate_create calls.
     auto gate_init() noexcept -> void {
-        // Initialize the SCOMS table with the gate type discriminator.
         _internal::g_gate_table.init(scoms::kobject_type::gate);
-
-        // Clear all nucleus dispatch handlers.
-        for (u32 i = 0; i < static_cast<u32>(nucleus_call::_count); ++i) {
-            _internal::g_nucleus_dispatch.handlers[i] = nullptr;
-        }
-
         pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
-    }
-
-    /// @brief Register a handler function for a nucleus call number.
-    ///
-    /// @param call     The nucleus call to register.
-    /// @param handler  The handler function pointer (must not be nullptr).
-    /// @return         Success, or an error if the call number is out of range
-    ///                 or the handler is null.
-    auto gate_register_nucleus_handler(
-        nucleus_call       call,
-        nucleus_handler_fn handler
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-
-        const auto idx = static_cast<u32>(call);
-
-        if (idx >= static_cast<u32>(nucleus_call::_count)) {
-            perr("gate: nucleus handler registration failed — call {} out of range", idx);
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::out_of_range));
-        }
-
-        if (handler == nullptr) {
-            perr("gate: nucleus handler registration failed — null handler for call {}", idx);
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
-
-        _internal::g_nucleus_dispatch.handlers[idx] = handler;
-        return {};
     }
 
     /// @brief Create a new gate descriptor.
@@ -116,7 +71,6 @@ namespace zxfoundation::gate {
         u8        target_key
     ) noexcept -> lib::expected<u32, lib::kernel_error> {
 
-        // Allocate an embryo slot from the SCOMS table.
         auto alloc_result = _internal::g_gate_table.alloc();
         if (!alloc_result) {
             perr("gate: gate table full ({} / {})",
@@ -128,7 +82,6 @@ namespace zxfoundation::gate {
             scoms::kobject_ref<gate_desc, base::lifecycle_state::embryo>&&
         >(alloc_result.value());
 
-        // Populate the gate-specific fields.
         gate_desc& desc   = *embryo_ref;
         desc.type          = type;
         desc.auth          = auth;
@@ -138,7 +91,6 @@ namespace zxfoundation::gate {
 
         const u32 id = desc.ko.id;
 
-        // Transition embryo → active (compile-time typestate check).
         auto active_ref = static_cast<
             scoms::kobject_ref<gate_desc, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
@@ -149,9 +101,6 @@ namespace zxfoundation::gate {
               target_domain_id,
               entry_va);
 
-        // The active_ref drops here, decrementing the refcount to 0.
-        // The slot remains allocated in the table — it is only freed
-        // by an explicit gate_destroy() / release() call.
         return id;
     }
 
@@ -195,13 +144,6 @@ namespace zxfoundation::gate {
     ///            or the slot is unused.
     auto gate_find(u32 id) noexcept -> gate_desc* {
         return _internal::g_gate_table.find_raw(id);
-    }
-
-    /// @brief Return a const reference to the nucleus dispatch table.
-    ///
-    /// Used by the dispatcher to look up handlers without copying.
-    auto nucleus_dispatch() noexcept -> const nucleus_dispatch_table& {
-        return _internal::g_nucleus_dispatch;
     }
 
     /// @brief Return the current number of active gates.

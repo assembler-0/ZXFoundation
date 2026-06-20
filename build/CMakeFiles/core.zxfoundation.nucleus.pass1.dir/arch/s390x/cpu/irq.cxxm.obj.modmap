@@ -1,0 +1,10 @@
+-x c++-module
+-fmodule-output="CMakeFiles/core.zxfoundation.nucleus.pass1.dir/arch.s390x.cpu.irq.pcm"
+-fmodule-file="arch.s390x.cpu.irq_types=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/arch.s390x.cpu.irq_types.pcm"
+-fmodule-file="arch.s390x.cpu.psw_types=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/arch.s390x.cpu.psw_types.pcm"
+-fmodule-file="zxfoundation.base.types=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation.base.types.pcm"
+-fmodule-file="lib.bit=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/lib.bit.pcm"
+-fmodule-file="lib.concepts=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/lib.concepts.pcm"
+-fmodule-file="lib.type_traits=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/lib.type_traits.pcm"
+-fmodule-file="lib.util=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/lib.util.pcm"
+-fmodule-file="zxfoundation.base.endian=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation.base.endian.pcm"

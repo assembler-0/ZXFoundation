@@ -1,0 +1,129 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/domain/signal_types.cxxm
+/// @brief Signal types for the DGP kernel's asynchronous event delivery
+///        mechanism.
+
+export module zxfoundation.domain.signal_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::domain::signal {
+
+    /// @brief Discriminator for the kind of asynchronous event.
+    enum class signal_kind : u8 {
+        none     = 0,   ///< Placeholder / no signal.
+        timer    = 1,   ///< Timer expiry (deadline reached).
+        io       = 2,   ///< I/O completion (interrupt).
+        fault    = 3,   ///< Domain page fault (protection, translation).
+        term     = 4,   ///< Graceful termination request.
+        user0    = 5,   ///< User-defined signal 0.
+        user1    = 6,   ///< User-defined signal 1.
+        ipc      = 7,   ///< Cross-domain IPC notification.
+    };
+
+    /// @brief Return a human-readable label for a signal kind.
+    [[nodiscard]] constexpr auto signal_kind_name(signal_kind k) noexcept -> const char* {
+        switch (k) {
+            case signal_kind::none:  return "none";
+            case signal_kind::timer: return "timer";
+            case signal_kind::io:    return "io";
+            case signal_kind::fault: return "fault";
+            case signal_kind::term:  return "term";
+            case signal_kind::user0: return "user0";
+            case signal_kind::user1: return "user1";
+            case signal_kind::ipc:   return "ipc";
+            default:                 return "unknown";
+        }
+    }
+
+    /// @brief What the kernel should do when a signal is delivered and no
+    ///        handler is registered.
+    enum class signal_default : u8 {
+        ignore    = 0,   ///< Silently discard the signal.
+        terminate = 1,   ///< Mark the domain as dying (voluntary exit).
+        notify    = 2,   ///< Set a flag; domain can poll it.
+    };
+
+    /// @brief Signal handler invoked by the nucleus at domain re-entry.
+    ///
+    /// @param[in] kind   The kind of signal being delivered.
+    /// @param[in] data   Opaque 64-bit payload (context-dependent).
+    /// @param[in] user   User-registered context pointer (from handler_info).
+    ///
+    /// @return  true if the signal was handled and should not trigger the
+    ///          default action; false to fall through to the default.
+    using signal_handler_fn = auto (*)(
+        signal_kind kind,
+        u64         data,
+        void*       user
+    ) noexcept -> bool;
+
+    /// @brief Descriptor for a registered signal handler.
+    struct signal_handler_info {
+        signal_handler_fn handler{nullptr};   ///< Handler function.
+        void*             user_data{nullptr}; ///< Opaque context passed to the handler.
+        signal_default    def{};              ///< Default action if no handler.
+        u8                _pad[3]{};
+    };
+
+    /// @brief A single signal queued for delivery to a domain.
+    struct signal_entry {
+        signal_kind kind{signal_kind::none};   ///< Signal discriminator.
+        u8          _pad[7]{};                 ///< Padding to 8 bytes.
+        u64         data{0};                   ///< Payload (I/O param, fault addr, etc.).
+    };
+
+    /// @brief Maximum number of pending signal entries per domain.
+    constexpr u32 SIGNAL_QUEUE_DEPTH = 16;
+
+    /// @brief Fixed-capacity signal queue embedded in the domain struct.
+    struct signal_queue {
+        signal_entry        entries[SIGNAL_QUEUE_DEPTH]{};  ///< Ring buffer.
+        u32                 head{0};                         ///< Dequeue index.
+        u32                 tail{0};                         ///< Enqueue index.
+        u32                 count{0};                        ///< Pending signals.
+        u32                 pending_mask{0};                 ///< Bitmask of signal_kind values present.
+
+        signal_handler_info handlers[8]{};                   ///< Registered handlers by kind.
+
+        /// @brief Check if any signal is pending.
+        [[nodiscard]] auto has_pending() const noexcept -> bool {
+            return count > 0;
+        }
+
+        /// @brief Check if a specific signal kind is pending.
+        [[nodiscard]] auto has_pending(signal_kind k) const noexcept -> bool {
+            return (pending_mask & (1U << static_cast<u8>(k))) != 0;
+        }
+
+        /// @brief Enqueue a signal (non-blocking, overwrites oldest if full).
+        auto enqueue(signal_kind kind, u64 data) noexcept -> void {
+            if (count >= SIGNAL_QUEUE_DEPTH) {
+                // Queue full: overwrite the oldest entry.
+                head = (head + 1) % SIGNAL_QUEUE_DEPTH;
+                --count;
+            }
+            entries[tail] = signal_entry{kind, {}, data};
+            tail = (tail + 1) % SIGNAL_QUEUE_DEPTH;
+            ++count;
+            pending_mask |= (1U << static_cast<u8>(kind));
+        }
+
+        /// @brief Dequeue the next signal.
+        /// @return  The entry, or a null entry (kind == none) if empty.
+        [[nodiscard]] auto dequeue() noexcept -> signal_entry {
+            if (count == 0) return {};
+            auto& e = entries[head];
+            signal_entry result = e;
+            e = {};  // Clear the slot.
+            head = (head + 1) % SIGNAL_QUEUE_DEPTH;
+            --count;
+            if (count == 0) pending_mask = 0;
+            return result;
+        }
+    };
+
+} // namespace zxfoundation::domain::signal
+
+} // end export

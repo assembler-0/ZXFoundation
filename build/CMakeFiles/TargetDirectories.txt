@@ -1,0 +1,13 @@
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/tools.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/zxf_bump_buildno.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/zxfl_stage1.elf.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/zxfl_stage2.elf.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/core.zxfoundation.nucleus.pass1.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/zxallsyms_data.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/core.zxfoundation.nucleus.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/dasd.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/edit_cache.dir
+/home/assembler-0/workspace/UltraSpark/build/CMakeFiles/rebuild_cache.dir
+/home/assembler-0/workspace/UltraSpark/build/user/init/CMakeFiles/zxf.init.dir
+/home/assembler-0/workspace/UltraSpark/build/user/init/CMakeFiles/edit_cache.dir
+/home/assembler-0/workspace/UltraSpark/build/user/init/CMakeFiles/rebuild_cache.dir

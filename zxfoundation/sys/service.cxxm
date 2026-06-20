@@ -1,0 +1,240 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/service.cxxm
+/// @brief Service registry — lightweight name-to-capability directory for
+///        the DGP kernel's service discovery model.
+
+export module zxfoundation.sys.service;
+import zxfoundation.base.types;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_table;
+import zxfoundation.scoms.scoms_ref;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
+import zxfoundation.sys.printk;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import lib.error;
+import lib.expected;
+import lib.string;
+import lib.string_view;
+import lib.algorithm;
+
+export {
+
+namespace zxfoundation::sys::service {
+
+    using namespace zxfoundation::scoms;
+    using namespace zxfoundation::sys::cap;
+    using namespace zxfoundation::sys::printk;
+
+    /// @brief Maximum number of services that can be registered simultaneously.
+    constexpr u32 MAX_SERVICES = 64;
+
+    /// @brief Maximum length of a service name, including NUL terminator.
+    constexpr u32 SERVICE_NAME_MAX_LEN = 64;
+
+    /// @brief A single entry in the service registry.
+    ///
+    /// Maps a human-readable name to a capability token.  The token can
+    /// represent any resource type (gate, portal, domain, I/O binding).
+    struct service_entry {
+        scoms::kobject  ko{};                                ///< SCOMS identity (offset 0).
+        char            name[SERVICE_NAME_MAX_LEN]{};        ///< NUL-terminated name string.
+        cap_token       token{};                             ///< Capability to access the service.
+        u32             owner_domain{~0U};                   ///< Domain that registered this entry.
+
+        service_entry() noexcept = default;
+    };
+
+    static_assert(__builtin_offsetof(service_entry, ko) == 0);
+
+    /// @brief Initialize the service registry.
+    auto service_init() noexcept -> void;
+
+    /// @brief Register a service.
+    /// @param[in]  name       NUL-terminated service name (max 63 chars).
+    /// @param[in]  token      Capability token for the service.
+    /// @param[in]  owner_id   Domain ID of the registering domain.
+    /// @return  service_id on success, kernel_error on failure.
+    ///
+    /// @note  If a service with the same name already exists, the registration
+    ///        fails with generic_error::already_exists.
+    [[nodiscard]] auto service_register(
+        const char* name,
+        cap_token   token,
+        u32         owner_id
+    ) noexcept -> lib::expected<u32, lib::kernel_error>;
+
+    /// @brief Look up a service by name.
+    /// @param[in]  name  NUL-terminated service name.
+    /// @return  Capability token on success, kernel_error if not found.
+    ///
+    /// @note  The returned token is a new capability acquired from the
+    ///        registry entry.  The caller is responsible for releasing it
+    ///        via cap_release().
+    [[nodiscard]] auto service_lookup(
+        const char* name
+    ) noexcept -> lib::expected<cap_token, lib::kernel_error>;
+
+    /// @brief Unregister a service.
+    /// @param[in]  service_id  The service ID returned by service_register.
+    /// @param[in]  caller_id   Domain ID of the caller (must match owner).
+    /// @return  Success, or kernel_error if not found / wrong owner.
+    [[nodiscard]] auto service_unregister(
+        u32 service_id,
+        u32 caller_id
+    ) noexcept -> lib::expected<void, lib::kernel_error>;
+
+    /// @brief Return the number of currently registered services.
+    [[nodiscard]] auto service_count() noexcept -> u32;
+
+} // namespace zxfoundation::sys::service
+
+} // end export
+
+namespace zxfoundation::sys::service::_internal {
+
+    static kobject_table<service_entry, MAX_SERVICES> g_service_table{};
+    static bool g_service_initialized{false};
+
+} // namespace zxfoundation::sys::service::_internal
+
+export {
+
+namespace zxfoundation::sys::service {
+
+    auto service_init() noexcept -> void {
+        using namespace _internal;
+        if (g_service_initialized) return;
+
+        g_service_table.init(scoms::kobject_type::capability);
+
+        // Register well-known nucleus services.
+        {
+            // Console service: points to domain 0 (nucleus)
+            auto d0_token = cap_token::make(
+                cap_type::domain, 0, 0, cap_rights::read | cap_rights::write);
+            (void)service_register("zx.console", d0_token, 0);
+        }
+
+        g_service_initialized = true;
+        pinfo("service: registry initialized ({} slots)", MAX_SERVICES);
+    }
+
+    [[nodiscard]] auto service_register(
+        const char* name,
+        cap_token   token,
+        u32         owner_id
+    ) noexcept -> lib::expected<u32, lib::kernel_error> {
+        using namespace _internal;
+
+        if (!name || !token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        const usize name_len = lib::strnlen(name, SERVICE_NAME_MAX_LEN);
+        if (name_len == 0 || name_len >= SERVICE_NAME_MAX_LEN) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        // Check for duplicates.
+        for (u32 i = 0; i < MAX_SERVICES; ++i) {
+            auto* existing = g_service_table.find_raw(i);
+            if (existing && lib::streq(existing->name, name)) {
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::internal_error));
+            }
+        }
+
+        auto result = g_service_table.alloc();
+        if (!result) {
+            return lib::unexpected(result.error());
+        }
+
+        auto embryo_ref = static_cast<
+            kobject_ref<service_entry, lifecycle_state::embryo>&&
+        >(result.value());
+
+        service_entry& entry = *embryo_ref;
+        lib::strncpy(entry.name, name, SERVICE_NAME_MAX_LEN);
+        entry.token       = token;
+        entry.owner_domain = owner_id;
+
+        const u32 id = entry.ko.id;
+
+        auto active_ref = static_cast<
+            kobject_ref<service_entry, lifecycle_state::embryo>&&
+        >(embryo_ref).activate();
+
+        pinfo("service: registered \"{}\" id={} owner={}",
+              name, id, owner_id);
+
+        return id;
+    }
+
+    [[nodiscard]] auto service_lookup(
+        const char* name
+    ) noexcept -> lib::expected<cap_token, lib::kernel_error> {
+        using namespace _internal;
+
+        if (!name) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        for (u32 i = 0; i < MAX_SERVICES; ++i) {
+            auto* entry = g_service_table.find_raw(i);
+            if (entry && lib::streq(entry->name, name)) {
+                // Acquire a new capability from the entry's stored token.
+                auto cap_result = cap_acquire(
+                    entry->token.type(),
+                    entry->token.object_id(),
+                    entry->token.rights());
+                if (!cap_result) {
+                    // The underlying object may have been destroyed.
+                    return lib::unexpected(cap_result.error());
+                }
+                return *cap_result;
+            }
+        }
+
+        return lib::unexpected(
+            lib::kernel_error::from_generic(lib::generic_error::not_found));
+    }
+
+    [[nodiscard]] auto service_unregister(
+        u32 service_id,
+        u32 caller_id
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        using namespace _internal;
+
+        auto* entry = g_service_table.find_raw(service_id);
+        if (!entry) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+
+        if (entry->owner_domain != caller_id && caller_id != 0) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        }
+
+        const auto result = g_service_table.release(service_id);
+        if (!result) {
+            return lib::unexpected(result.error());
+        }
+
+        pinfo("service: unregistered \"{}\" id={}", entry->name, service_id);
+        return {};
+    }
+
+    auto service_count() noexcept -> u32 {
+        using namespace _internal;
+        return g_service_table.count();
+    }
+
+} // namespace zxfoundation::sys::service
+
+} // end export

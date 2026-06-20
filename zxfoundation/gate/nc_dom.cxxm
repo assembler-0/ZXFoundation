@@ -1,0 +1,182 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nc_dom.cxxm
+/// @brief Domain namespace dispatch handler — Pure DGP (cap-gated).
+
+export module zxfoundation.gate.nc_dom;
+import zxfoundation.gate.gate_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
+import zxfoundation.sys.printk;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.uaccess;
+import lib.error;
+import lib.expected;
+import lib.string;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+using zxfoundation::domain::domain;
+using zxfoundation::domain::domain_id;
+using zxfoundation::domain::domain_flags;
+using zxfoundation::sys::cap::cap_token;
+using zxfoundation::sys::cap::cap_rights;
+using zxfoundation::sys::cap::cap_type;
+
+namespace __dom_detail {
+
+    [[nodiscard]] auto current_domain() noexcept -> domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain*>(lc->current_domain);
+    }
+
+    auto copy_from_user(void* dst, u64 src, u64 len, domain* d) noexcept -> i32 {
+        return arch::s390x::cpu::uaccess::copy_from_user(
+            dst, src, len, d->root_phys);
+    }
+
+    /// @brief Validate that a capability token confers admin authority.
+    /// Uses cap_validate<domain> to check the token references a valid domain,
+    /// then verifies the admin right is present.
+    [[nodiscard]] auto validate_admin(cap_token token) noexcept -> bool {
+        auto d_r = zxfoundation::sys::cap::cap_validate<domain>(
+            token, cap_rights::admin);
+        if (!d_r) {
+            zxfoundation::sys::printk::perr("dom: admin cap validation failed");
+            return false;
+        }
+        return true;
+    }
+
+    auto nc_domain_create(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        // a0 = admin capability token, a1 = user-space name pointer
+        if (!validate_admin(cap_token{a0})) {
+            return NC_ERROR;
+        }
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 user_name_ptr = a1;
+        if (user_name_ptr == 0) {
+            zxfoundation::sys::printk::perr("domain_create: null name pointer");
+            return NC_ERROR;
+        }
+
+        char name_buf[64]{};
+        if (copy_from_user(name_buf, user_name_ptr, 63, d) != 0) {
+            zxfoundation::sys::printk::perr("domain_create: copy_from_user failed");
+            return NC_ERROR;
+        }
+        name_buf[63] = '\0';
+
+        auto result = zxfoundation::domain::domain_create(name_buf);
+        if (!result) {
+            zxfoundation::sys::printk::perr("domain_create: domain_create failed");
+            return NC_ERROR;
+        }
+
+        const u32 new_id = (*result)->ko.id;
+        return static_cast<u64>(new_id);
+    }
+
+    auto nc_domain_destroy(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        // a0 = admin capability token, a1 = target domain ID
+        if (!validate_admin(cap_token{a0})) {
+            return NC_ERROR;
+        }
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto target_id = static_cast<domain_id>(a1);
+
+        if (target_id == d->ko.id) {
+            zxfoundation::sys::printk::perr("domain_destroy: cannot destroy self");
+            return NC_ERROR;
+        }
+
+        auto result = zxfoundation::domain::domain_destroy(target_id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("domain_destroy: domain_destroy({}) failed", target_id);
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_domain_exit(u64, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        d->ko.state = zxfoundation::base::lifecycle_state::dying;
+        d->flags = d->flags | domain_flags::need_resched;
+
+        return 0;
+    }
+
+    auto nc_domain_info(u64, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        return static_cast<u64>(d->ko.id) |
+               (static_cast<u64>(d->primary_strand.cpu) << 32);
+    }
+
+    auto nc_domain_query(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* self = current_domain();
+        if (!self) [[unlikely]] return NC_ERROR;
+
+        const auto query_id = static_cast<u32>(a0);
+
+        domain* target = self;
+        if (query_id != 0 && query_id != self->ko.id) {
+            target = zxfoundation::domain::domain_find(query_id);
+            if (!target) {
+                zxfoundation::sys::printk::perr("domain_query: domain {} not found", query_id);
+                return NC_ERROR;
+            }
+        }
+
+        const u32 state  = static_cast<u32>(target->ko.state);
+        const u32 type   = static_cast<u32>(target->ko.type);
+        const u32 result = (state & 0xFF) | ((type & 0xFF) << 8)
+                         | (target->gate_count << 16)
+                         | (target->portal_count << 24);
+
+        return static_cast<u64>(result);
+    }
+
+} // namespace __dom_detail
+
+export {
+
+namespace zxfoundation::gate::nc_dom {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::gate::dom_op;
+
+        switch (static_cast<dom_op>(op)) {
+        case dom_op::create:
+            return __dom_detail::nc_domain_create(a0, a1, a2, a3, a4);
+        case dom_op::destroy:
+            return __dom_detail::nc_domain_destroy(a0, a1, a2, a3, a4);
+        case dom_op::exit:
+            return __dom_detail::nc_domain_exit(a0, a1, a2, a3, a4);
+        case dom_op::info:
+            return __dom_detail::nc_domain_info(a0, a1, a2, a3, a4);
+        case dom_op::query:
+            return __dom_detail::nc_domain_query(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("dom_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+} // namespace zxfoundation::gate::nc_dom
+
+} // end export

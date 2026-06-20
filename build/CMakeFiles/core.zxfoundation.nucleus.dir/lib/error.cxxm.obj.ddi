@@ -1,0 +1,27 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/lib/error.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "lib.error",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/lib/error.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "lib.format"
+        },
+        {
+          "logical-name": "lib.string_view"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

@@ -1,0 +1,16 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/base/config.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.base.config",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/base/config.cxxm"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

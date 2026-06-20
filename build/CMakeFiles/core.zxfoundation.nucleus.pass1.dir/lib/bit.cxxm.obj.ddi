@@ -1,0 +1,27 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/lib/bit.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "lib.bit",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/lib/bit.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.base.endian"
+        },
+        {
+          "logical-name": "lib.concepts"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

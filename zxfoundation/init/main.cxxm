@@ -12,6 +12,8 @@ import zxfoundation.base.config;
 import zxfoundation.memory.pmm;
 import zxfoundation.sys.irq.irqdesc_init;
 import zxfoundation.sys.syschk;
+import zxfoundation.sys.service;
+import zxfoundation.sys.io;
 import zxfoundation.memory.hhdm;
 import zxfoundation.base.cxxrtse.cxxabi;
 import zxfoundation.memory.slub;
@@ -23,7 +25,6 @@ import zxfoundation.init.bootstrap;
 import zxfoundation.domain.domain;
 import zxfoundation.domain.domain_types;
 import zxfoundation.gate.gate;
-import zxfoundation.gate.nucleus_handlers;
 import zxfoundation.portal.portal;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.stfle_types;
@@ -236,8 +237,8 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::rcu::rcu_init();
     zxfoundation::domain::domain_init();
+    zxfoundation::sys::service::service_init();
     zxfoundation::gate::gate_init();
-    zxfoundation::gate::nucleus_handlers::register_nucleus_handlers();
     zxfoundation::portal::portal_init();
     arch::s390x::cpu::aste::aste_subsystem_init();
 
@@ -249,6 +250,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     arch::s390x::css::css_init();
     arch::s390x::css::ccw_io::css_probe_devices();
+    zxfoundation::sys::io::io_init();
 
     arch::s390x::cpu::smp::ap_release_all();
 

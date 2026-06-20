@@ -1,0 +1,24 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/arch/s390x/mmu/mmu_const.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "arch.s390x.mmu.mmu_const",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/arch/s390x/mmu/mmu_const.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "arch.s390x.mmu.mmu_types"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

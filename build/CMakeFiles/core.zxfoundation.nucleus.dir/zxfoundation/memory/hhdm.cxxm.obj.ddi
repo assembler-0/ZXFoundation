@@ -1,0 +1,24 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/memory/hhdm.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.memory.hhdm",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/memory/hhdm.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.memory.hhdm_types"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

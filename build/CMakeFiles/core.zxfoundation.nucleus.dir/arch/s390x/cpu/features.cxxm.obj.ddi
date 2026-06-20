@@ -1,0 +1,30 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/arch/s390x/cpu/features.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "arch.s390x.cpu.features",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/arch/s390x/cpu/features.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "arch.s390x.cpu.stfle"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.stfle_types"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.processor"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

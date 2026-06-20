@@ -1,0 +1,94 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nc_sgn.cxxm
+/// @brief Signal namespace dispatch handler.
+
+export module zxfoundation.gate.nc_sgn;
+import zxfoundation.gate.gate_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.signal_types;
+import zxfoundation.domain.signal;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import arch.s390x.cpu.lowcore;
+import lib.error;
+import lib.expected;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+using zxfoundation::domain::domain;
+
+namespace __sgn_detail {
+
+    [[nodiscard]] auto current_domain() noexcept -> domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain*>(lc->current_domain);
+    }
+
+    auto nc_signal_register(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::domain::signal;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto kind = static_cast<signal_kind>(a0 & 0xFFU);
+        const u64 handler_addr = a1;
+        const u64 user_data    = a2;
+
+        zxfoundation::domain::signal::signal_handler_info info{};
+        info.handler   = reinterpret_cast<zxfoundation::domain::signal::signal_handler_fn>(handler_addr);
+        info.user_data = reinterpret_cast<void*>(user_data);
+        info.def       = signal_default::notify;
+
+        auto result = zxfoundation::domain::signal::signal_register_handler(*d, kind, info);
+        if (!result) {
+            zxfoundation::sys::printk::perr("signal_register: kind={} failed",
+                                           static_cast<u32>(kind));
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_signal_poll(u64, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        return static_cast<u64>(d->signal_queue.pending_mask);
+    }
+
+    auto nc_signal_ack(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u32 ack_mask = static_cast<u32>(a0 & 0xFFFFFFFFU);
+        d->signal_queue.pending_mask &= ~ack_mask;
+
+        return 0;
+    }
+
+} // namespace __sgn_detail
+
+export {
+
+namespace zxfoundation::gate::nc_sgn {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::gate::sgn_op;
+
+        switch (static_cast<sgn_op>(op)) {
+        case sgn_op::register_handler:
+            return __sgn_detail::nc_signal_register(a0, a1, a2, a3, a4);
+        case sgn_op::poll:
+            return __sgn_detail::nc_signal_poll(a0, a1, a2, a3, a4);
+        case sgn_op::ack:
+            return __sgn_detail::nc_signal_ack(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("sgn_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+} // namespace zxfoundation::gate::nc_sgn
+
+} // end export

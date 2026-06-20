@@ -10,7 +10,7 @@
 #define LC_CURRENT_DOMAIN 0x0340
 #define LC_PREEMPT_COUNT 0x0428
 
-#define DOMAIN_FLAGS_OFF  20
+#define DOMAIN_FLAGS_OFF  32  /* domain.flags (after kobject[24] + name[8]) */
 
 #define TIF_NEED_RESCHED 4
 
@@ -120,29 +120,40 @@ trap_mcck_entry:
     .align  8
 pc_gate_entry:
     lg      %r15, LC_KERNEL_STACK(0)
-    aghi    %r15, -160                  // standard stack frame
+    aghi    %r15, -(160 + IRQ_FRAME_SIZE)  // allocate full frame
 
-    stmg    %r0, %r13, 0(%r15)
+    // Save GPRs
+    stmg    %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
+    // Save ARs
+    stam    %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
+    // Save FPC
+    stfpc   (160 + IRQ_FRAME_FPC)(%r15)
+    // Save vector registers
+    vstm    %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
+    vstm    %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
 
-    //   R2 = call_nr (was in R0)
-    //   R3 = a0      (was in R2, save it first)
-    //   R4 = a1      (was in R3)
-    //   R5 = a2      (was in R4)
-    //   R6 = a3      (was in R5)
-    //   R7 = a4      (was in R6)
-    // shift: {r0,r2,r3,r4,r5,r6} → {r2,r3,r4,r5,r6,r7}
-    lgr     %r7, %r6                    // a4 = old r6
-    lgr     %r6, %r5                    // a3 = old r5
-    lgr     %r5, %r4                    // a2 = old r4
-    lgr     %r4, %r3                    // a1 = old r3
-    lgr     %r3, %r2                    // a0 = old r2
-    lgr     %r2, %r0                    // call_nr = old r0
+    asi     LC_IRQ_NESTING(0), 1
+
+    // Shift arguments for do_nucleus_dispatch(call_nr, a0, a1, a2, a3, a4)
+    // Input:  r0=call_nr, r2=a0, r3=a1, r4=a2, r5=a3, r6=a4
+    // Output: r2=call_nr, r3=a0,  r4=a1, r5=a2, r6=a3, r7=a4
+    lgr     %r7, %r6
+    lgr     %r6, %r5
+    lgr     %r5, %r4
+    lgr     %r4, %r3
+    lgr     %r3, %r2
+    lgr     %r2, %r0
 
     brasl   %r14, do_nucleus_dispatch
 
-    lg      %r0, 0(%r15)
-    lg      %r1, 8(%r15)
-    lmg     %r3, %r13, 24(%r15)
+    // Restore state (skip r14, r15 — don't overwrite current SP)
+    vlm     %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
+    vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
+    lfpc    (160 + IRQ_FRAME_FPC)(%r15)
+    lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
+    lmg     %r0, %r13, (160 + IRQ_FRAME_GPRS)(%r15)
+
+    asi     LC_IRQ_NESTING(0), -1
 
     .insn   e,0x0101                    // PR instruction
     .size   pc_gate_entry, . - pc_gate_entry

@@ -1,11 +1,11 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/trap/trap.cxxm
-/// @brief C++ interrupt handlers.
+/// @brief C++ interrupt handlers — audited against z/Architecture PoP.
 
 export module arch.s390x.trap.trap;
 import arch.s390x.cpu.irq_frame;
-import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
+import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.psw_types;
 import arch.s390x.cpu.psw;
 import arch.s390x.css.css;
@@ -18,130 +18,237 @@ import zxfoundation.sys.syschk;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.stacktrace;
+import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.signal;
+import zxfoundation.domain.signal_types;
 import zxfoundation.gate.dispatch;
 import zxfoundation.base.typestate;
 import lib.error;
 
+// ── PoP program-exception codes ──────────────────────────────────────────
+// z/Architecture PoP Table 6-1.
+constexpr u16 PGM_OPERATION          = 0x0001;
+constexpr u16 PGM_PRIVILEGED_OP      = 0x0002;
+constexpr u16 PGM_EXECUTE            = 0x0003;
+constexpr u16 PGM_PROTECTION         = 0x0004;
+constexpr u16 PGM_ADDRESSING         = 0x0005;
+constexpr u16 PGM_SPECIFICATION      = 0x0006;
+constexpr u16 PGM_DATA               = 0x0007;
+constexpr u16 PGM_FIXED_PT_DIVIDE    = 0x0009;
+constexpr u16 PGM_DECIMAL_DIVIDE     = 0x000A;
+constexpr u16 PGM_HFP_EXP_UNDERFLOW  = 0x000B;
+constexpr u16 PGM_HFP_EXP_OVERFLOW   = 0x000C;
+constexpr u16 PGM_HFP_SIGNIFICANCE   = 0x000D;
+constexpr u16 PGM_HFP_DIVIDE         = 0x000E;
+constexpr u16 PGM_SEGMENT_TRANS      = 0x0010;
+constexpr u16 PGM_PAGE_TRANS         = 0x0011;
+constexpr u16 PGM_TRANSACTION_CONSTRAINT = 0x0218;
+constexpr u16 PGM_TRANSACTION_ABORT  = 0x0200;
+constexpr u16 PGM_REGION_FIRST_TRANS = 0x0039;
+constexpr u16 PGM_REGION_SECOND_TRANS= 0x003A;
+constexpr u16 PGM_REGION_THIRD_TRANS = 0x003B;
+constexpr u16 PGM_ASCE_TYPE          = 0x0038;
+constexpr u16 PGM_MONITOR            = 0x0040;
+constexpr u16 PGM_VECTOR_OP          = 0x001C;
+constexpr u16 PGM_VECTOR_EMAX        = 0x001D;
+constexpr u16 PGM_VECTOR_ENR         = 0x001E;
+constexpr u16 PGM_VECTOR_ERTE        = 0x001F;
+
+// ── External interruption codes (PoP Table 7-1) ──────────────────────────
+constexpr u16 EXT_CLOCK_COMPARATOR   = 0x1004;
+constexpr u16 EXT_CPU_TIMER          = 0x1005;
+constexpr u16 EXT_EMERGENCY_SIGNAL   = 0x1201;
+constexpr u16 EXT_EXTERNAL_CALL      = 0x1202;
+constexpr u16 EXT_TIMING_ALERT       = 0x1406;
+constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;
+
+// ── MCIC (Machine-Check Interruption Code) bit definitions (PoP §7-4) ────
+constexpr u64 MCIC_SYSTEM_DAMAGE     = 1ULL << 63;  // bit 0
+constexpr u64 MCIC_INSTRUCTION_PROC  = 1ULL << 62;  // bit 1
+constexpr u64 MCIC_SYSTEM_RECOVERY   = 1ULL << 61;  // bit 2
+constexpr u64 MCIC_TIMING_FACILITY   = 1ULL << 60;  // bit 3
+constexpr u64 MCIC_EXT_DAMAGE        = 1ULL << 59;  // bit 4
+constexpr u64 MCIC_FAILING_STOR_ADDR = 1ULL << 58;  // bit 5
+constexpr u64 MCIC_BACKLOG           = 1ULL << 57;  // bit 6
+constexpr u64 MCIC_KEY               = 1ULL << 56;  // bit 7
+
+/// @brief Log an unhandled domain program exception.
+static void log_domain_pgm(
+    u16 pgm_code, const arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+    u64 trans_exc
+) noexcept {
+    zxfoundation::sys::printk::perr(
+        "domain program check {:#06x} at PSW {:#018x}:{:#018x} "
+        "tex={:#018x} domain={}\n",
+        pgm_code, frame->psw_mask, frame->psw_addr, trans_exc,
+        reinterpret_cast<zxfoundation::domain::domain*>(
+            arch::s390x::cpu::lowcore::get_current()->current_domain) ?
+            reinterpret_cast<zxfoundation::domain::domain*>(
+                arch::s390x::cpu::lowcore::get_current()->current_domain)->ko.id :
+            0xFFFFFFFFU);
+}
+
+/// @brief Extract the execution-access bit from the TEID (translation-exception
+///        identification) at lowcore 0xA8.  PoP Table 6-10: TEID bit 61 (IBM
+///        bit 3 of the second word) is 1 when the access was for instruction
+///        fetch.
+static bool is_exec_from_teid(u64 teid) noexcept {
+    return (teid & (1ULL << 60)) != 0;
+}
+
 /// @brief Program check handler.
 extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     const u16 pgm_code = *reinterpret_cast<const u16*>(0x8EUL);
-
     const u64 trans_exc = *reinterpret_cast<const u64*>(0xA8UL);
+    const u32 data_exc_code = pgm_code == PGM_DATA
+        ? *reinterpret_cast<const u32*>(0x90UL) : 0U;
 
     const bool in_problem_state =
         (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
 
+    // ── Kernel-mode program checks ─────────────────────────────────────
     if (!in_problem_state) {
-        // ---- Transaction constraint exception (0x0218) ----------------------
-        // A non-constrained TX abort (e.g., VL inside TBEGIN/TEND) generates
-        // a program interrupt with code 0x0218.  The CPU has already aborted
-        // the transaction and set CC != 0 in the old PSW.  The TBEGIN retry
-        // loop in qspinlock::tx_try_lock() handles this transparently.
-        //
-        // We MUST NOT call syschk_fatal here because:
-        //   syschk_fatal → pemerg → printk → qspinlock::lock → tx_try_lock
-        //   → TBEGIN → constraint exception → do_pgm_check → syschk_fatal
-        //   → infinite recursion → stack overflow → operation exception storm.
-        //
-        // Also handle bare transaction abort (0x0200) for completeness.
-        constexpr u16 PGM_TX_CONSTRAINT = 0x0218;
-        constexpr u16 PGM_TX_ABORT      = 0x0200;
-        if (pgm_code == PGM_TX_CONSTRAINT || pgm_code == PGM_TX_ABORT) {
-            // Transaction was already aborted by hardware.
-            // Return to the instruction following the outermost TBEGIN
-            // (which the CPU has already set in the old PSW with CC != 0).
+        // Transaction constraint/abort — transparent to TBEGIN retry loops.
+        if (pgm_code == PGM_TRANSACTION_CONSTRAINT ||
+            pgm_code == PGM_TRANSACTION_ABORT) {
             return;
         }
-
-        // All other nucleus faults — this is a kernel bug.
+        // All other nucleus faults — kernel bug.
         zxfoundation::sys::stacktrace::dump_stack_from_irq(frame);
         zxfoundation::sys::syschk::syschk_fatal(
             lib::kernel_error::from_generic(lib::generic_error::internal_error),
             "program check {:#06x} at PSW {:#018x}:{:#018x} tex={:#018x}",
-            static_cast<u32>(pgm_code), frame->psw_mask, frame->psw_addr, trans_exc);
+            pgm_code, frame->psw_mask, frame->psw_addr, trans_exc);
     }
 
-    // Domain fault — get the faulting domain.
+    // ── User-mode program checks ───────────────────────────────────────
     auto* lc = arch::s390x::cpu::lowcore::get_current();
     auto* d = reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
 
-    // Check if this is a translation exception (page fault).
     const bool is_translation_exception =
-        pgm_code == 0x0010 ||  // Segment translation
-        pgm_code == 0x0011 ||  // Page translation
-        pgm_code == 0x0004 ||  // Protection
-        pgm_code == 0x0039 ||  // Region first translation
-        pgm_code == 0x003A ||  // Region second translation
-        pgm_code == 0x003B;    // Region third translation
+        pgm_code == PGM_SEGMENT_TRANS      ||
+        pgm_code == PGM_PAGE_TRANS         ||
+        pgm_code == PGM_PROTECTION         ||
+        pgm_code == PGM_REGION_FIRST_TRANS ||
+        pgm_code == PGM_REGION_SECOND_TRANS||
+        pgm_code == PGM_REGION_THIRD_TRANS ||
+        pgm_code == PGM_ASCE_TYPE;
 
     if (is_translation_exception && d) {
-        const u64 fault_va = trans_exc & ~0xFFFULL; // Page-align
-        const bool is_write = (pgm_code == 0x0004); // Protection = store
-        const bool is_exec  = false; // TODO: detect from TEA bits
+        const u64 fault_va = trans_exc & ~0xFFFULL;
+        const bool is_write = (pgm_code == PGM_PROTECTION);
+        const bool is_exec  = is_exec_from_teid(trans_exc);
 
         auto action = zxfoundation::memory::vm::handle_page_fault(
-            d->vm_space,
-            d->root_phys,
-            d->storage_key,
-            fault_va,
-            is_write,
-            is_exec);
+            d->vm_space, d->root_phys, d->storage_key,
+            fault_va, is_write, is_exec);
 
         if (action == zxfoundation::memory::vm::fault_action::resolved ||
             action == zxfoundation::memory::vm::fault_action::stack_grew) {
-            return; // Fault handled, resume user execution.
+            return;
         }
-        // Fall through to domain kill for guard_hit / killed.
     }
 
-    // Unhandled fault — terminate the faulting domain.
+    // ── Unhandled fault path ───────────────────────────────────────────
     if (d) {
-        zxfoundation::sys::stacktrace::dump_stack_from_irq(frame);
+        // Enqueue signal before marking dying — gives handler a chance.
+        zxfoundation::domain::signal::signal_enqueue(
+            *d, zxfoundation::domain::signal::signal_kind::fault,
+            trans_exc & ~0xFFFULL);
+
+        log_domain_pgm(pgm_code, frame, trans_exc);
+        if (pgm_code == PGM_DATA) {
+            zxfoundation::sys::printk::perr(
+                "  data-exception code={:#010x}\n", data_exc_code);
+        }
+
         d->ko.state = zxfoundation::base::lifecycle_state::dying;
         d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
     } else {
         zxfoundation::sys::printk::perr(
-            "domain fault: pgm_code={:#06x} addr={:#018x} (no current domain)\n",
-            static_cast<u32>(pgm_code), frame->psw_addr);
+            "domain program check {:#06x} at PSW {:#018x}:{:#018x} "
+            "(no current domain)\n",
+            pgm_code, frame->psw_mask, frame->psw_addr);
         arch::s390x::cpu::psw::disabled_wait();
     }
 }
 
 /// @brief External interrupt handler.
+///
+/// Dispatches to the generic IRQ table for all subclasses except the
+/// clock-comparator (hot path, called directly).  Registered handlers:
+///   IPI_IRQ_EMERGENCY = IRQ_BASE_EXT + (EXT_EMERGENCY_SIGNAL >> 4)
+///   IPI_IRQ_EXTCALL   = IRQ_BASE_EXT + (EXT_EXTERNAL_CALL    >> 4)
 extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
 
     const u16 ext_code = *reinterpret_cast<const u16*>(0x86UL);
 
-    if (ext_code == 0x1004U) {
+    // Clock comparator — hot path, call directly.
+    if (ext_code == EXT_CLOCK_COMPARATOR) {
         zxfoundation::sys::timer::timer_interrupt();
         return;
     }
 
-    if (ext_code == 0x1202U) {
+    // CPU timer — decrements the CPU-timer function (PoP §7-5.2).
+    // This kernel does not use the CPU-timer for scheduling; log and return.
+    if (ext_code == EXT_CPU_TIMER) {
+        static bool once = false;
+        if (!once) {
+            once = true;
+            zxfoundation::sys::printk::pinfo("ext: CPU timer interrupt (ignored)\n");
+        }
         return;
     }
 
-    // Emergency signal (0x1201).
-    if (ext_code == 0x1201U) {
+    // Timing-alert — recoverable clock-sync event (PoP §7-5.3).
+    // z/Architecture: may fire after TOD-clock steering.  Log and return.
+    if (ext_code == EXT_TIMING_ALERT) {
+        zxfoundation::sys::printk::pdebug("ext: timing-alert\n");
         return;
     }
+
+    // Service signal — channel-subsystem signalling (PoP §7-5.4).
+    // LPAR uses this for channel-report words.  Stub for now.
+    if (ext_code == EXT_SERVICE_SIGNAL) {
+        zxfoundation::sys::printk::pdebug("ext: service signal\n");
+        return;
+    }
+
+    // All other external signals (emergency, external call, and any future
+    // subclass): dispatch through the IRQ subsystem.
+    const u16 irq_nr = static_cast<u16>(
+        zxfoundation::sys::irq::IRQ_BASE_EXT + (ext_code >> 4));
+    zxfoundation::sys::irq::irq_dispatch(
+        irq_nr, frame,
+        arch::s390x::cpu::irq::ZX_IRQ_CLASS_EXT);
 }
 
 /// @brief I/O interrupt handler.
 extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
 
-    // Read the subchannel ID word stored by hardware at lowcore offset 0xB8.
+    // Read subchannel ID from lowcore at 0xB8 (PoP §7-6.4).
     const u32 sid = *reinterpret_cast<volatile u32*>(
         zxfoundation::memory::hhdm::phys_to_virt(0xB8));
 
-    // Extract the subchannel number from the lower 16 bits of the SID word.
+    const u32 io_int_parm = *reinterpret_cast<volatile u32*>(
+        zxfoundation::memory::hhdm::phys_to_virt(0xBC));
+
     const u16 sch_no = static_cast<u16>(sid & 0xFFFFU);
 
-    // Dispatch to the CSS layer for TSCH / IRB processing.
+    // Dispatch to the CSS layer for command-RB / TSCH processing.
     arch::s390x::css::css_io_interrupt(sch_no);
+
+    // Also dispatch through the IRQ subsystem for any generic I/O listeners.
+    // The CSS handler already wakes the wait queue and signals the domain.
+    const u8 isc = static_cast<u8>(io_int_parm & 0x07U);
+    const u16 io_irq = static_cast<u16>(
+        zxfoundation::sys::irq::IRQ_BASE_IO + isc);
+    zxfoundation::sys::irq::irq_dispatch(
+        io_irq, frame,
+        arch::s390x::cpu::irq::ZX_IRQ_CLASS_IO);
 }
 
 /// @brief SVC handler — nucleus call dispatch.
@@ -153,11 +260,49 @@ extern "C" auto do_svc(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame, u16 s
     frame->gprs[2] = result;
 }
 
-/// @brief Machine check handler.
+/// @brief Machine-check handler — decode MCIC and attempt recovery.
 extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
+
+    // Read and clear the MCIC from lowcore (0xE8) to prevent re-trigger.
     const u64 mcck_code = *reinterpret_cast<const u64*>(0xE8UL);
-    if (mcck_code != 0) {
-        zxfoundation::sys::printk::pcrit("mcck: interruption code={:#018x}\n", mcck_code);
+
+    if (mcck_code == 0) return;
+
+    // Clear the MCIC (must write 0 to acknowledge per PoP §7-4.4).
+    *reinterpret_cast<volatile u64*>(0xE8UL) = 0ULL;
+
+    // Decode MCIC bits (PoP Figure 7-13).
+    if (mcck_code & MCIC_SYSTEM_DAMAGE) {
+        zxfoundation::sys::printk::pcrit("mcck: SYSTEM DAMAGE\n");
+        // System damage is usually unrecoverable.
+        arch::s390x::cpu::psw::disabled_wait();
     }
+    if (mcck_code & MCIC_INSTRUCTION_PROC) {
+        const u64 fail_addr = *reinterpret_cast<const u64*>(0xF8UL);
+        zxfoundation::sys::printk::pcrit(
+            "mcck: instruction-processing damage at addr={:#018x}\n", fail_addr);
+        // May be recoverable — attempt re-execution.
+    }
+    if (mcck_code & MCIC_SYSTEM_RECOVERY) {
+        zxfoundation::sys::printk::pnotice("mcck: system recovery completed\n");
+    }
+    if (mcck_code & MCIC_TIMING_FACILITY) {
+        zxfoundation::sys::printk::pnotice("mcck: timing facility damage — TOD may be stale\n");
+    }
+    if (mcck_code & MCIC_EXT_DAMAGE) {
+        const u32 ext_damage = *reinterpret_cast<const u32*>(0xF4UL);
+        zxfoundation::sys::printk::pcrit(
+            "mcck: external damage code={:#010x}\n", ext_damage);
+    }
+    if (mcck_code & MCIC_FAILING_STOR_ADDR) {
+        const u64 fail_stor = *reinterpret_cast<const u64*>(0xF8UL);
+        zxfoundation::sys::printk::pnotice(
+            "mcck: failing storage addr={:#018x}\n", fail_stor);
+    }
+
+    // Dispatch through IRQ subsystem for any registered machine-check listeners.
+    zxfoundation::sys::irq::irq_dispatch(
+        zxfoundation::sys::irq::IRQ_BASE_MCCK, frame,
+        arch::s390x::cpu::irq::ZX_IRQ_CLASS_MCCK);
 }

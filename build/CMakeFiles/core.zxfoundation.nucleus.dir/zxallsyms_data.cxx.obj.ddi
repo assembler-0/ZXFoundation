@@ -1,0 +1,9 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxallsyms_data.cxx.obj"
+    }
+  ],
+  "version": 1
+}

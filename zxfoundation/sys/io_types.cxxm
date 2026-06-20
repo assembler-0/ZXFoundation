@@ -1,0 +1,57 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/io_types.cxxm
+/// @brief I/O binding type definitions — device capability management
+///        for the DGP kernel's channel-subsystem-based I/O model.
+
+export module zxfoundation.sys.io_types;
+import zxfoundation.base.types;
+import zxfoundation.scoms.scoms_types;
+
+export {
+
+namespace zxfoundation::sys::io {
+
+    /// @brief Maximum number of simultaneous I/O bindings system-wide.
+    constexpr u32 MAX_IO_BINDINGS = 256;
+
+    /// @brief Maximum number of segments in a DMA scatter-gather list.
+    constexpr u32 IO_DMA_MAX_SEGMENTS = 32;
+
+    /// @brief State of an I/O device binding.
+    enum class io_binding_state : u8 {
+        free    = 0, ///< Slot unused.
+        bound   = 1, ///< Device bound to a domain.
+        pending = 2, ///< I/O operation in progress.
+        error   = 3, ///< Device error state.
+    };
+
+    /// @brief Describes the binding of a CSS device to a user domain.
+    /// @note CSS types are privileged — io_binding stores only the opaque
+    ///       device number (dev_no), never a subchannel_id directly.
+    struct io_binding {
+        scoms::kobject    ko{};                    ///< SCOMS identity (offset 0).
+        u16               dev_no{};                ///< Device number (opaque handle, CSS-IO boundary).
+        u16               sch_index{0xFFFF};       ///< Subchannel table index.
+        io_binding_state  state{io_binding_state::free};
+        u32               owner_domain{~0U};       ///< Domain that owns this binding.
+        u64               dma_base{0};             ///< DMA-able memory base (physical).
+        u64               dma_size{0};             ///< DMA memory size.
+        u32               irq_gate_id{~0U};        ///< Gate for I/O interrupt delivery.
+        u32               _reserved{0};
+
+        io_binding() noexcept = default;
+    };
+
+    static_assert(__builtin_offsetof(io_binding, ko) == 0);
+
+    /// @brief User-space view of an I/O submission request.
+    struct user_orb {
+        u32 param{0};    ///< Interruption parameter (returned in IRB).
+        u32 cpa{0};      ///< Channel program address (31-bit physical, MSB=0).
+        u32 key{0};      ///< Storage key (only lower 4 bits used).
+        u32 lpm{0};      ///< Logical path mask (lower 8 bits, 0xFF = all paths).
+    };
+
+} // namespace zxfoundation::sys::io
+
+} // end export

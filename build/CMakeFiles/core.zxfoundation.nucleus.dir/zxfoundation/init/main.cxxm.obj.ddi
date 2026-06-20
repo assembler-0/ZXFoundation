@@ -1,0 +1,147 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/init/main.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.init.main",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/init/main.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.time"
+        },
+        {
+          "logical-name": "zxfoundation.sys.timer"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        },
+        {
+          "logical-name": "zxfoundation.sys.watchdog"
+        },
+        {
+          "logical-name": "zxfoundation.base.config"
+        },
+        {
+          "logical-name": "zxfoundation.memory.pmm"
+        },
+        {
+          "logical-name": "zxfoundation.sys.irq.irqdesc_init"
+        },
+        {
+          "logical-name": "zxfoundation.sys.syschk"
+        },
+        {
+          "logical-name": "zxfoundation.sys.service"
+        },
+        {
+          "logical-name": "zxfoundation.sys.io"
+        },
+        {
+          "logical-name": "zxfoundation.memory.hhdm"
+        },
+        {
+          "logical-name": "zxfoundation.base.cxxrtse.cxxabi"
+        },
+        {
+          "logical-name": "zxfoundation.memory.slub"
+        },
+        {
+          "logical-name": "zxfoundation.rcu.rcu"
+        },
+        {
+          "logical-name": "zxfoundation.memory.kmalloc"
+        },
+        {
+          "logical-name": "zxfoundation.memory.vm"
+        },
+        {
+          "logical-name": "zxfoundation.sched.sched"
+        },
+        {
+          "logical-name": "zxfoundation.init.bootstrap"
+        },
+        {
+          "logical-name": "zxfoundation.domain.domain"
+        },
+        {
+          "logical-name": "zxfoundation.domain.domain_types"
+        },
+        {
+          "logical-name": "zxfoundation.gate.gate"
+        },
+        {
+          "logical-name": "zxfoundation.portal.portal"
+        },
+        {
+          "logical-name": "arch.s390x.init.zxfl.protocol"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.stfle_types"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.percpu"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.processor"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.lowcore"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.psw"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.smp"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.features"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.irq"
+        },
+        {
+          "logical-name": "arch.s390x.mmu.mmu"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.aste"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.pc"
+        },
+        {
+          "logical-name": "arch.s390x.css.css"
+        },
+        {
+          "logical-name": "arch.s390x.css.ccw_io"
+        },
+        {
+          "logical-name": "crypto.sha256_types"
+        },
+        {
+          "logical-name": "crypto.sha256"
+        },
+        {
+          "logical-name": "drivers.console.diag"
+        },
+        {
+          "logical-name": "lib.span"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.format"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

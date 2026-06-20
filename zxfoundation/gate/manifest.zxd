@@ -2,5 +2,12 @@
     gate_types.cxxm
     gate.cxxm
     dispatch.cxxm
-    nucleus_handlers.cxxm
+    nc_cap.cxxm
+    nc_dom.cxxm
+    nc_gate.cxxm
+    nc_io.cxxm
+    nc_mem.cxxm
+    nc_portal.cxxm
+    nc_sgn.cxxm
+    nc_sys.cxxm
 }

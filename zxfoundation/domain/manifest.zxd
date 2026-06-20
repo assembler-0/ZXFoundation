@@ -2,4 +2,6 @@
     strand_types.cxxm
     domain_types.cxxm
     domain.cxxm
+    signal_types.cxxm
+    signal.cxxm
 }

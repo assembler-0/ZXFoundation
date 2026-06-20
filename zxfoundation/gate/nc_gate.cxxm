@@ -1,0 +1,93 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nc_gate.cxxm
+/// @brief Gate namespace dispatch handler.
+
+export module zxfoundation.gate.nc_gate;
+import zxfoundation.gate.gate_types;
+import zxfoundation.gate.gate;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import arch.s390x.cpu.lowcore;
+import lib.error;
+import lib.expected;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+using zxfoundation::domain::domain;
+
+namespace __gate_detail {
+
+    [[nodiscard]] auto current_domain() noexcept -> domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain*>(lc->current_domain);
+    }
+
+    auto nc_gate_create(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto type      = static_cast<zxfoundation::gate::gate_type>(a0);
+        const auto auth      = static_cast<zxfoundation::gate::gate_auth>(a1);
+        const auto target_id = static_cast<u32>(a2);
+        const u64  entry_va  = a3;
+        const auto key       = static_cast<u8>(a4);
+
+        if (static_cast<u8>(type) > 1) {
+            zxfoundation::sys::printk::perr("gate_create: invalid gate_type {}", static_cast<u8>(type));
+            return NC_ERROR;
+        }
+        if (static_cast<u8>(auth) > 2) {
+            zxfoundation::sys::printk::perr("gate_create: invalid gate_auth {}", static_cast<u8>(auth));
+            return NC_ERROR;
+        }
+
+        auto result = zxfoundation::gate::gate_create(type, auth, target_id, entry_va, key);
+        if (!result) {
+            zxfoundation::sys::printk::perr("gate_create: gate_create failed");
+            return NC_ERROR;
+        }
+
+        return *result;
+    }
+
+    auto nc_gate_destroy(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const auto gid = static_cast<u32>(a0);
+
+        auto result = zxfoundation::gate::gate_destroy(gid);
+        if (!result) {
+            zxfoundation::sys::printk::perr("gate_destroy: gate_destroy({}) failed", gid);
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+} // namespace __gate_detail
+
+export {
+
+namespace zxfoundation::gate::nc_gate {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::gate::gate_op;
+
+        switch (static_cast<gate_op>(op)) {
+        case gate_op::create:
+            return __gate_detail::nc_gate_create(a0, a1, a2, a3, a4);
+        case gate_op::destroy:
+            return __gate_detail::nc_gate_destroy(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("gate_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+} // namespace zxfoundation::gate::nc_gate
+
+} // end export

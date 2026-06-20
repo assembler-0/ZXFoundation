@@ -1,0 +1,21 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/base/cxxrtse/builtins.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.base.cxxrtse.builtins",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/base/cxxrtse/builtins.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

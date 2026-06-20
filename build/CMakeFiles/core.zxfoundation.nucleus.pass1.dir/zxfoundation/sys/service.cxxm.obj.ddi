@@ -1,0 +1,60 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation/sys/service.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.sys.service",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/sys/service.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_table"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_ref"
+        },
+        {
+          "logical-name": "zxfoundation.sys.cap_types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.cap"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        },
+        {
+          "logical-name": "zxfoundation.locking.qspinlock"
+        },
+        {
+          "logical-name": "zxfoundation.locking.lock"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.expected"
+        },
+        {
+          "logical-name": "lib.string"
+        },
+        {
+          "logical-name": "lib.string_view"
+        },
+        {
+          "logical-name": "lib.algorithm"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

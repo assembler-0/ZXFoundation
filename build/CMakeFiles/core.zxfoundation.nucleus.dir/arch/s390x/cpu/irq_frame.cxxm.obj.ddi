@@ -1,0 +1,21 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/arch/s390x/cpu/irq_frame.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "arch.s390x.cpu.irq_frame",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/arch/s390x/cpu/irq_frame.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

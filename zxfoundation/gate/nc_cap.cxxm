@@ -1,0 +1,85 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/nc_cap.cxxm
+/// @brief Capability namespace dispatch handler.
+
+export module zxfoundation.gate.nc_cap;
+import zxfoundation.gate.gate_types;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
+import zxfoundation.sys.printk;
+import zxfoundation.base.types;
+import lib.error;
+import lib.expected;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+namespace __cap_detail {
+
+    using namespace zxfoundation::sys::cap;
+
+    auto nc_cap_acquire(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        const auto type   = static_cast<cap_type>(a0 & 0xFFFFU);
+        const auto obj_id = static_cast<u16>(a1 & 0xFFFFU);
+        const auto rights = static_cast<cap_rights>(a2 & 0xFFFFU);
+
+        auto result = cap_acquire(type, obj_id, rights);
+        if (!result) {
+            zxfoundation::sys::printk::perr("cap_acquire: failed type={} id={}",
+                                            cap_type_name(type), static_cast<u32>(obj_id));
+            return NC_ERROR;
+        }
+
+        return result->raw;
+    }
+
+    auto nc_cap_release(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        const cap_token token{a0};
+        auto result = cap_release(token);
+        if (!result) {
+            zxfoundation::sys::printk::perr("cap_release: failed");
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_cap_validate(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        const cap_token token{a0};
+        const auto needed = static_cast<cap_rights>(a1 & 0xFFFFU);
+
+        // Use the server-side generic validator which checks generation,
+        // object liveness, and rights — not just the bitmask.
+        auto result = zxfoundation::sys::cap::cap_validate_generic(token, needed);
+        if (!result) {
+            zxfoundation::sys::printk::perr("cap_validate: failed");
+            return NC_ERROR;
+        }
+
+        return 0;
+    }
+
+} // namespace __cap_detail
+
+export {
+
+namespace zxfoundation::gate::nc_cap {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::gate::cap_op;
+
+        switch (static_cast<cap_op>(op)) {
+        case cap_op::acquire:
+            return __cap_detail::nc_cap_acquire(a0, a1, a2, a3, a4);
+        case cap_op::release:
+            return __cap_detail::nc_cap_release(a0, a1, a2, a3, a4);
+        case cap_op::validate:
+            return __cap_detail::nc_cap_validate(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("cap_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+} // namespace zxfoundation::gate::nc_cap
+
+} // end export

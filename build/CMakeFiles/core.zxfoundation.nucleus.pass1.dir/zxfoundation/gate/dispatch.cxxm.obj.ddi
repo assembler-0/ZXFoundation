@@ -1,0 +1,51 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation/gate/dispatch.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.gate.dispatch",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/gate/dispatch.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.gate.gate_types"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_dom"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_mem"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_gate"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_portal"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_io"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_sgn"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_cap"
+        },
+        {
+          "logical-name": "zxfoundation.gate.nc_sys"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

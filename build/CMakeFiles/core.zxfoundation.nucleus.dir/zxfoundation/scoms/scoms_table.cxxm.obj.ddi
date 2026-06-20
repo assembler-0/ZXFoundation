@@ -1,0 +1,48 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/scoms/scoms_table.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.scoms.scoms_table",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/scoms/scoms_table.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.base.typestate"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_ref"
+        },
+        {
+          "logical-name": "zxfoundation.locking.qspinlock"
+        },
+        {
+          "logical-name": "zxfoundation.locking.lock"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.irq"
+        },
+        {
+          "logical-name": "arch.s390x.lib.atomic"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.expected"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

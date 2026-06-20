@@ -1,0 +1,69 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/sys/cap.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.sys.cap",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/sys/cap.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.sys.cap_types"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_table"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_ref"
+        },
+        {
+          "logical-name": "zxfoundation.domain.domain_types"
+        },
+        {
+          "logical-name": "zxfoundation.domain.domain"
+        },
+        {
+          "logical-name": "zxfoundation.gate.gate_types"
+        },
+        {
+          "logical-name": "zxfoundation.gate.gate"
+        },
+        {
+          "logical-name": "zxfoundation.portal.portal_types"
+        },
+        {
+          "logical-name": "zxfoundation.portal.portal"
+        },
+        {
+          "logical-name": "zxfoundation.memory.vm_types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.expected"
+        },
+        {
+          "logical-name": "lib.format"
+        },
+        {
+          "logical-name": "lib.pair"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

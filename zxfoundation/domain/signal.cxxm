@@ -1,0 +1,133 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/domain/signal.cxxm
+/// @brief Signal delivery infrastructure — enqueue, deliver, and manage
+///        signal handlers for DGP domains.
+
+export module zxfoundation.domain.signal;
+import zxfoundation.domain.signal_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import zxfoundation.base.typestate;
+import lib.error;
+import lib.expected;
+
+export {
+
+namespace zxfoundation::domain::signal {
+
+    using namespace zxfoundation::sys::printk;
+
+    /// @brief Register a signal handler for the given domain and kind.
+    /// @param[in,out] d     The target domain.
+    /// @param[in]     kind  The signal kind to handle.
+    /// @param[in]     info  Handler descriptor (function, user data, default).
+    /// @return  Success, or kernel_error if kind is out of range.
+    [[nodiscard]] auto signal_register_handler(
+        domain&               d,
+        signal_kind           kind,
+        const signal_handler_info& info
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        const u8 idx = static_cast<u8>(kind);
+        if (idx >= 8) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        d.signal_queue.handlers[idx] = info;
+        return {};
+    }
+
+    /// @brief Queue a signal for asynchronous delivery to a domain.
+    /// @param[in,out] d     The target domain.
+    /// @param[in]     kind  Signal kind.
+    /// @param[in]     data  Opaque payload.
+    ///
+    /// @note  Safe to call from interrupt context.  Non-blocking.
+    ///        If the queue is full, the oldest entry is silently overwritten.
+    auto signal_enqueue(
+        domain&     d,
+        signal_kind kind,
+        u64         data
+    ) noexcept -> void {
+        d.signal_queue.enqueue(kind, data);
+    }
+
+    /// @brief Deliver one pending signal to the domain.
+    /// @param[in,out] d  The domain about to return to user mode.
+    /// @return  true if a signal was delivered; false if the queue was empty.
+    ///
+    /// @note  If the default action is terminate and no handler is registered,
+    ///        the domain is marked dying and the caller should invoke schedule().
+    auto signal_deliver_one(domain& d) noexcept -> bool {
+        if (!d.signal_queue.has_pending()) {
+            return false;
+        }
+
+        auto entry = d.signal_queue.dequeue();
+        if (entry.kind == signal_kind::none) {
+            return false;
+        }
+
+        const u8 idx = static_cast<u8>(entry.kind);
+        const auto& hinfo = d.signal_queue.handlers[idx];
+
+        bool handled = false;
+        if (hinfo.handler != nullptr) {
+            handled = hinfo.handler(entry.kind, entry.data, hinfo.user_data);
+        }
+
+        if (!handled) {
+            // When no handler is registered, use kind-specific built-in defaults
+            // so that critical signals (fault, term) terminate by default.
+            auto effective_def = hinfo.def;
+            if (hinfo.handler == nullptr) {
+                switch (entry.kind) {
+                    case signal_kind::fault:
+                    case signal_kind::term:
+                        effective_def = signal_default::terminate;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            switch (effective_def) {
+                case signal_default::terminate:
+                    pinfo("signal: domain {} — unhandled {} (default: terminate)",
+                          d.ko.id, signal_kind_name(entry.kind));
+                    d.ko.state = base::lifecycle_state::dying;
+                    d.flags = d.flags | domain_flags::need_resched;
+                    break;
+
+                case signal_default::notify:
+                    // Domain can poll signal_queue.pending_mask.
+                    break;
+
+                case signal_default::ignore:
+                default:
+                    // Silent discard.
+                    break;
+            }
+        }
+
+        return true;
+    }
+
+    /// @brief Deliver all pending signals to the domain.
+    /// @return  true if the domain should be rescheduled (terminate default
+    ///          was taken).
+    auto signal_deliver_all(domain& d) noexcept -> bool {
+        bool needs_resched = false;
+        while (d.signal_queue.has_pending()) {
+            (void)signal_deliver_one(d);
+            if (d.ko.state == base::lifecycle_state::dying) {
+                needs_resched = true;
+                break;
+            }
+        }
+        return needs_resched;
+    }
+
+} // namespace zxfoundation::domain::signal
+
+} // end export

@@ -1,0 +1,27 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/arch/s390x/cpu/psw.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "arch.s390x.cpu.psw",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/arch/s390x/cpu/psw.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "arch.s390x.cpu.psw_types"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "lib.bit"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

@@ -1,0 +1,60 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation/sys/printk.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.sys.printk",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/sys/printk.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.base.config"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk_types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.time"
+        },
+        {
+          "logical-name": "zxfoundation.locking.qspinlock"
+        },
+        {
+          "logical-name": "zxfoundation.locking.lock"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.percpu"
+        },
+        {
+          "logical-name": "lib.string_view"
+        },
+        {
+          "logical-name": "lib.span"
+        },
+        {
+          "logical-name": "lib.format"
+        },
+        {
+          "logical-name": "lib.util"
+        },
+        {
+          "logical-name": "lib.ring_buffer"
+        },
+        {
+          "logical-name": "lib.algorithm"
+        },
+        {
+          "logical-name": "lib.static_vector"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

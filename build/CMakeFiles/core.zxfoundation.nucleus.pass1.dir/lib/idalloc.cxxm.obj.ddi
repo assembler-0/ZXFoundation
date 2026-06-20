@@ -1,0 +1,33 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/lib/idalloc.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "lib.idalloc",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/lib/idalloc.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "lib.bitmap"
+        },
+        {
+          "logical-name": "lib.optional"
+        },
+        {
+          "logical-name": "zxfoundation.locking.qspinlock"
+        },
+        {
+          "logical-name": "zxfoundation.locking.lock"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

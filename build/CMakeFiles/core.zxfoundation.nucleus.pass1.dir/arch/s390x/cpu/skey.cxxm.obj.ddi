@@ -1,0 +1,21 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/arch/s390x/cpu/skey.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "arch.s390x.cpu.skey",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/arch/s390x/cpu/skey.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

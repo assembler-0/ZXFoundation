@@ -1,0 +1,72 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation/gate/nc_mem.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.gate.nc_mem",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/gate/nc_mem.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.gate.gate_types"
+        },
+        {
+          "logical-name": "zxfoundation.domain.domain_types"
+        },
+        {
+          "logical-name": "zxfoundation.domain.domain"
+        },
+        {
+          "logical-name": "zxfoundation.memory.pmm"
+        },
+        {
+          "logical-name": "zxfoundation.memory.pmm_types"
+        },
+        {
+          "logical-name": "zxfoundation.memory.vm"
+        },
+        {
+          "logical-name": "zxfoundation.memory.vm_types"
+        },
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.cap_types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.cap"
+        },
+        {
+          "logical-name": "zxfoundation.sys.printk"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.lowcore"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.uaccess"
+        },
+        {
+          "logical-name": "arch.s390x.cpu.skey"
+        },
+        {
+          "logical-name": "arch.s390x.mmu.mmu"
+        },
+        {
+          "logical-name": "arch.s390x.mmu.mmu_types"
+        },
+        {
+          "logical-name": "lib.error"
+        },
+        {
+          "logical-name": "lib.expected"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

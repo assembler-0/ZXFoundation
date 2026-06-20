@@ -1,72 +1,71 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/gate/dispatch.cxxm
-/// @brief Nucleus call dispatcher — routes PC-initiated calls to handlers.
+/// @brief Namespaced nucleus dispatch — routes PC-initiated calls to
+///        per-namespace handler files.
 ///
-/// Called from the PC entry handler (in the future, from entry.S PC trap).
-/// Looks up the nucleus_call enum value, finds the handler in the dispatch
-/// table, and invokes it.
+/// The call number encodes: bits 7-5 = namespace, bits 4-0 = operation.
+/// The top-level dispatch extracts the namespace and delegates to the
+/// appropriate nc_*::dispatch() function.
 
 export module zxfoundation.gate.dispatch;
 import zxfoundation.gate.gate_types;
-import zxfoundation.gate.gate;
-import zxfoundation.domain.domain_types;
+import zxfoundation.gate.nc_dom;
+import zxfoundation.gate.nc_mem;
+import zxfoundation.gate.nc_gate;
+import zxfoundation.gate.nc_portal;
+import zxfoundation.gate.nc_io;
+import zxfoundation.gate.nc_sgn;
+import zxfoundation.gate.nc_cap;
+import zxfoundation.gate.nc_sys;
 import zxfoundation.sys.printk;
-import zxfoundation.sys.syschk;
 import zxfoundation.base.types;
-import lib.error;
 
-using zxfoundation::gate::nucleus_call;
 using zxfoundation::sys::printk::perr;
 
-/// @brief Error sentinel returned when a nucleus call cannot be dispatched.
-///
-/// The caller (assembly stub or domain) checks for this value in r2 to
-/// detect dispatch failures.
 static constexpr u64 DISPATCH_ERROR_SENTINEL = ~0ULL;
 
 export {
 
 namespace zxfoundation::gate::dispatch {
 
-    /// @brief Dispatch a nucleus call.
+    /// @brief Namespaced nucleus dispatch entry point.
     ///
-    /// Called from the PC entry handler (in the future, from entry.S PC trap).
-    /// Looks up the nucleus_call enum value, finds the handler, invokes it.
+    /// Called from the C-linkage do_nucleus_dispatch() which is reached
+    /// from the PC entry assembly stub.
     ///
-    /// @param call_nr  The nucleus call number (from r2 or PC number).
-    /// @param a1       Argument from r3.
-    /// @param a2       Argument from r4.
-    /// @param a3       Argument from r5.
-    /// @param a4       Argument from r6.
-    /// @param a5       Argument from r7.
-    /// @return          Result to be placed in r2, or DISPATCH_ERROR_SENTINEL
-    ///                  on failure.
+    /// @param call_nr  Packed: (namespace << 5) | operation.
+    /// @param a0-a4    Arguments from r3-r7.
+    /// @return         Result for r2, or DISPATCH_ERROR_SENTINEL on failure.
     auto nucleus_dispatch(
         u32 call_nr,
-        u64 a1, u64 a2, u64 a3, u64 a4, u64 a5
+        u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
     ) noexcept -> u64 {
 
-        // 1. Bounds check: call_nr must be < nucleus_call::_count.
-        if (call_nr >= static_cast<u32>(nucleus_call::_count)) {
-            perr("dispatch: nucleus call {} out of range (max {})",
-                 call_nr,
-                 static_cast<u32>(nucleus_call::_count));
+        const auto ns = static_cast<call_namespace>(
+            (call_nr >> 5) & 0x7U);
+        const u32 op = call_nr & 0x1FU;
+
+        switch (ns) {
+        case call_namespace::dom:
+            return nc_dom::dispatch(op, a0, a1, a2, a3, a4);
+        case call_namespace::mem:
+            return nc_mem::dispatch(op, a0, a1, a2, a3, a4);
+        case call_namespace::gate:
+            return nc_gate::dispatch(op, a0, a1, a2, a3, a4);
+        case call_namespace::portal:
+            return nc_portal::dispatch(op, a0, a1, a2, a3, a4);
+        case call_namespace::io:
+            return nc_io::dispatch(op, a0, a1, a2, a3, a4);
+        case call_namespace::sgn:
+            return nc_sgn::dispatch(op, a0, a1, a2, a3, a4);
+        case call_namespace::cap:
+            return nc_cap::dispatch(op, a0, a1, a2, a3, a4);
+        case call_namespace::sys:
+            return nc_sys::dispatch(op, a0, a1, a2, a3, a4);
+        default:
+            perr("dispatch: unknown namespace {}", static_cast<u32>(ns));
             return DISPATCH_ERROR_SENTINEL;
         }
-
-        // 2. Look up the handler from the dispatch table.
-        const auto& table = zxfoundation::gate::nucleus_dispatch();
-        auto handler = table.handlers[call_nr];
-
-        if (handler == nullptr) {
-            perr("dispatch: no handler registered for nucleus call {}", call_nr);
-            return DISPATCH_ERROR_SENTINEL;
-        }
-
-        // 3. Invoke the handler with all six argument slots.
-        //    The sixth argument (from r8) is not used by the current ABI,
-        //    so we pass 0.
-        return handler(a1, a2, a3, a4, a5, 0);
     }
 
 } // namespace zxfoundation::gate::dispatch
@@ -78,8 +77,8 @@ namespace zxfoundation::gate::dispatch {
 /// The assembly stub places the call number in r2 and arguments in r3-r7,
 /// then branches here.  The result is returned in r2.
 extern "C" auto do_nucleus_dispatch(
-    u64 call_nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5
+    u64 call_nr, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
 ) noexcept -> u64 {
     return zxfoundation::gate::dispatch::nucleus_dispatch(
-        static_cast<u32>(call_nr), a1, a2, a3, a4, a5);
+        static_cast<u32>(call_nr), a0, a1, a2, a3, a4);
 }

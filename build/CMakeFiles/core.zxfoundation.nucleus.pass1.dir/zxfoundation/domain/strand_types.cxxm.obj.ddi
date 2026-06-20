@@ -1,0 +1,33 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation/domain/strand_types.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.domain.strand_types",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/domain/strand_types.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.scoms.scoms_types"
+        },
+        {
+          "logical-name": "arch.s390x.lib.atomic"
+        },
+        {
+          "logical-name": "lib.rbtree"
+        },
+        {
+          "logical-name": "lib.list"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

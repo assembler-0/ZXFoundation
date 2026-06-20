@@ -1,0 +1,172 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/cap_types.cxxm
+/// @brief Capability system type definitions — opaque resource tokens for
+///        the DGP kernel's capability-based authorization model.
+///
+/// Every resource in the system (domain, gate, portal, I/O binding, memory
+/// region, service entry) is identified by an opaque capability token.
+/// Tokens are unforgeable: they encode the object type, object ID, generation
+/// counter (ABA prevention), and a delegated-rights mask.
+///
+/// Token layout (64-bit):
+///
+///   63              48 47          32 31          16 15            0
+///   ┌─────────────────┬──────────────┬──────────────┬────────────────┐
+///   │     RIGHTS      │  GENERATION  │   OBJECT_ID  │     TYPE       │
+///   │     (16 bits)   │   (16 bits)  │   (16 bits)  │   (16 bits)    │
+///   └─────────────────┴──────────────┴──────────────┴────────────────┘
+
+export module zxfoundation.sys.cap_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sys::cap {
+
+    // ── Capability type discriminator ───────────────────────────────────
+
+    /// @brief Discriminator for the kind of resource a capability token refers to.
+    enum class cap_type : u16 {
+        none       = 0,   ///< Invalid / null capability.
+        domain     = 1,   ///< Reference to a domain.
+        gate       = 2,   ///< Reference to a gate.
+        portal     = 3,   ///< Reference to a portal.
+        io_device  = 5,   ///< Reference to an I/O device binding.
+        memory     = 6,   ///< Reference to a VME memory region.
+        service    = 7,   ///< Reference to a service registry entry.
+        admin      = 8,   ///< Administrative authority (domain mgmt, etc.).
+    };
+
+    /// @brief Return a human-readable label for a capability type.
+    [[nodiscard]] constexpr auto cap_type_name(cap_type t) noexcept -> const char* {
+        switch (t) {
+            case cap_type::none:      return "none";
+            case cap_type::domain:    return "domain";
+            case cap_type::gate:      return "gate";
+            case cap_type::portal:    return "portal";
+            case cap_type::io_device: return "io_device";
+            case cap_type::memory:    return "memory";
+            case cap_type::service:   return "service";
+            case cap_type::admin:     return "admin";
+            default:                  return "unknown";
+        }
+    }
+
+    // ── Generic rights masks ─────────────────────────────────────────────
+
+    /// @brief Standard access rights usable with any capability type.
+    enum class cap_rights : u16 {
+        none     = 0,
+        read     = 1U << 0,    ///< Read / view the resource.
+        write    = 1U << 1,    ///< Write / modify the resource.
+        exec     = 1U << 2,    ///< Execute / invoke the resource.
+        destroy  = 1U << 3,    ///< Destroy the resource.
+        delegate = 1U << 4,    ///< Delegate this capability to another domain.
+        admin    = 1U << 5,    ///< Administrative operations (domain create/destroy).
+        map      = 1U << 6,    ///< Map physical memory into address space.
+        all      = 0xFFFFU,    ///< All rights.
+    };
+
+    [[nodiscard]] constexpr auto operator|(cap_rights a, cap_rights b) noexcept -> cap_rights {
+        return static_cast<cap_rights>(static_cast<u16>(a) | static_cast<u16>(b));
+    }
+
+    [[nodiscard]] constexpr auto operator&(cap_rights a, cap_rights b) noexcept -> cap_rights {
+        return static_cast<cap_rights>(static_cast<u16>(a) & static_cast<u16>(b));
+    }
+
+    [[nodiscard]] constexpr auto operator~(cap_rights r) noexcept -> cap_rights {
+        return static_cast<cap_rights>(~static_cast<u16>(r));
+    }
+
+    // ── Capability token ────────────────────────────────────────────────
+
+    /// @brief Opaque 64-bit capability token.
+    ///
+    /// A token is created by the nucleus and is unforgeable because:
+    ///   - The object generation is known only to the nucleus.
+    ///   - The token is constructed inside a nucleus call.
+    ///   - Domains can only pass existing tokens, never construct new ones.
+    ///
+    /// @note  Tokens are value types (copyable, movable).
+    struct cap_token {
+        u64 raw{0};   ///< Raw 64-bit encoding.
+
+        constexpr cap_token() noexcept = default;
+        constexpr explicit cap_token(u64 v) noexcept : raw(v) {}
+
+        /// @brief Construct a token from its components.
+        /// @param[in] type     Resource type discriminator.
+        /// @param[in] obj_id   Object index in the type's SCOMS table.
+        /// @param[in] gen      Object generation counter.
+        /// @param[in] rights   Delegated rights mask.
+        static constexpr auto make(
+            cap_type   type,
+            u16        obj_id,
+            u16        gen,
+            cap_rights rights
+        ) noexcept -> cap_token {
+            return cap_token(
+                (static_cast<u64>(rights)  << 48) |
+                (static_cast<u64>(gen)     << 32) |
+                (static_cast<u64>(obj_id)  << 16) |
+                static_cast<u64>(type)
+            );
+        }
+
+        /// @brief Extract the type field.
+        [[nodiscard]] constexpr auto type() const noexcept -> cap_type {
+            return static_cast<cap_type>(raw & 0xFFFFU);
+        }
+
+        /// @brief Extract the object ID field.
+        [[nodiscard]] constexpr auto object_id() const noexcept -> u16 {
+            return static_cast<u16>((raw >> 16) & 0xFFFFU);
+        }
+
+        /// @brief Extract the generation field.
+        [[nodiscard]] constexpr auto generation() const noexcept -> u16 {
+            return static_cast<u16>((raw >> 32) & 0xFFFFU);
+        }
+
+        /// @brief Extract the rights mask.
+        [[nodiscard]] constexpr auto rights() const noexcept -> cap_rights {
+            return static_cast<cap_rights>((raw >> 48) & 0xFFFFU);
+        }
+
+        /// @brief Check whether a specific right is present.
+        [[nodiscard]] constexpr auto has_right(cap_rights r) const noexcept -> bool {
+            return (static_cast<u16>(rights()) & static_cast<u16>(r)) != 0;
+        }
+
+        /// @brief Derive a new token with a subset of the rights.
+        /// @param[in] subset  Rights to retain in the derived token.
+        [[nodiscard]] constexpr auto derive(cap_rights subset) const noexcept -> cap_token {
+            return make(type(), object_id(), generation(),
+                        rights() & subset);
+        }
+
+        /// @brief Check whether the token is valid (non-null).
+        [[nodiscard]] constexpr explicit operator bool() const noexcept {
+            return raw != 0 && type() != cap_type::none;
+        }
+
+        /// @brief Compare two tokens for equality.
+        [[nodiscard]] constexpr auto operator==(cap_token o) const noexcept -> bool {
+            return raw == o.raw;
+        }
+
+        [[nodiscard]] constexpr auto operator!=(cap_token o) const noexcept -> bool {
+            return raw != o.raw;
+        }
+    };
+
+    /// @brief Null / invalid capability token sentinel.
+    inline constexpr cap_token CAP_TOKEN_NULL{};
+
+    /// @brief Sentinel value indicating an error from capability operations.
+    inline constexpr u64 CAP_ERROR_SENTINEL = ~0ULL;
+
+} // namespace zxfoundation::sys::cap
+
+} // end export

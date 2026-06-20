@@ -10,6 +10,7 @@ import arch.s390x.mmu.mmu_types;
 import arch.s390x.lib.atomic;
 import zxfoundation.memory.vm_types;
 import zxfoundation.locking.qspinlock;
+import zxfoundation.domain.signal_types;
 import lib.rbtree;
 import lib.list;
 
@@ -43,7 +44,6 @@ namespace zxfoundation::domain {
     /// @brief Per-domain flags (bitfield).
     enum class domain_flags : u32 {
         none         = 0,
-        root         = 1U << 0,   ///< Root domain — can create/destroy other domains.
         idle         = 1U << 1,   ///< Idle domain (per-CPU).
         need_resched = 1U << 2,   ///< Reschedule requested.
     };
@@ -111,6 +111,12 @@ namespace zxfoundation::domain {
 
         // ── Per-domain VM state
         memory::vm::vm_space                                            vm_space{};
+
+        // ── Per-domain signal queue
+        signal::signal_queue                                            signal_queue{};
+
+        // ── Admin capability token (set by bootstrap for domains with domain-lifecycle authority)
+        u64                                                             admin_token{0};
 
         domain() noexcept = default;
         domain(const domain&)            = delete;

@@ -1,0 +1,27 @@
+{
+  "revision": 0,
+  "rules": [
+    {
+      "primary-output": "CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation/base/cxxrtse/ssp.cxxm.obj",
+      "provides": [
+        {
+          "is-interface": true,
+          "logical-name": "zxfoundation.base.cxxrtse.ssp",
+          "source-path": "/home/assembler-0/workspace/UltraSpark/zxfoundation/base/cxxrtse/ssp.cxxm"
+        }
+      ],
+      "requires": [
+        {
+          "logical-name": "zxfoundation.base.types"
+        },
+        {
+          "logical-name": "zxfoundation.sys.syschk"
+        },
+        {
+          "logical-name": "lib.error"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

@@ -8,6 +8,8 @@
 export module zxfoundation.init.bootstrap;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.domain;
@@ -141,6 +143,18 @@ namespace zxfoundation::init::bootstrap {
         _internal::g_init_module_info.size_bytes = found->size_bytes;
 
         d->primary_strand.cpu = 0;
+
+        // ── Create an admin capability token for the init domain ────────
+        {
+            d->admin_token = zxfoundation::sys::cap::cap_token::make(
+                zxfoundation::sys::cap::cap_type::domain,
+                static_cast<u16>(d->ko.id),
+                static_cast<u16>(d->ko.generation),
+                zxfoundation::sys::cap::cap_rights::admin).raw;
+            pinfo("bootstrap: admin token {:#016x} set for domain {} gen={}",
+                  d->admin_token, d->ko.id, static_cast<u32>(d->ko.generation));
+        }
+
         zxfoundation::sched::setup_domain_context(
             d,
             _internal::init_domain_entry,

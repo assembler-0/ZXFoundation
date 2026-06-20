@@ -1,0 +1,13 @@
+-x c++-module
+-fmodule-output="CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation.sys.syschk_types.pcm"
+-fmodule-file="zxfoundation.base.types=CMakeFiles/core.zxfoundation.nucleus.dir/zxfoundation.base.types.pcm"
+-fmodule-file="lib.error=CMakeFiles/core.zxfoundation.nucleus.dir/lib.error.pcm"
+-fmodule-file="lib.source_location=CMakeFiles/core.zxfoundation.nucleus.dir/lib.source_location.pcm"
+-fmodule-file="lib.string_view=CMakeFiles/core.zxfoundation.nucleus.dir/lib.string_view.pcm"
+-fmodule-file="lib.compare=CMakeFiles/core.zxfoundation.nucleus.dir/lib.compare.pcm"
+-fmodule-file="lib.concepts=CMakeFiles/core.zxfoundation.nucleus.dir/lib.concepts.pcm"
+-fmodule-file="lib.format=CMakeFiles/core.zxfoundation.nucleus.dir/lib.format.pcm"
+-fmodule-file="lib.span=CMakeFiles/core.zxfoundation.nucleus.dir/lib.span.pcm"
+-fmodule-file="lib.string=CMakeFiles/core.zxfoundation.nucleus.dir/lib.string.pcm"
+-fmodule-file="lib.type_traits=CMakeFiles/core.zxfoundation.nucleus.dir/lib.type_traits.pcm"
+-fmodule-file="lib.util=CMakeFiles/core.zxfoundation.nucleus.dir/lib.util.pcm"
