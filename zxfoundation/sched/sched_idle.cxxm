@@ -4,6 +4,7 @@
 
 export module zxfoundation.sched.sched_idle;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.types;
@@ -18,17 +19,15 @@ namespace _internal {
     using namespace zxfoundation::memory::pmm;
     using zxfoundation::memory::hhdm::phys_to_virt;
 
-    /// @brief Static array of idle domains — one per CPU.
     domain g_idle_domains[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS];
 
-    /// @brief Stack order for idle domain kernel stacks (order 2 = 4 pages = 16 KiB).
     static constexpr u32 IDLE_STACK_ORDER = 2;
 
-    inline auto idle_enqueue(run_queue&, domain&) noexcept -> void {}
-    inline auto idle_dequeue(run_queue&, domain&) noexcept -> void {}
-    inline auto idle_pick_next(run_queue& rq) noexcept -> domain* { return rq.idle; }
-    inline auto idle_tick(run_queue&, domain&) noexcept -> void {}
-    inline auto idle_preempt(run_queue&, domain&) noexcept -> void {}
+    inline auto idle_enqueue(run_queue&, strand&) noexcept -> void {}
+    inline auto idle_dequeue(run_queue&, strand&) noexcept -> void {}
+    inline auto idle_pick_next(run_queue& rq) noexcept -> strand* { return rq.idle_strand; }
+    inline auto idle_tick(run_queue&, strand&) noexcept -> void {}
+    inline auto idle_preempt(run_queue&, strand&) noexcept -> void {}
 
 } // namespace _internal
 
@@ -38,13 +37,13 @@ namespace zxfoundation::sched::idle {
 
     using zxfoundation::domain::domain;
     using zxfoundation::domain::domain_flags;
+    using zxfoundation::domain::strand_state;
     using zxfoundation::base::lifecycle_state;
     using zxfoundation::domain::run_queue;
     using zxfoundation::domain::sched_class;
     using zxfoundation::domain::DOMAIN_ID_NUCLEUS;
     using zxfoundation::domain::SKEY_NUCLEUS;
 
-    /// @brief The idle scheduling class vtable.
     inline constexpr sched_class the_class{
         _internal::idle_enqueue,
         _internal::idle_dequeue,
@@ -53,9 +52,6 @@ namespace zxfoundation::sched::idle {
         _internal::idle_preempt
     };
 
-    /// @brief Initialize an idle domain for a given CPU.
-    /// @param cpu_id  Logical CPU identifier.
-    /// @return Pointer to the initialized idle domain, or nullptr on failure.
     [[nodiscard]] inline auto init_idle_domain(u16 cpu_id) noexcept -> domain* {
         using namespace zxfoundation::memory::pmm;
 
@@ -68,7 +64,8 @@ namespace zxfoundation::sched::idle {
         d->flags       = domain_flags::idle;
         d->storage_key = SKEY_NUCLEUS;
         d->primary_strand.cpu         = cpu_id;
-        d->primary_strand.owner       = d;  // Back-pointer: strand → owning domain.
+        d->primary_strand.owner       = d;
+        d->primary_strand.state       = strand_state::runnable;
 
         auto stack_r = alloc(_internal::IDLE_STACK_ORDER,
                              zone::dma31,

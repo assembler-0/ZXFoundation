@@ -6,6 +6,12 @@
 /// The call number encodes: bits 7-5 = namespace, bits 4-0 = operation.
 /// The top-level dispatch extracts the namespace and delegates to the
 /// appropriate nc_*::dispatch() function.
+///
+/// Capability enforcement: every nucleus call is validated at this single
+/// chokepoint before reaching any handler.  A static table maps each
+/// (namespace, op) to its required capability token type and rights.
+/// Calls that require a capability pass it in a0; the dispatch function
+/// validates it via cap_validate_generic() before routing.
 
 export module zxfoundation.gate.dispatch;
 import zxfoundation.gate.gate_types;
@@ -17,12 +23,144 @@ import zxfoundation.gate.nc_io;
 import zxfoundation.gate.nc_sgn;
 import zxfoundation.gate.nc_cap;
 import zxfoundation.gate.nc_sys;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
 import zxfoundation.base.types;
 
 using zxfoundation::sys::printk::perr;
 
 static constexpr u64 DISPATCH_ERROR_SENTINEL = ~0ULL;
+
+// ── Capability enforcement table ─────────────────────────────────────────────
+//
+// Each entry maps a packed (namespace << 5 | operation) to the capability
+// check required before the handler is invoked.  The check validates that
+// the cap_token in argument register a0:
+//   - Is non-null
+//   - References a live object
+//   - Carries the required rights
+//
+// Operations that do not take a capability token are marked check::none.
+
+namespace _dispatch_internal {
+
+    enum class check : u8 {
+        none = 0,       // No capability needed (a0 is a regular argument).
+        admin = 1,      // Admin capability (cap_type::admin, cap_rights::admin).
+        domain_map = 2, // Domain capability with map right  (cap_type::domain, cap_rights::map).
+    };
+
+    struct auth_entry {
+        u8      packed;   // (namespace << 5) | operation
+        check   need;     // Capability requirement.
+    };
+
+    /// @brief Lookup table.  Sorted by packed call number for a potential
+    ///        binary search; linear scan is fine for ~36 entries.
+    static constexpr auth_entry g_auth_table[] = {
+        // ── Domain namespace (0) ──
+        { (0U << 5) | 0, check::admin       },  // dom::create
+        { (0U << 5) | 1, check::admin       },  // dom::destroy
+        { (0U << 5) | 2, check::none        },  // dom::exit       — self-terminate
+        { (0U << 5) | 3, check::none        },  // dom::info       — self-query
+        { (0U << 5) | 4, check::none        },  // dom::query      — lookup any
+        { (0U << 5) | 5, check::admin       },  // dom::strand_create
+
+        // ── Memory namespace (1) ──
+        { (1U << 5) | 0, check::none        },  // mem::alloc      — self alloc
+        { (1U << 5) | 1, check::none        },  // mem::free       — self free
+        { (1U << 5) | 2, check::domain_map  },  // mem::map        — requires domain::map cap in a0
+        { (1U << 5) | 3, check::none        },  // mem::unmap      — self unmap
+        { (1U << 5) | 4, check::none        },  // mem::protect    — self protect
+        { (1U << 5) | 5, check::none        },  // mem::share      — self → target
+
+        // ── Gate namespace (2) — a0 is gate_type / gate_id, not a cap token
+        //    (Cap enforcement to be added at handler level in future phase)
+        { (2U << 5) | 0, check::none        },  // gate::create
+        { (2U << 5) | 1, check::none        },  // gate::destroy
+
+        // ── Portal namespace (3) — a0 is target_id / portal_id
+        { (3U << 5) | 0, check::none        },  // portal::create
+        { (3U << 5) | 1, check::none        },  // portal::destroy
+
+        // ── I/O namespace (4) — all stubs, no cap check yet
+        { (4U << 5) | 0, check::none        },  // io::bind
+        { (4U << 5) | 1, check::none        },  // io::unbind
+        { (4U << 5) | 2, check::none        },  // io::submit
+        { (4U << 5) | 3, check::none        },  // io::irq_bind
+
+        // ── Signal namespace (5) — no cap check yet
+        { (5U << 5) | 0, check::none        },  // sgn::register_handler
+        { (5U << 5) | 1, check::none        },  // sgn::poll
+        { (5U << 5) | 2, check::none        },  // sgn::ack
+
+        // ── Capability namespace (6) — the cap operations themselves need no cap
+        { (6U << 5) | 0, check::none        },  // cap::acquire
+        { (6U << 5) | 1, check::none        },  // cap::release
+        { (6U << 5) | 2, check::none        },  // cap::validate
+
+        // ── System namespace (7) — no cap checks for time / console
+        { (7U << 5) | 0, check::none        },  // sys::time_yield
+        { (7U << 5) | 1, check::none        },  // sys::time_deadline
+        { (7U << 5) | 2, check::none        },  // sys::time_now
+        { (7U << 5) | 3, check::none        },  // sys::console_write
+        { (7U << 5) | 4, check::none        },  // sys::service_register
+        { (7U << 5) | 5, check::none        },  // sys::service_lookup
+        { (7U << 5) | 6, check::none        },  // sys::service_unregister
+    };
+
+    /// @brief Validate a capability token for the given call.
+    /// @param ns     Call namespace.
+    /// @param op     Operation within the namespace.
+    /// @param a0     First argument register (carries cap_token when applicable).
+    /// @return true if the call is authorized, false to reject.
+    [[nodiscard]] auto validate_call(
+        zxfoundation::gate::call_namespace ns, u32 op, u64 a0
+    ) noexcept -> bool {
+        const u8 packed = (static_cast<u32>(ns) << 5) | (op & 0x1FU);
+
+        // Linear scan of the auth table.
+        for (auto& entry : g_auth_table) {
+            if (entry.packed != packed) continue;
+
+            switch (entry.need) {
+            case check::none:
+                return true;
+
+            case check::admin: {
+                auto result = zxfoundation::sys::cap::cap_validate_generic(
+                    zxfoundation::sys::cap::cap_token{a0},
+                    zxfoundation::sys::cap::cap_rights::admin);
+                if (!result) {
+                    perr("dispatch: call {}/{} — admin cap validation failed",
+                         static_cast<u32>(ns), op);
+                    return false;
+                }
+                return true;
+            }
+
+            case check::domain_map: {
+                auto result = zxfoundation::sys::cap::cap_validate_generic(
+                    zxfoundation::sys::cap::cap_token{a0},
+                    zxfoundation::sys::cap::cap_rights::map);
+                if (!result) {
+                    perr("dispatch: call {}/{} — domain_map cap validation failed",
+                         static_cast<u32>(ns), op);
+                    return false;
+                }
+                return true;
+            }
+            }
+        }
+
+        // Entry not found in table — reject.
+        perr("dispatch: call {}/{} — no auth entry, rejecting",
+             static_cast<u32>(ns), op);
+        return false;
+    }
+
+} // namespace _dispatch_internal
 
 export {
 
@@ -32,6 +170,10 @@ namespace zxfoundation::gate::dispatch {
     ///
     /// Called from the C-linkage do_nucleus_dispatch() which is reached
     /// from the PC entry assembly stub.
+    ///
+    /// Every call is subject to capability-based authorization: the
+    /// validate_call() function checks a0 against the static auth table
+    /// before any handler is invoked.
     ///
     /// @param call_nr  Packed: (namespace << 5) | operation.
     /// @param a0-a4    Arguments from r3-r7.
@@ -44,6 +186,11 @@ namespace zxfoundation::gate::dispatch {
         const auto ns = static_cast<call_namespace>(
             (call_nr >> 5) & 0x7U);
         const u32 op = call_nr & 0x1FU;
+
+        // ── Capability enforcement chokepoint ────────────────
+        if (!_dispatch_internal::validate_call(ns, op, a0)) {
+            return DISPATCH_ERROR_SENTINEL;
+        }
 
         switch (ns) {
         case call_namespace::dom:

@@ -1,14 +1,15 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/sched/switch_to.S
 /// @brief Context switch — save/restore callee-saved GPRs and swap kernel stacks.
+///
+/// The scheduler now dispatches strands (not domains).  __switch_to_asm
+/// receives (strand* prev, strand* next) in %r2, %r3.
 
 #include <arch/s390x/cpu/lowcore.h>
 
-#define DOMAIN_STRAND       48
-#define STRAND_KSTACK_TOP   112
-#define STRAND_KSP          120
-#define DOMAIN_KSP          (DOMAIN_STRAND + STRAND_KSP)
-#define DOMAIN_KSTACK_TOP   (DOMAIN_STRAND + STRAND_KSTACK_TOP)
+#define STRAND_OWNER        24   ///< strand::owner (void* — back-pointer to domain)
+#define STRAND_KSTACK_TOP   112  ///< strand::kstack_top (verified by static_assert)
+#define STRAND_KSP          120  ///< strand::ksp        (verified by static_assert)
 #define SF_GPRS             48
 #define LC_CURRENT_DOMAIN   0x0340
 
@@ -17,26 +18,34 @@
     .type   __switch_to_asm, @function
     .align  8
 
-/// @brief Low-level context switch.
-///   %r2 = domain* prev
-///   %r3 = domain* next
+/// @brief Low-level context switch (strand-aware).
+///   %r2 = strand* prev
+///   %r3 = strand* next
 /// Returns:
-///   %r2 = prev (unchanged, for the caller to finish_domain_switch)
+///   %r2 = prev's owning domain (for the caller to finish domain teardown)
 __switch_to_asm:
-    stmg    %r6, %r15, SF_GPRS(%r15)        
+    stmg    %r6, %r15, SF_GPRS(%r15)
     aghi    %r15, -128
     vstm    %v8, %v15, 0(%r15)
-    stg     %r15, DOMAIN_KSP(%r2)
+    stg     %r15, STRAND_KSP(%r2)           // save prev's ksp (strand.ksp)
 
-    stg     %r3, LC_CURRENT_DOMAIN(0)       
-    lg      %r4, DOMAIN_KSTACK_TOP(%r3)     
-    stg     %r4, LC_KERNEL_STACK(0)
+    // Update lowcore: current_domain = next->owner
+    lg      %r4, STRAND_OWNER(%r3)
+    stg     %r4, LC_CURRENT_DOMAIN(0)
 
-    lg      %r15, DOMAIN_KSP(%r3)           
+    // Update kernel stack top in lowcore from next strand
+    lg      %r5, STRAND_KSTACK_TOP(%r3)
+    stg     %r5, LC_KERNEL_STACK(0)
+
+    // Load next's kernel stack pointer
+    lg      %r15, STRAND_KSP(%r3)
+
+    // Return the PREVIOUS domain pointer (prev->owner) in %r2
+    lg      %r2, STRAND_OWNER(%r2)
 
     vlm     %v8, %v15, 0(%r15)
     aghi    %r15, 128
-    lmg     %r6, %r15, SF_GPRS(%r15)        
+    lmg     %r6, %r15, SF_GPRS(%r15)
     br      %r14
 
     .size   __switch_to_asm, . - __switch_to_asm
@@ -54,7 +63,7 @@ domain_trampoline:
     aghi    %r15, -160                   // grow stack
     stg     %r1, 0(%r15)                 // store back-chain
 
-    stosm   160(%r15), 0x03              // use padding byte in frame
+    stosm   160(%r15), 0x03
 
     lgr     %r2, %r6
     basr    %r14, %r7

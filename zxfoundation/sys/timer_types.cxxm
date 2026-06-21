@@ -18,6 +18,11 @@ namespace zxfoundation::sys::timer {
     /// @brief EXT interrupt code for the clock comparator.
     constexpr u16 EXT_CODE_CLK_COMP = 0x1004;
 
+    /// @brief EXT interrupt code for the CPU timer (PoP §6-12).
+    /// The CPU timer requests this interruption whenever its value is
+    /// negative (bit 0 = 1).
+    constexpr u16 EXT_CODE_CPU_TIMER = 0x1005;
+
     /// @brief Tick interval: 10 ms expressed in TOD clock units.
     ///
     /// The s390x TOD clock increments at 2^12 (4096) units per microsecond.

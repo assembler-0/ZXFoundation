@@ -19,22 +19,18 @@ namespace zxfoundation::sched::fair {
     using zxfoundation::domain::sched_class;
     using zxfoundation::domain::strand;
 
-    /// @brief Default time slice in TOD units (~10 ms).
     inline constexpr u64 EEVDF_DEFAULT_SLICE = 40'960'000ULL;
 
-    /// @brief Convert an rb_node* back to its containing domain.
-    [[nodiscard]] inline auto rb_node_to_domain(lib::rb_node* node) noexcept -> domain* {
-        auto* s = lib::container_of<strand, lib::rb_node, &strand::sched_rb>(node);
-        return static_cast<domain*>(s->owner);
+    [[nodiscard]] inline auto rb_node_to_strand(lib::rb_node* node) noexcept -> strand* {
+        return lib::container_of<strand, lib::rb_node, &strand::sched_rb>(node);
     }
 
-    /// @brief Enqueue a domain into the EEVDF fair tree.
-    inline auto enqueue(run_queue& rq, domain& d) noexcept -> void {
-        if (d.primary_strand.sched.deadline == 0) {
-            d.primary_strand.sched.vruntime = rq.min_vruntime;
-            d.primary_strand.sched.slice    = EEVDF_DEFAULT_SLICE;
-            d.primary_strand.sched.deadline = d.primary_strand.sched.vruntime +
-                (d.primary_strand.sched.slice * 1024 / d.primary_strand.sched.weight);
+    inline auto enqueue(run_queue& rq, strand& s) noexcept -> void {
+        if (s.sched.deadline == 0) {
+            s.sched.vruntime = rq.min_vruntime;
+            s.sched.slice    = EEVDF_DEFAULT_SLICE;
+            s.sched.deadline = s.sched.vruntime +
+                (s.sched.slice * 1024 / s.sched.weight);
         }
 
         lib::rb_node** link = &rq.fair_tree.root.node;
@@ -43,74 +39,71 @@ namespace zxfoundation::sched::fair {
 
         while (*link) {
             parent = *link;
-            auto* existing = rb_node_to_domain(parent);
-            if (d.primary_strand.sched.deadline < existing->primary_strand.sched.deadline) {
+            auto* existing = rb_node_to_strand(parent);
+            if (s.sched.deadline < existing->sched.deadline) {
                 link = &parent->left;
             } else {
                 link = &parent->right;
                 leftmost = false;
             }
         }
-        lib::rb_link_node(&d.primary_strand.sched_rb, parent, link);
-        lib::rb_insert_color_cached(&d.primary_strand.sched_rb, rq.fair_tree, leftmost);
+        lib::rb_link_node(&s.sched_rb, parent, link);
+        lib::rb_insert_color_cached(&s.sched_rb, rq.fair_tree, leftmost);
 
-        d.primary_strand.on_rq = true;
+        s.on_rq = true;
         ++rq.nr_running;
     }
 
-    /// @brief Dequeue a domain from the EEVDF fair tree.
-    inline auto dequeue(run_queue& rq, domain& d) noexcept -> void {
-        if (!d.primary_strand.on_rq) return;
-        lib::rb_erase_cached(&d.primary_strand.sched_rb, rq.fair_tree);
-        d.primary_strand.on_rq = false;
+    inline auto dequeue(run_queue& rq, strand& s) noexcept -> void {
+        if (!s.on_rq) return;
+        lib::rb_erase_cached(&s.sched_rb, rq.fair_tree);
+        s.on_rq = false;
         --rq.nr_running;
     }
 
-    /// @brief Pick the next eligible domain (earliest eligible deadline).
-    [[nodiscard]] inline auto pick_next(run_queue& rq) noexcept -> domain* {
+    [[nodiscard]] inline auto pick_next(run_queue& rq) noexcept -> strand* {
         auto* rb_left = rq.fair_tree.leftmost;
         if (!rb_left) return nullptr;
 
         auto* node = rb_left;
         while (node) {
-            auto* d = rb_node_to_domain(node);
-            d->primary_strand.sched.lag = static_cast<i64>(rq.min_vruntime) -
-                        static_cast<i64>(d->primary_strand.sched.vruntime);
+            auto* s = rb_node_to_strand(node);
+            s->sched.lag = static_cast<i64>(rq.min_vruntime) -
+                        static_cast<i64>(s->sched.vruntime);
 
-            if (d->primary_strand.sched.lag >= 0) {
-                return d;
+            if (s->sched.lag >= 0) {
+                return s;
             }
             node = lib::rb_next(node);
         }
 
-        return rb_node_to_domain(rb_left);
+        return rb_node_to_strand(rb_left);
     }
 
-    /// @brief Per-tick accounting: advance vruntime, check deadline.
-    inline auto tick(run_queue& rq, domain& d) noexcept -> void {
+    inline auto tick(run_queue& rq, strand& s) noexcept -> void {
         const u64 delta = EEVDF_DEFAULT_SLICE;
-        const u64 weighted_delta = (delta * 1024) / d.primary_strand.sched.weight;
-        d.primary_strand.sched.vruntime += weighted_delta;
+        const u64 weighted_delta = (delta * 1024) / s.sched.weight;
+        s.sched.vruntime += weighted_delta;
 
-        if (d.primary_strand.sched.vruntime > rq.min_vruntime)
-            rq.min_vruntime = d.primary_strand.sched.vruntime;
+        if (s.sched.vruntime > rq.min_vruntime)
+            rq.min_vruntime = s.sched.vruntime;
 
-        if (d.primary_strand.sched.vruntime >= d.primary_strand.sched.deadline) {
-            d.flags |= domain_flags::need_resched;
-            d.primary_strand.sched.deadline = d.primary_strand.sched.vruntime +
-                (d.primary_strand.sched.slice * 1024 / d.primary_strand.sched.weight);
+        if (s.sched.vruntime >= s.sched.deadline) {
+            auto* owner = static_cast<domain*>(s.owner);
+            owner->flags |= domain_flags::need_resched;
+            s.sched.deadline = s.sched.vruntime +
+                (s.sched.slice * 1024 / s.sched.weight);
         }
     }
 
-    /// @brief Check if a waking domain should preempt the current one.
-    inline auto preempt(run_queue& rq, domain& waking) noexcept -> void {
+    inline auto preempt(run_queue& rq, strand& waking) noexcept -> void {
         if (!rq.curr) return;
-        if (waking.primary_strand.sched.deadline < rq.curr->primary_strand.sched.deadline) {
-            rq.curr->flags |= domain_flags::need_resched;
+        if (waking.sched.deadline < rq.curr->sched.deadline) {
+            auto* owner = static_cast<domain*>(rq.curr->owner);
+            owner->flags |= domain_flags::need_resched;
         }
     }
 
-    /// @brief The EEVDF scheduling class vtable.
     inline constexpr sched_class the_class{
         enqueue, dequeue, pick_next, tick, preempt
     };

@@ -19,6 +19,12 @@ extern "C" {
 
     /// @brief Assembly trampoline for first entry into a new domain.
     [[noreturn]] auto domain_trampoline() noexcept -> void;
+
+    /// @brief Low-level context switch: (strand* prev, strand* next) -> domain* (prev->owner).
+    auto __switch_to_asm(
+        zxfoundation::domain::strand* prev,
+        zxfoundation::domain::strand* next
+    ) noexcept -> zxfoundation::domain::domain*;
 }
 
 export {
@@ -26,16 +32,18 @@ export {
 namespace zxfoundation::sched::domain_ctx {
 
     using zxfoundation::domain::domain;
+    using zxfoundation::domain::strand;
 
     /// @brief Domain entry function type.
     using domain_entry_fn = auto (*)(void*) noexcept -> void;
 
-    /// @brief Set up the initial kernel stack frame for a new domain so that
-    /// @param d      Domain with valid kstack_top.
-    /// @param entry  Function to run when the domain is first scheduled.
+    /// @brief Set up the initial kernel stack frame for a strand so that
+    ///        the first context switch enters the given entry function.
+    /// @param s      Target strand with valid kstack_top.
+    /// @param entry  Function to run when the strand is first scheduled.
     /// @param arg    Argument passed in r6 to the entry function.
-    auto setup_domain_context(
-        domain* d,
+    auto setup_strand_context(
+        strand* s,
         domain_entry_fn entry,
         void* arg = nullptr
     ) noexcept -> void {
@@ -43,7 +51,7 @@ namespace zxfoundation::sched::domain_ctx {
         static constexpr u64 SF_GPRS    = 48;
         static constexpr u64 SWITCH_VR_SIZE = 128;
 
-        const u64 sp = d->primary_strand.kstack_top - FRAME_SIZE;
+        const u64 sp = s->kstack_top - FRAME_SIZE;
         const u64 ksp = sp - SWITCH_VR_SIZE;
 
         lib::memset(reinterpret_cast<void*>(ksp), 0, FRAME_SIZE + SWITCH_VR_SIZE);
@@ -54,36 +62,52 @@ namespace zxfoundation::sched::domain_ctx {
         frame[8] = reinterpret_cast<u64>(&domain_trampoline);     // r14 = trampoline
         frame[9] = sp;                                            // r15 = stack pointer
 
-        d->primary_strand.ksp = ksp;
+        s->ksp = ksp;
+    }
+
+    /// @brief Convenience wrapper — set up the primary strand of a domain.
+    auto setup_domain_context(
+        domain* d,
+        domain_entry_fn entry,
+        void* arg = nullptr
+    ) noexcept -> void {
+        setup_strand_context(&d->primary_strand, entry, arg);
     }
 
     /// @brief Enter user mode for a domain — first-time entry path.
-    /// @param d  Domain with valid uregs and a valid asce.
-    [[noreturn]] auto domain_enter_user(domain* d) noexcept -> void {
+    /// @param s  Strand with valid uregs; domain accessed via s->owner.
+    [[noreturn]] auto domain_enter_user(strand* s) noexcept -> void {
+        auto* d = static_cast<domain*>(s->owner);
         auto* lc = arch::s390x::cpu::lowcore::get_current();
 
         lc->user_asce = d->asce.val;
         const u64 user_asce = d->asce.val;
         arch::s390x::cpu::processor::ctl_load<1, 1>(user_asce);
 
-        d->primary_strand.uregs.psw_mask |=
+        s->uregs.psw_mask |=
             (static_cast<u64>(d->storage_key) << arch::s390x::cpu::psw::PSW_KEY_SHIFT);
 
         static constexpr u64 RET_FRAME_SIZE = 0x90;
-        const u64 frame_base = d->primary_strand.kstack_top - RET_FRAME_SIZE;
+        const u64 frame_base = s->kstack_top - RET_FRAME_SIZE;
         auto* gprs = reinterpret_cast<u64*>(frame_base);
         auto* psw  = reinterpret_cast<u64*>(frame_base + 0x80);
 
         for (u32 i = 0; i < 16; ++i)
-            gprs[i] = d->primary_strand.uregs.gprs[i];
+            gprs[i] = s->uregs.gprs[i];
 
-        psw[0] = d->primary_strand.uregs.psw_mask;
-        psw[1] = d->primary_strand.uregs.psw_addr;
+        psw[0] = s->uregs.psw_mask;
+        psw[1] = s->uregs.psw_addr;
 
         lc->current_domain = reinterpret_cast<u64>(d);
-        lc->kernel_stack   = d->primary_strand.kstack_top;
+        lc->kernel_stack   = s->kstack_top;
+        lc->percpu.current_strand = reinterpret_cast<u64>(s);
 
-        __domain_enter_user_asm(frame_base, &d->primary_strand.uregs);
+        __domain_enter_user_asm(frame_base, &s->uregs);
+    }
+
+    /// @brief Overload taking domain* for backward compatibility.
+    [[noreturn]] inline auto domain_enter_user(domain* d) noexcept -> void {
+        domain_enter_user(&d->primary_strand);
     }
 
 } // namespace zxfoundation::sched::domain_ctx

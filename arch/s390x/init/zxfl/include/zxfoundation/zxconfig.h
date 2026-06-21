@@ -13,7 +13,7 @@
 #define CONFIG_ZX_BUILD_DT_COMPILER  __DATE__ " " __TIME__
 
 /// @brief host build platform
-#define CONFIG_ZX_BUILD_PLATFORM    "Linux@7.0.12-zen1-1-zen::x86_64"
+#define CONFIG_ZX_BUILD_PLATFORM    "Darwin@25.5.0::x86_64"
 
 /// @brief compiler id
 #define CONFIG_ZX_COMPILER_ID       __VERSION__

@@ -7,7 +7,7 @@
     percpu_types.cxxm
     percpu.cxxm
     processor_types.cxxm
-    processor.cxxm
+    processor.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) ]
     psw_types.cxxm
     psw.cxxm
     sigp_types.cxxm
@@ -21,6 +21,7 @@
     stsi_types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) ]
     stsi.cxxm
     clkcomp.cxxm
+    cputimer.cxxm
     skey.cxxm
     ar.cxxm
     linkage.cxxm

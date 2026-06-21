@@ -12,6 +12,7 @@ import zxfoundation.sys.syschk;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
+import arch.s390x.trap.trap;
 import lib.error;
 
 namespace _internal {
@@ -21,34 +22,38 @@ namespace _internal {
     using namespace zxfoundation::sys::printk;
     using namespace arch::s390x::cpu;
 
+    /// @brief Arm / re-ping the hypervisor watchdog.
+    static auto harddog_ping() noexcept -> bool {
+        arch::s390x::trap::set_pgm_fixup(true);
+        i32 rc = processor::diag288(processor::WDT_FUNC_CHANGE, processor::WDT_DEFAULT_TIMEOUT,
+                                         processor::LPARWDT_RESTART, 0);
+        if (rc != 0) {
+            rc = processor::diag288(processor::WDT_FUNC_INIT, processor::WDT_DEFAULT_TIMEOUT,
+                              processor::LPARWDT_RESTART, 0);
+        }
+        arch::s390x::trap::set_pgm_fixup(false);
+        return rc == 0;
+    }
+
     constexpr u16 WATCHDOG_INTERVAL_SECONDS = 5;
 
-    /// @brief Watchdog check interval: 5 seconds in TOD units.
-    /// TOD runs at 4096 ticks/µs → 5s = 5 × 4096 × 1'000'000.
-    constexpr u64 WATCHDOG_INTERVAL_TOD = WATCHDOG_INTERVAL_SECONDS * 4096ULL * 1'000'000ULL;
+    constexpr u64 WATCHDOG_INTERVAL_TOD =
+        WATCHDOG_INTERVAL_SECONDS * 4096ULL * 1'000'000ULL;
 
-    /// @brief Number of consecutive missed heartbeats before warning.
     constexpr u32 WATCHDOG_MISS_THRESHOLD = 2;
 
-    /// @brief Number of consecutive warnings before fatal panic.
     constexpr u32 WATCHDOG_FATAL_WARNINGS = 3;
 
-    /// @brief Total misses that trigger a fatal panic.
     constexpr u32 WATCHDOG_FATAL_THRESHOLD =
         WATCHDOG_MISS_THRESHOLD + WATCHDOG_FATAL_WARNINGS;
 
-    /// @brief Last-observed heartbeat snapshot per CPU.
+    static bool g_harddog_armed = false;
     static u64 g_last_heartbeat[CONFIG_ZX_MAX_CPUS]{};
-
-    /// @brief Consecutive-miss counter per CPU.
     static u32 g_miss_count[CONFIG_ZX_MAX_CPUS]{};
-
-    /// @brief Timer backing the periodic watchdog check.
     static kernel_timer g_watchdog_timer{};
 
-    /// @brief Watchdog timer callback — scans all online APs.
+    /// @brief Softdog timer callback — scans all online APs, pings harddog.
     auto watchdog_check(void*) noexcept -> void {
-
         for (u32 cpu = 1; cpu < CONFIG_ZX_MAX_CPUS; ++cpu) {
             auto* pcp = lowcore::cpu_percpu(static_cast<u16>(cpu));
             if (!pcp) continue;
@@ -67,7 +72,7 @@ namespace _internal {
                         g_miss_count[cpu] * WATCHDOG_INTERVAL_SECONDS);
                 }
                 if (g_miss_count[cpu] >= WATCHDOG_MISS_THRESHOLD) {
-                    palert("watchdog: processor {} appears stuck "
+                    palert("watchdog: processor {} stall suspected "
                           "(heartbeat={}, misses={}/{})",
                         cpu, hb, g_miss_count[cpu],
                         WATCHDOG_FATAL_THRESHOLD);
@@ -77,6 +82,10 @@ namespace _internal {
                 g_last_heartbeat[cpu] = hb;
             }
         }
+
+        if (g_harddog_armed) {
+            harddog_ping();
+        }
     }
 
 } // namespace _internal
@@ -85,22 +94,34 @@ export {
 
 namespace zxfoundation::sys::watchdog {
 
-    /// @brief Initialize the SMP watchdog subsystem.
     auto watchdog_init() noexcept -> void {
         using namespace _internal;
         using namespace zxfoundation::sys::timer;
         using namespace zxfoundation::sys::printk;
 
+        arch::s390x::trap::set_pgm_fixup(true);
+        i32 rc = processor::diag288(processor::WDT_FUNC_INIT, processor::WDT_DEFAULT_TIMEOUT,
+                              processor::LPARWDT_RESTART, 0);
+        arch::s390x::trap::set_pgm_fixup(false);
+        if (rc != 0) {
+            palert("watchdog: DIAG 0x288 not available (rc={})",
+                     static_cast<i32>(rc));
+        } else {
+            g_harddog_armed = true;
+            pinfo("watchdog: DIAG 0x288 armed (timeout={}s)",
+                  processor::WDT_DEFAULT_TIMEOUT);
+        }
+
         auto& t = g_watchdog_timer;
-        t.deadline_tod = arch::s390x::cpu::processor::stck() + WATCHDOG_INTERVAL_TOD;
+        t.deadline_tod = processor::stck() + WATCHDOG_INTERVAL_TOD;
         t.interval_tod = WATCHDOG_INTERVAL_TOD;
         t.callback     = watchdog_check;
         t.data         = nullptr;
         t.mode         = timer_mode::periodic;
         (void)timer_add(t);
 
-        pinfo("watchdog: initialized (interval=5s, threshold={})",
-            WATCHDOG_MISS_THRESHOLD);
+        pinfo("watchdog: softdog initialized (interval={}s, miss_threshold={})",
+            WATCHDOG_INTERVAL_SECONDS, WATCHDOG_FATAL_THRESHOLD);
     }
 
 } // namespace zxfoundation::sys::watchdog

@@ -6,9 +6,9 @@
 #include <arch/s390x/init/zxfl/psw.h>
 #include <arch/s390x/cpu/lowcore.h>
 
-#define LC_IRQ_NESTING  0x0430
+#define LC_IRQ_NESTING  0x0438
 #define LC_CURRENT_DOMAIN 0x0340
-#define LC_PREEMPT_COUNT 0x0428
+#define LC_PREEMPT_COUNT 0x0430
 
 #define DOMAIN_FLAGS_OFF  32  /* domain.flags (after kobject[24] + name[8]) */
 
@@ -119,16 +119,22 @@ trap_mcck_entry:
     .type   pc_gate_entry, @function
     .align  8
 pc_gate_entry:
+    // ── Nesting-aware stack allocation ──────────────────────────────
+    // If already in kernel context (IRQ_NESTING > 0), keep current r15;
+    // otherwise load the dedicated kernel stack.
+    icm     %r1, 15, LC_IRQ_NESTING(0)
+    jnz     .Lpc_nested
     lg      %r15, LC_KERNEL_STACK(0)
-    aghi    %r15, -(160 + IRQ_FRAME_SIZE)  // allocate full frame
+    j       .Lpc_alloc_frame
+.Lpc_nested:
+    // Already nested: continue using current stack pointer.
+.Lpc_alloc_frame:
+    aghi    %r15, -(160 + IRQ_FRAME_SIZE)
 
-    // Save GPRs
+    // Save GPRs, ARs, FPC, vector registers
     stmg    %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
-    // Save ARs
     stam    %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
-    // Save FPC
     stfpc   (160 + IRQ_FRAME_FPC)(%r15)
-    // Save vector registers
     vstm    %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
     vstm    %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
 
@@ -146,6 +152,30 @@ pc_gate_entry:
 
     brasl   %r14, do_nucleus_dispatch
 
+    // ── Preemption check ───────────────────────────────────────────
+    // PC calls always return to problem state (user mode), so the
+    // saved-PSW problem-state check is omitted.  We only check the
+    // preempt count and the need_resched flag on the current domain.
+    l       %r1, LC_PREEMPT_COUNT(0)
+    ltr     %r1, %r1
+    jnz     .Lpc_no_preempt
+
+    lg      %r1, LC_CURRENT_DOMAIN(0)
+    ltgr    %r1, %r1
+    jz      .Lpc_no_preempt
+    l       %r1, DOMAIN_FLAGS_OFF(%r1)
+    tmll    %r1, TIF_NEED_RESCHED
+    jz      .Lpc_no_preempt
+
+    // Switch to a clean kernel stack frame and call schedule().
+    lg      %r1, LC_KERNEL_STACK(0)
+    aghi    %r1, -160
+    stg     %r15, 0(%r1)            // backchain = current frame pointer
+    lgr     %r15, %r1
+    brasl   %r14, _ZN12zxfoundation5schedW12zxfoundationW5schedW5sched8scheduleEv
+    lg      %r15, 0(%r15)           // restore original frame pointer
+
+.Lpc_no_preempt:
     // Restore state (skip r14, r15 — don't overwrite current SP)
     vlm     %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
     vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)

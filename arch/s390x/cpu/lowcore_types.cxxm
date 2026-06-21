@@ -32,7 +32,7 @@ namespace arch::s390x::cpu::lowcore {
 
     constexpr u64 LC_PERCPU_OFFSET  = 0x0400UL; ///< zx_lowcore::percpu
     constexpr u64 LC_CPU_ID_OFFSET  = 0x0408UL; ///< percpu::cpu_id
-    constexpr u64 LC_IRQ_NESTING    = 0x0430UL; ///< percpu::irq_nesting — used by entry.S
+    constexpr u64 LC_IRQ_NESTING    = 0x0438UL; ///< percpu::irq_nesting — used by entry.S
 
     /// @brief z/Architecture 8 KB prefix (lowcore) structure.
     struct alignas(8192) zx_lowcore {
@@ -219,8 +219,8 @@ namespace arch::s390x::cpu::lowcore {
         __builtin_offsetof(percpu::s390x_percpu_data, irq_nesting) == LC_IRQ_NESTING,
         "LC_IRQ_NESTING does not match irq_nesting field; update LC_IRQ_NESTING");
 
-    /// @brief LC_PREEMPT_COUNT = 0x0428 — used by entry.S CHECK_PREEMPT macro.
-    constexpr u64 LC_PREEMPT_COUNT = 0x0428UL;
+    /// @brief LC_PREEMPT_COUNT = 0x0430 — used by entry.S CHECK_PREEMPT macro.
+    constexpr u64 LC_PREEMPT_COUNT = 0x0430UL;
 
     static_assert(
         __builtin_offsetof(zx_lowcore, percpu) +

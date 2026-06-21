@@ -109,6 +109,9 @@ namespace zxfoundation::domain {
         // ── List node for global domain list
         lib::list_node                                                  domain_list{};
 
+        // ── Strand list (head of doubly-linked list of secondary strands)
+        lib::list_head                                                  strands{};
+
         // ── Per-domain VM state
         memory::vm::vm_space                                            vm_space{};
 
@@ -142,8 +145,8 @@ namespace zxfoundation::domain {
         locking::qspinlock::qspinlock   lock{};          ///< Protects all run_queue mutations.
         u32                             nr_running{0};   ///< Total runnable strands on this CPU.
 
-        domain*                         curr{nullptr};   ///< Currently running domain.
-        domain*                         idle{nullptr};   ///< This CPU's idle domain.
+        strand*                         curr{nullptr};   ///< Currently running strand.
+        strand*                         idle_strand{nullptr}; ///< This CPU's idle strand.
 
         /// @brief EEVDF fair scheduling tree (cached leftmost = earliest deadline).
         lib::rb_root_cached             fair_tree{};
@@ -169,11 +172,11 @@ namespace zxfoundation::domain {
 
     /// @brief Scheduler class — vtable of typed function pointers.
     struct sched_class {
-        void    (*enqueue_domain)(run_queue& rq, domain& d);    ///< Add domain to the run queue.
-        void    (*dequeue_domain)(run_queue& rq, domain& d);    ///< Remove domain from the run queue.
-        domain* (*pick_next_domain)(run_queue& rq);              ///< Select the next domain to run.
-        void    (*domain_tick)(run_queue& rq, domain& d);        ///< Called on each timer tick.
-        void    (*check_preempt)(run_queue& rq, domain& d);     ///< Check if d should preempt curr.
+        void    (*enqueue_strand)(run_queue& rq, strand& s);    ///< Add strand to the run queue.
+        void    (*dequeue_strand)(run_queue& rq, strand& s);    ///< Remove strand from the run queue.
+        strand* (*pick_next_strand)(run_queue& rq);              ///< Select the next strand to run.
+        void    (*strand_tick)(run_queue& rq, strand& s);        ///< Called on each timer tick.
+        void    (*check_preempt)(run_queue& rq, strand& s);     ///< Check if s should preempt curr.
     };
 
 } // namespace zxfoundation::domain

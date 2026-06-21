@@ -1,0 +1,45 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/cputimer.cxxm
+/// @brief z/Architecture CPU Timer — raw hardware accessors (SPT / STPT).
+///
+/// The CPU Timer (PoP §4-42, §6-12) is a per-CPU 64-bit decrementing
+/// counter.  Its format matches TOD-clock bits 0-63 except bit 0 is a
+/// sign.  The timer decrements at the TOD-clock rate (effectively 4096
+/// ticks/µs).  When the value is negative (bit 0 = 1), an external
+/// interrupt (code 0x1005) is requested (subject to CR0 bit 53).
+///
+/// The interrupt request is level-sensitive — it persists as long as
+/// the value remains negative.  The handler must set the timer to a
+/// non-negative value (via SPT) to clear the condition.
+///
+/// Use cases:
+///   - Virtual-time accounting (store on context switch, restore on
+///     resume, measure elapsed CPU time per task).
+///   - Profiling / any per-CPU hardware-backed timer.
+
+export module arch.s390x.cpu.cputimer;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::cputimer {
+
+    /// @brief Set the CPU Timer to a decrement value (SPT instruction).
+    /// @param val  64-bit decrement value.  The timer counts down in
+    ///             TOD-clock units (4096 ticks/µs).  An external interrupt
+    ///             fires when the value wraps from 1 to 0.
+    inline auto timer_set(u64 val) noexcept -> void {
+        __asm__ volatile ("spt %[v]\n\t" :: [v] "Q"(val) : "memory");
+    }
+
+    /// @brief Read the current CPU Timer value (STPT instruction).
+    /// @return  Current 64-bit decrement counter.
+    [[nodiscard]] inline auto timer_get() noexcept -> u64 {
+        u64 v = 0;
+        __asm__ volatile ("stpt %[v]\n\t" : [v] "=Q"(v) :: "memory");
+        return v;
+    }
+
+} // namespace arch::s390x::cpu::cputimer
+
+} // end export

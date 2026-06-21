@@ -22,6 +22,9 @@ import zxfoundation.sys.transaction;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.slub;
+import zxfoundation.memory.slub_typed;
+import zxfoundation.memory.slub_types;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 import zxfoundation.sys.printk;
@@ -36,6 +39,8 @@ import arch.s390x.cpu.irq;
 import lib.error;
 import lib.expected;
 import lib.string;
+import lib.list;
+import lib.util;
 
 // ── Internal state ──────────────────────────────────────────────────────────
 
@@ -85,6 +90,59 @@ namespace zxfoundation::domain::_internal {
         if (key >= SKEY_USER_BASE && key <= SKEY_USER_MAX) {
             g_key_used[key] = false;
         }
+    }
+
+    // ── Strand slab cache ────────────────────────────────────────────────
+
+    static memory::slub::typed_slab_cache<strand> g_strand_cache{};
+
+    // ── Strand creation ────────────────────────────────────────────────
+
+    /// @brief Allocate and initialize a secondary strand for a domain.
+    /// @param owner  The domain that will own this strand.
+    /// @param cpu    CPU affinity (0 for any).
+    /// @return Pointer to the created strand, or kernel_error.
+    [[nodiscard]] auto strand_create_impl(
+        domain* owner, u16 cpu
+    ) noexcept -> lib::expected<strand*, lib::kernel_error> {
+        namespace pmm  = zxfoundation::memory::pmm;
+        namespace hhdm = zxfoundation::memory::hhdm;
+
+        auto result = g_strand_cache.alloc();
+        if (!result) return lib::unexpected(result.error());
+
+        strand* s = *result;
+        ::new(static_cast<void*>(s)) strand{};
+
+        s->owner = owner;
+        s->state = strand_state::runnable;
+        s->cpu   = cpu;
+        s->on_rq = false;
+
+        // Allocate kernel stack (same size as domain stacks).
+        auto stack_r = pmm::alloc(
+            DOMAIN_KERNEL_STACK_ORDER,
+            pmm::zone::dma31,
+            pmm::purpose::stack,
+            pmm::page_init::zeroed);
+        if (!stack_r) {
+            g_strand_cache.dealloc(s);
+            return lib::unexpected(stack_r.error());
+        }
+
+        const u64 stack_phys = stack_r->phys_base;
+        const u64 stack_virt = hhdm::phys_to_virt(stack_phys);
+        s->kstack_base = stack_virt;
+        s->kstack_top  = stack_virt + DOMAIN_KERNEL_STACK_SIZE;
+        s->ksp         = s->kstack_top;
+
+        // Link into the domain's strand list.
+        owner->strands.push_back(s->strand_list);
+
+        sys::printk::pdebug("strand: created id={} owner={} cpu={}",
+                   s->ko.id, owner->ko.id, static_cast<u32>(cpu));
+
+        return s;
     }
 
     // ── Domain creation transaction ─────────────────────────────────────
@@ -220,6 +278,9 @@ namespace zxfoundation::domain::_internal {
             d->gate_count   = 0;
             d->portal_count = 0;
 
+            // Initialize the strand list (self-linked sentinel).
+            ::new(static_cast<void*>(&d->strands)) lib::list_head{};
+
             // Initialize the per-domain virtual memory space.
             zxfoundation::memory::vm::vm_space_init(d->vm_space);
 
@@ -256,6 +317,35 @@ namespace zxfoundation::domain {
 
         sys::printk::pinfo("domain: subsystem initialized, max_domains={}\n",
                            MAX_DOMAINS);
+    }
+
+    /// @brief Initialize the strand slab cache.
+    auto strand_init() noexcept -> void {
+        using namespace _internal;
+        using namespace zxfoundation::memory::slub;
+
+        auto result = typed_slab_cache<strand>::create(
+            "strand", slub_flags::none);
+        if (!result)
+            sys::syschk::syschk_fatal(
+                result.error(),
+                "domain: failed to create strand slab cache");
+
+        g_strand_cache = *result;
+        sys::printk::pinfo("domain: strand slab cache initialized");
+    }
+
+    /// @brief Create a secondary strand within a domain.
+    /// @param owner Domain that will own the strand.
+    /// @param cpu   CPU affinity (0 for any, or specific CPU).
+    /// @return Pointer to the created strand, or kernel_error.
+    [[nodiscard]] auto strand_create(
+        domain* owner, u16 cpu = 0
+    ) noexcept -> lib::expected<strand*, lib::kernel_error> {
+        using namespace _internal;
+        if (!owner) return lib::unexpected(
+            lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        return strand_create_impl(owner, cpu);
     }
 
     /// @brief Create a new domain.
@@ -346,6 +436,20 @@ namespace zxfoundation::domain {
             mmu::table_free<mmu::dat_level::region_1>(root_tbl);
         }
 
+        // Free secondary strands (kernel stacks + slab objects).
+        while (!d->strands.empty()) {
+            auto* node = d->strands.pop_front();
+            auto* s = lib::container_of<strand, lib::list_node, &strand::strand_list>(node);
+            if (s->kstack_base != 0) {
+                const u64 stack_phys = hhdm::virt_to_phys(s->kstack_base);
+                pmm::folio_active stack_folio{
+                    stack_phys, DOMAIN_KERNEL_STACK_ORDER,
+                    pmm::purpose::stack, pmm::zone::dma31};
+                pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
+            }
+            g_strand_cache.dealloc(s);
+        }
+
         // Free storage key.
         free_storage_key(d->storage_key);
 
@@ -362,6 +466,9 @@ namespace zxfoundation::domain {
         d->primary_strand.cpu          = 0;
         d->gate_count   = 0;
         d->portal_count = 0;
+
+        // Re-initialize the strand list head (self-linked sentinel).
+        ::new(static_cast<void*>(&d->strands)) lib::list_head{};
 
         // Release the table slot back to the free-list.
         auto release_result = g_domain_table.release(id);

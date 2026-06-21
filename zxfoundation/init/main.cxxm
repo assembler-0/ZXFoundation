@@ -237,8 +237,10 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::rcu::rcu_init();
     zxfoundation::domain::domain_init();
+    zxfoundation::domain::strand_init();
     zxfoundation::sys::service::service_init();
     zxfoundation::gate::gate_init();
+
     zxfoundation::portal::portal_init();
     arch::s390x::cpu::aste::aste_subsystem_init();
 

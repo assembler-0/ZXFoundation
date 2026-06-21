@@ -54,12 +54,13 @@ namespace zxfoundation::gate {
     /// @brief Per-namespace operation IDs.
 
     enum class dom_op : u32 {
-        create  = 0,
-        destroy = 1,
-        exit    = 2,
-        info    = 3,
-        query   = 4,
-        _count  = 5,
+        create       = 0,
+        destroy      = 1,
+        exit         = 2,
+        info         = 3,
+        query        = 4,
+        strand_create = 5,
+        _count       = 6,
     };
 
     enum class mem_op : u32 {

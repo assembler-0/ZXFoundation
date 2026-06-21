@@ -75,6 +75,12 @@ namespace arch::s390x::cpu::lowcore {
         return reinterpret_cast<void*>(lc->current_domain);
     }
 
+    /// @brief Get the current strand pointer from percpu.
+    [[nodiscard]] inline auto current_strand_ptr() noexcept -> void* {
+        auto& pcp = this_cpu_percpu();
+        return reinterpret_cast<void*>(pcp.current_strand);
+    }
+
     [[nodiscard]] auto cpu_percpu(const u16 cpu_id) noexcept -> percpu::s390x_percpu_data* {
         zx_lowcore* lc = get_for_cpu(cpu_id);
         return lc ? &lc->percpu : nullptr;
@@ -125,6 +131,7 @@ namespace arch::s390x::cpu::lowcore {
         lc->stack_canary  = processor::stck() ^ 0xC0FFEE00FACADE42ULL;
         lc->cpu_nr        = 0;
         lc->current_domain = 0;
+        lc->percpu.current_strand = 0;
         lc->preempt_count = 0;
     }
 
@@ -164,6 +171,7 @@ namespace arch::s390x::cpu::lowcore {
         lc.percpu.preempt_count = 0;
         lc.percpu.irq_nesting   = 0;
 
+        lc.percpu.current_strand = 0;
         lc.stack_canary = processor::stck() ^ 0xC0FFEE00FACADE42ULL ^ static_cast<u64>(p.cpu_id);
         lc.cpu_nr       = static_cast<u32>(p.cpu_id);
     }

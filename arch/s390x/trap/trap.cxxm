@@ -63,6 +63,11 @@ constexpr u16 EXT_EXTERNAL_CALL      = 0x1202;
 constexpr u16 EXT_TIMING_ALERT       = 0x1406;
 constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;
 
+// ── DIAG 288 probe fixup flag ──────────────────────────────────────────
+// Set before calling processor::diag288() to catch spec exceptions when
+// the hypervisor doesn't implement DIAG 0x288.  Checked in do_pgm_check().
+static bool s_pgm_fixup_active = false;
+
 // ── MCIC (Machine-Check Interruption Code) bit definitions (PoP §7-4) ────
 constexpr u64 MCIC_SYSTEM_DAMAGE     = 1ULL << 63;  // bit 0
 constexpr u64 MCIC_INSTRUCTION_PROC  = 1ULL << 62;  // bit 1
@@ -107,13 +112,19 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
     const bool in_problem_state =
         (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
 
-    // ── Kernel-mode program checks ─────────────────────────────────────
     if (!in_problem_state) {
-        // Transaction constraint/abort — transparent to TBEGIN retry loops.
         if (pgm_code == PGM_TRANSACTION_CONSTRAINT ||
             pgm_code == PGM_TRANSACTION_ABORT) {
             return;
         }
+
+        if (pgm_code == PGM_SPECIFICATION) {
+            const u16* instr = reinterpret_cast<const u16*>(frame->psw_addr - 4);
+            if ((instr[0] & 0xFF00U) == 0x8300U && instr[1] == 0x0288U) {
+                return;
+            }
+        }
+
         // All other nucleus faults — kernel bug.
         zxfoundation::sys::stacktrace::dump_stack_from_irq(frame);
         zxfoundation::sys::syschk::syschk_fatal(
@@ -306,3 +317,15 @@ extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* f
         zxfoundation::sys::irq::IRQ_BASE_MCCK, frame,
         arch::s390x::cpu::irq::ZX_IRQ_CLASS_MCCK);
 }
+
+export {
+
+namespace arch::s390x::trap {
+
+    auto set_pgm_fixup(bool active) noexcept -> void {
+        s_pgm_fixup_active = active;
+    }
+
+} // namespace arch::s390x::trap
+
+} // end export

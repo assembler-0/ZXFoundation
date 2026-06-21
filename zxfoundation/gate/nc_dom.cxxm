@@ -5,6 +5,7 @@
 export module zxfoundation.gate.nc_dom;
 import zxfoundation.gate.gate_types;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
@@ -13,6 +14,7 @@ import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
+import zxfoundation.sched.sched;
 import lib.error;
 import lib.expected;
 import lib.string;
@@ -22,6 +24,7 @@ static constexpr u64 NC_ERROR = ~0ULL;
 using zxfoundation::domain::domain;
 using zxfoundation::domain::domain_id;
 using zxfoundation::domain::domain_flags;
+using zxfoundation::domain::strand;
 using zxfoundation::sys::cap::cap_token;
 using zxfoundation::sys::cap::cap_rights;
 using zxfoundation::sys::cap::cap_type;
@@ -127,6 +130,29 @@ namespace __dom_detail {
                (static_cast<u64>(d->primary_strand.cpu) << 32);
     }
 
+    auto nc_domain_strand_create(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        // a0 = admin capability token, a1 = cpu affinity (0 for any)
+        if (!validate_admin(cap_token{a0})) {
+            return NC_ERROR;
+        }
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u16 cpu = static_cast<u16>(a1 & 0xFFFF);
+
+        auto result = zxfoundation::domain::strand_create(d, cpu);
+        if (!result) {
+            zxfoundation::sys::printk::perr("domain_strand_create: failed");
+            return NC_ERROR;
+        }
+
+        strand* s = *result;
+        zxfoundation::sched::enqueue_strand(s);
+
+        return static_cast<u64>(s->ko.id);
+    }
+
     auto nc_domain_query(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto* self = current_domain();
         if (!self) [[unlikely]] return NC_ERROR;
@@ -171,6 +197,8 @@ namespace zxfoundation::gate::nc_dom {
             return __dom_detail::nc_domain_info(a0, a1, a2, a3, a4);
         case dom_op::query:
             return __dom_detail::nc_domain_query(a0, a1, a2, a3, a4);
+        case dom_op::strand_create:
+            return __dom_detail::nc_domain_strand_create(a0, a1, a2, a3, a4);
         default:
             zxfoundation::sys::printk::perr("dom_dispatch: unknown op {}", op);
             return NC_ERROR;
