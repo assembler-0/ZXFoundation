@@ -1,3 +1,0 @@
--x c++-module
--fmodule-output="CMakeFiles/core.zxfoundation.nucleus.pass1.dir/arch.s390x.cpu.stsi_types.pcm"
--fmodule-file="zxfoundation.base.types=CMakeFiles/core.zxfoundation.nucleus.pass1.dir/zxfoundation.base.types.pcm"
