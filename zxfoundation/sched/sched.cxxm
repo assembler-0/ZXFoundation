@@ -63,7 +63,7 @@ namespace _internal {
             }
         }
 
-        if (!busiest) return nullptr;
+        if (!busiest) return nullptr;   // local_rq.lock still held by caller
 
         local_rq.lock.unlock();
 
@@ -81,12 +81,16 @@ namespace _internal {
 
                 stolen = fair::rb_node_to_strand(last);
 
-                fair::dequeue(*busiest, *stolen);
-                stolen->cpu = local_rq.cpu_id;
+                if (stolen->cpu != busiest->cpu_id || !stolen->on_rq) [[unlikely]] {
+                    stolen = nullptr;
+                } else {
+                    fair::dequeue(*busiest, *stolen);
+                    stolen->cpu = local_rq.cpu_id;
 
-                stolen->sched.vruntime = local_rq.min_vruntime;
-                stolen->sched.deadline = stolen->sched.vruntime +
-                    (stolen->sched.slice * 1024 / stolen->sched.weight);
+                    stolen->sched.vruntime = local_rq.min_vruntime;
+                    stolen->sched.deadline = stolen->sched.vruntime +
+                        (stolen->sched.slice * 1024 / stolen->sched.weight);
+                }
             }
         }
 
@@ -241,17 +245,21 @@ namespace zxfoundation::sched {
         if (!_internal::g_sched_initialized) return;
 
         auto& rq = this_rq();
+
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         rq.lock.lock();
 
         auto* curr = rq.curr;
         if (!curr || curr == rq.idle_strand) {
             rq.lock.unlock();
+            arch::s390x::cpu::irq::irq_restore(flags);
             watchdog_heartbeat_bump();
             return;
         }
 
         fair::tick(rq, *curr);
         rq.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(flags);
 
         watchdog_heartbeat_bump();
     }

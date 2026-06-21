@@ -104,11 +104,11 @@ namespace zxfoundation::sys::watchdog {
                               processor::LPARWDT_RESTART, 0);
         arch::s390x::trap::set_pgm_fixup(false);
         if (rc != 0) {
-            palert("watchdog: DIAG 0x288 not available (rc={})",
+            pnotice("watchdog: diag 0x288 not available (rc={})",
                      static_cast<i32>(rc));
         } else {
             g_harddog_armed = true;
-            pinfo("watchdog: DIAG 0x288 armed (timeout={}s)",
+            pinfo("watchdog: diag 0x288 armed (timeout={}s)",
                   processor::WDT_DEFAULT_TIMEOUT);
         }
 

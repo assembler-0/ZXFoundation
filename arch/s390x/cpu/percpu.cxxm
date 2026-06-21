@@ -83,12 +83,12 @@ namespace arch::s390x::cpu::percpu {
     /// Used by printk to format e.g. [cp00], [ifl02], [ziip03].
     [[nodiscard]] inline auto cpu_type_prefix() noexcept -> const char* {
         switch (this_cpu().cpu_type) {
-            case 1:  return "cp";       // ZXFL_CPU_TYPE_CP
-            case 2:  return "ifl";      // ZXFL_CPU_TYPE_IFL
-            case 3:  return "icf";      // ZXFL_CPU_TYPE_ICF
-            case 4:  return "ziip";     // ZXFL_CPU_TYPE_ZIIP
-            case 5:  return "zaap";     // ZXFL_CPU_TYPE_ZAAP
-            default: return "t?";      // fallback
+            case 1:  return "cp";     // ZXFL_CPU_TYPE_CP
+            case 2:  return "il";     // ZXFL_CPU_TYPE_IFL
+            case 3:  return "if";     // ZXFL_CPU_TYPE_ICF
+            case 4:  return "ip";     // ZXFL_CPU_TYPE_ZIIP
+            case 5:  return "ap";     // ZXFL_CPU_TYPE_ZAAP
+            default: return "t?";     // fallback
         }
     }
 

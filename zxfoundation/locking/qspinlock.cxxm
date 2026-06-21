@@ -13,6 +13,7 @@ import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.irq_types;
 import arch.s390x.lib.atomic;
+import zxfoundation.memory.hhdm;
 import lib.bit;
 
 export {
@@ -123,13 +124,47 @@ namespace zxfoundation::locking::qspinlock {
         }
 
     private:
+        /// @brief Atomically transition the lock word from PENDING|LOCKED to LOCKED.
+        ///
+        /// @details The pending-bit optimization installs (LOCKED|PENDING) to
+        ///          mark second-in-line.  Once the current holder releases
+        ///          (clears LOCKED), we must atomically clear PENDING and set
+        ///          LOCKED in a single CAS — a simple fetch_add of a negative
+        ///          delta would overflow the u32 and corrupt the tail field.
+        ///          This CAS loop is the only correct primitive for that transition.
+        ///
+        /// @pre  PENDING bit is set, LOCKED bit is clear, TAIL field is zero.
+        /// @post LOCKED bit is set, PENDING bit is clear.
+        auto pending_to_locked() noexcept -> void {
+            u32 expected = m_val.load(memory_order::relaxed);
+            for (;;) {
+                if (expected & _Q_LOCKED_VAL) {
+                    arch::s390x::cpu::processor::cpu_relax();
+                    expected = m_val.load(memory_order::relaxed);
+                    continue;
+                }
+                const u32 desired = (expected & ~_Q_PENDING_VAL) | _Q_LOCKED_VAL;
+                if (m_val.compare_exchange_weak(
+                        expected, desired,
+                        memory_order::acquire, memory_order::relaxed)) {
+                    return;
+                }
+                arch::s390x::cpu::processor::cpu_relax();
+            }
+        }
+
         /// @brief Slow acquisition path: pending-bit optimization + MCS queue.
-        /// @pre Interrupts disabled, CAS fast path failed.
+        /// @pre  Interrupts MUST be disabled (asserted by caller).
+        /// @pre  Fast-path CAS has already failed.
         /// @post The lock is held with _Q_LOCKED_VAL set.
         auto lock_slow() noexcept -> void {
             u32 v = m_val.load(memory_order::relaxed);
 
-            // ---- Pending optimization: second-in-line spins directly --------
+            // ---- Pending optimization: second-in-line spins on LOCKED bit --------
+            //
+            // Condition: only LOCKED is set (PENDING clear, no queue tail).  We
+            // are the second contender — install PENDING to announce ourselves
+            // without allocating an MCS node.
             if ((v & _Q_LOCKED_MASK) == _Q_LOCKED_VAL && !(v & _Q_TAIL_MASK)) {
                 u32 expected_pending = _Q_LOCKED_VAL;
                 if (m_val.compare_exchange_strong(
@@ -137,31 +172,51 @@ namespace zxfoundation::locking::qspinlock {
                         _Q_LOCKED_VAL | _Q_PENDING_VAL,
                         memory_order::acquire,
                         memory_order::relaxed)) {
-                    while (m_val.load(memory_order::relaxed) & _Q_LOCKED_VAL)
+                    // Spin until the current holder clears LOCKED.
+                    while (m_val.load(memory_order::acquire) & _Q_LOCKED_VAL)
                         arch::s390x::cpu::processor::cpu_relax();
-                    (void)m_val.fetch_add(_Q_LOCKED_VAL - _Q_PENDING_VAL, memory_order::acquire);
+
+                    // Atomically clear PENDING and set LOCKED.
+                    // fetch_add(LOCKED_VAL - PENDING_VAL) is WRONG for u32
+                    // (wraps to 0xFFFF'FFFF on x - 2 < 0).  Use the CAS loop.
+                    pending_to_locked();
                     return;
                 }
+                // Another CPU arrived and set the PENDING bit or a tail before
+                // us — fall through to the full MCS path.
                 v = m_val.load(memory_order::relaxed);
             }
 
             // ---- MCS queue path ---------------------------------------------
+            //
+            // Allocate a per-CPU MCS node at the current lock nesting depth.
+            // The nesting depth is bounded by MCS_MAX_LOCK_DEPTH; exceeding it
+            // indicates a recursive lock acquisition from an IRQ handler that
+            // was not protected by irq_save_disable — treat as a fatal error.
             auto& pcp = arch::s390x::cpu::lowcore::get_current()->percpu;
 
-            // Claim a node at the current nesting depth.
             const u32 node_idx = pcp.lock_depth;
-            if (node_idx >= mcs::MCS_MAX_LOCK_DEPTH)
-                [[unlikely]] arch::s390x::cpu::psw::disabled_wait();
+            if (node_idx >= mcs::MCS_MAX_LOCK_DEPTH) [[unlikely]]
+                arch::s390x::cpu::psw::disabled_wait();
             pcp.lock_depth++;
 
             mcs::mcs_node* const node = &pcp.qnodes[node_idx];
-            // Initialize the node: we are locked (spinning) and have no successor.
+
+            // Initialize the node: locked=1 means "I am waiting", next=nullptr.
             node->locked.store(1, memory_order::relaxed);
             node->next.store(nullptr, memory_order::relaxed);
 
-            // Encode our position into the tail field.
+            // Compute absolute pointer to node for cross-CPU access.
+            const u64 node_offset = reinterpret_cast<u64>(node) -
+                                    reinterpret_cast<u64>(arch::s390x::cpu::lowcore::get_current());
+            const u64 node_phys = pcp.prefix_phys + node_offset;
+            mcs::mcs_node* const node_absolute = reinterpret_cast<mcs::mcs_node*>(
+                zxfoundation::memory::hhdm::phys_to_virt(node_phys));
+
+            // Encode our position into the lock word's tail field.
             const u32 my_tail = encode_tail(pcp.cpu_id, node_idx);
 
+            // Atomically install our tail, preserving the LOCKED/PENDING bits.
             u32 old_val = m_val.load(memory_order::relaxed);
             u32 new_val;
             do {
@@ -169,40 +224,58 @@ namespace zxfoundation::locking::qspinlock {
             } while (!m_val.compare_exchange_weak(
                          old_val, new_val, memory_order::acq_rel, memory_order::relaxed));
 
+            // If there was a previous tail owner, link ourselves into the MCS
+            // chain so they can wake us when they release.
             if (old_val & _Q_TAIL_MASK) {
-                const u16 prev_cpu  = decode_tail_cpu(old_val);
-                const u32 prev_idx  = decode_tail_node(old_val);
+                const u16 prev_cpu = decode_tail_cpu(old_val);
+                const u32 prev_idx = decode_tail_node(old_val);
 
                 arch::s390x::cpu::lowcore::zx_lowcore* prev_lc =
                     arch::s390x::cpu::lowcore::get_for_cpu(prev_cpu);
+                // A null prev_lc means the encoded cpu_id is invalid — this is
+                // a kernel data-structure corruption; halt immediately.
                 if (!prev_lc) [[unlikely]]
                     arch::s390x::cpu::psw::disabled_wait();
 
                 mcs::mcs_node* const prev_node = &prev_lc->percpu.qnodes[prev_idx];
 
-                prev_node->next.store(node, memory_order::release);
+                // Publish ourselves as the predecessor's successor.  The
+                // release store pairs with the acquire load in the unlock path.
+                prev_node->next.store(node_absolute, memory_order::release);
 
+                // Spin on our own node's locked flag — only the predecessor
+                // clears it via unlock → pass-to-next.
                 while (node->locked.load(memory_order::acquire))
                     arch::s390x::cpu::processor::cpu_relax();
             }
-            
-            while (m_val.load(memory_order::relaxed) & _Q_LOCKED_MASK)
+
+            // We are now at the head of the queue.  Spin until the current
+            // holder releases (clears LOCKED and PENDING).
+            while (m_val.load(memory_order::acquire) & _Q_LOCKED_MASK)
                 arch::s390x::cpu::processor::cpu_relax();
 
+            // Try the uncontested CAS: we are the only queued waiter.
+            // If it succeeds the lock word transitions: my_tail → LOCKED_VAL.
             u32 expected_solo = my_tail;
             if (m_val.compare_exchange_strong(
                     expected_solo, _Q_LOCKED_VAL,
                     memory_order::acquire, memory_order::relaxed)) {
                 pcp.lock_depth--;
-                return;
+                return;   // sole waiter, no successor to wake
             }
 
+            // There are successor waiters.  Set LOCKED so we hold the lock,
+            // then find and wake our immediate successor.
             (void)m_val.fetch_or(_Q_LOCKED_VAL, memory_order::acquire);
 
+            // Wait until the successor has published its node pointer.
+            // The store is a release (prev_node->next.store(..., release)),
+            // so this acquire load forms the required ordering pair.
             mcs::mcs_node* next_node;
-            while (!((next_node = node->next.load(memory_order::relaxed))))
+            while (!(next_node = node->next.load(memory_order::acquire)))
                 arch::s390x::cpu::processor::cpu_relax();
 
+            // Pass the lock to the successor by clearing its locked flag.
             next_node->locked.store(0, memory_order::release);
 
             pcp.lock_depth--;

@@ -68,10 +68,11 @@ namespace zxfoundation::sched::fair {
         auto* node = rb_left;
         while (node) {
             auto* s = rb_node_to_strand(node);
-            s->sched.lag = static_cast<i64>(rq.min_vruntime) -
-                        static_cast<i64>(s->sched.vruntime);
+            const bool eligible = rq.min_vruntime >= s->sched.vruntime ||
+                                  (rq.min_vruntime + (1ULL << 63)) < (s->sched.vruntime + (1ULL << 63));
+            s->sched.lag = eligible ? 0 : -1;
 
-            if (s->sched.lag >= 0) {
+            if (eligible) {
                 return s;
             }
             node = lib::rb_next(node);

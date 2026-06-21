@@ -23,9 +23,11 @@ namespace _internal {
     /// @note Uses MSGNOH (Message No Header) to avoid the
     ///       "MSG FROM LPAR:" prefix that Hercules prepends to MSG output.
     class hercules_message {
+    public:
         static constexpr usize MAX_CAPACITY = 256;
         static constexpr usize PREFIX_SIZE  = 9;   // "MSGNOH * " = 9 bytes
 
+    private:
         // Pre-built EBCDIC "MSGNOH * " (CP037)
         static constexpr u8 EBCDIC_M  = 0xD4U;  // M
         static constexpr u8 EBCDIC_S  = 0xE2U;  // S
@@ -36,7 +38,7 @@ namespace _internal {
         static constexpr u8 EBCDIC_SP = 0x40U;  // space
         static constexpr u8 EBCDIC_ST = 0x5CU;  // *
 
-        char m_data[MAX_CAPACITY]{};
+        char m_data[MAX_CAPACITY];
         usize m_total_len{PREFIX_SIZE};
 
     public:
@@ -85,12 +87,20 @@ namespace drivers::console::diag {
     /// @brief Flush ASCII content to the DIAG 8 console.
     /// @param[in] s The ASCII string view to transmit.
     auto write(const lib::string_view s) noexcept -> void {
-        _internal::hercules_message msg;
-        msg.transcribe(s);
-
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         _internal::g_diag_lock.lock();
-        msg.transmit();
+
+        lib::string_view remaining = s;
+        constexpr usize payload_limit = _internal::hercules_message::MAX_CAPACITY - _internal::hercules_message::PREFIX_SIZE;
+
+        while (!remaining.empty()) {
+            const usize chunk_len = lib::min(remaining.size(), payload_limit);
+            _internal::hercules_message msg;
+            msg.transcribe(remaining.substr(0, chunk_len));
+            msg.transmit();
+            remaining = remaining.substr(chunk_len);
+        }
+
         _internal::g_diag_lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
     }

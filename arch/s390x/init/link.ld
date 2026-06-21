@@ -6,12 +6,12 @@ ENTRY(__zx_start_kernel64)
 PHDRS {
     hs_seg        PT_LOAD FLAGS(0x00400005);  /* ZXVL_PFLAGS_HS:    PF_X|PF_R + bit22 */
     entry_seg     PT_LOAD FLAGS(0x00800005);  /* ZXVL_PFLAGS_ENTRY: PF_X|PF_R + bit23 */
-    nucleus_text  PT_LOAD FLAGS(0x00000005);  /* PF_X|PF_R  — kernel .text             */
-    nucleus_ro    PT_LOAD FLAGS(0x00000004);  /* PF_R       — kernel .rodata            */
+    nucleus_text  PT_LOAD FLAGS(0x00000005);  /* PF_X|PF_R  — kernel .text            */
+    nucleus_ro    PT_LOAD FLAGS(0x00000004);  /* PF_R       — kernel .rodata           */
     nucleus_data  PT_LOAD FLAGS(0x00000006);  /* PF_R|PF_W  — kernel .data             */
     nucleus_bss   PT_LOAD FLAGS(0x00000006);  /* PF_R|PF_W  — kernel .bss              */
-    lock_seg      PT_LOAD FLAGS(0x00100006);  /* ZXVL_PFLAGS_LOCK:  PF_R|PF_W + bit20 */
-    checksums_seg PT_LOAD FLAGS(0x00200004);  /* ZXVL_PFLAGS_CKSUM: PF_R + bit21      */
+    lock_seg      PT_LOAD FLAGS(0x00100006);  /* ZXVL_PFLAGS_LOCK:  PF_R|PF_W + bit20  */
+    checksums_seg PT_LOAD FLAGS(0x00200004);  /* ZXVL_PFLAGS_CKSUM: PF_R + bit21       */
 }
 
 nucleus_vma_base = 0xFFFF800000100000;

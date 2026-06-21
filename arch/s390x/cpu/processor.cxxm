@@ -9,6 +9,9 @@ import lib.bit;
 
 namespace {
 
+    /// @brief Hypervisor detection state machine.
+    alignas(64) static u32 g_hypervisor_state{0};
+
     /// @brief A 128-bit register pair for DIAGNOSE instructions.
     union register_pair {
         u128 pair{};
@@ -37,24 +40,38 @@ namespace arch::s390x::cpu::processor {
         __asm__ volatile("stidp %0" : "=m" (*id));
     }
 
-    auto is_hypervisor() -> bool {
-        cpuid id{};
-        get_cpuid(&id);
-        return id.version == 0xFF;
-    }
 
-    /// @brief Compiler-only memory barrier.
+
+    /// @brief Compiler-only memory barrier — prevents compiler reordering.
     inline auto barrier() noexcept -> void {
         __asm__ volatile ("" ::: "memory");
     }
 
-    /// @brief Spin-loop hint — yield timeslice to the hypervisor.
+    /// @brief Probe whether the kernel is running under a hypervisor.
+    /// @return true if the kernel is running under a hypervisor.
+    auto is_hypervisor() noexcept -> bool {
+        const u32 state = __atomic_load_n(&g_hypervisor_state, __ATOMIC_ACQUIRE);
+        if (state != 0U) [[likely]]
+            return state == 2U;
+
+        cpuid id{};
+        get_cpuid(&id);
+        const bool under_hv = (id.version == 0xFF);
+        __atomic_store_n(&g_hypervisor_state, under_hv ? 2U : 1U, __ATOMIC_SEQ_CST);
+        return under_hv;
+    }
+
+    /// @brief Spin-loop hint.
     inline auto cpu_relax() noexcept -> void {
-        if (is_hypervisor()) __asm__ volatile("diag 0,0,0x44" ::: "memory");
-        else barrier();
+        if (is_hypervisor()) {
+            __asm__ volatile("diag 0,0,0x44" ::: "memory");
+        } else {
+            barrier();
+        }
     }
 
     /// @brief Yield the virtual CPU timeslice to the hypervisor (if running under one).
+    /// @note  This is an alias for cpu_relax() provided for call-site clarity.
     inline auto smp_yield() noexcept -> void {
         cpu_relax();
     }

@@ -1,6 +1,6 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/printk.cxxm
-/// @brief kernel logging framework
+/// @brief Kernel logging framework.
 
 export module zxfoundation.sys.printk;
 import zxfoundation.base.types;
@@ -10,6 +10,9 @@ import zxfoundation.sys.time;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.irq_types;
 import lib.string_view;
 import lib.span;
 import lib.format;
@@ -18,83 +21,241 @@ import lib.ring_buffer;
 import lib.algorithm;
 import lib.static_vector;
 
-namespace _internal {
-    using namespace zxfoundation::sys::printk;
+static constexpr usize MAX_BACKENDS        = 4;
+static constexpr usize LOG_BUFFER_SIZE     = 128 * 1024;
 
-    static constexpr usize MAX_BACKENDS    = 4;
-    static constexpr usize LOG_BUFFER_SIZE = 128 * 1024;
-
-    struct printk_state {
-        zxfoundation::locking::qspinlock::qspinlock lock;
-        lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
-        log_level min_level{log_level::EMERG};
-        lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
-    };
-
-    printk_state g_state;
-
-    static constexpr char level_tags[] = "XACEWNID";
-
-} // namespace _internal
+/// @brief Maximum per-message formatted length (bytes, including header + newline + NUL).
+static constexpr usize PRINTK_LINE_MAX     = 512;
 
 export {
 
 namespace zxfoundation::sys::printk {
 
+    struct printk_state {
+        zxfoundation::locking::qspinlock::qspinlock lock;
+        zxfoundation::locking::qspinlock::qspinlock flush_lock;
+        lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
+        log_level min_level{log_level::EMERG};
+        lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
+    };
+
+    extern printk_state g_state;
+
+} // namespace zxfoundation::sys::printk
+
+} // end export
+
+export {
+
+namespace zxfoundation::sys::printk {
+
+    printk_state g_state;
+
     auto init() noexcept -> void {
-        _internal::g_state.min_level = log_level::DEBUG;
+        g_state.min_level = log_level::DEBUG;
     }
 
     auto register_backend(const printk_backend& backend) noexcept -> void {
         if (!backend.emit) return;
-        locking::irq_lock_guard guard(_internal::g_state.lock);
-        if (_internal::g_state.backends.full()) return;
+        const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+        g_state.lock.lock();
+        if (g_state.backends.full()) {
+            g_state.lock.unlock();
+            arch::s390x::cpu::irq::irq_restore(irq_flags);
+            return;
+        }
         if (backend.init) backend.init();
         auto b = backend;
         b.active = true;
-        (void)_internal::g_state.backends.push_back(b);
+        (void)g_state.backends.push_back(b);
+        g_state.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(irq_flags);
     }
 
     auto set_min_level(const log_level level) noexcept -> void {
-        _internal::g_state.min_level = level;
+        g_state.min_level = level;
     }
 
     auto read_logs(lib::span<u8> dest, bool consume) noexcept -> usize {
-        locking::irq_lock_guard guard(_internal::g_state.lock);
+        const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+        g_state.lock.lock();
+        usize result;
         if (consume) {
-            return _internal::g_state.log_buffer.pop(dest);
+            result = g_state.log_buffer.pop(dest);
         } else {
-            return _internal::g_state.log_buffer.peek(dest);
+            result = g_state.log_buffer.peek(dest);
         }
+        g_state.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(irq_flags);
+        return result;
     }
 
     auto log_size() noexcept -> usize {
-        return _internal::g_state.log_buffer.size();
+        const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+        g_state.lock.lock();
+        const usize result = g_state.log_buffer.size();
+        g_state.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(irq_flags);
+        return result;
+    }
+
+    /// @brief Commit a pre-formatted message to all active backends and the ring-buffer.
+    /// @param[in] buf     Pre-formatted message buffer (NUL-terminated).
+    /// @param[in] offset  Number of valid bytes in buf (not counting NUL).
+    /// @param[in] cpu     Logical CPU ID of the calling processor.
+    auto printk_commit(const char* buf, usize offset, u16 cpu) noexcept -> void {
+        (void)cpu;
+
+        const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+
+        bool pushed = false;
+        // Try to acquire the buffer lock to queue our message.
+        // We use a retry loop to be robust against deadlocks in extreme situations.
+        for (u32 iter = 0; iter < 100000; ++iter) {
+            if (g_state.lock.try_lock()) {
+                lib::span<const u8> to_push(
+                    reinterpret_cast<const u8*>(buf), offset);
+                while (to_push.size() > 0) {
+                    usize written = g_state.log_buffer.push(to_push);
+                    if (written == to_push.size()) break;
+                    u8 discard[1024];
+                    (void)g_state.log_buffer.pop(
+                        {discard, lib::min(static_cast<usize>(sizeof(discard)),
+                                           g_state.log_buffer.size())});
+                    if (written > 0) to_push = to_push.subspan(written);
+                }
+                g_state.lock.unlock();
+                pushed = true;
+                break;
+            }
+            arch::s390x::cpu::processor::cpu_relax();
+        }
+
+        if (pushed) {
+            // Try to acquire the console flush lock.
+            // If we fail, it means another CPU is currently flushing the log buffer,
+            // so we can return immediately and let them handle it.
+            if (g_state.flush_lock.try_lock()) {
+                bool done = false;
+                while (!done) {
+                    while (true) {
+                        lib::static_vector<printk_backend, MAX_BACKENDS> snap;
+                        char line_buf[PRINTK_LINE_MAX];
+                        usize popped = 0;
+
+                        g_state.lock.lock();
+                        // Snapshot the active backends
+                        for (usize i = 0; i < g_state.backends.size(); ++i) {
+                            if (g_state.backends[i].active) {
+                                (void)snap.push_back(g_state.backends[i]);
+                            }
+                        }
+
+                        // Peek to find a complete message line (ending with \n)
+                        const usize peeked = g_state.log_buffer.peek(
+                            {reinterpret_cast<u8*>(line_buf), PRINTK_LINE_MAX});
+                        
+                        usize line_len = 0;
+                        for (usize i = 0; i < peeked; ++i) {
+                            if (line_buf[i] == '\n') {
+                                line_len = i + 1;
+                                break;
+                            }
+                        }
+                        if (line_len == 0) {
+                            line_len = peeked;
+                        }
+
+                        if (line_len > 0) {
+                            popped = g_state.log_buffer.pop(
+                                {reinterpret_cast<u8*>(line_buf), line_len});
+                        }
+                        g_state.lock.unlock();
+
+                        if (popped == 0) {
+                            break; // No more log messages
+                        }
+
+                        // Emit the popped message to all snapshot backends
+                        const lib::string_view msg(line_buf, popped);
+                        for (usize i = 0; i < snap.size(); ++i) {
+                            snap[i].emit(msg);
+                        }
+                    }
+
+                    g_state.flush_lock.unlock();
+
+                    // Check if more logs arrived after we finished flushing and unlocked.
+                    g_state.lock.lock();
+                    const bool more_logs = (g_state.log_buffer.size() > 0);
+                    g_state.lock.unlock();
+
+                    if (more_logs) {
+                        if (!g_state.flush_lock.try_lock()) {
+                            // Another CPU acquired the flush lock or is about to, so let them handle it.
+                            done = true;
+                        }
+                    } else {
+                        done = true;
+                    }
+                }
+            }
+        } else {
+            // Fallback: if we failed to push to the queue, emit directly to backends (best-effort).
+            lib::static_vector<printk_backend, MAX_BACKENDS> snap;
+            for (usize i = 0; i < g_state.backends.size(); ++i) {
+                if (g_state.backends[i].active) {
+                    (void)snap.push_back(g_state.backends[i]);
+                }
+            }
+            const lib::string_view msg(buf, offset);
+            for (usize i = 0; i < snap.size(); ++i) {
+                snap[i].emit(msg);
+            }
+        }
+
+        arch::s390x::cpu::irq::irq_restore(irq_flags);
     }
 
     template <typename... Args>
     auto printk(log_level level, lib::string_view fmt, Args&&... args) noexcept -> void {
-        if (static_cast<u8>(level) > static_cast<u8>(_internal::g_state.min_level))
+        if (static_cast<u8>(level) > static_cast<u8>(g_state.min_level))
             return;
 
-        char buf[512];
+        char buf[PRINTK_LINE_MAX];
 
         const auto now = time::monotonic_now();
         const u64 s = now.nanoseconds_since_epoch() / 1000000000U;
         const u64 us = (now.nanoseconds_since_epoch() % 1000000000U) / 1000U;
         const u16 cpu = arch::s390x::cpu::percpu::cpu_id();
-        const char tag = _internal::level_tags[static_cast<u8>(level)];
         const auto prefix = arch::s390x::cpu::percpu::cpu_type_prefix();
 
+        char tag;
+        switch (level) {
+            case log_level::EMERG:  tag = 'X'; break;
+            case log_level::ALERT:  tag = 'A'; break;
+            case log_level::CRIT:   tag = 'C'; break;
+            case log_level::ERROR:  tag = 'E'; break;
+            case log_level::WARN:   tag = 'W'; break;
+            case log_level::NOTICE: tag = 'N'; break;
+            case log_level::INFO:   tag = 'I'; break;
+            case log_level::DEBUG:  tag = 'D'; break;
+            default:                tag = '?'; break;
+        }
+
+        // Format: ZXF-[(SSSS).uuuuuu] [(type)NN] T <message>\n
+        // TODO: domain-based naming for `[(ZXF)]`
         usize offset = 0;
         if (s > 1'000'000'000U) [[unlikely]] {
-            offset = lib::format::format_to({buf, 512}, "ZXF-[(XXXX).xxxxxx] [({}){}] {} ",
+            offset = lib::format::format_to({buf, PRINTK_LINE_MAX},
+                "[(ZXF)]-[(XXXX).xxxxxx] [({}){}] {} ",
                 prefix,
                 lib::format::dec{static_cast<u64>(cpu), 2, true},
                 tag
             );
         } else {
-            offset = lib::format::format_to({buf, 512}, "ZXF-[({}).{}] [({}){}] {} ",
+            offset = lib::format::format_to({buf, PRINTK_LINE_MAX},
+                "[(ZXF)]-[({}).{}] [({}){}] {} ",
                 lib::format::dec{s, 4, true},
                 lib::format::dec{us, 6, true},
                 prefix,
@@ -103,56 +264,27 @@ namespace zxfoundation::sys::printk {
             );
         }
 
-        offset += lib::format::format_to({buf + offset, 512 - offset}, fmt, lib::forward<Args>(args)...);
+        offset += lib::format::format_to(
+            {buf + offset, PRINTK_LINE_MAX - offset},
+            fmt,
+            lib::forward<Args>(args)...);
 
-        if (offset < 511 && (offset == 0 || buf[offset-1] != '\n')) {
+        if (offset < (PRINTK_LINE_MAX - 1) && (offset == 0 || buf[offset-1] != '\n')) {
             buf[offset++] = '\n';
         }
         buf[offset] = '\0';
 
-        lib::string_view final_msg(buf, offset);
-
-        lib::static_vector<printk_backend, _internal::MAX_BACKENDS> snap;
-        {
-            locking::irq_lock_guard guard(_internal::g_state.lock);
-
-            lib::span<const u8> to_push(
-                reinterpret_cast<const u8*>(final_msg.data()), final_msg.size());
-
-            while (to_push.size() > 0) {
-                usize written = _internal::g_state.log_buffer.push(to_push);
-                if (written == to_push.size()) break;
-
-                u8 discard[1024];
-                (void)_internal::g_state.log_buffer.pop(
-                    {discard, lib::min(static_cast<usize>(sizeof(discard)),
-                                       _internal::g_state.log_buffer.size())});
-
-                if (written > 0) {
-                    to_push = to_push.subspan(written);
-                }
-            }
-
-            for (usize i = 0; i < _internal::g_state.backends.size(); ++i) {
-                if (_internal::g_state.backends[i].active) {
-                    (void)snap.push_back(_internal::g_state.backends[i]);
-                }
-            }
-        }
-
-        for (usize i = 0; i < snap.size(); ++i) {
-            snap[i].emit(final_msg);
-        }
+        printk_commit(buf, offset, cpu);
     }
 
-    template <typename... Args> auto pemerg(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::EMERG, fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto palert(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ALERT, fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pcrit(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::CRIT, fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto perr(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ERROR, fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pwarn(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::WARN, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pemerg(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::EMERG,  fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto palert(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ALERT,  fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pcrit(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::CRIT,   fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto perr(lib::string_view fmt, Args&&... args) noexcept -> void   { printk(log_level::ERROR,  fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pwarn(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::WARN,   fmt, lib::forward<Args>(args)...); }
     template <typename... Args> auto pnotice(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::NOTICE, fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pinfo(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::INFO, fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pdebug(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::DEBUG, fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pinfo(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::INFO,   fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pdebug(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::DEBUG,  fmt, lib::forward<Args>(args)...); }
 
 } // namespace zxfoundation::sys::printk
 

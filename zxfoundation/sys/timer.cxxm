@@ -5,6 +5,7 @@
 export module zxfoundation.sys.timer;
 import zxfoundation.sys.timer_types;
 import zxfoundation.base.types;
+import zxfoundation.base.config;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clkcomp;
 import arch.s390x.cpu.irq;
@@ -29,7 +30,12 @@ namespace _internal {
     };
 
     /// @brief Per-CPU timer heaps, indexed by logical cpu_id.
-    static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY> g_heaps[128]{};
+    /// @note Sized by CONFIG_ZX_MAX_CPUS, not a hardcoded constant.
+    static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
+        g_heaps[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
+    static_assert(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS <= 1024,
+        "g_heaps array size must not exceed reasonable bounds");
 
     /// @brief Subsystem initialization flag.
     static bool g_timer_initialized{false};

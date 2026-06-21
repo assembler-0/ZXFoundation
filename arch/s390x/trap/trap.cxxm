@@ -186,11 +186,6 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
 }
 
 /// @brief External interrupt handler.
-///
-/// Dispatches to the generic IRQ table for all subclasses except the
-/// clock-comparator (hot path, called directly).  Registered handlers:
-///   IPI_IRQ_EMERGENCY = IRQ_BASE_EXT + (EXT_EMERGENCY_SIGNAL >> 4)
-///   IPI_IRQ_EXTCALL   = IRQ_BASE_EXT + (EXT_EXTERNAL_CALL    >> 4)
 extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
 

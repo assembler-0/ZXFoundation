@@ -45,17 +45,31 @@ namespace arch::s390x::cpu::lowcore {
     }
 
     [[nodiscard]] inline auto get_current_phys() noexcept -> zx_lowcore* {
-        return nullptr;
+        return static_cast<zx_lowcore*>(0x0ULL);
     }
 
+    /// @brief Retrieve the lowcore structure pointer for a specific CPU, taking prefixing into account.
+    /// @param[in] cpu_id  The logical target CPU ID.
+    /// @return Pointer to the lowcore of the target CPU, or nullptr if unregistered.
     [[nodiscard]] auto get_for_cpu(const u16 cpu_id) noexcept -> zx_lowcore* {
         if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]]
             return nullptr;
+
+        const u16 current_cpu = *reinterpret_cast<const volatile u16*>(
+            zxfoundation::memory::hhdm::phys_to_virt(LC_CPU_ID_OFFSET));
+
+        if (cpu_id == current_cpu) {
+            return reinterpret_cast<zx_lowcore*>(
+                zxfoundation::memory::hhdm::phys_to_virt(0ULL));
+        }
+
         const u64 phys = __percpu_lowcore_phys[cpu_id].load(
             lib::atomic::memory_order::acquire);
         if (phys == 0) [[unlikely]]
             return nullptr;
-        return reinterpret_cast<zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(phys));
+
+        return reinterpret_cast<zx_lowcore*>(
+            zxfoundation::memory::hhdm::phys_to_virt(phys));
     }
 
     auto register_cpu_lowcore(const u16 cpu_id, const u64 phys_lc) noexcept -> void {
@@ -123,6 +137,12 @@ namespace arch::s390x::cpu::lowcore {
         lc->percpu.prefix_phys  = static_cast<u64>(bsp_prefix_phys);
         lc->percpu.cpu_id       = 0;
         lc->percpu.cpu_addr     = processor::cpu_addr();
+        for (u32 i = 0; i < proto.cpu_count; ++i) {
+            if (proto.cpu_map[i].cpu_addr == lc->percpu.cpu_addr) {
+                lc->percpu.cpu_type = proto.cpu_map[i].type;
+                break;
+            }
+        }
         lc->percpu.kernel_stack = proto.kernel_stack_top;
         lc->percpu.lock_depth   = 0;
         lc->percpu.preempt_count = 0;

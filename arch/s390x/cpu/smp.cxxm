@@ -114,22 +114,24 @@ namespace arch::s390x::cpu::smp {
         u64 cr0; processor::ctl_store<0, 0>(cr0);
 
         u32 started = 0;
+        u16 next_cpu_id = 1;
 
         for (u32 i = 0; i < proto.cpu_count; ++i) {
             const auto& ci = proto.cpu_map[i];
             if (ci.cpu_addr == proto.bsp_cpu_addr) continue;
             if (ci.state != init::zxfl::ZXFL_CPU_STOPPED) continue;
 
-            const u16 new_cpu_id = static_cast<u16>(i);
+            const u16 new_cpu_id = next_cpu_id++;
 
-            // Allocate lowcore (order 1 = 8 KiB) + 3 stacks (order 2 = 16 KiB each)
+            // Allocate lowcore (order 1 = 8 KiB) + 4 stacks (order 2 = 16 KiB each)
             // as a single atomic transaction.
             transaction txn;
             auto lc_f    = txn.alloc(1, zone::dma31, purpose::lowcore,    page_init::zeroed);
             auto stk_f   = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
             auto async_f = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
             auto mcck_f  = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
-            if (!lc_f || !stk_f || !async_f || !mcck_f) continue;
+            auto nodat_f = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            if (!lc_f || !stk_f || !async_f || !mcck_f || !nodat_f) continue;
             txn.commit();
 
             // folio_fresh carries the physical address — use phys_base directly.
@@ -137,6 +139,7 @@ namespace arch::s390x::cpu::smp {
             const u64 stk_top   = stk_f->phys_base   + (static_cast<u64>(PAGE_SIZE) << 2);
             const u64 async_top = async_f->phys_base  + (static_cast<u64>(PAGE_SIZE) << 2);
             const u64 mcck_top  = mcck_f->phys_base   + (static_cast<u64>(PAGE_SIZE) << 2);
+            const u64 nodat_top = nodat_f->phys_base  + (static_cast<u64>(PAGE_SIZE) << 2);
 
             // page_init::zeroed already zeroed the lowcore folio during alloc.
             auto* lc = reinterpret_cast<lowcore::zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(lc_phys));
@@ -154,6 +157,7 @@ namespace arch::s390x::cpu::smp {
             lc->kernel_stack = zxfoundation::memory::hhdm::phys_to_virt(stk_top);
             lc->async_stack  = zxfoundation::memory::hhdm::phys_to_virt(async_top);
             lc->mcck_stack   = zxfoundation::memory::hhdm::phys_to_virt(mcck_top);
+            lc->nodat_stack  = zxfoundation::memory::hhdm::phys_to_virt(nodat_top);
 
             percpu::init_ap(*lc);
             lc->percpu.drawer_id = ci.drawer_id;
@@ -171,8 +175,8 @@ namespace arch::s390x::cpu::smp {
         while (g_ap_online.load(lib::atomic::memory_order::seq_cst) < started)
             processor::cpu_relax();
 
-        if (started != 0) zxfoundation::sys::printk::pinfo("smp: {} cpus started", started);
-        else zxfoundation::sys::printk::pnotice("smp: no processor detected/started");
+        if (started != 0) zxfoundation::sys::printk::pinfo("smp: {} ap(s) started", started);
+        else zxfoundation::sys::printk::pnotice("smp: no ap(s) detected/started");
 
         g_total_aps = started;
         return started;

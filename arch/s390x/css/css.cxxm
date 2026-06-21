@@ -32,15 +32,16 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=started, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto ssch(subchannel_id schid, const orb& orb_ref) noexcept -> int {
         int cc;
+        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr %%r1,%[schid]\n\t"
+            "lgr 1,%[r1_val]\n\t"
             "ssch 0(%[orb])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schid] "d"(static_cast<u64>(schid.to_raw())),
-              [orb] "a"(&orb_ref)
-            : "cc", "r1", "memory"
+            : [orb] "a"(&orb_ref),
+              [r1_val] "r"(r1_val)
+            : "cc", "1", "memory"
         );
         return cc;
     }
@@ -51,15 +52,16 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=status stored, 1=no status pending, 3=not operational.
     [[nodiscard]] auto tsch(subchannel_id schid, irb& irb_ref) noexcept -> int {
         int cc;
+        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr %%r1,%[schid]\n\t"
+            "lgr 1,%[r1_val]\n\t"
             "tsch 0(%[irb])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schid] "d"(static_cast<u64>(schid.to_raw())),
-              [irb] "a"(&irb_ref)
-            : "cc", "r1", "memory"
+            : [irb] "a"(&irb_ref),
+              [r1_val] "r"(r1_val)
+            : "cc", "1", "memory"
         );
         return cc;
     }
@@ -70,15 +72,16 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=stored, 3=not operational.
     [[nodiscard]] auto stsch(subchannel_id schid, schib& schib_ref) noexcept -> int {
         int cc;
+        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr %%r1,%[schid]\n\t"
+            "lgr 1,%[r1_val]\n\t"
             "stsch 0(%[schib])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schid] "d"(static_cast<u64>(schid.to_raw())),
-              [schib] "a"(&schib_ref)
-            : "cc", "r1", "memory"
+            : [schib] "a"(&schib_ref),
+              [r1_val] "r"(r1_val)
+            : "cc", "1", "memory"
         );
         return cc;
     }
@@ -89,15 +92,16 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=modified, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto msch(subchannel_id schid, const schib& schib_ref) noexcept -> int {
         int cc;
+        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr %%r1,%[schid]\n\t"
+            "lgr 1,%[r1_val]\n\t"
             "msch 0(%[schib])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schid] "d"(static_cast<u64>(schid.to_raw())),
-              [schib] "a"(&schib_ref)
-            : "cc", "r1", "memory"
+            : [schib] "a"(&schib_ref),
+              [r1_val] "r"(r1_val)
+            : "cc", "1", "memory"
         );
         return cc;
     }
