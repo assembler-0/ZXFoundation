@@ -7,5 +7,3 @@ endif()
 if (NOT DEFINED DSYM_LEVEL)
     set(DSYM_LEVEL "0" CACHE STRING "Debug symbol level (0, 1, 2, 3)")
 endif()
-
-option(CONFIG_SSP "Enable ssp for kernel" ON)

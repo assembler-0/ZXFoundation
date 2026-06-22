@@ -40,12 +40,6 @@ target_compile_options(core.zxfoundation.nucleus.pass1 PRIVATE
     -m64
 )
 
-if (CONFIG_SSP)
-    target_compile_options(core.zxfoundation.nucleus.pass1 PRIVATE
-        -fstack-protector-all
-    )
-endif()
-
 if (COMPILER_ID STREQUAL "clang")
     target_compile_options(core.zxfoundation.nucleus.pass1 PRIVATE
         -nostdlib++

@@ -32,14 +32,12 @@ export {
 namespace zxfoundation::sys::printk {
 
     struct printk_state {
-        zxfoundation::locking::qspinlock::qspinlock lock;
-        zxfoundation::locking::qspinlock::qspinlock flush_lock;
+        locking::qspinlock::qspinlock lock;
+        locking::qspinlock::qspinlock flush_lock;
         lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
         log_level min_level{log_level::EMERG};
         lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
     };
-
-    extern printk_state g_state;
 
 } // namespace zxfoundation::sys::printk
 
@@ -109,8 +107,6 @@ namespace zxfoundation::sys::printk {
         const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
 
         bool pushed = false;
-        // Try to acquire the buffer lock to queue our message.
-        // We use a retry loop to be robust against deadlocks in extreme situations.
         for (u32 iter = 0; iter < 100000; ++iter) {
             if (g_state.lock.try_lock()) {
                 lib::span<const u8> to_push(

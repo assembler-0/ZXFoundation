@@ -27,6 +27,29 @@ import lib.expected;
 import lib.error;
 import lib.string;
 
+/// @brief Spin until target CPU reports stopped (SIGP_STATUS_STOPPED or CHECK_STOP).
+/// @note  SIGP_STATUS_STOPPED = 0x0200 0000, SIGP_STATUS_CHECK_STOP = 0x0010 0000
+///        Both are in the status word returned on CC=1 (status stored).
+static constexpr u32 SIGP_STATUS_STOPPED    = 0x0020'0000U; ///< CPU is stopped
+static constexpr u32 SIGP_STATUS_CHECK_STOP = 0x0010'0000U; ///< CPU is in check-stop
+
+[[nodiscard]] static auto cpu_is_stopped(const u16 cpu_addr) noexcept -> bool {
+    u32 status{0};
+    const int cc = arch::s390x::cpu::sigp::sigp_issue(
+        cpu_addr, arch::s390x::cpu::sigp::SIGP_SENSE, 0, status);
+    /// CC=1 means status was stored; check stopped/check-stop bits.
+    if (cc == arch::s390x::cpu::sigp::SIGP_CC_STATUS_STORED)
+        return !!(status & (SIGP_STATUS_STOPPED | SIGP_STATUS_CHECK_STOP));
+    /// CC=3: CPU not operational — treat as stopped to avoid infinite spin.
+    return (cc == arch::s390x::cpu::sigp::SIGP_CC_NOT_OPERATIONAL);
+}
+
+/// @brief Block until @p cpu_addr transitions to stopped state.
+static auto wait_cpu_stopped(const u16 cpu_addr) noexcept -> void {
+    while (!cpu_is_stopped(cpu_addr))
+        arch::s390x::cpu::processor::cpu_relax();
+}
+
 // AP online counter — written by each AP in ap_startup, polled by BSP.
 static arch::s390x::lib::atomic::atomic<u32> g_ap_online{0};
 
@@ -166,6 +189,7 @@ namespace arch::s390x::cpu::smp {
 
             u32 status{0};
             sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_INITIAL_CPU_RESET, 0, status);
+            wait_cpu_stopped(ci.cpu_addr);
             sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_SET_PREFIX,
                             static_cast<u32>(lc_phys), status);
             sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_RESTART, 0, status);
