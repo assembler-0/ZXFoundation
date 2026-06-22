@@ -1,10 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/timer_types.cxxm
 /// @brief Kernel timer type definitions and per-CPU min-heap storage.
-///
-/// All deadline and interval fields are expressed in z/Architecture TOD
-/// clock units (2^12 increments per microsecond) for zero-conversion
-/// comparisons against the hardware clock comparator.
 
 export module zxfoundation.sys.timer_types;
 import zxfoundation.base.types;
@@ -50,18 +46,7 @@ namespace zxfoundation::sys::timer {
         periodic = 1,  ///< Re-arm automatically after each expiry.
     };
 
-    // ---- kernel_timer -------------------------------------------------------
-
     /// @brief Kernel timer descriptor.
-    ///
-    /// Each timer holds an absolute TOD deadline, an optional periodic re-arm
-    /// interval (also in TOD units), a callback/data pair, and bookkeeping
-    /// state.  Timers are enqueued into a per-CPU min-heap indexed by
-    /// deadline_tod.
-    ///
-    /// @note  Non-copyable, non-movable.  Timers are always manipulated by
-    ///        pointer/reference — they must remain at a stable address while
-    ///        they are armed.
     struct kernel_timer {
         u64         deadline_tod{0};       ///< Absolute TOD deadline (hardware clock units).
         u64         interval_tod{0};       ///< Re-arm interval for periodic timers (TOD units).
@@ -81,13 +66,7 @@ namespace zxfoundation::sys::timer {
         auto operator=(kernel_timer&&)               = delete;
     };
 
-    // ---- timer_heap ---------------------------------------------------------
-
     /// @brief Fixed-capacity binary min-heap of kernel_timer pointers.
-    ///
-    /// Ordered by deadline_tod (smallest at index 0).  Each CPU owns exactly
-    /// one heap; access is serialized by disabling local interrupts.
-    ///
     /// @note  Non-copyable, non-movable.
     struct timer_heap {
         kernel_timer* entries[TIMER_HEAP_CAPACITY]{}; ///< Heap-ordered array of timer pointers.

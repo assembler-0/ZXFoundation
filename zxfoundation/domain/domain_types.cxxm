@@ -73,14 +73,6 @@ namespace zxfoundation::domain {
     struct sched_class;
 
     /// @brief The domain struct — the central entity of the DGP kernel.
-    ///
-    /// A domain is the unit of isolation: it owns an address space, gates,
-    /// portals, and one or more strands of execution.
-    ///
-    /// The primary_strand is embedded directly in the domain struct for
-    /// single-stranded domains (Phase 1). The assembly context switch
-    /// accesses strand fields through the domain pointer at compile-time
-    /// known offsets.
     struct domain {
         // ── offset 0 ──  SCOMS kobject header (24 bytes)
         scoms::kobject                                                  ko{};
@@ -172,11 +164,11 @@ namespace zxfoundation::domain {
 
     /// @brief Scheduler class — vtable of typed function pointers.
     struct sched_class {
-        void    (*enqueue_strand)(run_queue& rq, strand& s);    ///< Add strand to the run queue.
-        void    (*dequeue_strand)(run_queue& rq, strand& s);    ///< Remove strand from the run queue.
-        strand* (*pick_next_strand)(run_queue& rq);              ///< Select the next strand to run.
-        void    (*strand_tick)(run_queue& rq, strand& s);        ///< Called on each timer tick.
-        void    (*check_preempt)(run_queue& rq, strand& s);     ///< Check if s should preempt curr.
+        void    (*enqueue_strand)(run_queue& rq, strand& s){};    ///< Add strand to the run queue.
+        void    (*dequeue_strand)(run_queue& rq, strand& s){};    ///< Remove strand from the run queue.
+        strand* (*pick_next_strand)(run_queue& rq){};              ///< Select the next strand to run.
+        void    (*strand_tick)(run_queue& rq, strand& s){};        ///< Called on each timer tick.
+        void    (*check_preempt)(run_queue& rq, strand& s){};     ///< Check if s should preempt curr.
     };
 
 } // namespace zxfoundation::domain

@@ -1,9 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/sched/switch_to.S
 /// @brief Context switch — save/restore callee-saved GPRs and swap kernel stacks.
-///
-/// The scheduler now dispatches strands (not domains).  __switch_to_asm
-/// receives (strand* prev, strand* next) in %r2, %r3.
 
 #include <arch/s390x/cpu/lowcore.h>
 

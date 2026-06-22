@@ -2,16 +2,6 @@
 /// @file zxfoundation/gate/dispatch.cxxm
 /// @brief Namespaced nucleus dispatch — routes PC-initiated calls to
 ///        per-namespace handler files.
-///
-/// The call number encodes: bits 7-5 = namespace, bits 4-0 = operation.
-/// The top-level dispatch extracts the namespace and delegates to the
-/// appropriate nc_*::dispatch() function.
-///
-/// Capability enforcement: every nucleus call is validated at this single
-/// chokepoint before reaching any handler.  A static table maps each
-/// (namespace, op) to its required capability token type and rights.
-/// Calls that require a capability pass it in a0; the dispatch function
-/// validates it via cap_validate_generic() before routing.
 
 export module zxfoundation.gate.dispatch;
 import zxfoundation.gate.gate_types;
@@ -32,18 +22,7 @@ using zxfoundation::sys::printk::perr;
 
 static constexpr u64 DISPATCH_ERROR_SENTINEL = ~0ULL;
 
-// ── Capability enforcement table ─────────────────────────────────────────────
-//
-// Each entry maps a packed (namespace << 5 | operation) to the capability
-// check required before the handler is invoked.  The check validates that
-// the cap_token in argument register a0:
-//   - Is non-null
-//   - References a live object
-//   - Carries the required rights
-//
-// Operations that do not take a capability token are marked check::none.
-
-namespace _dispatch_internal {
+namespace _internal {
 
     enum class check : u8 {
         none = 0,       // No capability needed (a0 is a regular argument).
@@ -167,14 +146,6 @@ export {
 namespace zxfoundation::gate::dispatch {
 
     /// @brief Namespaced nucleus dispatch entry point.
-    ///
-    /// Called from the C-linkage do_nucleus_dispatch() which is reached
-    /// from the PC entry assembly stub.
-    ///
-    /// Every call is subject to capability-based authorization: the
-    /// validate_call() function checks a0 against the static auth table
-    /// before any handler is invoked.
-    ///
     /// @param call_nr  Packed: (namespace << 5) | operation.
     /// @param a0-a4    Arguments from r3-r7.
     /// @return         Result for r2, or DISPATCH_ERROR_SENTINEL on failure.
@@ -188,7 +159,7 @@ namespace zxfoundation::gate::dispatch {
         const u32 op = call_nr & 0x1FU;
 
         // ── Capability enforcement chokepoint ────────────────
-        if (!_dispatch_internal::validate_call(ns, op, a0)) {
+        if (!_internal::validate_call(ns, op, a0)) {
             return DISPATCH_ERROR_SENTINEL;
         }
 
@@ -220,9 +191,6 @@ namespace zxfoundation::gate::dispatch {
 } // end export
 
 /// @brief C-linkage entry point for assembly callers (entry.S PC trap stub).
-///
-/// The assembly stub places the call number in r2 and arguments in r3-r7,
-/// then branches here.  The result is returned in r2.
 extern "C" auto do_nucleus_dispatch(
     u64 call_nr, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
 ) noexcept -> u64 {

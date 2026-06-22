@@ -63,9 +63,6 @@ constexpr u16 EXT_EXTERNAL_CALL      = 0x1202;
 constexpr u16 EXT_TIMING_ALERT       = 0x1406;
 constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;
 
-// ── DIAG 288 probe fixup flag ──────────────────────────────────────────
-// Set before calling processor::diag288() to catch spec exceptions when
-// the hypervisor doesn't implement DIAG 0x288.  Checked in do_pgm_check().
 static bool s_pgm_fixup_active = false;
 
 // ── MCIC (Machine-Check Interruption Code) bit definitions (PoP §7-4) ────

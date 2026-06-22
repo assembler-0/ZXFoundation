@@ -132,9 +132,6 @@ namespace zxfoundation::sys::printk {
         }
 
         if (pushed) {
-            // Try to acquire the console flush lock.
-            // If we fail, it means another CPU is currently flushing the log buffer,
-            // so we can return immediately and let them handle it.
             if (g_state.flush_lock.try_lock()) {
                 bool done = false;
                 while (!done) {

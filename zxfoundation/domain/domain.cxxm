@@ -384,19 +384,6 @@ namespace zxfoundation::domain {
     }
 
     /// @brief Destroy a domain and release all its resources.
-    ///
-    /// Performs full teardown:
-    ///   1. Validates the domain ID and checks the slot is live.
-    ///   2. Marks the domain as dying.
-    ///   3. Frees the kernel stack via PMM.
-    ///   4. Frees the root page table via MMU.
-    ///   5. Frees the storage key.
-    ///   6. Releases the table slot back to the SCOMS kobject_table.
-    ///
-    /// NOTE: Gate, portal, and scheduler cleanup is performed by the
-    /// caller (domain_reap in sched.cxxm) BEFORE calling domain_destroy.
-    /// This avoids circular module dependencies.
-    ///
     /// @param[in] id  Domain ID to destroy.
     /// @return Success or kernel_error on invalid ID.
     [[nodiscard]] auto domain_destroy(domain_id id) noexcept
@@ -480,12 +467,6 @@ namespace zxfoundation::domain {
 
     /// @brief Deferred destruction — called by the scheduler after switching
     ///        away from a dying domain.
-    ///
-    /// This is the deferred cleanup path. When a domain exits (marks itself
-    /// dying), the scheduler switches away from it. After the context switch
-    /// completes (on the new domain's stack), the scheduler calls domain_reap
-    /// on the old domain to perform the actual resource teardown.
-    ///
     /// @param[in,out] d  The dying domain to reap.
     auto domain_reap(domain& d) noexcept -> void {
         using namespace _internal;

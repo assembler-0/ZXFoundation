@@ -1,10 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sched/sched.cxxm
 /// @brief Scheduler core — schedule(), tick, init, work-stealing.
-///
-/// The scheduler dispatches strands (not domains).  Each domain has a
-/// primary_strand; additional strands can be created via the strand_create
-/// syscall (Phase 1: single strand per domain, Phase 2+: multi-strand).
 
 export module zxfoundation.sched.sched;
 import zxfoundation.sched.sched_fair;

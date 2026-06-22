@@ -1,21 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/cputimer.cxxm
 /// @brief z/Architecture CPU Timer — raw hardware accessors (SPT / STPT).
-///
-/// The CPU Timer (PoP §4-42, §6-12) is a per-CPU 64-bit decrementing
-/// counter.  Its format matches TOD-clock bits 0-63 except bit 0 is a
-/// sign.  The timer decrements at the TOD-clock rate (effectively 4096
-/// ticks/µs).  When the value is negative (bit 0 = 1), an external
-/// interrupt (code 0x1005) is requested (subject to CR0 bit 53).
-///
-/// The interrupt request is level-sensitive — it persists as long as
-/// the value remains negative.  The handler must set the timer to a
-/// non-negative value (via SPT) to clear the condition.
-///
-/// Use cases:
-///   - Virtual-time accounting (store on context switch, restore on
-///     resume, measure elapsed CPU time per task).
-///   - Profiling / any per-CPU hardware-backed timer.
 
 export module arch.s390x.cpu.cputimer;
 import zxfoundation.base.types;

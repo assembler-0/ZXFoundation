@@ -45,7 +45,7 @@ namespace arch::s390x::cpu::lowcore {
     }
 
     [[nodiscard]] inline auto get_current_phys() noexcept -> zx_lowcore* {
-        return static_cast<zx_lowcore*>(0x0ULL);
+        return static_cast<zx_lowcore*>(0ULL);
     }
 
     /// @brief Retrieve the lowcore structure pointer for a specific CPU, taking prefixing into account.
