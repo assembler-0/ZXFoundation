@@ -12,8 +12,19 @@ export {
 
 namespace arch::s390x::cpu::irq {
 
+    constexpr u64 IRQ_RESTORE_MASK_LC = 0x0200UL;
+
+    [[gnu::no_stack_protector]] auto irq_restore_mask_byte(const u8 byte0) noexcept -> void {
+        __asm__ volatile (
+            "stc %[byte0], %c[slot](0)\n\t"
+            "ssm %c[slot](0)\n\t"
+            :: [byte0] "d"(byte0), [slot] "i"(IRQ_RESTORE_MASK_LC)
+            : "memory", "cc"
+        );
+    }
+
     [[nodiscard]] auto irq_save_disable() noexcept -> irqflags {
-        psw::epsw_words w;
+        psw::epsw_words w{};
         u8 dummy;
         __asm__ volatile (
             "epsw  %[hi], %[lo]\n\t"
@@ -29,7 +40,7 @@ namespace arch::s390x::cpu::irq {
     auto irq_restore(const irqflags flags) noexcept -> void {
         const auto w   = lib::bit_cast<psw::epsw_words>(flags);
         const u8 byte0 = static_cast<u8>(w.hi >> 24);
-        __asm__ volatile ("ssm %[m]\n\t" :: [m] "Q"(byte0) : "memory");
+        irq_restore_mask_byte(byte0);
     }
 
     auto irq_disable() noexcept -> void {

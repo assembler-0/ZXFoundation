@@ -28,10 +28,12 @@ namespace arch::s390x::cpu::lowcore {
     constexpr u64 LC_MCCK_STACK     = 0x0368UL; ///< zx_lowcore::mcck_stack
     constexpr u64 LC_AP_CR0         = 0x0330UL; ///< zx_lowcore::ap_cr0  (software-defined)
     constexpr u64 LC_AP_CR13        = 0x0338UL; ///< zx_lowcore::ap_cr13 (software-defined)
+    constexpr u64 LC_CURRENT_DOMAIN = 0x0340UL; ///< zx_lowcore::current_domain — used by entry.S
     constexpr u64 LC_KERNEL_ASCE    = 0x0388UL; ///< zx_lowcore::kernel_asce
 
     constexpr u64 LC_PERCPU_OFFSET  = 0x0400UL; ///< zx_lowcore::percpu
     constexpr u64 LC_CPU_ID_OFFSET  = 0x0408UL; ///< percpu::cpu_id
+    constexpr u64 LC_PREEMPT_COUNT  = 0x0430UL; ///< percpu::preempt_count — used by entry.S
     constexpr u64 LC_IRQ_NESTING    = 0x0438UL; ///< percpu::irq_nesting — used by entry.S
 
     /// @brief z/Architecture 8 KB prefix (lowcore) structure.
@@ -203,6 +205,8 @@ namespace arch::s390x::cpu::lowcore {
         "LC_AP_CR0 mismatch");
     static_assert(__builtin_offsetof(zx_lowcore, ap_cr13) == LC_AP_CR13,
         "LC_AP_CR13 mismatch");
+    static_assert(__builtin_offsetof(zx_lowcore, current_domain) == LC_CURRENT_DOMAIN,
+        "LC_CURRENT_DOMAIN mismatch");
     static_assert(__builtin_offsetof(zx_lowcore, kernel_asce) == LC_KERNEL_ASCE,
         "LC_KERNEL_ASCE mismatch");
     static_assert(__builtin_offsetof(zx_lowcore, percpu) == LC_PERCPU_OFFSET,
@@ -218,9 +222,6 @@ namespace arch::s390x::cpu::lowcore {
         __builtin_offsetof(zx_lowcore, percpu) +
         __builtin_offsetof(percpu::s390x_percpu_data, irq_nesting) == LC_IRQ_NESTING,
         "LC_IRQ_NESTING does not match irq_nesting field; update LC_IRQ_NESTING");
-
-    /// @brief LC_PREEMPT_COUNT = 0x0430 — used by entry.S CHECK_PREEMPT macro.
-    constexpr u64 LC_PREEMPT_COUNT = 0x0430UL;
 
     static_assert(
         __builtin_offsetof(zx_lowcore, percpu) +

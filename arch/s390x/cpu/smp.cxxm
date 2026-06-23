@@ -27,27 +27,114 @@ import lib.expected;
 import lib.error;
 import lib.string;
 
-/// @brief Spin until target CPU reports stopped (SIGP_STATUS_STOPPED or CHECK_STOP).
-/// @note  SIGP_STATUS_STOPPED = 0x0200 0000, SIGP_STATUS_CHECK_STOP = 0x0010 0000
-///        Both are in the status word returned on CC=1 (status stored).
-static constexpr u32 SIGP_STATUS_STOPPED    = 0x0020'0000U; ///< CPU is stopped
-static constexpr u32 SIGP_STATUS_CHECK_STOP = 0x0010'0000U; ///< CPU is in check-stop
+enum class ap_boot_state : u8 {
+    allocated,
+    lowcore_initialized,
+    prefix_set,
+    restarted,
+    online,
+    failed,
+};
 
-[[nodiscard]] static auto cpu_is_stopped(const u16 cpu_addr) noexcept -> bool {
-    u32 status{0};
-    const int cc = arch::s390x::cpu::sigp::sigp_issue(
-        cpu_addr, arch::s390x::cpu::sigp::SIGP_SENSE, 0, status);
-    /// CC=1 means status was stored; check stopped/check-stop bits.
-    if (cc == arch::s390x::cpu::sigp::SIGP_CC_STATUS_STORED)
-        return !!(status & (SIGP_STATUS_STOPPED | SIGP_STATUS_CHECK_STOP));
-    /// CC=3: CPU not operational — treat as stopped to avoid infinite spin.
-    return (cc == arch::s390x::cpu::sigp::SIGP_CC_NOT_OPERATIONAL);
+struct ap_boot_record {
+    u16 cpu_id{};
+    u16 cpu_addr{};
+    u64 lowcore_phys{};
+    u64 kernel_stack_phys{};
+    u64 async_stack_phys{};
+    u64 mcck_stack_phys{};
+    u64 nodat_stack_phys{};
+    ap_boot_state state{ap_boot_state::allocated};
+    u32 sigp_status{};
+};
+
+struct sigp_result {
+    int cc{};
+    u32 status{};
+};
+
+static constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
+static constexpr u64 SIGP_WAIT_TIMEOUT_TOD = TOD_UNITS_PER_MILLISECOND * 2'000ULL;
+static constexpr u64 AP_ONLINE_TIMEOUT_TOD = TOD_UNITS_PER_MILLISECOND * 30'000ULL;
+static constexpr u64 LOWCORE_PREFIX_ALIGNMENT = 8'192ULL;
+static constexpr u64 SIGP_PREFIX_MAX_PHYS = 1ULL << 31U;
+
+static ap_boot_record g_ap_boot_records[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
+[[nodiscard]] static auto tod_elapsed(const u64 start) noexcept -> u64 {
+    return arch::s390x::cpu::processor::stck() - start;
 }
 
-/// @brief Block until @p cpu_addr transitions to stopped state.
-static auto wait_cpu_stopped(const u16 cpu_addr) noexcept -> void {
-    while (!cpu_is_stopped(cpu_addr))
+[[nodiscard]] static auto prefix_block_is_valid(const u64 phys) noexcept -> bool {
+    return phys != 0 && phys < SIGP_PREFIX_MAX_PHYS &&
+        ((phys & (LOWCORE_PREFIX_ALIGNMENT - 1U)) == 0);
+}
+
+[[nodiscard]] static auto sigp_issue_bounded(
+    const u16 cpu_addr,
+    const u8 order,
+    const u32 parm
+) noexcept -> sigp_result {
+    sigp_result result{};
+    const u64 start = arch::s390x::cpu::processor::stck();
+
+    do {
+        result.status = 0;
+        result.cc = arch::s390x::cpu::sigp::sigp_issue(cpu_addr, order, parm, result.status);
+        if (result.cc != arch::s390x::cpu::sigp::SIGP_CC_BUSY)
+            return result;
         arch::s390x::cpu::processor::cpu_relax();
+    } while (tod_elapsed(start) < SIGP_WAIT_TIMEOUT_TOD);
+
+    result.cc = arch::s390x::cpu::sigp::SIGP_CC_BUSY;
+    return result;
+}
+
+[[nodiscard]] static auto wait_cpu_stopped(const u16 cpu_addr) noexcept -> sigp_result {
+    sigp_result result{};
+    const u64 start = arch::s390x::cpu::processor::stck();
+
+    do {
+        result = sigp_issue_bounded(cpu_addr, arch::s390x::cpu::sigp::SIGP_SENSE, 0);
+        if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_STATUS_STORED &&
+            (result.status & (arch::s390x::cpu::sigp::SIGP_STATUS_STOPPED |
+                              arch::s390x::cpu::sigp::SIGP_STATUS_CHECK_STOP)))
+            return result;
+        if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_NOT_OPERATIONAL)
+            return result;
+        arch::s390x::cpu::processor::cpu_relax();
+    } while (tod_elapsed(start) < SIGP_WAIT_TIMEOUT_TOD);
+
+    result.cc = arch::s390x::cpu::sigp::SIGP_CC_BUSY;
+    return result;
+}
+
+[[nodiscard]] static auto sigp_failure_error(const sigp_result& result) noexcept -> lib::kernel_error {
+    if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_BUSY)
+        return lib::kernel_error::from_arch(lib::arch_error::sigp_busy);
+    if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_NOT_OPERATIONAL)
+        return lib::kernel_error::from_arch(lib::arch_error::sigp_not_operational);
+    if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_STATUS_STORED) {
+        if (result.status & arch::s390x::cpu::sigp::SIGP_STATUS_INVALID_ORDER)
+            return lib::kernel_error::from_arch(lib::arch_error::sigp_invalid_order);
+        if (result.status & arch::s390x::cpu::sigp::SIGP_STATUS_INVALID_PARAMETER)
+            return lib::kernel_error::from_memory(lib::memory_error::alignment_error);
+        return lib::kernel_error::from_arch(lib::arch_error::cpu_not_available);
+    }
+    return lib::kernel_error::from_generic(lib::generic_error::internal_error);
+}
+
+[[nodiscard]] static auto reject_sigp(
+    ap_boot_record& record,
+    const u8 order,
+    const sigp_result& result
+) noexcept -> lib::kernel_error {
+    record.state = ap_boot_state::failed;
+    record.sigp_status = result.status;
+    zxfoundation::sys::printk::pnotice(
+        "smp: cpu {} addr {} rejected by SIGP order {} cc {} status {}",
+        record.cpu_id, record.cpu_addr, static_cast<u32>(order), result.cc, result.status);
+    return sigp_failure_error(result);
 }
 
 // AP online counter — written by each AP in ap_startup, polled by BSP.
@@ -61,6 +148,16 @@ static arch::s390x::lib::atomic::atomic<u32> g_aps_initialized{0};
 
 // Total number of APs that were started (set by init_aps, read by wait).
 static u32 g_total_aps{0};
+
+[[nodiscard]] static auto wait_ap_online(const u32 target) noexcept -> bool {
+    const u64 start = arch::s390x::cpu::processor::stck();
+    while (g_ap_online.load(arch::s390x::lib::atomic::memory_order::seq_cst) < target) {
+        if (tod_elapsed(start) >= AP_ONLINE_TIMEOUT_TOD)
+            return false;
+        arch::s390x::cpu::processor::cpu_relax();
+    }
+    return true;
+}
 
 extern "C" {
 
@@ -118,6 +215,20 @@ namespace arch::s390x::cpu::smp {
     {
         using namespace zxfoundation::memory::pmm;
 
+        g_ap_online.store(0, arch::s390x::lib::atomic::memory_order::seq_cst);
+        g_sched_ready.store(0, arch::s390x::lib::atomic::memory_order::release);
+        g_aps_initialized.store(0, arch::s390x::lib::atomic::memory_order::seq_cst);
+        g_total_aps = 0;
+        for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i)
+            g_ap_boot_records[i] = ap_boot_record{};
+
+        if (proto.cpu_count > zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] {
+            zxfoundation::sys::printk::pnotice(
+                "smp: rejected cpu map count {} larger than maximum {}",
+                proto.cpu_count, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS);
+            return ::lib::unexpected(::lib::kernel_error::from_arch(::lib::arch_error::invalid_cpu_id));
+        }
+
         if (!(proto.flags & init::zxfl::ZXFL_FLAG_SMP) || proto.cpu_count <= 1)
             return 0U;
 
@@ -145,26 +256,77 @@ namespace arch::s390x::cpu::smp {
             if (ci.state != init::zxfl::ZXFL_CPU_STOPPED) continue;
 
             const u16 new_cpu_id = next_cpu_id++;
+            if (new_cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]]
+                return ::lib::unexpected(::lib::kernel_error::from_arch(::lib::arch_error::invalid_cpu_id));
 
-            // Allocate lowcore (order 1 = 8 KiB) + 4 stacks (order 2 = 16 KiB each)
-            // as a single atomic transaction.
+            auto& record = g_ap_boot_records[new_cpu_id];
+            record = ap_boot_record{
+                .cpu_id = new_cpu_id,
+                .cpu_addr = ci.cpu_addr,
+            };
+
             transaction txn;
             auto lc_f    = txn.alloc(1, zone::dma31, purpose::lowcore,    page_init::zeroed);
+            if (!lc_f) {
+                record.state = ap_boot_state::failed;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {} lowcore allocation failed",
+                    record.cpu_id, record.cpu_addr);
+                return ::lib::unexpected(lc_f.error());
+            }
             auto stk_f   = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            if (!stk_f) {
+                record.state = ap_boot_state::failed;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {} kernel stack allocation failed",
+                    record.cpu_id, record.cpu_addr);
+                return ::lib::unexpected(stk_f.error());
+            }
             auto async_f = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            if (!async_f) {
+                record.state = ap_boot_state::failed;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {} async stack allocation failed",
+                    record.cpu_id, record.cpu_addr);
+                return ::lib::unexpected(async_f.error());
+            }
             auto mcck_f  = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            if (!mcck_f) {
+                record.state = ap_boot_state::failed;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {} mcck stack allocation failed",
+                    record.cpu_id, record.cpu_addr);
+                return ::lib::unexpected(mcck_f.error());
+            }
             auto nodat_f = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
-            if (!lc_f || !stk_f || !async_f || !mcck_f || !nodat_f) continue;
-            txn.commit();
+            if (!nodat_f) {
+                record.state = ap_boot_state::failed;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {} nodat stack allocation failed",
+                    record.cpu_id, record.cpu_addr);
+                return ::lib::unexpected(nodat_f.error());
+            }
 
-            // folio_fresh carries the physical address — use phys_base directly.
             const u64 lc_phys   = lc_f->phys_base;
             const u64 stk_top   = stk_f->phys_base   + (static_cast<u64>(PAGE_SIZE) << 2);
             const u64 async_top = async_f->phys_base  + (static_cast<u64>(PAGE_SIZE) << 2);
             const u64 mcck_top  = mcck_f->phys_base   + (static_cast<u64>(PAGE_SIZE) << 2);
             const u64 nodat_top = nodat_f->phys_base  + (static_cast<u64>(PAGE_SIZE) << 2);
 
-            // page_init::zeroed already zeroed the lowcore folio during alloc.
+            record.lowcore_phys = lc_phys;
+            record.kernel_stack_phys = stk_top;
+            record.async_stack_phys = async_top;
+            record.mcck_stack_phys = mcck_top;
+            record.nodat_stack_phys = nodat_top;
+            if (!prefix_block_is_valid(lc_phys)) {
+                record.state = ap_boot_state::failed;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {} invalid prefix block {}",
+                    record.cpu_id, record.cpu_addr, lc_phys);
+                return ::lib::unexpected(::lib::kernel_error::from_memory(::lib::memory_error::alignment_error));
+            }
+            txn.commit();
+
             auto* lc = reinterpret_cast<lowcore::zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(lc_phys));
 
             lowcore::init_ap(*lc, lowcore::ap_init_params{
@@ -186,18 +348,39 @@ namespace arch::s390x::cpu::smp {
             lc->percpu.drawer_id = ci.drawer_id;
             lc->percpu.cpu_type  = ci.type;
             lowcore::register_cpu_lowcore(new_cpu_id, lc_phys);
+            record.state = ap_boot_state::lowcore_initialized;
 
-            u32 status{0};
-            sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_INITIAL_CPU_RESET, 0, status);
-            wait_cpu_stopped(ci.cpu_addr);
-            sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_SET_PREFIX,
-                            static_cast<u32>(lc_phys), status);
-            sigp::sigp_busy(ci.cpu_addr, sigp::SIGP_RESTART, 0, status);
+            auto result = sigp_issue_bounded(ci.cpu_addr, sigp::SIGP_INITIAL_CPU_RESET, 0);
+            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
+                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_INITIAL_CPU_RESET, result));
+
+            result = wait_cpu_stopped(ci.cpu_addr);
+            if (result.cc != sigp::SIGP_CC_STATUS_STORED ||
+                !(result.status & sigp::SIGP_STATUS_STOPPED) ||
+                (result.status & sigp::SIGP_STATUS_CHECK_STOP))
+                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_SENSE, result));
+
+            result = sigp_issue_bounded(ci.cpu_addr, sigp::SIGP_SET_PREFIX,
+                static_cast<u32>(lc_phys));
+            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
+                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_SET_PREFIX, result));
+            record.state = ap_boot_state::prefix_set;
+
+            result = sigp_issue_bounded(ci.cpu_addr, sigp::SIGP_RESTART, 0);
+            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
+                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_RESTART, result));
+            record.state = ap_boot_state::restarted;
             ++started;
-        }
 
-        while (g_ap_online.load(lib::atomic::memory_order::seq_cst) < started)
-            processor::cpu_relax();
+            if (!wait_ap_online(started)) {
+                record.state = ap_boot_state::failed;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {} did not enter AP startup before timeout",
+                    record.cpu_id, record.cpu_addr);
+                return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::stall));
+            }
+            record.state = ap_boot_state::online;
+        }
 
         if (started != 0) zxfoundation::sys::printk::pinfo("smp: {} ap(s) started", started);
         else zxfoundation::sys::printk::pnotice("smp: no ap(s) detected/started");

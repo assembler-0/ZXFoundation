@@ -32,20 +32,20 @@ namespace arch::s390x::css::devmatch::_internal {
     };
 
     static constexpr dev_entry device_types[] = {
-        { 0x2501, dev_class::reader,     "2501 card reader"           },
-        { 0x2540, dev_class::reader,     "2540 card reader/punch"     },
+        { 0x2501, dev_class::reader,     "2501 card reader"          },
+        { 0x2540, dev_class::reader,     "2540 card reader/punch"    },
 
-        { 0x1403, dev_class::printer,    "1403 line printer"          },
-        { 0x3211, dev_class::printer,    "3211 line printer"          },
+        { 0x1403, dev_class::printer,    "1403 line printer"         },
+        { 0x3211, dev_class::printer,    "3211 line printer"         },
 
-        { 0x3215, dev_class::console,    "3215 line-mode console"     },
-        { 0x3270, dev_class::display,    "3270 display"               },
-        { 0x3277, dev_class::display,    "3277 display"               },
-        { 0x3278, dev_class::display,    "3278 display"               },
-        { 0x3279, dev_class::display,    "3279 color display"         },
+        { 0x3215, dev_class::console,    "3215 line-mode console"    },
+        { 0x3270, dev_class::display,    "3270 display"              },
+        { 0x3277, dev_class::display,    "3277 display"              },
+        { 0x3278, dev_class::display,    "3278 display"              },
+        { 0x3279, dev_class::display,    "3279 color display"        },
 
-        { 0x3505, dev_class::reader,     "3505 card reader"           },
-        { 0x3525, dev_class::punch,      "3525 card punch"            },
+        { 0x3505, dev_class::reader,     "3505 card reader"          },
+        { 0x3525, dev_class::punch,      "3525 card punch"           },
 
         { 0x3380, dev_class::dasd_eckd,  "3380 CKD DASD"             },
         { 0x3390, dev_class::dasd_eckd,  "3390 ECKD DASD"            },
@@ -53,9 +53,9 @@ namespace arch::s390x::css::devmatch::_internal {
         { 0x0671, dev_class::dasd_fba,   "0671 FBA DASD"             },
         { 0x9336, dev_class::dasd_fba,   "9336 FBA DASD"             },
 
-        { 0x3420, dev_class::tape,       "3420 tape"                  },
-        { 0x3480, dev_class::tape,       "3480 tape cartridge"        },
-        { 0x3490, dev_class::tape,       "3490 tape cartridge"        },
+        { 0x3420, dev_class::tape,       "3420 tape"                 },
+        { 0x3480, dev_class::tape,       "3480 tape cartridge"       },
+        { 0x3490, dev_class::tape,       "3490 tape cartridge"       },
         { 0x3590, dev_class::tape,       "3590 high-perf tape"       },
 
         { 0x3088, dev_class::ctc,        "3088 CTC adapter"          },
@@ -69,7 +69,7 @@ namespace arch::s390x::css::devmatch::_internal {
         { 0x3832, dev_class::virtio,     "virtio-ccw transport"      },
     };
 
-    static constexpr u32 NUM_DEVICE_TYPES =
+    [[maybe_unused]] static constexpr u32 NUM_DEVICE_TYPES =
         sizeof(device_types) / sizeof(device_types[0]);
 
     static constexpr dev_entry cu_types[] = {
@@ -102,7 +102,7 @@ namespace arch::s390x::css::devmatch::_internal {
         { 0x3832, dev_class::virtio,     "virtio-ccw ctrl"           },
     };
 
-    static constexpr u32 NUM_CU_TYPES =
+    [[maybe_unused]] static constexpr u32 NUM_CU_TYPES =
         sizeof(cu_types) / sizeof(cu_types[0]);
 
     static constexpr const char* class_names[] = {
@@ -139,9 +139,9 @@ namespace arch::s390x::css::devmatch {
     /// @brief Look up a device type by its IBM 4-digit code.
     /// @return Device name string, or nullptr if unknown.
     [[nodiscard]] constexpr auto lookup_device(u16 dev_type) noexcept -> const char* {
-        for (u32 i = 0; i < NUM_DEVICE_TYPES; ++i) {
-            if (device_types[i].type == dev_type)
-                return device_types[i].name;
+        for (const auto device_type : device_types) {
+            if (device_type.type == dev_type)
+                return device_type.name;
         }
         return nullptr;
     }
@@ -149,27 +149,27 @@ namespace arch::s390x::css::devmatch {
     /// @brief Look up a control-unit type by its IBM 4-digit code.
     /// @return CU name string, or nullptr if unknown.
     [[nodiscard]] constexpr auto lookup_cu(u16 cu_type) noexcept -> const char* {
-        for (u32 i = 0; i < NUM_CU_TYPES; ++i) {
-            if (cu_types[i].type == cu_type)
-                return cu_types[i].name;
+        for (auto i : cu_types) {
+            if (i.type == cu_type)
+                return i.name;
         }
         return nullptr;
     }
 
     /// @brief Get the device class for a device type.
     [[nodiscard]] constexpr auto device_class_of(u16 dev_type) noexcept -> dev_class {
-        for (u32 i = 0; i < NUM_DEVICE_TYPES; ++i) {
-            if (device_types[i].type == dev_type)
-                return device_types[i].cls;
+        for (auto device_type : device_types) {
+            if (device_type.type == dev_type)
+                return device_type.cls;
         }
         return dev_class::unknown;
     }
 
     /// @brief Get the device class for a control-unit type.
     [[nodiscard]] constexpr auto cu_class_of(u16 cu_type) noexcept -> dev_class {
-        for (u32 i = 0; i < NUM_CU_TYPES; ++i) {
-            if (cu_types[i].type == cu_type)
-                return cu_types[i].cls;
+        for (auto i : cu_types) {
+            if (i.type == cu_type)
+                return i.cls;
         }
         return dev_class::unknown;
     }
@@ -186,19 +186,19 @@ namespace arch::s390x::css::devmatch {
     [[nodiscard]] constexpr auto match(u16 dev_type, u16 cu_type) noexcept -> match_result {
         match_result r{ nullptr, nullptr, dev_class::unknown };
 
-        for (u32 i = 0; i < NUM_DEVICE_TYPES; ++i) {
-            if (device_types[i].type == dev_type) {
-                r.dev_name = device_types[i].name;
-                r.cls      = device_types[i].cls;
+        for (auto device_type : device_types) {
+            if (device_type.type == dev_type) {
+                r.dev_name = device_type.name;
+                r.cls      = device_type.cls;
                 break;
             }
         }
 
-        for (u32 i = 0; i < NUM_CU_TYPES; ++i) {
-            if (cu_types[i].type == cu_type) {
-                r.cu_name = cu_types[i].name;
+        for (auto i : cu_types) {
+            if (i.type == cu_type) {
+                r.cu_name = i.name;
                 if (r.cls == dev_class::unknown)
-                    r.cls = cu_types[i].cls;
+                    r.cls = i.cls;
                 break;
             }
         }

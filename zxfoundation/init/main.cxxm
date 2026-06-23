@@ -209,6 +209,8 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     _internal::validate_stack_frame(*protocol);
     _internal::verify_kernel_checksums(*protocol);
 
+    zxfoundation::base::cxxrtse::cxxabi::ssp_init();
+
     zxfoundation::init::boot_protocol = *protocol;
 
     arch::s390x::cpu::features::init(zxfoundation::init::boot_protocol.stfle_fac);
@@ -233,7 +235,6 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::sys::irq::irq_subsystem_init();
     zxfoundation::sys::timer::timer_init();
-    arch::s390x::cpu::irq::irq_enable();
 
     zxfoundation::rcu::rcu_init();
     zxfoundation::domain::domain_init();
@@ -249,18 +250,17 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::sched::sched_init();
     arch::s390x::cpu::smp::init_bsp();
     arch::s390x::cpu::smp::init_aps(*protocol);
+    arch::s390x::cpu::smp::ap_release_all();
+    arch::s390x::cpu::smp::wait_aps_initialized();
+    arch::s390x::cpu::irq::irq_enable();
 
     arch::s390x::css::css_init();
     arch::s390x::css::ccw_io::css_probe_devices();
     zxfoundation::sys::io::io_init();
 
-    arch::s390x::cpu::smp::ap_release_all();
-
     _internal::launch_bootstrap_domain();
 
     pinfo("sys: core.zxfoundation.nucleus initialization complete");
-
-    arch::s390x::cpu::smp::wait_aps_initialized();
 
     zxfoundation::sys::watchdog::watchdog_init();
 

@@ -26,7 +26,7 @@ target_compile_options(core.zxfoundation.nucleus.pass1 PRIVATE
     -ftrivial-auto-var-init=pattern
     -fno-omit-frame-pointer
     -mbackchain
-    -fno-stack-protector
+    -fstack-protector-strong
     -pipe
     -mno-packed-stack
     -mhard-float

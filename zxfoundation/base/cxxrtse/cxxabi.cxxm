@@ -171,12 +171,39 @@ auto __cxa_free_exception(void*) -> void* {
     );
 }
 
+/// @brief Global stack-protector guard value read by every `-fstack-protector`
+///        function prologue/epilogue.
+u64 __stack_chk_guard = 0x595A465353500001ULL; // "ZXFSSP" + version tag
+
+[[gnu::no_stack_protector, noreturn]] auto __stack_chk_fail() -> void {
+    zxfoundation::sys::syschk::syschk_fatal(
+        lib::kernel_error::from_memory(lib::memory_error::ssp_check_fail),
+        "cxxrtse: stack smashing detected"
+    );
+    __builtin_unreachable();
+}
+
 } // extern "C"
 
 export {
 
 namespace zxfoundation::base::cxxrtse::cxxabi {
-    
+
+    /// @brief Install the kernel-wide stack-protector guard entropy.
+    /// @note One value is computed once on the BSP and used kernel-wide; APs do
+    ///       not recompute it.  This is what makes the guard migration-safe
+    ///       across CPUs (see the `__stack_chk_guard` rationale above).
+    [[gnu::no_stack_protector]] void ssp_init() noexcept {
+        __stack_chk_guard =
+            arch::s390x::cpu::processor::stck() ^ 0xC0FFEE00FACADE42ULL;
+    }
+
+    /// @brief Read the active kernel-wide stack-protector guard value.
+    /// @return The current `__stack_chk_guard`.
+    [[nodiscard]] auto stack_guard() noexcept -> u64 {
+        return __stack_chk_guard;
+    }
+
     void run_global_constructor() noexcept {
         if (&__init_array_end == nullptr) [[unlikely]] {
             pinfo("cxxabi: __init_array_start or __init_array_end "

@@ -14,3 +14,4 @@ arch/s390x/init/zxfl/include/zxfoundation/zxconfig.h
 zxfoundation/base/config.cxxm
 doxygen-build/
 convert*.py
+.junie

@@ -18,12 +18,14 @@
 #define LC_MCCK_STACK       0x0368UL    ///< zx_lowcore_t::mcck_stack
 #define LC_KERNEL_ASCE      0x0388UL    ///< zx_lowcore_t::kernel_asce
 #define LC_RETURN_PSW       0x0290UL    ///< zx_lowcore_t::return_psw
+#define LC_CURRENT_DOMAIN   0x0340UL    ///< zx_lowcore_t::current_domain
 #define LC_KERNEL_STACK     0x0348UL    ///< zx_lowcore_t::kernel_stack
-#define LC_ASYNC_STACK      0x0350UL    ///< zx_lowcore_t::async_stack
 #define LC_AP_CR0           0x0330UL    ///< zx_lowcore_t::ap_cr0
 #define LC_AP_CR13          0x0338UL    ///< zx_lowcore_t::ap_cr13
+#define LC_PREEMPT_COUNT    0x0430UL    ///< arch::s390x::cpu::percpu::preempt_count
+#define LC_IRQ_NESTING      0x0438UL    ///< arch::s390x::cpu::percpu::irq_nesting
 
-/* Old PSW offsets — PoP §4.3.2 */
+// Old PSW offsets — PoP §4.3.2.
 #define LC_EXT_OLD_PSW      0x0130UL
 #define LC_SVC_OLD_PSW      0x0140UL
 #define LC_PGM_OLD_PSW      0x0150UL
@@ -218,6 +220,8 @@ _Static_assert(__builtin_offsetof(zx_lowcore_t, return_psw)    == LC_RETURN_PSW,
                "LC_RETURN_PSW mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, kernel_stack)  == LC_KERNEL_STACK,
                "LC_KERNEL_STACK mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, current_domain) == LC_CURRENT_DOMAIN,
+               "LC_CURRENT_DOMAIN mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, percpu)        == LC_PERCPU_OFFSET,
                "LC_PERCPU_OFFSET mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, ap_cr0)         == LC_AP_CR0,
@@ -238,6 +242,15 @@ _Static_assert(
     LC_PERCPU_OFFSET + __builtin_offsetof(zx_percpu_t, cpu_id) == LC_CPU_ID_OFFSET,
     "LC_CPU_ID_OFFSET does not match actual zx_percpu_t::cpu_id offset; "
     "update processor.h inline constant 0x408UL to match");
+
+/// @brief Trap entry uses these per-CPU offsets from the C++ lowcore layout.
+///        The C loader header exports the constants for assembly inclusion;
+///        arch/s390x/cpu/lowcore_types.cxxm validates them against the C++
+///        percpu layout that owns preempt_count and irq_nesting.
+_Static_assert(LC_PREEMPT_COUNT == 0x0430UL,
+               "LC_PREEMPT_COUNT must match lowcore_types.cxxm");
+_Static_assert(LC_IRQ_NESTING == 0x0438UL,
+               "LC_IRQ_NESTING must match lowcore_types.cxxm");
 
 /// @brief Access lowcore via absolute addressing (DAT off).
 #define ZX_LOWCORE_RAW_INPLACE  ((zx_lowcore_t *)0x0)

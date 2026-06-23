@@ -27,6 +27,9 @@ extern "C" {
     auto trap_svc_entry()  -> void;
     auto trap_mcck_entry() -> void;
     auto ap_dat_on()       -> void;
+
+    /// @brief Kernel-wide stack-protector guard
+    extern u64 __stack_chk_guard;
 }
 
 export {
@@ -148,7 +151,7 @@ namespace arch::s390x::cpu::lowcore {
         lc->percpu.preempt_count = 0;
         lc->percpu.irq_nesting  = 0;
 
-        lc->stack_canary  = processor::stck() ^ 0xC0FFEE00FACADE42ULL;
+        lc->stack_canary  = __stack_chk_guard;
         lc->cpu_nr        = 0;
         lc->current_domain = 0;
         lc->percpu.current_strand = 0;
@@ -192,7 +195,7 @@ namespace arch::s390x::cpu::lowcore {
         lc.percpu.irq_nesting   = 0;
 
         lc.percpu.current_strand = 0;
-        lc.stack_canary = processor::stck() ^ 0xC0FFEE00FACADE42ULL ^ static_cast<u64>(p.cpu_id);
+        lc.stack_canary = __stack_chk_guard;
         lc.cpu_nr       = static_cast<u32>(p.cpu_id);
     }
 

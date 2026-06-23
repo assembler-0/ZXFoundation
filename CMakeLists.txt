@@ -9,6 +9,7 @@
 # ============================================================================
 
 cmake_minimum_required(VERSION 3.30)
+include(cmake/meta.cmake)
 project(ZXFoundation
     VERSION 26.1
     HOMEPAGE_URL "https://zxfoundation-devlog.vercel.app"
@@ -34,4 +35,4 @@ include(zx-discovery)         # zx-discovery DSL interpreter
 include(source)        		  # Core kernel sources
 include(zxfoundation-compile) # Full kernel compilation
 include(run)       		      # Run targets (mostly post-build targets)
-add_subdirectory(user/init)
+add_subdirectory(user/init)   # Tester only, this is a kernel, remember?

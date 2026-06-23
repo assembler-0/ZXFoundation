@@ -10,7 +10,15 @@ import lib.bit;
 namespace {
 
     /// @brief Hypervisor detection state machine.
-    alignas(64) static u32 g_hypervisor_state{0};
+    alignas(64) u32 g_hypervisor_state{0};
+
+} // anonymous namespace
+
+export {
+
+namespace arch::s390x::cpu::processor {
+
+    constexpr u64 PREFIX_SAVE_LC = 0x0208UL;
 
     /// @brief A 128-bit register pair for DIAGNOSE instructions.
     union register_pair {
@@ -21,12 +29,6 @@ namespace {
         };
     };
     static_assert(sizeof(register_pair) == 16, "register_pair must be exactly 128 bits");
-
-} // anonymous namespace
-
-export {
-
-namespace arch::s390x::cpu::processor {
 
     /// @brief cpuid structure
     struct alignas(8) [[gnu::packed]] cpuid {
@@ -39,8 +41,6 @@ namespace arch::s390x::cpu::processor {
     auto get_cpuid(cpuid *id) -> void {
         __asm__ volatile("stidp %0" : "=m" (*id));
     }
-
-
 
     /// @brief Compiler-only memory barrier — prevents compiler reordering.
     inline auto barrier() noexcept -> void {
@@ -113,9 +113,19 @@ namespace arch::s390x::cpu::processor {
     /// @brief Store Prefix (STPX) — returns the physical address in the Prefix Register.
     /// @return Physical base address of the current CPU's lowcore.
     [[deprecated("STPX is expensive — use lowcore::get_current() on the hot path")]]
-    auto get_prefix() noexcept -> u32 {
+    [[gnu::no_stack_protector]] auto get_prefix() noexcept -> u32 {
         u32 prefix;
-        __asm__ volatile ("stpx %0" : "=m" (prefix));
+        // `stpx` stores to memory.  Use the current CPU's prefixed lowcore
+        // scratch area rather than a stack slot so asynchronous interruptions
+        // cannot make a stack-protector epilogue observe a transiently damaged
+        // frame in this low-level primitive.
+        __asm__ volatile (
+            "stpx %c[slot](0)\n\t"
+            "l %[prefix], %c[slot](0)\n\t"
+            : [prefix] "=d" (prefix)
+            : [slot] "i" (PREFIX_SAVE_LC)
+            : "memory", "cc"
+        );
         return prefix;
     }
 

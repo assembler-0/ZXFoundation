@@ -29,6 +29,15 @@ namespace arch::s390x::cpu::sigp {
     constexpr auto SIGP_CC_BUSY                  = 2;
     constexpr auto SIGP_CC_NOT_OPERATIONAL       = 3;
 
+    /// SIGP status bits stored when the condition code is STATUS_STORED.
+    constexpr auto SIGP_STATUS_INVALID_ORDER     = 0x0000'0002U;
+    constexpr auto SIGP_STATUS_CHECK_STOP        = 0x0000'0010U;
+    constexpr auto SIGP_STATUS_STOPPED           = 0x0000'0040U;
+    constexpr auto SIGP_STATUS_EXT_CALL_PENDING  = 0x0000'0080U;
+    constexpr auto SIGP_STATUS_INVALID_PARAMETER = 0x0000'0100U;
+    constexpr auto SIGP_STATUS_INCORRECT_STATE   = 0x0000'0200U;
+    constexpr auto SIGP_STATUS_NOT_RUNNING       = 0x0000'0400U;
+
 } // namespace arch::s390x::cpu::sigp
 
 } // end export

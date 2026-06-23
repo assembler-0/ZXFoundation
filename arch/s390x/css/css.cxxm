@@ -32,16 +32,15 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=started, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto ssch(subchannel_id schid, const orb& orb_ref) noexcept -> int {
         int cc;
-        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = schid.to_raw();
         __asm__ volatile(
-            "lgr 1,%[r1_val]\n\t"
             "ssch 0(%[orb])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [orb] "a"(&orb_ref),
-              [r1_val] "r"(r1_val)
-            : "cc", "1", "memory"
+            : "r"(r1),
+              [orb] "a"(&orb_ref)
+            : "cc", "memory"
         );
         return cc;
     }
@@ -52,16 +51,15 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=status stored, 1=no status pending, 3=not operational.
     [[nodiscard]] auto tsch(subchannel_id schid, irb& irb_ref) noexcept -> int {
         int cc;
-        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr 1,%[r1_val]\n\t"
             "tsch 0(%[irb])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [irb] "a"(&irb_ref),
-              [r1_val] "r"(r1_val)
-            : "cc", "1", "memory"
+            : "r"(r1),
+              [irb] "a"(&irb_ref)
+            : "cc", "memory"
         );
         return cc;
     }
@@ -72,16 +70,15 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=stored, 3=not operational.
     [[nodiscard]] auto stsch(subchannel_id schid, schib& schib_ref) noexcept -> int {
         int cc;
-        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr 1,%[r1_val]\n\t"
             "stsch 0(%[schib])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schib] "a"(&schib_ref),
-              [r1_val] "r"(r1_val)
-            : "cc", "1", "memory"
+            : "r"(r1),
+              [schib] "a"(&schib_ref)
+            : "cc", "memory"
         );
         return cc;
     }
@@ -92,16 +89,15 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=modified, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto msch(subchannel_id schid, const schib& schib_ref) noexcept -> int {
         int cc;
-        register u64 r1_val asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr 1,%[r1_val]\n\t"
             "msch 0(%[schib])\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schib] "a"(&schib_ref),
-              [r1_val] "r"(r1_val)
-            : "cc", "1", "memory"
+            : "r"(r1),
+              [schib] "a"(&schib_ref)
+            : "cc", "memory"
         );
         return cc;
     }
@@ -111,14 +107,14 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=halted, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto hsch(subchannel_id schid) noexcept -> int {
         int cc;
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr %%r1,%[schid]\n\t"
             "hsch\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schid] "d"(static_cast<u64>(schid.to_raw()))
-            : "cc", "r1", "memory"
+            : "r"(r1)
+            : "cc", "memory"
         );
         return cc;
     }
@@ -128,14 +124,14 @@ namespace arch::s390x::css {
     /// @return Condition code: 0=cleared, 3=not operational.
     [[nodiscard]] auto csch(subchannel_id schid) noexcept -> int {
         int cc;
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
-            "lgr %%r1,%[schid]\n\t"
             "csch\n\t"
             "ipm  %[cc]\n\t"
             "srl  %[cc],28\n\t"
             : [cc] "=d"(cc)
-            : [schid] "d"(static_cast<u64>(schid.to_raw()))
-            : "cc", "r1", "memory"
+            : "r"(r1)
+            : "cc", "memory"
         );
         return cc;
     }
@@ -197,23 +193,18 @@ export {
 namespace arch::s390x::css {
 
     /// @brief Probe all subchannels, enable valid ones, and populate the table.
-    ///
-    /// Also sets CR6 to enable I/O interruption delivery for all subclass codes.
     auto css_init() noexcept -> void {
         using zxfoundation::sys::printk::pinfo;
         using zxfoundation::sys::printk::pnotice;
         using zxfoundation::sys::printk::pwarn;
 
-        {
-            u64 cr6 = 0;
-            __asm__ volatile("stctg 6,6,%[cr]" : [cr] "=Q"(cr6));
-            cr6 |= 0x00000000FF000000ULL; // ISC mask: PoP bits 32-39
-            __asm__ volatile("lctlg 6,6,%[cr]" :: [cr] "Q"(cr6) : "memory");
-        }
-
         pinfo("css: starting subchannel probe (cssid=0, ssid=0)");
 
         u32 found = 0;
+
+        // Probe with I/O interrupts disabled on this CPU; no floating I/O
+        // interrupt may be taken between loading GR1 and issuing STSCH/MSCH.
+        const auto irq_state = arch::s390x::cpu::irq::irq_save_disable();
 
         for (u32 sch_no = 0; sch_no <= 0xFFFF && found < _internal::MAX_SCH_ENTRIES; ++sch_no) {
             const auto id = subchannel_id::from_parts(0, 0, static_cast<u16>(sch_no));
@@ -269,6 +260,19 @@ namespace arch::s390x::css {
 
         _internal::g_sch_count       = found;
         _internal::g_css_initialized = true;
+
+        // Probe is finished and the table is published; now enable CR6 (ISC
+        // mask) so floating I/O interrupts can be delivered, then re-enable
+        // interrupts on this CPU. This ordering guarantees CR6 is active before
+        // css_probe_devices()/io_init() issue real I/O (see main.cxxm).
+        {
+            u64 cr6 = 0;
+            __asm__ volatile("stctg 6,6,%[cr]" : [cr] "=Q"(cr6));
+            cr6 |= 0x00000000FF000000ULL; // ISC mask: PoP bits 32-39
+            __asm__ volatile("lctlg 6,6,%[cr]" :: [cr] "Q"(cr6) : "memory");
+        }
+
+        arch::s390x::cpu::irq::irq_restore(irq_state);
 
         pinfo("css: probe complete, {} subchannel(s) registered",
               ::lib::format::dec{static_cast<u64>(found)});

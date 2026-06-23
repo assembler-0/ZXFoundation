@@ -8,7 +8,6 @@
 #define STRAND_KSTACK_TOP   112  ///< strand::kstack_top (verified by static_assert)
 #define STRAND_KSP          120  ///< strand::ksp        (verified by static_assert)
 #define SF_GPRS             48
-#define LC_CURRENT_DOMAIN   0x0340
 
     .section .text, "ax", @progbits
     .globl  __switch_to_asm

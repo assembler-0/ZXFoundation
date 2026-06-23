@@ -12,28 +12,29 @@ export {
 namespace arch::s390x::cpu::sigp {
 
     /// @brief Issue a SIGP (Signal Processor) instruction.
-    /// @param cpu_addr Target CPU address.
+    /// @param addr Target CPU address.
     /// @param order SIGP order code (SIGP_* constants).
     /// @param parm Parameter (placed in r1; used by Set Prefix, Set Architecture, …).
     /// @param status Out: CPU status word on CC=1, unchanged otherwise.
     /// @return Condition code: 0 = accepted, 1 = status stored, 2 = busy, 3 = not operational.
     /// @note The order code is passed in an address register per PoP SA22-7832.
     ///       On CC=1 (status stored) the CPU status word is written to status.
-    inline auto sigp_issue(u16 cpu_addr, u8 order, u32 parm, u32& status) noexcept -> int {
-        register uint32_t r1 __asm__("1") = parm;
+    inline auto sigp_issue(u16 addr, u8 order, unsigned long parm,
+                u32& status) -> int {
+        processor::register_pair r1 = { .odd = parm, };
         int cc;
+
         __asm__ volatile(
-            "sigp %1,%2,0(%3)\n"
-            "ipm  %0\n"
-            "srl  %0,28\n"
-            : "=d" (cc), "+d" (r1)
-            : "d" (static_cast<u64>(cpu_addr)), "a" (static_cast<u64>(order))
+            "	sigp	%[r1],%[addr],0(%[order])\n"
+            "	ipm	    %[cc]\n"
+            : [cc] "=d" (cc), [r1] "+d" (r1.pair)
+            : [addr] "d" (addr), [order] "a" (order)
             : "cc"
         );
-        if (cc == 1)
-            status = r1;
-        return cc;
+        status = r1.even;
+        return cc >> 28;
     }
+
 
     /// @brief Issue SIGP, retrying until the target CPU is no longer busy (CC≠2).
     /// @param cpu_addr Target CPU address.

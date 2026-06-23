@@ -6,11 +6,7 @@
 #include <arch/s390x/init/zxfl/psw.h>
 #include <arch/s390x/cpu/lowcore.h>
 
-#define LC_IRQ_NESTING  0x0438
-#define LC_CURRENT_DOMAIN 0x0340
-#define LC_PREEMPT_COUNT 0x0430
-
-#define DOMAIN_FLAGS_OFF  32  /* domain.flags (after kobject[24] + name[8]) */
+#define DOMAIN_FLAGS_OFF  32  // domain.flags after kobject[24] and name[8].
 
 #define TIF_NEED_RESCHED 4
 
@@ -102,7 +98,7 @@ trap_io_entry:
     .globl  trap_svc_entry
 trap_svc_entry:
     SAVE_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK
-    llgh    %r3, 0x008a(0)          /* load svc_code (u16) from lowcore */
+    llgh    %r3, 0x008a(0)          // Load svc_code (u16) from lowcore.
     brasl   %r14, do_svc
     CHECK_PREEMPT
     RESTORE_FRAME
@@ -119,9 +115,6 @@ trap_mcck_entry:
     .type   pc_gate_entry, @function
     .align  8
 pc_gate_entry:
-    // ── Nesting-aware stack allocation ──────────────────────────────
-    // If already in kernel context (IRQ_NESTING > 0), keep current r15;
-    // otherwise load the dedicated kernel stack.
     icm     %r1, 15, LC_IRQ_NESTING(0)
     jnz     .Lpc_nested
     lg      %r15, LC_KERNEL_STACK(0)
@@ -140,9 +133,6 @@ pc_gate_entry:
 
     asi     LC_IRQ_NESTING(0), 1
 
-    // Shift arguments for do_nucleus_dispatch(call_nr, a0, a1, a2, a3, a4)
-    // Input:  r0=call_nr, r2=a0, r3=a1, r4=a2, r5=a3, r6=a4
-    // Output: r2=call_nr, r3=a0,  r4=a1, r5=a2, r6=a3, r7=a4
     lgr     %r7, %r6
     lgr     %r6, %r5
     lgr     %r5, %r4
@@ -152,10 +142,6 @@ pc_gate_entry:
 
     brasl   %r14, do_nucleus_dispatch
 
-    // ── Preemption check ───────────────────────────────────────────
-    // PC calls always return to problem state (user mode), so the
-    // saved-PSW problem-state check is omitted.  We only check the
-    // preempt count and the need_resched flag on the current domain.
     l       %r1, LC_PREEMPT_COUNT(0)
     ltr     %r1, %r1
     jnz     .Lpc_no_preempt
