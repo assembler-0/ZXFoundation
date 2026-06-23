@@ -10,7 +10,7 @@ book
 compile_flags.txt
 flatboot/
 .DS_Store
-include/zxfoundation/zxconfig.h
+arch/s390x/init/zxfl/include/zxfoundation/zxconfig.h
 zxfoundation/base/config.cxxm
 doxygen-build/
 convert*.py

@@ -10,6 +10,9 @@
 
 cmake_minimum_required(VERSION 3.30)
 project(ZXFoundation
+    VERSION 26.1
+    HOMEPAGE_URL "https://zxfoundation-devlog.vercel.app"
+    DESCRIPTION "Experimental C++ DGP kernel for IBM z/Architecture"
     LANGUAGES C CXX ASM
 )
 

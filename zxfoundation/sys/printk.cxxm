@@ -236,19 +236,18 @@ namespace zxfoundation::sys::printk {
             default:                tag = '?'; break;
         }
 
-        // Format: ZXF-[(SSSS).uuuuuu] [(type)NN] T <message>\n
-        // TODO: domain-based naming for `[(ZXF)]`
+        // Format: ZXF!-[(SSSS).uuuuuu] [(type)NN] T <message>\n
         usize offset = 0;
         if (s > 1'000'000'000U) [[unlikely]] {
             offset = lib::format::format_to({buf, PRINTK_LINE_MAX},
-                "[(ZXF)]-[(XXXX).xxxxxx] [({}){}] {} ",
+                "ZXF!-[(XXXX).xxxxxx] [({}){}] {} ",
                 prefix,
                 lib::format::dec{static_cast<u64>(cpu), 2, true},
                 tag
             );
         } else {
             offset = lib::format::format_to({buf, PRINTK_LINE_MAX},
-                "[(ZXF)]-[({}).{}] [({}){}] {} ",
+                "ZXF!-[({}).{}] [({}){}] {} ",
                 lib::format::dec{s, 4, true},
                 lib::format::dec{us, 6, true},
                 prefix,
