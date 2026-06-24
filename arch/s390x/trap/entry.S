@@ -11,14 +11,11 @@
 #define TIF_NEED_RESCHED 4
 
 .macro SAVE_FRAME reg, old_psw_lc, stack_lc
-    // Check if we are already in an interrupt context (nesting > 0)
     icm     \reg, 15, LC_IRQ_NESTING(0)
     jnz     .Lnested\@
-    // First interrupt: load the dedicated stack pointer
     lg      \reg, \stack_lc(0)
     j       .Lalloc_frame\@
 .Lnested\@:
-    // Nested interrupt: continue using current %r15
     lgr     \reg, %r15
 .Lalloc_frame\@:
     aghi    \reg, -(160 + IRQ_FRAME_SIZE)
@@ -44,9 +41,6 @@
 .endm
 
 .macro SAVE_NUCLEUS_FRAME reg, old_psw_lc, stack_lc
-    // SVC is a synchronous nucleus call, not a hardware interrupt.  It uses a
-    // separate nesting counter so allocator and lock-context checks can keep
-    // true external/I/O/MCCK handlers distinct from syscall context.
     tm      (\old_psw_lc + 1)(0), 0x01
     jz      .Lnucleus_keep_context\@
     xgr     \reg, \reg
@@ -160,11 +154,9 @@ pc_gate_entry:
     lg      %r15, LC_KERNEL_STACK(0)
     j       .Lpc_alloc_frame
 .Lpc_nested:
-    // Already nested: continue using current stack pointer.
 .Lpc_alloc_frame:
     aghi    %r15, -(160 + IRQ_FRAME_SIZE)
 
-    // Save GPRs, ARs, FPC, vector registers
     stmg    %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
     stam    %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
     stfpc   (160 + IRQ_FRAME_FPC)(%r15)
@@ -193,7 +185,6 @@ pc_gate_entry:
     tmll    %r1, TIF_NEED_RESCHED
     jz      .Lpc_no_preempt
 
-    // Switch to a clean kernel stack frame and call schedule().
     lg      %r1, LC_KERNEL_STACK(0)
     aghi    %r1, -160
     stg     %r15, 0(%r1)            // backchain = current frame pointer
@@ -202,7 +193,6 @@ pc_gate_entry:
     lg      %r15, 0(%r15)           // restore original frame pointer
 
 .Lpc_no_preempt:
-    // Restore state (skip r14, r15 — don't overwrite current SP)
     vlm     %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
     vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
     lfpc    (160 + IRQ_FRAME_FPC)(%r15)

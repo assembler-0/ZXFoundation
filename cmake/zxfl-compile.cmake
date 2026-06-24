@@ -44,6 +44,7 @@ set(ZXFL_COMMON_FLAGS
     -mtune=${MARCH_MODE}
     -O${OPT_LEVEL}
     -g${DSYM_LEVEL}
+    ${EXTRA_LOADER_FLAGS}
 )
 
 set(ZXFL_COMMON_LINK_FLAGS

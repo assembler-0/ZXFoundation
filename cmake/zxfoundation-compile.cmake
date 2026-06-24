@@ -58,6 +58,7 @@ target_compile_options(core.zxfoundation.nucleus PRIVATE
     -march=${MARCH_MODE}
     -mtune=${MARCH_MODE}
     -m64
+    ${EXTRA_KERNEL_FLAGS}
 )
 
 if (COMPILER_ID STREQUAL "clang")

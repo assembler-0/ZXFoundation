@@ -62,7 +62,6 @@ namespace zxfoundation::sched::topology {
 
     static_assert(sizeof(cpu_relation) == sizeof(u8), "CPU relation must remain byte-sized");
     static_assert(sizeof(cpu_scheduling_state) == sizeof(u8), "CPU scheduling state must remain byte-sized");
-    static_assert(0xFFU > 0U, "Preferred-node invalid sentinel must remain representable");
     static_assert(sizeof(cpu_topology_record) <= 48U, "CPU topology record must remain compact for hot-path snapshots");
 
 } // namespace zxfoundation::sched::topology

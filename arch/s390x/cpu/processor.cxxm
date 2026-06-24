@@ -115,10 +115,6 @@ namespace arch::s390x::cpu::processor {
     [[deprecated("STPX is expensive — use lowcore::get_current() on the hot path")]]
     [[gnu::no_stack_protector]] auto get_prefix() noexcept -> u32 {
         u32 prefix;
-        // `stpx` stores to memory.  Use the current CPU's prefixed lowcore
-        // scratch area rather than a stack slot so asynchronous interruptions
-        // cannot make a stack-protector epilogue observe a transiently damaged
-        // frame in this low-level primitive.
         __asm__ volatile (
             "stpx %c[slot](0)\n\t"
             "l %[prefix], %c[slot](0)\n\t"

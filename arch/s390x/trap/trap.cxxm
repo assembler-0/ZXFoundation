@@ -26,8 +26,6 @@ import zxfoundation.gate.dispatch;
 import zxfoundation.base.typestate;
 import lib.error;
 
-// ── PoP program-exception codes ──────────────────────────────────────────
-// z/Architecture PoP Table 6-1.
 constexpr u16 PGM_OPERATION          = 0x0001;
 constexpr u16 PGM_PRIVILEGED_OP      = 0x0002;
 constexpr u16 PGM_EXECUTE            = 0x0003;
@@ -55,7 +53,6 @@ constexpr u16 PGM_VECTOR_EMAX        = 0x001D;
 constexpr u16 PGM_VECTOR_ENR         = 0x001E;
 constexpr u16 PGM_VECTOR_ERTE        = 0x001F;
 
-// ── External interruption codes (PoP Table 7-1) ──────────────────────────
 constexpr u16 EXT_CLOCK_COMPARATOR   = 0x1004;
 constexpr u16 EXT_CPU_TIMER          = 0x1005;
 constexpr u16 EXT_EMERGENCY_SIGNAL   = 0x1201;
@@ -65,7 +62,6 @@ constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;
 
 static bool s_pgm_fixup_active = false;
 
-// ── MCIC (Machine-Check Interruption Code) bit definitions (PoP §7-4) ────
 constexpr u64 MCIC_SYSTEM_DAMAGE     = 1ULL << 63;  // bit 0
 constexpr u64 MCIC_INSTRUCTION_PROC  = 1ULL << 62;  // bit 1
 constexpr u64 MCIC_SYSTEM_RECOVERY   = 1ULL << 61;  // bit 2
@@ -130,7 +126,6 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
             pgm_code, frame->psw_mask, frame->psw_addr, trans_exc);
     }
 
-    // ── User-mode program checks ───────────────────────────────────────
     auto* lc = arch::s390x::cpu::lowcore::get_current();
     auto* d = reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
 
@@ -158,7 +153,6 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
         }
     }
 
-    // ── Unhandled fault path ───────────────────────────────────────────
     if (d) {
         // Enqueue signal before marking dying — gives handler a chance.
         zxfoundation::domain::signal::signal_enqueue(
@@ -188,14 +182,11 @@ extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fr
 
     const u16 ext_code = *reinterpret_cast<const u16*>(0x86UL);
 
-    // Clock comparator — hot path, call directly.
     if (ext_code == EXT_CLOCK_COMPARATOR) {
         zxfoundation::sys::timer::timer_interrupt();
         return;
     }
 
-    // CPU timer — decrements the CPU-timer function (PoP §7-5.2).
-    // This kernel does not use the CPU-timer for scheduling; log and return.
     if (ext_code == EXT_CPU_TIMER) {
         static bool once = false;
         if (!once) {
@@ -205,22 +196,16 @@ extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fr
         return;
     }
 
-    // Timing-alert — recoverable clock-sync event (PoP §7-5.3).
-    // z/Architecture: may fire after TOD-clock steering.  Log and return.
     if (ext_code == EXT_TIMING_ALERT) {
         zxfoundation::sys::printk::pdebug("ext: timing-alert\n");
         return;
     }
 
-    // Service signal — channel-subsystem signalling (PoP §7-5.4).
-    // LPAR uses this for channel-report words.  Stub for now.
     if (ext_code == EXT_SERVICE_SIGNAL) {
         zxfoundation::sys::printk::pdebug("ext: service signal\n");
         return;
     }
 
-    // All other external signals (emergency, external call, and any future
-    // subclass): dispatch through the IRQ subsystem.
     const u16 irq_nr = static_cast<u16>(
         zxfoundation::sys::irq::IRQ_BASE_EXT + (ext_code >> 4));
     zxfoundation::sys::irq::irq_dispatch(
@@ -244,8 +229,6 @@ extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fra
     // Dispatch to the CSS layer for command-RB / TSCH processing.
     arch::s390x::css::css_io_interrupt(sch_no);
 
-    // Also dispatch through the IRQ subsystem for any generic I/O listeners.
-    // The CSS handler already wakes the wait queue and signals the domain.
     const u8 isc = static_cast<u8>(io_int_parm & 0x07U);
     const u16 io_irq = static_cast<u16>(
         zxfoundation::sys::irq::IRQ_BASE_IO + isc);

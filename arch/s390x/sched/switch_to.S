@@ -25,18 +25,14 @@ __switch_to_asm:
     vstm    %v8, %v15, 0(%r15)
     stg     %r15, STRAND_KSP(%r2)           // save prev's ksp (strand.ksp)
 
-    // Update lowcore: current_domain = next->owner
     lg      %r4, STRAND_OWNER(%r3)
     stg     %r4, LC_CURRENT_DOMAIN(0)
 
-    // Update kernel stack top in lowcore from next strand
     lg      %r5, STRAND_KSTACK_TOP(%r3)
     stg     %r5, LC_KERNEL_STACK(0)
 
-    // Load next's kernel stack pointer
     lg      %r15, STRAND_KSP(%r3)
 
-    // Return the PREVIOUS domain pointer (prev->owner) in %r2
     lg      %r2, STRAND_OWNER(%r2)
 
     vlm     %v8, %v15, 0(%r15)

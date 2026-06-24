@@ -20,3 +20,9 @@ set(ZX_CXXFILT llvm-cxxfilt)
 set(ZX_HOST_CC clang)
 
 set(COMPILER_ID "clang")
+
+set(EXTRA_KERNEL_FLAGS "")
+set(EXTRA_LOADER_FLAGS "")
+
+set(OPT_LEVEL "2" CACHE STRING "Optimization level (0, 1, 2, 3, s, z)")
+set(DSYM_LEVEL "0" CACHE STRING "Debug symbol level (0, 1, 2, 3)")

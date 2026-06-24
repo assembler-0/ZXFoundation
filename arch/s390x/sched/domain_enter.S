@@ -13,7 +13,6 @@
 __domain_enter_user_asm:
     lam     %a0, %a15, 144(%r3)
     lfpc    208(%r3)
-    // Restore Vector Registers
     vlm     %v0, %v15, 216(%r3)
     vlm     %v16, %v31, 472(%r3)
 

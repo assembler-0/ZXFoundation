@@ -17,6 +17,7 @@ import zxfoundation.domain.signal;
 import zxfoundation.domain.signal_types;
 import arch.s390x.cpu.irq;
 import arch.s390x.lib.atomic;
+import arch.s390x.cpu.processor;
 import lib.error;
 import lib.expected;
 import lib.string;
@@ -202,8 +203,6 @@ namespace arch::s390x::css {
 
         u32 found = 0;
 
-        // Probe with I/O interrupts disabled on this CPU; no floating I/O
-        // interrupt may be taken between loading GR1 and issuing STSCH/MSCH.
         const auto irq_state = arch::s390x::cpu::irq::irq_save_disable();
 
         for (u32 sch_no = 0; sch_no <= 0xFFFF && found < _internal::MAX_SCH_ENTRIES; ++sch_no) {
@@ -261,18 +260,14 @@ namespace arch::s390x::css {
         _internal::g_sch_count       = found;
         _internal::g_css_initialized = true;
 
-        // Probe is finished and the table is published; now enable CR6 (ISC
-        // mask) so floating I/O interrupts can be delivered, then re-enable
-        // interrupts on this CPU. This ordering guarantees CR6 is active before
-        // css_probe_devices()/io_init() issue real I/O (see main.cxxm).
         {
             u64 cr6 = 0;
-            __asm__ volatile("stctg 6,6,%[cr]" : [cr] "=Q"(cr6));
-            cr6 |= 0x00000000FF000000ULL; // ISC mask: PoP bits 32-39
-            __asm__ volatile("lctlg 6,6,%[cr]" :: [cr] "Q"(cr6) : "memory");
+            cpu::processor::ctl_load<6, 6>(cr6);
+            cr6 |= 0x00000000FF000000ULL;
+            cpu::processor::ctl_store<6, 6>(cr6);
         }
 
-        arch::s390x::cpu::irq::irq_restore(irq_state);
+        cpu::irq::irq_restore(irq_state);
 
         pinfo("css: probe complete, {} subchannel(s) registered",
               ::lib::format::dec{static_cast<u64>(found)});
