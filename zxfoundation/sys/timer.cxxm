@@ -79,10 +79,7 @@ namespace zxfoundation::sys::timer {
     }
 
     /// @brief Initialize the timer subsystem on an application processor.
-    auto timer_init_ap(u16 cpu_id) noexcept -> void {
-        printk::pinfo("timer: AP processor {} timer heap ready",
-            lib::format::dec{static_cast<u64>(cpu_id)});
-    }
+    auto timer_init_ap(u16 cpu_id) noexcept -> void { (void)cpu_id; }
 
     /// @brief Add a timer to the current CPU's heap and arm the clock comparator.
     [[nodiscard]] auto timer_add(kernel_timer& t) noexcept

@@ -43,6 +43,45 @@
     lpswe   (160 + IRQ_FRAME_PSW_MASK)(%r15)
 .endm
 
+.macro SAVE_NUCLEUS_FRAME reg, old_psw_lc, stack_lc
+    // SVC is a synchronous nucleus call, not a hardware interrupt.  It uses a
+    // separate nesting counter so allocator and lock-context checks can keep
+    // true external/I/O/MCCK handlers distinct from syscall context.
+    tm      (\old_psw_lc + 1)(0), 0x01
+    jz      .Lnucleus_keep_context\@
+    xgr     \reg, \reg
+    st      \reg, LC_IRQ_NESTING(0)
+    st      \reg, LC_NUCLEUS_NESTING(0)
+.Lnucleus_keep_context\@:
+    icm     \reg, 15, LC_NUCLEUS_NESTING(0)
+    jnz     .Lnucleus_nested\@
+    lg      \reg, \stack_lc(0)
+    j       .Lnucleus_alloc_frame\@
+.Lnucleus_nested\@:
+    lgr     \reg, %r15
+.Lnucleus_alloc_frame\@:
+    aghi    \reg, -(160 + IRQ_FRAME_SIZE)
+    stmg    %r0, %r15, (160 + IRQ_FRAME_GPRS)(\reg)
+    mvc     (160 + IRQ_FRAME_PSW_MASK)(16, \reg), \old_psw_lc(0)
+    stam    %a0, %a15, (160 + IRQ_FRAME_ARS)(\reg)
+    stfpc   (160 + IRQ_FRAME_FPC)(\reg)
+    vstm    %v0, %v15, (160 + IRQ_FRAME_VRS)(\reg)
+    vstm    %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(\reg)
+    lgr     %r15, \reg
+    asi     LC_NUCLEUS_NESTING(0), 1
+    la      %r2, 160(%r15)
+.endm
+
+.macro RESTORE_NUCLEUS_FRAME
+    vlm     %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
+    vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
+    lfpc    (160 + IRQ_FRAME_FPC)(%r15)
+    lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
+    lmg     %r0, %r14, (160 + IRQ_FRAME_GPRS)(%r15)
+    asi     LC_NUCLEUS_NESTING(0), -1
+    lpswe   (160 + IRQ_FRAME_PSW_MASK)(%r15)
+.endm
+
 /// @brief Check for preemption after a preemptible interrupt.
 .macro CHECK_PREEMPT
     tm      (160 + IRQ_FRAME_PSW_MASK + 1)(%r15), 0x01
@@ -97,11 +136,10 @@ trap_io_entry:
     .section .text.trap_svc, "ax", @progbits
     .globl  trap_svc_entry
 trap_svc_entry:
-    SAVE_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK
+    SAVE_NUCLEUS_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK
     llgh    %r3, 0x008a(0)          // Load svc_code (u16) from lowcore.
     brasl   %r14, do_svc
-    CHECK_PREEMPT
-    RESTORE_FRAME
+    RESTORE_NUCLEUS_FRAME
 
     .section .text.trap_mcck, "ax", @progbits
     .globl  trap_mcck_entry
@@ -117,6 +155,8 @@ trap_mcck_entry:
 pc_gate_entry:
     icm     %r1, 15, LC_IRQ_NESTING(0)
     jnz     .Lpc_nested
+    icm     %r1, 15, LC_NUCLEUS_NESTING(0)
+    jnz     .Lpc_nested
     lg      %r15, LC_KERNEL_STACK(0)
     j       .Lpc_alloc_frame
 .Lpc_nested:
@@ -131,7 +171,7 @@ pc_gate_entry:
     vstm    %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
     vstm    %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
 
-    asi     LC_IRQ_NESTING(0), 1
+    asi     LC_NUCLEUS_NESTING(0), 1
 
     lgr     %r7, %r6
     lgr     %r6, %r5
@@ -169,7 +209,7 @@ pc_gate_entry:
     lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
     lmg     %r0, %r13, (160 + IRQ_FRAME_GPRS)(%r15)
 
-    asi     LC_IRQ_NESTING(0), -1
+    asi     LC_NUCLEUS_NESTING(0), -1
 
     .insn   e,0x0101                    // PR instruction
     .size   pc_gate_entry, . - pc_gate_entry

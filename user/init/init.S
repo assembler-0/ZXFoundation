@@ -29,6 +29,7 @@
     .equ DOM_EXIT,      2
     .equ DOM_INFO,      3
     .equ DOM_QUERY,     4
+    .equ DOM_STRAND_CREATE, 5
 
     .equ MEM_ALLOC,     32
     .equ MEM_FREE,      33
@@ -651,51 +652,128 @@ _start:
     aghi    %r9, 1
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test 41: dom::destroy(admin, child_id)  —  destroy child domain
+    // Test 41: dom::strand_create(admin, cpu=0, self)  —  create runnable strand
     // ─────────────────────────────────────────────────────────────────────
     PRINT   t41_name
     lgr     %r2, %r12               // admin cap token
-    lgr     %r3, %r13               // child domain_id
-    CALL    DOM_DESTROY
+    lghi    %r3, 0                  // CPU 0 / default BSP placement
+    lgr     %r4, %r8                // owner = self domain
+    CALL    DOM_STRAND_CREATE
     CHECK_OK t41_fail
+    llilf   %r1, 0xffffffff         // invalid kobject-id sentinel must not be reported as success
+    cgr     %r2, %r1
+    je      t41_fail
+    lgr     %r10, %r2               // r10 = first created strand id
     PRINT   t_pass
     aghi    %r9, 1
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test 42: cap::release(admin)  —  release admin cap
+    // Test 42: dom::strand_create(admin, cpu=0, self)  —  create second strand
     // ─────────────────────────────────────────────────────────────────────
     PRINT   t42_name
-    lgr     %r2, %r12               // admin token
-    CALL    CAP_RELEASE
+    lgr     %r2, %r12               // admin cap token
+    lghi    %r3, 0                  // CPU 0 / default BSP placement
+    lgr     %r4, %r8                // owner = self domain
+    CALL    DOM_STRAND_CREATE
     CHECK_OK t42_fail
+    llilf   %r1, 0xffffffff         // invalid kobject-id sentinel must not be reported as success
+    cgr     %r2, %r1
+    je      t42_fail
+    cgr     %r2, %r10
+    je      t42_fail                // strand IDs must be distinct
+    lgr     %r11, %r2               // r11 = second created strand id
     PRINT   t_pass
     aghi    %r9, 1
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test 43: dom::create(null_token)  —  should FAIL (security gate)
-    //   Tests that domain_create rejects a null/zero cap token.
+    // Test 43: scheduler::yield loop  —  give spawned strands chances to run
     // ─────────────────────────────────────────────────────────────────────
     PRINT   t43_name
+    lghi    %r7, 8
+.Lt43_yield_loop:
+    lghi    %r2, 0
+    CALL    SYS_YIELD
+    CHECK_OK t43_fail
+    aghi    %r7, -1
+    cghi    %r7, 0
+    jne     .Lt43_yield_loop
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Test 44: dom::strand_create(invalid CPU)  —  expected denial
+    // ─────────────────────────────────────────────────────────────────────
+    PRINT   t44_name
+    lgr     %r2, %r12               // admin cap token
+    llill   %r3, 0xffff             // impossible CPU affinity
+    lgr     %r4, %r8                // owner = self domain
+    CALL    DOM_STRAND_CREATE
+    lghi    %r1, ERR_SENTINEL
+    cgr     %r2, %r1
+    jne     t44_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Test 45: dom::strand_create(child)  —  expected denial until teardown drain exists
+    // ─────────────────────────────────────────────────────────────────────
+    PRINT   t45_name
+    lgr     %r2, %r12               // admin cap token
+    lghi    %r3, 0                  // CPU 0 / default BSP placement
+    lgr     %r4, %r13               // owner = child domain
+    CALL    DOM_STRAND_CREATE
+    lghi    %r1, ERR_SENTINEL
+    cgr     %r2, %r1
+    jne     t45_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Test 46: dom::destroy(admin, child_id)  —  destroy child domain
+    // ─────────────────────────────────────────────────────────────────────
+    PRINT   t46_name
+    lgr     %r2, %r12               // admin cap token
+    lgr     %r3, %r13               // child domain_id
+    CALL    DOM_DESTROY
+    CHECK_OK t46_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Test 47: cap::release(admin)  —  release admin cap
+    // ─────────────────────────────────────────────────────────────────────
+    PRINT   t47_name
+    lgr     %r2, %r12               // admin token
+    CALL    CAP_RELEASE
+    CHECK_OK t47_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Test 48: dom::create(null_token)  —  should FAIL (security gate)
+    //   Tests that domain_create rejects a null/zero cap token.
+    // ─────────────────────────────────────────────────────────────────────
+    PRINT   t48_name
     lghi    %r2, 0                  // null token
     larl    %r3, name_dummy
     CALL    DOM_CREATE
     // This MUST return ERR_SENTINEL (null token should be rejected)
     lghi    %r0, ERR_SENTINEL
     cgr     %r2, %r0
-    jne     t43_fail                // If NOT error, it succeeded when illegal — FAIL
+    jne     t48_fail                // If NOT error, it succeeded when illegal — FAIL
     PRINT   t_pass
     aghi    %r9, 1
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test 44: cap::validate(null_token)  —  should FAIL (security gate)
+    // Test 49: cap::validate(null_token)  —  should FAIL (security gate)
     // ─────────────────────────────────────────────────────────────────────
-    PRINT   t44_name
+    PRINT   t49_name
     lghi    %r2, 0                  // null token
     lghi    %r3, 0x20               // admin right
     CALL    CAP_VALIDATE
     lghi    %r0, ERR_SENTINEL
     cgr     %r2, %r0
-    jne     t44_fail                // If NOT error, it succeeded when illegal — FAIL
+    jne     t49_fail                // If NOT error, it succeeded when illegal — FAIL
     PRINT   t_pass
     aghi    %r9, 1
 
@@ -751,6 +829,11 @@ t41_fail:  PRINT t41_fail_msg;  j .Lfail_end
 t42_fail:  PRINT t42_fail_msg;  j .Lfail_end
 t43_fail:  PRINT t43_fail_msg;  j .Lfail_end
 t44_fail:  PRINT t44_fail_msg;  j .Lfail_end
+t45_fail:  PRINT t45_fail_msg;  j .Lfail_end
+t46_fail:  PRINT t46_fail_msg;  j .Lfail_end
+t47_fail:  PRINT t47_fail_msg;  j .Lfail_end
+t48_fail:  PRINT t48_fail_msg;  j .Lfail_end
+t49_fail:  PRINT t49_fail_msg;  j .Lfail_end
 
 .Lfail_end:
     PRINT   msg_fail_end
@@ -868,13 +951,23 @@ t39_name:  .ascii "[init] Test 39: service::lookup ................. ";  .equ t3
     .p2align 1
 t40_name:  .ascii "[init] Test 40: service::unregister ............. ";  .equ t40_name_len, . - t40_name
     .p2align 1
-t41_name:  .ascii "[init] Test 41: dom::destroy .................... ";  .equ t41_name_len, . - t41_name
+t41_name:  .ascii "[init] Test 41: dom::strand_create(self) ........ ";  .equ t41_name_len, . - t41_name
     .p2align 1
-t42_name:  .ascii "[init] Test 42: cap::release .................... ";  .equ t42_name_len, . - t42_name
+t42_name:  .ascii "[init] Test 42: dom::strand_create(second) ...... ";  .equ t42_name_len, . - t42_name
     .p2align 1
-t43_name:  .ascii "[init] Test 43: dom::create(no-token)->ERR ...... ";  .equ t43_name_len, . - t43_name
+t43_name:  .ascii "[init] Test 43: scheduler::yield loop ........... ";  .equ t43_name_len, . - t43_name
     .p2align 1
-t44_name:  .ascii "[init] Test 44: cap::validate(null)->ERR ........ ";  .equ t44_name_len, . - t44_name
+t44_name:  .ascii "[init] Test 44: dom::strand_create(cpu)->ERR .... ";  .equ t44_name_len, . - t44_name
+    .p2align 1
+t45_name:  .ascii "[init] Test 45: dom::strand_create(child)->ERR .. ";  .equ t45_name_len, . - t45_name
+    .p2align 1
+t46_name:  .ascii "[init] Test 46: dom::destroy .................... ";  .equ t46_name_len, . - t46_name
+    .p2align 1
+t47_name:  .ascii "[init] Test 47: cap::release .................... ";  .equ t47_name_len, . - t47_name
+    .p2align 1
+t48_name:  .ascii "[init] Test 48: dom::create(no-token)->ERR ...... ";  .equ t48_name_len, . - t48_name
+    .p2align 1
+t49_name:  .ascii "[init] Test 49: cap::validate(null)->ERR ........ ";  .equ t49_name_len, . - t49_name
 
 // ── Failure messages ──
 
@@ -956,13 +1049,23 @@ t39_fail_msg:  .ascii "FAIL: service::lookup failed\n";      .equ t39_fail_msg_l
     .p2align 1
 t40_fail_msg:  .ascii "FAIL: service::unregister failed\n";  .equ t40_fail_msg_len, . - t40_fail_msg
     .p2align 1
-t41_fail_msg:  .ascii "FAIL: dom::destroy failed\n";         .equ t41_fail_msg_len, . - t41_fail_msg
+t41_fail_msg:  .ascii "FAIL: dom::strand_create(self) failed\n"; .equ t41_fail_msg_len, . - t41_fail_msg
     .p2align 1
-t42_fail_msg:  .ascii "FAIL: cap::release failed\n";         .equ t42_fail_msg_len, . - t42_fail_msg
+t42_fail_msg:  .ascii "FAIL: second dom::strand_create failed\n";.equ t42_fail_msg_len, . - t42_fail_msg
     .p2align 1
-t43_fail_msg:  .ascii "FAIL: dom::create should have rejected null token\n"; .equ t43_fail_msg_len, . - t43_fail_msg
+t43_fail_msg:  .ascii "FAIL: scheduler yield loop failed\n";  .equ t43_fail_msg_len, . - t43_fail_msg
     .p2align 1
-t44_fail_msg:  .ascii "FAIL: cap::validate should have rejected null token\n";.equ t44_fail_msg_len, . - t44_fail_msg
+t44_fail_msg:  .ascii "FAIL: invalid CPU strand_create was accepted\n"; .equ t44_fail_msg_len, . - t44_fail_msg
+    .p2align 1
+t45_fail_msg:  .ascii "FAIL: child-domain strand_create was accepted\n"; .equ t45_fail_msg_len, . - t45_fail_msg
+    .p2align 1
+t46_fail_msg:  .ascii "FAIL: dom::destroy failed\n";         .equ t46_fail_msg_len, . - t46_fail_msg
+    .p2align 1
+t47_fail_msg:  .ascii "FAIL: cap::release failed\n";         .equ t47_fail_msg_len, . - t47_fail_msg
+    .p2align 1
+t48_fail_msg:  .ascii "FAIL: dom::create should have rejected null token\n"; .equ t48_fail_msg_len, . - t48_fail_msg
+    .p2align 1
+t49_fail_msg:  .ascii "FAIL: cap::validate should have rejected null token\n";.equ t49_fail_msg_len, . - t49_fail_msg
 
 // ── Names used in domain/service tests ──
 

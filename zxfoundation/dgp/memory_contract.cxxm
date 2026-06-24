@@ -1,0 +1,294 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/memory_contract.cxxm
+/// @brief DGP memory-contract adapter types and validation helpers.
+
+export module zxfoundation.dgp.memory_contract;
+import zxfoundation.base.types;
+import zxfoundation.dgp.isolation_types;
+import arch.s390x.mmu.mmu_types;
+import lib.error;
+import lib.expected;
+
+export {
+
+namespace zxfoundation::dgp {
+
+    /// @brief Granularity used by the DGP memory contract.
+    inline constexpr u64 DGP_PAGE_SIZE = 4096ULL;
+
+    /// @brief Access intent for a DGP-validated memory operation.
+    enum class memory_access : u32 {
+        none    = 0U,
+        read    = 1U << 0,
+        write   = 1U << 1,
+        execute = 1U << 2,
+        share   = 1U << 3,
+    };
+
+    /// @brief Address-space scope affected by a memory operation.
+    enum class memory_scope : u8 {
+        private_domain = 0,
+        portal_shared = 1,
+        nucleus       = 2,
+    };
+
+    /// @brief NUMA selection behavior for DGP memory policy.
+    enum class numa_policy : u8 {
+        deterministic_fallback = 0,
+        strict_node            = 1,
+        interleave             = 2,
+    };
+
+    /// @brief Translation invalidation scope required by an authorized memory operation.
+    enum class invalidation_scope : u8 {
+        none          = 0,
+        local_cpu     = 1,
+        address_space = 2,
+        single_page   = 3,
+        global        = 4,
+        alb_global    = 5,
+    };
+
+    /// @brief Memory request submitted to the clean-core contract.
+    struct memory_contract_request {
+        u32 domain_id{0};
+        u64 va_start{0};
+        u64 va_end{0};
+        u64 phys_start{0};
+        u64 length{0};
+        arch::s390x::mmu::page_prot prot{};
+        u8 storage_key{0};
+        u8 numa_node{0};
+        memory_access access{memory_access::none};
+        memory_scope scope{memory_scope::private_domain};
+        numa_policy policy{numa_policy::deterministic_fallback};
+    };
+
+    /// @brief DGP-authorized policy output attached to VM regions and DAT operations.
+    struct memory_contract_result {
+        u8 storage_key{0};
+        u8 numa_node{0};
+        invalidation_scope invalidate{invalidation_scope::none};
+        isolation_rights required_rights{isolation_rights::none};
+        u64 generation{0};
+        memory_access access{memory_access::none};
+        memory_scope scope{memory_scope::private_domain};
+    };
+
+    /// @brief Combine two memory access masks.
+    /// @param[in] lhs Left-hand access mask.
+    /// @param[in] rhs Right-hand access mask.
+    /// @return Combined access mask.
+    [[nodiscard]] constexpr auto operator|(
+        memory_access lhs,
+        memory_access rhs
+    ) noexcept -> memory_access {
+        return static_cast<memory_access>(
+            static_cast<u32>(lhs) | static_cast<u32>(rhs));
+    }
+
+    /// @brief Intersect two memory access masks.
+    /// @param[in] lhs Left-hand access mask.
+    /// @param[in] rhs Right-hand access mask.
+    /// @return Common access mask.
+    [[nodiscard]] constexpr auto operator&(
+        memory_access lhs,
+        memory_access rhs
+    ) noexcept -> memory_access {
+        return static_cast<memory_access>(
+            static_cast<u32>(lhs) & static_cast<u32>(rhs));
+    }
+
+    /// @brief Test whether a memory-access mask carries a requested bit.
+    /// @param[in] available Memory-access mask to test.
+    /// @param[in] requested Requested access bit or mask.
+    /// @return true when all requested access bits are present.
+    [[nodiscard]] constexpr auto memory_access_has(
+        memory_access available,
+        memory_access requested
+    ) noexcept -> bool {
+        return (static_cast<u32>(available & requested) == static_cast<u32>(requested));
+    }
+
+    /// @brief Test that an address is aligned to the DGP page size.
+    /// @param[in] address Address to check.
+    /// @return true when the low page-offset bits are zero.
+    [[nodiscard]] constexpr auto memory_contract_is_page_aligned(u64 address) noexcept -> bool {
+        return (address & (DGP_PAGE_SIZE - 1ULL)) == 0ULL;
+    }
+
+    /// @brief Validate a virtual address range before a VM or portal operation.
+    /// @param[in] va_start First virtual address in the range.
+    /// @param[in] va_end Exclusive end of the virtual range.
+    /// @return Success when the range is ordered, non-empty, and page-aligned.
+    /// @note The contract checks generic range safety only; ownership and DAT effects are checked by later adapters.
+    /// @warning Passing this check does not install or invalidate any DAT entry.
+    [[nodiscard]] auto memory_contract_validate_range(
+        u64 va_start,
+        u64 va_end
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        if (va_end == 0ULL || va_start >= va_end) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        if (!memory_contract_is_page_aligned(va_start) || !memory_contract_is_page_aligned(va_end)) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+        }
+
+        return {};
+    }
+
+    /// @brief Validate a storage key for a DGP memory request.
+    /// @param[in] storage_key Four-bit access-control key value.
+    /// @return Success when the key is architecturally representable.
+    /// @note The IBM PoP defines the storage-key access-control field as four bits.
+    /// @warning This check does not allocate, reserve, or release a key.
+    [[nodiscard]] auto memory_contract_validate_storage_key(
+        u8 storage_key
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        if (storage_key >= STORAGE_KEY_COUNT) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::out_of_range));
+        }
+
+        return {};
+    }
+
+    /// @brief Validate a complete memory-contract request.
+    /// @param[in] request DGP memory request to validate.
+    /// @return Success when the generic range, length, and storage-key constraints are satisfied.
+    /// @note Later migration waves will bind this request to VM regions, DAT permissions, NUMA zones, and TLB scope.
+    /// @warning This adapter performs no allocation and installs no mapping.
+    [[nodiscard]] auto memory_contract_validate_request(
+        const memory_contract_request& request
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        auto range_result = memory_contract_validate_range(request.va_start, request.va_end);
+        if (!range_result) {
+            return lib::unexpected(range_result.error());
+        }
+
+        if (request.length == 0ULL || request.length != (request.va_end - request.va_start)) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        if (request.phys_start != 0ULL && !memory_contract_is_page_aligned(request.phys_start)) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+        }
+
+        return memory_contract_validate_storage_key(request.storage_key);
+    }
+
+    /// @brief Return the current DGP memory-policy generation.
+    /// @return Monotonic generation attached to authorization results.
+    /// @note Hotplug, storage-key revocation, and CPU-ASCE tracking waves may advance this value later.
+    [[nodiscard]] auto memory_contract_generation() noexcept -> u64 {
+        return 1ULL;
+    }
+
+    /// @brief Translate an access mask into isolation rights required by the DGP policy plane.
+    /// @param[in] access Requested memory access mask.
+    /// @param[in] scope Address-space sharing scope.
+    /// @return Isolation rights required to authorize the request.
+    [[nodiscard]] constexpr auto memory_contract_required_rights(
+        memory_access access,
+        memory_scope scope
+    ) noexcept -> isolation_rights {
+        isolation_rights rights = isolation_rights::map;
+        if (memory_access_has(access, memory_access::share)
+            || scope == memory_scope::portal_shared) {
+            rights = rights | isolation_rights::share;
+        }
+        return rights;
+    }
+
+    /// @brief Resolve a storage key value for region metadata.
+    /// @param[in] storage_key Requested storage key, or `STORAGE_KEY_AUTO`.
+    /// @return Concrete architected storage-key access-control value.
+    [[nodiscard]] auto memory_contract_resolve_storage_key(
+        u8 storage_key
+    ) noexcept -> lib::expected<u8, lib::kernel_error> {
+        if (storage_key == STORAGE_KEY_AUTO) {
+            return 0U;
+        }
+
+        auto key_result = memory_contract_validate_storage_key(storage_key);
+        if (!key_result) return lib::unexpected(key_result.error());
+        return storage_key;
+    }
+
+    /// @brief Authorize creation of a VM mapping authority record.
+    /// @param[in] request Complete VM/DAT/storage-key/NUMA request.
+    /// @return DGP policy metadata to store in the owning `vm_region`.
+    /// @note The result records conservative invalidation needs; actual `PTLB`/`IDTE`/`IPTE` dispatch is wired in the DAT invalidation wave.
+    /// @warning This function authorizes policy only; it does not allocate frames or install DAT entries.
+    [[nodiscard]] auto memory_contract_authorize_mapping(
+        const memory_contract_request& request
+    ) noexcept -> lib::expected<memory_contract_result, lib::kernel_error> {
+        auto validate_result = memory_contract_validate_request(request);
+        if (!validate_result) return lib::unexpected(validate_result.error());
+
+        if (request.scope == memory_scope::portal_shared
+            && !memory_access_has(request.access, memory_access::share)) {
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+
+        auto key = memory_contract_resolve_storage_key(request.storage_key);
+        if (!key) return lib::unexpected(key.error());
+
+        return memory_contract_result{
+            .storage_key = *key,
+            .numa_node = request.numa_node,
+            .invalidate = request.phys_start != 0ULL
+                ? invalidation_scope::address_space
+                : invalidation_scope::none,
+            .required_rights = memory_contract_required_rights(request.access, request.scope),
+            .generation = memory_contract_generation(),
+            .access = request.access,
+            .scope = request.scope,
+        };
+    }
+
+    /// @brief Authorize a VM protection change.
+    /// @param[in] request Complete VM/DAT/storage-key/NUMA request for the new protection.
+    /// @param[in] old_prot Previous hardware protection bits.
+    /// @return DGP policy metadata to store in affected VM regions.
+    /// @note Any changed DAT protection is conservatively marked address-space scoped until CPU-ASCE attachment tracking is complete.
+    /// @warning The caller must perform DAT invalidation before reusing frames or relaxing storage-key authority.
+    [[nodiscard]] auto memory_contract_authorize_protect(
+        const memory_contract_request& request,
+        arch::s390x::mmu::page_prot old_prot
+    ) noexcept -> lib::expected<memory_contract_result, lib::kernel_error> {
+        auto result = memory_contract_authorize_mapping(request);
+        if (!result) return lib::unexpected(result.error());
+
+        result->invalidate = (old_prot.raw() == request.prot.raw())
+            ? invalidation_scope::none
+            : invalidation_scope::address_space;
+        return *result;
+    }
+
+    /// @brief Authorize removal of a VM mapping authority record.
+    /// @param[in] request Complete VM/DAT/storage-key/NUMA request describing the removed range.
+    /// @return DGP policy metadata describing the required teardown authority.
+    /// @note Physical frame, portal, storage-key, and DAT reuse must wait for the returned invalidation scope.
+    /// @warning This function does not perform teardown; it only selects policy metadata.
+    [[nodiscard]] auto memory_contract_authorize_unmap(
+        const memory_contract_request& request
+    ) noexcept -> lib::expected<memory_contract_result, lib::kernel_error> {
+        auto result = memory_contract_authorize_mapping(request);
+        if (!result) return lib::unexpected(result.error());
+
+        result->invalidate = memory_access_has(request.access, memory_access::share)
+            ? invalidation_scope::alb_global
+            : invalidation_scope::address_space;
+        return *result;
+    }
+
+    static_assert(sizeof(memory_access) == sizeof(u32), "DGP memory access mask must remain 32-bit");
+    static_assert(sizeof(memory_scope) == sizeof(u8), "DGP memory scope must remain byte-sized");
+    static_assert(sizeof(invalidation_scope) == sizeof(u8), "DGP invalidation scope must remain byte-sized");
+    static_assert(DGP_PAGE_SIZE == 4096ULL, "DGP initial contract assumes the z/Architecture 4 KiB page granule");
+
+} // namespace zxfoundation::dgp
+
+} // end export

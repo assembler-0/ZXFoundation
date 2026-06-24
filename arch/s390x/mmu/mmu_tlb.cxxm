@@ -3,6 +3,7 @@
 /// @brief TLB invalidation primitives for z/Architecture.
 export module arch.s390x.mmu.mmu_tlb;
 import arch.s390x.mmu.mmu_types;
+import zxfoundation.dgp.memory_contract;
 import zxfoundation.base.types;
 
 export {
@@ -20,11 +21,12 @@ namespace arch::s390x::mmu {
     /// @brief IDTE — Invalidate DAT Table Entry (all CPUs, full ASCE flush).
     /// @param[in] asce_val  The ASCE whose TLB entries should be purged.
     auto tlb_flush_asce(u64 asce_val) noexcept -> void {
+        u64 opt = IDTE_PTOA;
         __asm__ volatile(
-            "   idte   0,%[opt],%[asce]"
+            "   idte   0,%[asce],%[opt]"
             :
-            : [opt]  "a" (IDTE_PTOA),
-              [asce] "a" (asce_val)
+            : [asce] "a" (asce_val),
+              [opt]  "a" (opt)
             : "cc", "memory"
         );
     }
@@ -51,6 +53,46 @@ namespace arch::s390x::mmu {
               [r2] "a" (virt_addr)
             : "cc", "memory"
         );
+    }
+
+    /// @brief Apply a DGP-selected invalidation scope using typed z/Architecture primitives.
+    /// @param[in] scope DGP memory-contract invalidation decision.
+    /// @param[in] asce_val Address-space control element for address-space scoped flushes.
+    /// @param[in] pte_table_phys Physical page-table address for single-page `IPTE`, or zero for conservative fallback.
+    /// @param[in] virt_addr Virtual address associated with a single-page invalidation.
+    /// @note `PTLB`, `IDTE`, and `IPTE` are the hardware boundaries described by the PoP DAT invalidation model; caller-side policy chooses the smallest safe scope.
+    /// @warning Until CPU-ASCE attachment tracking is complete, global and ALB-sensitive scopes fall back to full ASCE invalidation when an ASCE is available.
+    auto tlb_apply_dgp_scope(
+        zxfoundation::dgp::invalidation_scope scope,
+        u64 asce_val,
+        u64 pte_table_phys,
+        u64 virt_addr
+    ) noexcept -> void {
+        switch (scope) {
+            case zxfoundation::dgp::invalidation_scope::none:
+                return;
+            case zxfoundation::dgp::invalidation_scope::local_cpu:
+                tlb_flush_local();
+                return;
+            case zxfoundation::dgp::invalidation_scope::single_page:
+                if (pte_table_phys != 0ULL) {
+                    tlb_invalidate_pte(pte_table_phys, virt_addr);
+                    return;
+                }
+                tlb_flush_local();
+                return;
+            case zxfoundation::dgp::invalidation_scope::address_space:
+            case zxfoundation::dgp::invalidation_scope::global:
+            case zxfoundation::dgp::invalidation_scope::alb_global:
+                if (asce_val != 0ULL) {
+                    tlb_flush_asce(asce_val);
+                    return;
+                }
+                tlb_flush_local();
+                return;
+        }
+
+        tlb_flush_local();
     }
 
 } // namespace arch::s390x::mmu

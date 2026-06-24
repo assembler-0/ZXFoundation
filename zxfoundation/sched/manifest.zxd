@@ -1,7 +1,14 @@
 !files : !compile_group -> [auto] {
     context.cxxm
+    sched_policy_types.cxxm
+    sched_topology_types.cxxm
+    sched_topology.cxxm
+    sched_balance.cxxm
     sched_fair.cxxm
     sched_idle.cxxm
+    sched_rt.cxxm
+    sched_deadline.cxxm
+    sched_class.cxxm
     sched_domain.cxxm
     sched.cxxm
 }

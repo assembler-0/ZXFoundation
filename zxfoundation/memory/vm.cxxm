@@ -4,14 +4,17 @@
 
 export module zxfoundation.memory.vm;
 import zxfoundation.memory.vm_types;
+import zxfoundation.dgp.memory_contract;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.numa_types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.slub;
 import zxfoundation.memory.slub_typed;
 import zxfoundation.memory.slub_types;
 import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_tlb;
 import arch.s390x.mmu.mmu_types;
 import arch.s390x.mmu.mmu_const;
 import zxfoundation.locking.qspinlock;
@@ -96,6 +99,148 @@ namespace zxfoundation::memory::vm::_internal {
         return page_prot{bits};
     }
 
+    /// @brief Convert VM protection and sharing flags into DGP access authority.
+    [[nodiscard]] auto dgp_access_from_vm(
+        vm_prot prot,
+        vm_flags flags,
+        vm_backing backing
+    ) noexcept -> zxfoundation::dgp::memory_access {
+        using namespace zxfoundation::dgp;
+
+        memory_access access = memory_access::none;
+        if (!!(prot & vm_prot::read)) access = access | memory_access::read;
+        if (!!(prot & vm_prot::write)) access = access | memory_access::write;
+        if (!!(prot & vm_prot::exec)) access = access | memory_access::execute;
+        if (!!(flags & vm_flags::portal) || backing == vm_backing::portal_shared) {
+            access = access | memory_access::share;
+        }
+        return access;
+    }
+
+    /// @brief Convert VM sharing flags into a DGP memory-contract scope.
+    [[nodiscard]] auto dgp_scope_from_vm(
+        vm_flags flags,
+        vm_backing backing
+    ) noexcept -> zxfoundation::dgp::memory_scope {
+        if (!!(flags & vm_flags::kernel)) return zxfoundation::dgp::memory_scope::nucleus;
+        if (!!(flags & vm_flags::portal) || backing == vm_backing::portal_shared) {
+            return zxfoundation::dgp::memory_scope::portal_shared;
+        }
+        return zxfoundation::dgp::memory_scope::private_domain;
+    }
+
+    /// @brief Convert VM placement flags into the current DGP NUMA policy enum.
+    [[nodiscard]] auto dgp_numa_policy_from_vm(vm_flags flags) noexcept
+        -> zxfoundation::dgp::numa_policy {
+        if (!!(flags & vm_flags::dma)) return zxfoundation::dgp::numa_policy::strict_node;
+        return zxfoundation::dgp::numa_policy::deterministic_fallback;
+    }
+
+    /// @brief Build a complete DGP memory-contract request for a VM operation.
+    [[nodiscard]] auto build_contract_request(
+        const vm_space& space,
+        u64 va_start,
+        u64 length,
+        vm_prot prot,
+        vm_flags flags,
+        vm_backing backing,
+        u64 phys_base,
+        u8 storage_key,
+        u8 numa_node
+    ) noexcept -> zxfoundation::dgp::memory_contract_request {
+        return zxfoundation::dgp::memory_contract_request{
+            .domain_id = space.owner_domain,
+            .va_start = va_start,
+            .va_end = va_start + length,
+            .phys_start = phys_base,
+            .length = length,
+            .prot = prot_to_mmu(prot),
+            .storage_key = storage_key,
+            .numa_node = numa_node,
+            .access = dgp_access_from_vm(prot, flags, backing),
+            .scope = dgp_scope_from_vm(flags, backing),
+            .policy = dgp_numa_policy_from_vm(flags),
+        };
+    }
+
+    /// @brief Store DGP authorization metadata into a VM region.
+    auto apply_contract_result(
+        vm_space& space,
+        vm_region& rgn,
+        const zxfoundation::dgp::memory_contract_result& contract
+    ) noexcept -> void {
+        rgn.storage_key = contract.storage_key;
+        rgn.numa_node = contract.numa_node;
+        rgn.invalidate = contract.invalidate;
+        rgn.dgp_scope = contract.scope;
+        rgn.dgp_access = contract.access;
+        rgn.dgp_rights = contract.required_rights;
+        rgn.dgp_generation = contract.generation;
+        rgn.mapping_generation = ++space.mapping_generation;
+        space.dgp_generation = contract.generation;
+    }
+
+    /// @brief Copy DGP authorization metadata when a VM region is split.
+    auto copy_contract_result(
+        const vm_region& source,
+        vm_region& target
+    ) noexcept -> void {
+        target.storage_key = source.storage_key;
+        target.numa_node = source.numa_node;
+        target.invalidate = source.invalidate;
+        target.dgp_scope = source.dgp_scope;
+        target.dgp_access = source.dgp_access;
+        target.dgp_rights = source.dgp_rights;
+        target.dgp_generation = source.dgp_generation;
+        target.mapping_generation = source.mapping_generation;
+    }
+
+    /// @brief Check whether two adjacent regions carry compatible DGP policy metadata.
+    [[nodiscard]] auto contract_metadata_compatible(
+        const vm_region& lhs,
+        const vm_region& rhs
+    ) noexcept -> bool {
+        return lhs.storage_key == rhs.storage_key
+            && lhs.numa_node == rhs.numa_node
+            && lhs.dgp_scope == rhs.dgp_scope
+            && lhs.dgp_access == rhs.dgp_access
+            && lhs.dgp_rights == rhs.dgp_rights
+            && lhs.dgp_generation == rhs.dgp_generation;
+    }
+
+    /// @brief Apply the invalidation scope attached to a VM/DGP policy result.
+    auto apply_vm_invalidation(
+        u64 root_phys,
+        const vm_region& rgn,
+        zxfoundation::dgp::invalidation_scope scope
+    ) noexcept -> void {
+        using namespace arch::s390x::mmu;
+
+        const dat_table<dat_level::region_1> root{root_phys};
+        const u64 asce_val = asce_build(root).raw();
+        tlb_apply_dgp_scope(scope, asce_val, 0ULL, rgn.va_start);
+    }
+
+    /// @brief Build a page-table allocation request from VM/DGP placement metadata.
+    [[nodiscard]] auto table_policy_from_region(
+        const vm_region& rgn
+    ) noexcept -> pmm::allocation_request {
+        return pmm::allocation_request{
+            .order = 0U,
+            .mem_zone = pmm::zone::normal,
+            .use = pmm::purpose::page_table,
+            .init = pmm::page_init::uninitialized,
+            .placement = zxfoundation::memory::numa::allocation_policy{
+                .preferred_node = rgn.numa_node,
+                .fallback = !!(rgn.flags & vm_flags::dma)
+                    ? zxfoundation::memory::numa::fallback_mode::strict_local
+                    : zxfoundation::memory::numa::fallback_mode::local_first,
+                .require_dma31 = false,
+                .allow_remote = !(!!(rgn.flags & vm_flags::dma)),
+            },
+        };
+    }
+
     /// @brief Allocate a vm_region from the slab, initialize it, and return.
     [[nodiscard]] auto alloc_region(
         u64 va_start, u64 va_end,
@@ -123,16 +268,18 @@ namespace zxfoundation::memory::vm::_internal {
     /// @brief Map physical pages for a region [va_start, va_end) using identity phys_base.
     auto map_physical_range(
         u64 root_phys,
-        u64 va_start, u64 va_end,
+        const vm_region& rgn,
         u64 phys_base,
         arch::s390x::mmu::page_prot pp
     ) noexcept -> lib::expected<void, lib::kernel_error> {
         using namespace arch::s390x::mmu;
         const dat_table<dat_level::region_1> root{root_phys};
-        u64 va   = va_start;
+        const auto table_policy = table_policy_from_region(rgn);
+        u64 va   = rgn.va_start;
         u64 phys = phys_base;
-        while (va < va_end) {
-            auto r = map_page<dat_level::region_1>(root, va, phys, pp);
+        while (va < rgn.va_end) {
+            auto r = map_page_with_policy<dat_level::region_1>(
+                root, va, phys, pp, table_policy);
             if (!r) return lib::unexpected(r.error());
             va   += VM_PAGE_SIZE;
             phys += VM_PAGE_SIZE;
@@ -224,6 +371,8 @@ namespace zxfoundation::memory::vm {
         space.total_resident  = 0;
         space.brk        = 0;
         space.mmap_base  = VM_MMAP_BASE;
+        space.dgp_generation = 0;
+        space.mapping_generation = 0;
         space.region_count = 0;
     }
 
@@ -320,6 +469,7 @@ namespace zxfoundation::memory::vm {
                 rgn->prot    == next->prot &&
                 rgn->flags   == next->flags &&
                 rgn->backing == next->backing &&
+                contract_metadata_compatible(*rgn, *next) &&
                 !(next->flags & vm_flags::no_merge))
             {
                 bool can_merge = true;
@@ -331,6 +481,9 @@ namespace zxfoundation::memory::vm {
                 if (can_merge) {
                     // Absorb successor into rgn.
                     rgn->va_end = next->va_end;
+                    if (next->mapping_generation > rgn->mapping_generation) {
+                        rgn->mapping_generation = next->mapping_generation;
+                    }
                     const u64 nc = read_committed(*next);
                     const u64 nr = read_resident(*next);
                     add_committed(*rgn, nc);
@@ -347,6 +500,7 @@ namespace zxfoundation::memory::vm {
                 prev->prot    == rgn->prot &&
                 prev->flags   == rgn->flags &&
                 prev->backing == rgn->backing &&
+                contract_metadata_compatible(*prev, *rgn) &&
                 !(prev->flags & vm_flags::no_merge))
             {
                 bool can_merge = true;
@@ -357,6 +511,9 @@ namespace zxfoundation::memory::vm {
                 if (can_merge) {
                     // Absorb rgn into predecessor.
                     prev->va_end = rgn->va_end;
+                    if (rgn->mapping_generation > prev->mapping_generation) {
+                        prev->mapping_generation = rgn->mapping_generation;
+                    }
                     const u64 rc = read_committed(*rgn);
                     const u64 rr = read_resident(*rgn);
                     add_committed(*prev, rc);
@@ -415,6 +572,7 @@ namespace zxfoundation::memory::vm {
         vm_region* new_rgn = *new_result;
         new_rgn->portal_id     = rgn->portal_id;
         new_rgn->owner_domain  = rgn->owner_domain;
+        copy_contract_result(*rgn, *new_rgn);
         store_committed(*new_rgn, upper_committed);
         store_resident(*new_rgn, upper_resident);
 
@@ -456,10 +614,17 @@ namespace zxfoundation::memory::vm {
         if (!gap) return lib::unexpected(gap.error());
         const u64 va = *gap;
 
+        const auto request = build_contract_request(
+            space, va, size, prot, flags, vm_backing::anonymous,
+            0ULL, 0U, 0U);
+        auto contract_result = zxfoundation::dgp::memory_contract_authorize_mapping(request);
+        if (!contract_result) return lib::unexpected(contract_result.error());
+
         auto rgn_r = alloc_region(va, va + size, prot, flags,
             vm_backing::anonymous, 0);
         if (!rgn_r) return lib::unexpected(rgn_r.error());
         vm_region* rgn = *rgn_r;
+        apply_contract_result(space, *rgn, *contract_result);
 
         if (!rb_insert_region(space, rgn)) {
             g_region_cache.dealloc(rgn);
@@ -493,6 +658,11 @@ namespace zxfoundation::memory::vm {
 
         const locking::irq_lock_guard guard{space.lock};
 
+        const auto request = build_contract_request(
+            space, va, size, prot, flags, backing, phys_base, 0U, 0U);
+        auto contract_result = zxfoundation::dgp::memory_contract_authorize_mapping(request);
+        if (!contract_result) return lib::unexpected(contract_result.error());
+
         if (space.region_count >= space.max_regions)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::out_of_memory));
@@ -500,6 +670,7 @@ namespace zxfoundation::memory::vm {
         auto rgn_r = alloc_region(va, va + size, prot, flags, backing, phys_base);
         if (!rgn_r) return lib::unexpected(rgn_r.error());
         vm_region* rgn = *rgn_r;
+        apply_contract_result(space, *rgn, *contract_result);
 
         if (!rb_insert_region(space, rgn)) {
             g_region_cache.dealloc(rgn);
@@ -538,6 +709,9 @@ namespace zxfoundation::memory::vm {
         if ((va & (VM_PAGE_SIZE - 1)) != 0)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::alignment_error));
+
+        auto contract_result = zxfoundation::dgp::memory_contract_validate_range(va, va + size);
+        if (!contract_result) return lib::unexpected(contract_result.error());
 
         const locking::irq_lock_guard guard{space.lock};
 
@@ -582,8 +756,16 @@ namespace zxfoundation::memory::vm {
                 if (!split_r) return lib::unexpected(split_r.error());
             }
 
+            const auto request = build_contract_request(
+                space, rgn->va_start, rgn->size(), rgn->prot, rgn->flags,
+                rgn->backing, rgn->phys_base, rgn->storage_key, rgn->numa_node);
+            auto unmap_result = zxfoundation::dgp::memory_contract_authorize_unmap(request);
+            if (!unmap_result) return lib::unexpected(unmap_result.error());
+            rgn->invalidate = unmap_result->invalidate;
+
             const bool free_phys = (rgn->backing == vm_backing::anonymous);
             unmap_range_pages(root_phys, rgn->va_start, rgn->va_end, free_phys);
+            apply_vm_invalidation(root_phys, *rgn, unmap_result->invalidate);
 
             space.total_committed -= read_committed(*rgn);
             space.total_resident  -= read_resident(*rgn);
@@ -611,6 +793,9 @@ namespace zxfoundation::memory::vm {
         if ((va & (VM_PAGE_SIZE - 1)) != 0)
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::alignment_error));
+
+        auto contract_result = zxfoundation::dgp::memory_contract_validate_range(va, va + size);
+        if (!contract_result) return lib::unexpected(contract_result.error());
 
         const locking::irq_lock_guard guard{space.lock};
 
@@ -665,14 +850,24 @@ namespace zxfoundation::memory::vm {
                 // rgn is now [rgn->va_start, prot_end), process it.
             }
 
+            const arch::s390x::mmu::page_prot old_prot = prot_to_mmu(rgn->prot);
+            const auto request = build_contract_request(
+                space, rgn->va_start, rgn->size(), new_prot, rgn->flags,
+                rgn->backing, rgn->phys_base, rgn->storage_key, rgn->numa_node);
+            auto protect_result = zxfoundation::dgp::memory_contract_authorize_protect(
+                request, old_prot);
+            if (!protect_result) return lib::unexpected(protect_result.error());
+
             // Update VMA protection.
             rgn->prot = new_prot;
+            apply_contract_result(space, *rgn, *protect_result);
 
             // Update DAT PTEs for mapped pages in this region.
             for (u64 cursor = rgn->va_start; cursor < rgn->va_end; cursor += VM_PAGE_SIZE) {
                 // Only update if a mapping exists (ignore unmapped demand pages).
                 (void)protect<dat_level::region_1>(root, cursor, hw_prot);
             }
+            apply_vm_invalidation(root_phys, *rgn, protect_result->invalidate);
 
             lib::rb_node* next = lib::rb_next(node);
             // Try to merge after protection change.

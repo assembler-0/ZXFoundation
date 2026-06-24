@@ -6,9 +6,44 @@ export module zxfoundation.memory.hhdm;
 import zxfoundation.base.types;
 import zxfoundation.memory.hhdm_types;
 
+namespace zxfoundation::memory::hhdm::_internal {
+
+    static u64 g_phys_coverage_end{0U};
+
+} // namespace zxfoundation::memory::hhdm::_internal
+
 export {
 
 namespace zxfoundation::memory::hhdm {
+
+    /// @brief Record the physical end covered by the active loader-built HHDM.
+    /// @param[in] phys_end Exclusive physical end address translated by the current HHDM DAT.
+    /// @note The value is supplied by ZXFL after it constructs the initial DAT tables.
+    /// @warning This function records coverage only; it does not alter DAT tables or flush translations.
+    auto set_phys_coverage_end(u64 phys_end) noexcept -> void {
+        _internal::g_phys_coverage_end = phys_end;
+    }
+
+    /// @brief Return the exclusive physical end covered by the active HHDM.
+    /// @return Exclusive physical coverage end, or zero if no contract has been recorded.
+    [[nodiscard]] auto phys_coverage_end() noexcept -> u64 {
+        return _internal::g_phys_coverage_end;
+    }
+
+    /// @brief Test whether a physical range is covered by the active HHDM.
+    /// @param[in] phys Physical start address.
+    /// @param[in] bytes Range size in bytes.
+    /// @return True when the full physical interval has a direct-map translation.
+    /// @note The PoP DAT exception in the rare DASD boot crash was a region-second translation exception on an HHDM store.
+    /// @warning A zero recorded coverage end is treated as not covered so callers fail closed.
+    [[nodiscard]] auto phys_range_is_mapped(u64 phys, u64 bytes) noexcept -> bool {
+        const u64 coverage_end = _internal::g_phys_coverage_end;
+        if (coverage_end == 0U || bytes == 0U) return false;
+        if (phys >= coverage_end) return false;
+        const u64 range_end = phys + bytes;
+        if (range_end < phys) return false;
+        return range_end <= coverage_end;
+    }
 
     /// @brief Translate a physical address (raw integer) to its HHDM virtual counterpart.
     /// @param[in] phys  Raw physical address.

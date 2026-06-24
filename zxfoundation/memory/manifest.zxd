@@ -2,6 +2,8 @@
     hhdm_types.cxxm
     hhdm.cxxm
     pmm_types.cxxm
+    numa_types.cxxm
+    numa.cxxm
     pmm.cxxm
     slub_types.cxxm
     slub.cxxm

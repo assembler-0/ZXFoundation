@@ -30,7 +30,8 @@ namespace arch::s390x::cpu::percpu {
 
         i32     preempt_count{};       ///< Preemption depth. >0 means non-preemptible.
         u32     softirq_pending{};     ///< Bitmask of pending deferred softirqs.
-        u32     irq_nesting{};         ///< IRQ nesting depth (0 = not in IRQ handler).
+        u32     irq_nesting{};         ///< Hardware IRQ/MCCK nesting depth (0 = not in IRQ handler).
+        u32     nucleus_nesting{};     ///< Synchronous SVC/PC nucleus-call nesting depth.
         u32     lock_depth{};          ///< Current qspinlock MCS node allocation depth.
         lib::atomic::atomic<u64> ec_bits{};
 
@@ -55,7 +56,16 @@ namespace arch::s390x::cpu::percpu {
 
         u8      drawer_id{0};
         u8      cpu_type{0};           ///< ZXFL_CPU_TYPE_* for this CPU (CP, IFL, zIIP, etc.)
-        u8      _pad_drawer[6]{};
+        u8      core_id{0};            ///< Scheduler core-group ID from ZXFL/STSI or degraded fallback.
+        u8      smt_id{0};             ///< SMT sibling ID inside core-group, zero when unproven.
+        u8      topology_evidence{0};  ///< ZXFL_CPU_EVIDENCE_* provenance flags.
+        u8      capacity{100};         ///< Scheduler capacity percentage, 100 when unknown.
+        u8      _pad_drawer[2]{};
+
+        u64     attached_asce{0};      ///< ASCE currently attached to CR1 for DGP tracking.
+        u32     attached_domain_id{0}; ///< Domain ID owning attached_asce, or nucleus for idle/kernel.
+        u8      attached_dgp_state{0}; ///< DGP isolation_state snapshot admitted by the scheduler.
+        u8      _pad_asce[3]{};
 
         u64     watchdog_heartbeat{0}; ///< Monotonic counter bumped by scheduler_tick().
     };

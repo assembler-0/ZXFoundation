@@ -1,0 +1,82 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_policy_types.cxxm
+/// @brief Scheduler policy records shared by classed scheduling backends.
+
+export module zxfoundation.sched.sched_policy_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sched {
+
+    /// @brief Scheduler class identifier ordered by dispatch priority.
+    enum class sched_class_id : u8 {
+        idle = 0,     ///< Per-CPU idle strand only.
+        fair = 1,     ///< Normal EEVDF-like time-sharing work.
+        rt = 2,       ///< Fixed-priority real-time work admitted by DGP policy.
+        deadline = 3, ///< Earliest-deadline work admitted by bandwidth policy.
+    };
+
+    /// @brief Real-time queueing behavior requested by a strand policy.
+    enum class rt_mode : u8 {
+        fifo = 0,        ///< Run until block, yield, or higher-priority preemption.
+        round_robin = 1, ///< Run with a bounded class slice among equal priorities.
+    };
+
+    /// @brief Quality of topology evidence used for placement decisions.
+    enum class topology_evidence : u8 {
+        absent = 0,      ///< No topology evidence is available.
+        loader = 1,      ///< Evidence was supplied by the IPL loader protocol.
+        loader_stsi = 2, ///< Loader evidence came from STSI topology records.
+        kernel_stsi = 3, ///< Kernel-side STSI refined the loader record.
+        verified = 4,    ///< Loader and kernel evidence agree for this field.
+        degraded = 5,    ///< Deterministic fallback is in use and must not be treated as complete topology.
+    };
+
+    /// @brief Compact CPU or node mask used by scheduler admission.
+    struct sched_mask {
+        u64 bits{0}; ///< Bit n authorizes CPU or NUMA node n.
+    };
+
+    /// @brief Public scheduler policy contract for a DGP strand.
+    struct sched_policy {
+        sched_class_id class_id{sched_class_id::fair}; ///< Requested scheduler class.
+        rt_mode rt_behavior{rt_mode::fifo};            ///< RT mode when class_id is rt.
+        u8 rt_priority{0};                             ///< Fixed RT priority, zero is invalid for user RT.
+        u8 _pad0[6]{};
+        u64 runtime_ns{0};                             ///< Runtime reservation for RT/deadline accounting.
+        u64 deadline_ns{0};                            ///< Relative deadline for deadline-class work.
+        u64 period_ns{0};                              ///< Replenishment period for bandwidth admission.
+        sched_mask allowed_cpus{};                     ///< Admitted CPU mask; zero means scheduler default.
+        sched_mask allowed_numa_nodes{};               ///< Admitted NUMA mask; zero means scheduler default.
+        bool allow_smt_sibling{true};                  ///< True when SMT sibling placement is allowed.
+        bool isolation_sensitive{false};               ///< True when placement must fail closed without evidence.
+        bool user_visible{false};                      ///< True when the request originated from a user domain.
+        u8 _pad1{0};
+    };
+
+    /// @brief Result returned by scheduler class admission.
+    struct sched_admission_result {
+        u64 admitted_runtime_ns{0}; ///< Runtime actually reserved by the scheduler.
+        u64 admitted_period_ns{0};  ///< Period actually reserved by the scheduler.
+        u16 preferred_cpu{0};       ///< Preferred CPU selected by topology admission.
+        bool remote_node_allowed{true}; ///< True when NUMA fallback remains permitted.
+        bool smt_sibling_allowed{true}; ///< True when SMT sibling placement remains permitted.
+        sched_class_id class_id{sched_class_id::fair}; ///< Class admitted by policy validation.
+        u8 _pad{0};
+    };
+
+    static_assert(sizeof(sched_class_id) == sizeof(u8), "scheduler class id must remain byte-sized");
+    static_assert(sizeof(rt_mode) == sizeof(u8), "RT mode must remain byte-sized");
+    static_assert(sizeof(topology_evidence) == sizeof(u8), "topology evidence must remain byte-sized");
+    static_assert(sizeof(sched_mask) == sizeof(u64), "scheduler masks must remain one machine word");
+    static_assert(static_cast<u8>(sched_class_id::deadline) > static_cast<u8>(sched_class_id::rt),
+        "deadline must outrank RT in the class contract");
+    static_assert(static_cast<u8>(sched_class_id::rt) > static_cast<u8>(sched_class_id::fair),
+        "RT must outrank fair in the class contract");
+    static_assert(static_cast<u8>(sched_class_id::fair) > static_cast<u8>(sched_class_id::idle),
+        "fair must outrank idle in the class contract");
+
+} // namespace zxfoundation::sched
+
+} // end export

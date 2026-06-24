@@ -5,6 +5,8 @@
 export module zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa;
+import zxfoundation.memory.numa_types;
 import zxfoundation.sched.context;
 import zxfoundation.sys.transaction;
 import zxfoundation.locking.qspinlock;
@@ -93,15 +95,16 @@ namespace zxfoundation::memory::pmm::_internal {
         }
     };
 
-    /// @brief Per-zone buddy allocators.
-    static buddy_zone g_zones[static_cast<u32>(zone::count)]{};
+    /// @brief Per-node allocator state.
+    struct numa_zone_set {
+        buddy_zone zones[static_cast<u32>(zone::count)]{};
+        locking::qspinlock::qspinlock locks[static_cast<u32>(zone::count)]{};
+        u64 free_pages[static_cast<u32>(zone::count)]{};
+        u64 total_pages[static_cast<u32>(zone::count)]{};
+    };
 
-    /// @brief Per-zone spinlocks.  Each lock covers only its own zone.
-    static locking::qspinlock::qspinlock g_zone_locks[static_cast<u32>(zone::count)]{};
-
-    /// @brief Per-zone free/total page counters.  Modified only under the zone lock.
-    static u64 g_zone_free_pages[static_cast<u32>(zone::count)]{};
-    static u64 g_zone_total_pages[static_cast<u32>(zone::count)]{};
+    /// @brief Node-owned buddy, lock, and accounting state.
+    static numa_zone_set g_node_zones[numa::MAX_NUMA_NODES]{};
 
     /// @brief Flat frame descriptor table.
     static frame_desc* g_frame_table{nullptr};
@@ -115,18 +118,112 @@ namespace zxfoundation::memory::pmm::_internal {
         return (phys < ZONE_DMA_LIMIT) ? zone::dma31 : zone::normal;
     }
 
+    [[nodiscard]] constexpr auto normalize_node_id(u8 node_id) noexcept -> u8 {
+        return numa::node_id_is_valid(node_id) ? node_id : numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] auto node_is_allocatable(u8 node_id) noexcept -> bool {
+        if (!numa::node_id_is_valid(node_id)) return false;
+        auto node = numa::node_at(node_id);
+        if (!node) return node_id == numa::NUMA_NODE_BOOT;
+        return numa::node_state_is_allocatable((*node)->state);
+    }
+
+    [[nodiscard]] auto local_node_id() noexcept -> u8 {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto node = numa::node_for_cpu(pcp.cpu_id);
+        if (node) return normalize_node_id(*node);
+        return normalize_node_id(pcp.drawer_id);
+    }
+
+    [[nodiscard]] auto desc_of(u64 phys) noexcept -> frame_desc&;
+
+    [[nodiscard]] auto frame_node_id(u64 phys) noexcept -> u8 {
+        const u8 recorded = desc_of(phys).numa_node;
+        if (numa::node_id_is_valid(recorded)) return recorded;
+
+        auto node = numa::node_for_phys(phys);
+        if (node) return normalize_node_id(*node);
+
+        return numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] auto boot_region_node_id(
+        const arch::s390x::init::zxfl::mem_region& region,
+        u64 phys
+    ) noexcept -> u8 {
+        if (numa::node_id_is_valid(region.numa_node)) return region.numa_node;
+
+        auto node = numa::node_for_phys(phys);
+        if (node) return normalize_node_id(*node);
+
+        return numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] constexpr auto owner_for_purpose(purpose p) noexcept -> frame_owner {
+        return
+            (p == purpose::page_table) ? frame_owner::page_table :
+            (p == purpose::stack)      ? frame_owner::stack      :
+            (p == purpose::device_dma) ? frame_owner::device     :
+            (p == purpose::slab)       ? frame_owner::slab       :
+                                         frame_owner::domain;
+    }
+
     /// @brief Access the frame_desc for a given physical address.
     /// @warning Only valid after pmm::init() has set g_frame_table.
     [[nodiscard]] auto desc_of(u64 phys) noexcept -> frame_desc& {
         return g_frame_table[phys >> PAGE_SHIFT];
     }
 
-    /// @brief Allocate a block of the given order from zone z.
-    /// @pre  Caller holds g_zone_locks[z] (or IRQs are off and lock is held).
+    [[nodiscard]] auto validate_page_table_allocation(
+        u64 phys,
+        u32 order,
+        zone z,
+        u8 node_id
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        const u64 size = static_cast<u64>(PAGE_SIZE) << order;
+        const u64 max_phys = g_max_pfn << PAGE_SHIFT;
+
+        if (!g_frame_table || order > MAX_ORDER || size == 0U) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+        if ((phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U
+            || (phys & (size - 1U)) != 0U) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+        }
+        if (phys >= max_phys || phys + size < phys || phys + size > max_phys) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+        if (!hhdm::phys_range_is_mapped(phys, size)) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed));
+        }
+        if (zone_of(phys) != z || !node_is_allocatable(node_id)) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+        }
+
+        const auto& fd = desc_of(phys);
+        if (fd.owner() != frame_owner::page_table || fd.order() != order || fd.numa_node != node_id) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::purpose_mismatch));
+        }
+        if ((fd.flags & (ff_offline | ff_shared)) != 0U) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+
+        return {};
+    }
+
+    auto quarantine_failed_allocation(u64 phys, u32 order, u8 node_id) noexcept -> void {
+        if (!g_frame_table || (phys >> PAGE_SHIFT) >= g_max_pfn) return;
+        desc_of(phys).set(static_cast<u8>(order), frame_owner::reserved, node_id, ff_suspect);
+    }
+
+    /// @brief Allocate a block of the given order from a node-owned zone.
+    /// @pre  Caller holds the selected node-zone lock.
     /// @return Physical base address of the allocated block, or 0 on failure.
-    auto alloc_locked(u32 order, zone z) noexcept -> u64 {
+    auto alloc_locked(u32 order, zone z, u8 node_id) noexcept -> u64 {
+        const u8 node = normalize_node_id(node_id);
         const u32 zi = static_cast<u32>(z);
-        auto& bz     = g_zones[zi];
+        auto& bz     = g_node_zones[node].zones[zi];
 
         for (u32 ord = order; ord <= MAX_ORDER; ++ord) {
             const u64 phys = bz.pop(ord);
@@ -136,21 +233,21 @@ namespace zxfoundation::memory::pmm::_internal {
             for (u32 s = ord; s > order; --s) {
                 const u64 buddy_phys = phys + (static_cast<u64>(PAGE_SIZE) << (s - 1));
                 bz.push(s - 1, buddy_phys);
-                desc_of(buddy_phys).set(static_cast<u8>(s - 1), frame_owner::buddy, 0);
+                desc_of(buddy_phys).set(static_cast<u8>(s - 1), frame_owner::buddy, node);
             }
 
-            // Caller will set frame_desc after knowing its numa_hint.
-            g_zone_free_pages[zi] -= 1ULL << order;
+            g_node_zones[node].free_pages[zi] -= 1ULL << order;
             return phys;
         }
         return 0;
     }
 
-    /// @brief Return a block to zone z, coalescing with free buddies.
-    /// @pre  Caller holds g_zone_locks[z] (or IRQs are off and lock is held).
-    auto free_locked(u64 phys, u32 order, zone z) noexcept -> void {
+    /// @brief Return a block to a node-owned zone, coalescing with same-node free buddies.
+    /// @pre  Caller holds the selected node-zone lock.
+    auto free_locked(u64 phys, u32 order, zone z, u8 node_id) noexcept -> void {
+        const u8 node = normalize_node_id(node_id);
         const u32 zi = static_cast<u32>(z);
-        auto& bz     = g_zones[zi];
+        auto& bz     = g_node_zones[node].zones[zi];
 
         u32 ord = order;
         for (; ord < MAX_ORDER; ++ord) {
@@ -161,6 +258,7 @@ namespace zxfoundation::memory::pmm::_internal {
 
             const auto& bd = desc_of(buddy);
             if (bd.owner() != frame_owner::buddy) break;
+            if (bd.numa_node != node) break;
 
             // EC-3: never merge across an MCCK-offline frame.
             if (bd.flags & ff_offline) {
@@ -171,15 +269,81 @@ namespace zxfoundation::memory::pmm::_internal {
             if (bd.order() != static_cast<u8>(ord)) break;
 
             bz.remove(ord, buddy);
-            desc_of(buddy).set(0, frame_owner::none, 0);
+            g_node_zones[node].free_pages[zi] -= 1ULL << ord;
+            desc_of(buddy).set(0, frame_owner::none, node);
             phys = lib::min(phys, buddy);
             // ord is incremented at the top of the next iteration → merge goes up
         }
 
         // Push at the *final merged* order (fixes the original coalescing bug).
         bz.push(ord, phys);
-        desc_of(phys).set(static_cast<u8>(ord), frame_owner::buddy, 0);
-        g_zone_free_pages[zi] += 1ULL << ord;
+        desc_of(phys).set(static_cast<u8>(ord), frame_owner::buddy, node);
+        g_node_zones[node].free_pages[zi] += 1ULL << ord;
+    }
+
+    struct node_allocation {
+        u64 phys{0ULL};
+        u8 node_id{numa::NUMA_NODE_BOOT};
+        u8 fallback_distance{0U};
+        bool remote{false};
+    };
+
+    [[nodiscard]] auto try_alloc_node(u32 order, zone z, u8 node_id) noexcept -> node_allocation {
+        const u8 node = normalize_node_id(node_id);
+        if (!node_is_allocatable(node)) return {};
+
+        const u32 zi = static_cast<u32>(z);
+        const u64 required_pages = 1ULL << order;
+        if (g_node_zones[node].free_pages[zi] < required_pages) return {};
+
+        const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+        const u64 phys = alloc_locked(order, z, node);
+        if (!phys) return {};
+
+        return node_allocation{
+            .phys = phys,
+            .node_id = node,
+            .fallback_distance = 0U,
+            .remote = false,
+        };
+    }
+
+    [[nodiscard]] auto alloc_node_aware(
+        u32 order,
+        zone z,
+        const numa::allocation_policy& policy,
+        u8 local_node
+    ) noexcept -> node_allocation {
+        const u8 preferred = normalize_node_id(
+            policy.preferred_node == numa::NUMA_NODE_ANY ? local_node : policy.preferred_node);
+
+        auto first = try_alloc_node(order, z, preferred);
+        if (first.phys) return first;
+
+        if (policy.fallback == numa::fallback_mode::strict_local || !policy.allow_remote) {
+            return {};
+        }
+
+        for (u8 distance = 1U; distance < numa::MAX_NUMA_NODES; ++distance) {
+            const u8 candidate = static_cast<u8>((static_cast<u32>(preferred) + distance) % numa::MAX_NUMA_NODES);
+            auto attempt = try_alloc_node(order, z, candidate);
+            if (!attempt.phys) continue;
+            attempt.fallback_distance = distance;
+            attempt.remote = candidate != preferred;
+            return attempt;
+        }
+
+        if (policy.fallback == numa::fallback_mode::emergency_any) {
+            for (u8 candidate = 0U; candidate < numa::MAX_NUMA_NODES; ++candidate) {
+                auto attempt = try_alloc_node(order, z, candidate);
+                if (!attempt.phys) continue;
+                attempt.fallback_distance = static_cast<u8>((candidate + numa::MAX_NUMA_NODES - preferred) % numa::MAX_NUMA_NODES);
+                attempt.remote = candidate != preferred;
+                return attempt;
+            }
+        }
+
+        return {};
     }
 
     /// @brief Pop one page of order `ord` from a PCP list.
@@ -205,28 +369,30 @@ namespace zxfoundation::memory::pmm::_internal {
 
     /// @brief Refill a PCP list by bulk-allocating PCP_BATCH pages from buddy.
     ///        Takes the zone spinlock internally (IRQs already disabled by caller).
-    auto pcp_refill(pcp_list& lst, u32 ord, zone z) noexcept -> void {
+    auto pcp_refill(pcp_list& lst, u32 ord, zone z, u8 node_id) noexcept -> void {
+        const u8 node = normalize_node_id(node_id);
         const u32 zi = static_cast<u32>(z);
-        const locking::lock_guard guard{g_zone_locks[zi]}; // IRQs already off
+        const locking::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
         for (u32 i = 0; i < PCP_BATCH; ++i) {
-            const u64 phys = alloc_locked(ord, z);
+            const u64 phys = alloc_locked(ord, z, node);
             if (!phys) break;
             // Pages in PCP are owned by buddy until popped for a real caller.
-            desc_of(phys).set(static_cast<u8>(ord), frame_owner::buddy, 0);
+            desc_of(phys).set(static_cast<u8>(ord), frame_owner::buddy, node);
             pcp_push(lst, phys);
         }
     }
 
     /// @brief Drain PCP_BATCH/2 pages from a list back to the buddy.
     ///        Takes the zone spinlock internally (IRQs already disabled by caller).
-    auto pcp_drain(pcp_list& lst, u32 ord, zone z) noexcept -> void {
+    auto pcp_drain(pcp_list& lst, u32 ord, zone z, u8 node_id) noexcept -> void {
+        const u8 node = normalize_node_id(node_id);
         const u32 zi     = static_cast<u32>(z);
         const u32 target = PCP_HIGH / 2U;
-        const locking::lock_guard guard{g_zone_locks[zi]}; // IRQs already off
+        const locking::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
         while (lst.count > target) {
             const u64 phys = pcp_pop(lst);
             if (!phys) break;
-            free_locked(phys, ord, z);
+            free_locked(phys, ord, z, node);
         }
     }
 
@@ -364,22 +530,26 @@ namespace zxfoundation::memory::pmm {
                                                     static_cast<u32>(resv.size()));
                 u64 run = cur;
                 while (run < run_end) {
+                    const zone z = zone_of(run);
+                    const u64 zone_end = (z == zone::dma31)
+                        ? lib::min(run_end, ZONE_DMA_LIMIT)
+                        : run_end;
                     u32 ord = MAX_ORDER;
                     while (ord > 0) {
                         const u64 block_size = static_cast<u64>(PAGE_SIZE) << ord;
                         const bool aligned   = (run & (block_size - 1)) == 0;
-                        const bool fits      = (run + block_size) <= run_end;
+                        const bool fits      = (run + block_size) <= zone_end;
                         if (aligned && fits) break;
                         --ord;
                     }
-                    const zone z = zone_of(run);
-                    const u32  zi = static_cast<u32>(z);
-                    g_zones[zi].push(ord, run);
-                    desc_of(run).set(static_cast<u8>(ord), frame_owner::buddy, 0);
+                    const u32 zi = static_cast<u32>(z);
+                    const u8 node = boot_region_node_id(map[i], run);
+                    g_node_zones[node].zones[zi].push(ord, run);
+                    desc_of(run).set(static_cast<u8>(ord), frame_owner::buddy, node);
 
                     const u64 block_pages = 1ULL << ord;
-                    g_zone_free_pages[zi]  += block_pages;
-                    g_zone_total_pages[zi] += block_pages;
+                    g_node_zones[node].free_pages[zi] += block_pages;
+                    g_node_zones[node].total_pages[zi] += block_pages;
                     run += static_cast<u64>(PAGE_SIZE) << ord;
                 }
                 cur = run_end;
@@ -396,63 +566,66 @@ namespace zxfoundation::memory::pmm {
     /// @param[in] order  log2 of the number of pages to reserve.
     auto reserve(u64 phys, u32 order) noexcept -> void {
         using namespace _internal;
-        const zone z  = zone_of(phys);
-        const u32  zi = static_cast<u32>(z);
-        const locking::irq_lock_guard guard{g_zone_locks[zi]};
-
+        const zone z = zone_of(phys);
+        const u32 zi = static_cast<u32>(z);
         const u64 end = phys + (static_cast<u64>(PAGE_SIZE) << order);
-        auto& bz      = g_zones[zi];
 
-        for (u32 ord = 0; ord <= MAX_ORDER; ++ord) {
-            u64 cur = bz.heads[ord];
-            while (cur) {
-                const auto* n   = reinterpret_cast<const free_node*>(hhdm::phys_to_virt(cur));
-                const u64   nxt = n->next_phys;
-                const u64   blk_end = cur + (static_cast<u64>(PAGE_SIZE) << ord);
+        for (u8 node = 0U; node < numa::MAX_NUMA_NODES; ++node) {
+            auto& node_zones = g_node_zones[node];
+            const locking::irq_lock_guard guard{node_zones.locks[zi]};
+            auto& bz = node_zones.zones[zi];
 
-                if (cur < end && blk_end > phys) {
-                    bz.remove(ord, cur);
-                    g_zone_free_pages[zi]  -= 1ULL << ord;
-                    g_zone_total_pages[zi] -= 1ULL << ord;
-                    desc_of(cur).set(static_cast<u8>(ord), frame_owner::reserved, 0);
+            for (u32 ord = 0; ord <= MAX_ORDER; ++ord) {
+                u64 cur = bz.heads[ord];
+                while (cur) {
+                    const auto* n = reinterpret_cast<const free_node*>(hhdm::phys_to_virt(cur));
+                    const u64 nxt = n->next_phys;
+                    const u64 blk_end = cur + (static_cast<u64>(PAGE_SIZE) << ord);
 
-                    // Return pages below the reserved range.
-                    if (cur < phys) {
-                        u64 ret = cur;
-                        while (ret < phys) {
-                            u32 ret_ord = 0;
-                            while (ret_ord + 1 <= ord) {
-                                const u64 ns = static_cast<u64>(PAGE_SIZE) << (ret_ord + 1);
-                                if ((ret & (ns - 1)) == 0 && ret + ns <= phys) ++ret_ord;
-                                else break;
+                    if (cur < end && blk_end > phys) {
+                        bz.remove(ord, cur);
+                        node_zones.free_pages[zi] -= 1ULL << ord;
+                        node_zones.total_pages[zi] -= 1ULL << ord;
+                        desc_of(cur).set(static_cast<u8>(ord), frame_owner::reserved, node);
+
+                        // Return pages below the reserved range.
+                        if (cur < phys) {
+                            u64 ret = cur;
+                            while (ret < phys) {
+                                u32 ret_ord = 0;
+                                while (ret_ord + 1 <= ord) {
+                                    const u64 ns = static_cast<u64>(PAGE_SIZE) << (ret_ord + 1);
+                                    if ((ret & (ns - 1)) == 0 && ret + ns <= phys) ++ret_ord;
+                                    else break;
+                                }
+                                bz.push(ret_ord, ret);
+                                desc_of(ret).set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                node_zones.free_pages[zi] += 1ULL << ret_ord;
+                                node_zones.total_pages[zi] += 1ULL << ret_ord;
+                                ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
                             }
-                            bz.push(ret_ord, ret);
-                            desc_of(ret).set(static_cast<u8>(ret_ord), frame_owner::buddy, 0);
-                            g_zone_free_pages[zi]  += 1ULL << ret_ord;
-                            g_zone_total_pages[zi] += 1ULL << ret_ord;
-                            ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
+                        }
+
+                        // Return pages above the reserved range.
+                        if (blk_end > end) {
+                            u64 ret = end;
+                            while (ret < blk_end) {
+                                u32 ret_ord = 0;
+                                while (ret_ord + 1 <= ord) {
+                                    const u64 ns = static_cast<u64>(PAGE_SIZE) << (ret_ord + 1);
+                                    if ((ret & (ns - 1)) == 0 && ret + ns <= blk_end) ++ret_ord;
+                                    else break;
+                                }
+                                bz.push(ret_ord, ret);
+                                desc_of(ret).set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                node_zones.free_pages[zi] += 1ULL << ret_ord;
+                                node_zones.total_pages[zi] += 1ULL << ret_ord;
+                                ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
+                            }
                         }
                     }
-
-                    // Return pages above the reserved range.
-                    if (blk_end > end) {
-                        u64 ret = end;
-                        while (ret < blk_end) {
-                            u32 ret_ord = 0;
-                            while (ret_ord + 1 <= ord) {
-                                const u64 ns = static_cast<u64>(PAGE_SIZE) << (ret_ord + 1);
-                                if ((ret & (ns - 1)) == 0 && ret + ns <= blk_end) ++ret_ord;
-                                else break;
-                            }
-                            bz.push(ret_ord, ret);
-                            desc_of(ret).set(static_cast<u8>(ret_ord), frame_owner::buddy, 0);
-                            g_zone_free_pages[zi]  += 1ULL << ret_ord;
-                            g_zone_total_pages[zi] += 1ULL << ret_ord;
-                            ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
-                        }
-                    }
+                    cur = nxt;
                 }
-                cur = nxt;
             }
         }
     }
@@ -468,6 +641,7 @@ namespace zxfoundation::memory::pmm {
             u32     order{0};
             zone    z{zone::normal};
             purpose p{purpose::generic};
+            u8      node_id{numa::NUMA_NODE_BOOT};
         };
 
         lib::array<slot, TXN_MAX> m_slots{};
@@ -481,8 +655,9 @@ namespace zxfoundation::memory::pmm {
                 const auto& fd = desc_of(m_slots[i].phys);
                 if (fd.flags & ff_offline) continue;
                 const u32 zi = static_cast<u32>(m_slots[i].z);
-                const locking::irq_lock_guard guard{g_zone_locks[zi]};
-                free_locked(m_slots[i].phys, m_slots[i].order, m_slots[i].z);
+                const u8 node = normalize_node_id(m_slots[i].node_id);
+                const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+                free_locked(m_slots[i].phys, m_slots[i].order, m_slots[i].z, node);
             }
         }
 
@@ -519,33 +694,35 @@ namespace zxfoundation::memory::pmm {
                     lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
                     "pmm::transaction::alloc order > 0 forbidden in hard-IRQ context");
 
-            const u8 numa_hint =
-                arch::s390x::cpu::lowcore::this_cpu_percpu().drawer_id;
-            const u32 zi = static_cast<u32>(z);
-
-            u64 phys = 0;
-            {
-                const locking::irq_lock_guard guard{g_zone_locks[zi]};
-                phys = alloc_locked(order, z);
-            }
-            if (!phys)
+            const u8 local_node = local_node_id();
+            const numa::allocation_policy placement{
+                .preferred_node = local_node,
+                .fallback = numa::fallback_mode::local_first,
+                .require_dma31 = z == zone::dma31,
+                .allow_remote = true,
+            };
+            const node_allocation allocation = alloc_node_aware(order, z, placement, local_node);
+            if (!allocation.phys)
                 return lib::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::zone_exhausted));
 
-            const frame_owner fo =
-                (p == purpose::page_table) ? frame_owner::page_table :
-                (p == purpose::stack)      ? frame_owner::stack      :
-                (p == purpose::device_dma) ? frame_owner::device     :
-                (p == purpose::slab)       ? frame_owner::slab       :
-                                             frame_owner::domain;
-            desc_of(phys).set(static_cast<u8>(order), fo, numa_hint);
+            const frame_owner fo = owner_for_purpose(p);
+            desc_of(allocation.phys).set(static_cast<u8>(order), fo, allocation.node_id);
+
+            if (p == purpose::page_table) {
+                auto validation = validate_page_table_allocation(allocation.phys, order, z, allocation.node_id);
+                if (!validation) {
+                    quarantine_failed_allocation(allocation.phys, order, allocation.node_id);
+                    return lib::unexpected(validation.error());
+                }
+            }
 
             if (init == page_init::zeroed)
-                lib::memset(reinterpret_cast<void*>(hhdm::phys_to_virt(phys)),
+                lib::memset(reinterpret_cast<void*>(hhdm::phys_to_virt(allocation.phys)),
                             0, static_cast<u64>(PAGE_SIZE) << order);
 
-            m_slots[m_count++] = { phys, order, z, p };
-            return folio_embryo{ phys, order, p, z };
+            m_slots[m_count++] = { allocation.phys, order, z, p, allocation.node_id };
+            return folio_embryo{ allocation.phys, order, p, z };
         }
 
         [[nodiscard]] auto count() const noexcept -> u32 { return m_count; }
@@ -555,6 +732,94 @@ namespace zxfoundation::memory::pmm {
             return (i < m_count) ? m_slots[i].phys : 0;
         }
     };
+
+    /// @brief Allocate a single folio.
+    /// @param[in] request Node-aware allocation request.
+    /// @return Allocation result containing the folio and resolved placement metadata.
+    /// @note Order-zero through PCP_MAX_ORDER allocations attempt the current CPU's node-local PCP first.
+    /// @warning Allocation is forbidden in MCCK context and multi-page allocation is forbidden in hard IRQ context.
+    [[nodiscard]] auto alloc(
+        const allocation_request& request
+    ) noexcept -> lib::expected<allocation_result, lib::kernel_error> {
+        using namespace _internal;
+
+        if (sched::context::in_mcck())
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::alloc forbidden in MCCK context");
+        if (sched::context::in_hardirq() && request.order > 0U)
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::alloc order>0 forbidden in hard-IRQ context");
+        if (request.order > MAX_ORDER)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+
+        const zone z = request.mem_zone;
+        const u32 zi = static_cast<u32>(z);
+        const u8 local_node = local_node_id();
+        numa::allocation_policy placement = request.placement;
+        if (placement.preferred_node == numa::NUMA_NODE_ANY) {
+            placement.preferred_node = local_node;
+        }
+        if (placement.require_dma31 && z != zone::dma31)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::zone_exhausted));
+
+        node_allocation allocation{};
+
+        if (request.order <= PCP_MAX_ORDER) {
+            const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+            auto& percpu = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            const u8 pcp_node = normalize_node_id(placement.preferred_node);
+            pcp_list& lst = percpu.pcp.lists[pcp_node][zi][request.order];
+
+            if (!lst.head_phys)
+                pcp_refill(lst, request.order, z, pcp_node); // takes node-zone lock internally
+
+            allocation.phys = pcp_pop(lst);
+            allocation.node_id = pcp_node;
+            allocation.fallback_distance = 0U;
+            allocation.remote = pcp_node != local_node;
+            arch::s390x::cpu::irq::irq_restore(irq_flags);
+        }
+
+        if (!allocation.phys) {
+            allocation = alloc_node_aware(request.order, z, placement, local_node);
+        }
+
+        if (!allocation.phys)
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::zone_exhausted));
+
+        const frame_owner fo = owner_for_purpose(request.use);
+        desc_of(allocation.phys).set(static_cast<u8>(request.order), fo, allocation.node_id);
+
+        if (request.use == purpose::page_table) {
+            auto validation = validate_page_table_allocation(allocation.phys, request.order, z, allocation.node_id);
+            if (!validation) {
+                quarantine_failed_allocation(allocation.phys, request.order, allocation.node_id);
+                return lib::unexpected(validation.error());
+            }
+        }
+
+        if (request.init == page_init::zeroed)
+            lib::memset(reinterpret_cast<void*>(hhdm::phys_to_virt(allocation.phys)),
+                        0, static_cast<u64>(PAGE_SIZE) << request.order);
+
+        return allocation_result{
+            .phys_base = allocation.phys,
+            .order = request.order,
+            .use = request.use,
+            .mem_zone = z,
+            .placement = numa::placement_result{
+                .selected_node = allocation.node_id,
+                .fallback_distance = allocation.fallback_distance,
+                .remote = allocation.remote,
+                .strict_violation = false,
+            },
+        };
+    }
 
     /// @brief Allocate a single folio.
     /// @param[in] order  Buddy order (0–MAX_ORDER).
@@ -568,59 +833,21 @@ namespace zxfoundation::memory::pmm {
         purpose   p    = purpose::generic,
         page_init init = page_init::uninitialized
     ) noexcept -> lib::expected<folio_embryo, lib::kernel_error> {
-        using namespace _internal;
-
-        if (sched::context::in_mcck())
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
-                "pmm::alloc forbidden in MCCK context");
-        if (sched::context::in_hardirq() && order > 0U)
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
-                "pmm::alloc order>0 forbidden in hard-IRQ context");
-
-        u64 phys      = 0;
-        u8  numa_hint = 0;
-
-        if (order <= PCP_MAX_ORDER) {
-            const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
-            auto& percpu = arch::s390x::cpu::lowcore::this_cpu_percpu();
-            numa_hint = percpu.drawer_id;
-            pcp_list& lst = percpu.pcp.lists[static_cast<u32>(z)][order];
-
-            if (!lst.head_phys)
-                pcp_refill(lst, order, z); // takes zone lock internally
-
-            phys = pcp_pop(lst);
-            arch::s390x::cpu::irq::irq_restore(irq_flags);
-        }
-
-        if (!phys) {
-            const u32 zi = static_cast<u32>(z);
-            {
-                const locking::irq_lock_guard guard{g_zone_locks[zi]};
-                phys = alloc_locked(order, z);
-            }
-            numa_hint = arch::s390x::cpu::lowcore::this_cpu_percpu().drawer_id;
-        }
-
-        if (!phys)
-            return lib::unexpected(lib::kernel_error::from_memory(
-                lib::memory_error::zone_exhausted));
-
-        const frame_owner fo =
-            (p == purpose::page_table) ? frame_owner::page_table :
-            (p == purpose::stack)      ? frame_owner::stack      :
-            (p == purpose::device_dma) ? frame_owner::device     :
-            (p == purpose::slab)       ? frame_owner::slab       :
-                                         frame_owner::domain;
-        desc_of(phys).set(static_cast<u8>(order), fo, numa_hint);
-
-        if (init == page_init::zeroed)
-            lib::memset(reinterpret_cast<void*>(hhdm::phys_to_virt(phys)),
-                        0, static_cast<u64>(PAGE_SIZE) << order);
-
-        return folio_embryo{ phys, order, p, z };
+        numa::allocation_policy placement{
+            .preferred_node = numa::NUMA_NODE_ANY,
+            .fallback = numa::fallback_mode::local_first,
+            .require_dma31 = z == zone::dma31,
+            .allow_remote = true,
+        };
+        auto result = alloc(allocation_request{
+            .order = order,
+            .mem_zone = z,
+            .use = p,
+            .init = init,
+            .placement = placement,
+        });
+        if (!result) return lib::unexpected(result.error());
+        return result->into_folio();
     }
 
 
@@ -633,9 +860,10 @@ namespace zxfoundation::memory::pmm {
         const u32   order = f.order;
         const zone  z     = f.mem_zone;
         const u64   phys  = f.phys_base;
+        const u8    node  = frame_node_id(phys);
 
         // Reset frame_desc so the frame shows as buddy-owned.
-        desc_of(phys).set(static_cast<u8>(order), frame_owner::buddy, 0);
+        desc_of(phys).set(static_cast<u8>(order), frame_owner::buddy, node);
 
         // Use PCP when not inside a hardware interrupt handler.
         // In hard-IRQ / MCCK context the zone lock may be held by the
@@ -645,15 +873,15 @@ namespace zxfoundation::memory::pmm {
         if (order <= PCP_MAX_ORDER && !sched::context::in_interrupt()) {
             const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
             pcp_list& lst = arch::s390x::cpu::lowcore::this_cpu_percpu()
-                                .pcp.lists[static_cast<u32>(z)][order];
+                                .pcp.lists[node][static_cast<u32>(z)][order];
             pcp_push(lst, phys);
             if (lst.count > PCP_HIGH)
-                pcp_drain(lst, order, z); // drains under zone lock
+                pcp_drain(lst, order, z, node); // drains under node-zone lock
             arch::s390x::cpu::irq::irq_restore(irq_flags);
         } else {
             const u32 zi = static_cast<u32>(z);
-            const locking::irq_lock_guard guard{g_zone_locks[zi]};
-            free_locked(phys, order, z);
+            const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+            free_locked(phys, order, z, node);
         }
     }
 
@@ -703,16 +931,18 @@ namespace zxfoundation::memory::pmm {
     ///        May be momentarily imprecise due to pages temporarily in PCP.
     [[nodiscard]] auto free_page_count() noexcept -> u64 {
         u64 total = 0;
-        for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
-            total += _internal::g_zone_free_pages[zi];
+        for (u32 node = 0; node < numa::MAX_NUMA_NODES; ++node)
+            for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
+                total += _internal::g_node_zones[node].free_pages[zi];
         return total;
     }
 
     /// @brief Total managed page count (sum across all zones).
     [[nodiscard]] auto total_page_count() noexcept -> u64 {
         u64 total = 0;
-        for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
-            total += _internal::g_zone_total_pages[zi];
+        for (u32 node = 0; node < numa::MAX_NUMA_NODES; ++node)
+            for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
+                total += _internal::g_node_zones[node].total_pages[zi];
         return total;
     }
 

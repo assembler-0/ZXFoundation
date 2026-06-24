@@ -11,11 +11,16 @@ import zxfoundation.base.typestate;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
+import zxfoundation.sys.syschk;
 import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
 import zxfoundation.sched.sched;
+import zxfoundation.sched.sched_topology;
+import zxfoundation.sched.sched_topology_types;
 import zxfoundation.exec.elf_loader;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.psw_types;
@@ -36,6 +41,88 @@ namespace _internal {
 
     /// @brief Static storage for module info — must outlive the trampoline call.
     static module_info g_init_module_info{};
+
+    static u64 g_executor_probe_counter{};
+
+    static auto executor_probe_entry(void* arg) noexcept -> void {
+        auto* counter = static_cast<u64*>(arg);
+        if (counter) {
+            *counter = *counter + 1U;
+        }
+
+        auto* self = static_cast<zxfoundation::domain::domain*>(
+            arch::s390x::cpu::lowcore::current_domain_ptr());
+        if (self) {
+            self->flags = self->flags | zxfoundation::domain::domain_flags::need_resched;
+        }
+        zxfoundation::sched::schedule();
+    }
+
+    auto bootstrap_scheduler_proof() noexcept -> void {
+        pinfo("bootstrap: DGP scheduler proof starting");
+
+        const auto* bsp_topology = zxfoundation::sched::topology::record_for(0U);
+        if (!bsp_topology || bsp_topology->state != zxfoundation::sched::topology::cpu_scheduling_state::online) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::uninitialized),
+                "bootstrap: scheduler topology proof failed");
+        }
+
+        if (zxfoundation::memory::numa::node_count() == 0U) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::uninitialized),
+                "bootstrap: NUMA fallback proof failed");
+        }
+
+        auto domain_a_result = zxfoundation::domain::domain_create("test/sched-a");
+        auto domain_b_result = zxfoundation::domain::domain_create("test/sched-b");
+        if (!domain_a_result || !domain_b_result) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error),
+                "bootstrap: multi-domain proof creation failed");
+        }
+
+        auto* domain_a = *domain_a_result;
+        auto* domain_b = *domain_b_result;
+
+        zxfoundation::domain::strand_create_request request_a{};
+        request_a.owner_domain = domain_a->ko.id;
+        request_a.entry = executor_probe_entry;
+        request_a.arg = &g_executor_probe_counter;
+        request_a.cpu = 0U;
+        request_a.stack_order = 2U;
+        request_a.enqueue = false;
+
+        zxfoundation::domain::strand_create_request request_b = request_a;
+        request_b.owner_domain = domain_b->ko.id;
+
+        auto strand_a_result = zxfoundation::sched::strand_spawn(request_a);
+        auto strand_b_result = zxfoundation::sched::strand_spawn(request_b);
+        if (!strand_a_result || !strand_b_result) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error),
+                "bootstrap: multi-strand proof spawn failed");
+        }
+
+        zxfoundation::sched::enqueue_strand(*strand_a_result);
+        zxfoundation::sched::dequeue_strand(*strand_a_result);
+
+        if (!zxfoundation::domain::strand_destroy(**strand_a_result)
+            || !zxfoundation::domain::strand_destroy(**strand_b_result)) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error),
+                "bootstrap: multi-strand proof teardown failed");
+        }
+
+        if (!zxfoundation::domain::domain_destroy(domain_a->ko.id)
+            || !zxfoundation::domain::domain_destroy(domain_b->ko.id)) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error),
+                "bootstrap: multi-domain proof teardown failed");
+        }
+
+        pinfo("bootstrap: DGP scheduler proof passed");
+    }
 
     /// @brief Kernel-mode entry function for the user/init domain.
     ///
@@ -90,6 +177,8 @@ namespace zxfoundation::init::bootstrap {
         {
         pinfo("bootstrap: sys/bootstrap domain running");
         pinfo("bootstrap: searching for init module...");
+
+        _internal::bootstrap_scheduler_proof();
 
         const arch::s390x::init::zxfl::protocol* proto = static_cast<arch::s390x::init::zxfl::protocol*>(arg);
         const arch::s390x::init::zxfl::sysmodule* found = nullptr;

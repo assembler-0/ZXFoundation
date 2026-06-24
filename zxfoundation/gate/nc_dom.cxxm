@@ -8,6 +8,7 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
 import zxfoundation.base.types;
+import zxfoundation.base.config;
 import zxfoundation.base.typestate;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
@@ -30,6 +31,15 @@ using zxfoundation::sys::cap::cap_rights;
 using zxfoundation::sys::cap::cap_type;
 
 namespace __dom_detail {
+
+    static u64 g_mock_strand_counter{};
+
+    auto mock_user_strand_entry(void* arg) noexcept -> void {
+        auto* counter = static_cast<u64*>(arg);
+        if (counter) {
+            *counter = *counter + 1U;
+        }
+    }
 
     [[nodiscard]] auto current_domain() noexcept -> domain* {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
@@ -130,26 +140,43 @@ namespace __dom_detail {
                (static_cast<u64>(d->primary_strand.cpu) << 32);
     }
 
-    auto nc_domain_strand_create(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
-        // a0 = admin capability token, a1 = cpu affinity (0 for any)
+    auto nc_domain_strand_create(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        // a0 = admin capability token, a1 = cpu affinity (0 for BSP/current default), a2 = owner domain ID (0 for self)
         if (!validate_admin(cap_token{a0})) {
             return NC_ERROR;
         }
 
-        auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        auto* self = current_domain();
+        if (!self) [[unlikely]] return NC_ERROR;
 
-        const u16 cpu = static_cast<u16>(a1 & 0xFFFF);
+        const auto cpu_affinity = static_cast<u16>(a1 & 0xFFFFU);
+        if (cpu_affinity >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
+            zxfoundation::sys::printk::perr("domain_strand_create: invalid CPU affinity {}", static_cast<u32>(cpu_affinity));
+            return NC_ERROR;
+        }
 
-        auto result = zxfoundation::domain::strand_create(d, cpu);
+        domain* owner = self;
+        const auto owner_id = static_cast<domain_id>(a2);
+        if (owner_id != 0U && owner_id != self->ko.id) {
+            zxfoundation::sys::printk::perr("domain_strand_create: cross-domain spawn denied for {}", owner_id);
+            return NC_ERROR;
+        }
+
+        zxfoundation::domain::strand_create_request request{};
+        request.owner_domain = owner->ko.id;
+        request.entry = mock_user_strand_entry;
+        request.arg = &g_mock_strand_counter;
+        request.cpu = cpu_affinity;
+        request.stack_order = 2U;
+        request.enqueue = true;
+
+        auto result = zxfoundation::sched::strand_spawn(request);
         if (!result) {
             zxfoundation::sys::printk::perr("domain_strand_create: failed");
             return NC_ERROR;
         }
 
         strand* s = *result;
-        zxfoundation::sched::enqueue_strand(s);
-
         return static_cast<u64>(s->ko.id);
     }
 

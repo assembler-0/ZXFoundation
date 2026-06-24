@@ -10,6 +10,8 @@ import zxfoundation.sys.io_types;
 import zxfoundation.sys.io;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
+import zxfoundation.dgp.io_authority;
+import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk;
 import arch.s390x.cpu.lowcore;
@@ -43,6 +45,18 @@ namespace __io_detail {
         // a0 carries the opaque device number (CSS-IO boundary).
         const u16 dev_no = static_cast<u16>(a0 & 0xFFFFU);
 
+        auto authority = zxfoundation::dgp::io_authority_authorize({
+            .caller_domain_id = d->ko.id,
+            .device_number = dev_no,
+            .operation = zxfoundation::dgp::io_authority_operation::bind,
+            .token = {},
+            .required_rights = zxfoundation::sys::cap::cap_rights::admin,
+            .granted_rights = d->dgp_state.granted_rights,
+            .bootstrap_admin = (d->dgp_state.granted_rights & zxfoundation::dgp::isolation_rights::admin)
+                == zxfoundation::dgp::isolation_rights::admin,
+        });
+        if (!authority) return NC_ERROR;
+
         zxfoundation::sys::cap::cap_token token{};
         auto result = io_bind(dev_no, d->ko.id, token);
         if (!result) {
@@ -57,7 +71,21 @@ namespace __io_detail {
     auto nc_io_unbind(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         using namespace zxfoundation::sys::io;
 
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
         const zxfoundation::sys::cap::cap_token token{a0};
+
+        auto authority = zxfoundation::dgp::io_authority_authorize({
+            .caller_domain_id = d->ko.id,
+            .device_number = 0U,
+            .operation = zxfoundation::dgp::io_authority_operation::unbind,
+            .token = token,
+            .required_rights = zxfoundation::sys::cap::cap_rights::destroy,
+            .granted_rights = d->dgp_state.granted_rights,
+            .bootstrap_admin = false,
+        });
+        if (!authority) return NC_ERROR;
 
         auto result = io_unbind(token);
         if (!result) {
@@ -76,6 +104,17 @@ namespace __io_detail {
 
         const zxfoundation::sys::cap::cap_token token{a0};
         const u64 orb_user_ptr = a1;
+
+        auto authority = zxfoundation::dgp::io_authority_authorize({
+            .caller_domain_id = d->ko.id,
+            .device_number = 0U,
+            .operation = zxfoundation::dgp::io_authority_operation::submit,
+            .token = token,
+            .required_rights = zxfoundation::sys::cap::cap_rights::exec,
+            .granted_rights = d->dgp_state.granted_rights,
+            .bootstrap_admin = false,
+        });
+        if (!authority) return NC_ERROR;
 
         if (orb_user_ptr == 0) {
             zxfoundation::sys::printk::perr("io_submit: null orb pointer");
@@ -100,8 +139,22 @@ namespace __io_detail {
     auto nc_io_irq_bind(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         using namespace zxfoundation::sys::io;
 
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
         const zxfoundation::sys::cap::cap_token token{a0};
         const auto gate_id = static_cast<u32>(a1);
+
+        auto authority = zxfoundation::dgp::io_authority_authorize({
+            .caller_domain_id = d->ko.id,
+            .device_number = 0U,
+            .operation = zxfoundation::dgp::io_authority_operation::irq_bind,
+            .token = token,
+            .required_rights = zxfoundation::sys::cap::cap_rights::write,
+            .granted_rights = d->dgp_state.granted_rights,
+            .bootstrap_admin = false,
+        });
+        if (!authority) return NC_ERROR;
 
         auto result = io_irq_bind(token, gate_id);
         if (!result) {

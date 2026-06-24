@@ -16,6 +16,9 @@ import zxfoundation.gate.nc_sys;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.sync_contract;
 import zxfoundation.base.types;
 
 using zxfoundation::sys::printk::perr;
@@ -34,6 +37,55 @@ namespace _internal {
         u8      packed;   // (namespace << 5) | operation
         check   need;     // Capability requirement.
     };
+
+    [[nodiscard]] auto dgp_rights_for(check need) noexcept
+        -> zxfoundation::dgp::isolation_rights
+    {
+        using zxfoundation::dgp::isolation_rights;
+
+        switch (need) {
+        case check::none:
+            return isolation_rights::enter;
+        case check::admin:
+            return isolation_rights::enter | isolation_rights::admin;
+        case check::domain_map:
+            return isolation_rights::enter | isolation_rights::map;
+        }
+
+        return isolation_rights::enter;
+    }
+
+    [[nodiscard]] auto validate_dgp_gate_entry(
+        zxfoundation::gate::call_namespace ns,
+        u32 op,
+        check need
+    ) noexcept -> bool {
+        const u32 gate_id = (static_cast<u32>(ns) << 5) | (op & 0x1FU);
+
+        const auto state = zxfoundation::dgp::sync_contract_snapshot(
+            zxfoundation::dgp::lock_context::thread,
+            zxfoundation::dgp::teardown_phase::none,
+            0U);
+        auto sync_result = zxfoundation::dgp::sync_contract_validate_authority_lookup(state);
+        if (!sync_result) {
+            perr("dispatch: call {}/{} — DGP authority context invalid",
+                 static_cast<u32>(ns), op);
+            return false;
+        }
+
+        auto result = zxfoundation::dgp::isolation_validate_gate_entry(
+            0U,
+            gate_id,
+            dgp_rights_for(need));
+
+        if (!result) {
+            perr("dispatch: call {}/{} — DGP gate validation failed",
+                 static_cast<u32>(ns), op);
+            return false;
+        }
+
+        return true;
+    }
 
     /// @brief Lookup table.  Sorted by packed call number for a potential
     ///        binary search; linear scan is fine for ~36 entries.
@@ -105,7 +157,7 @@ namespace _internal {
 
             switch (entry.need) {
             case check::none:
-                return true;
+                return validate_dgp_gate_entry(ns, op, entry.need);
 
             case check::admin: {
                 auto result = zxfoundation::sys::cap::cap_validate_generic(
@@ -116,7 +168,7 @@ namespace _internal {
                          static_cast<u32>(ns), op);
                     return false;
                 }
-                return true;
+                return validate_dgp_gate_entry(ns, op, entry.need);
             }
 
             case check::domain_map: {
@@ -128,7 +180,7 @@ namespace _internal {
                          static_cast<u32>(ns), op);
                     return false;
                 }
-                return true;
+                return validate_dgp_gate_entry(ns, op, entry.need);
             }
             }
         }

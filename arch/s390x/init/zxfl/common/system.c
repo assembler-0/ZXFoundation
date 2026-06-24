@@ -119,6 +119,7 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
             uint8_t drawer_id = 0;
             uint8_t book_id   = 0;
             uint8_t socket_id = 0;
+            uint8_t core_leaf_id = 0;
 
             uint8_t *ptr = (uint8_t *)info->tle;
             uint8_t *end = (uint8_t *)info + info->length;
@@ -151,12 +152,15 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
                         ci->drawer_id = drawer_id;
                         ci->book_id   = book_id;
                         ci->socket_id = socket_id;
-                        ci->chip_id   = socket_id;
-                        ci->thread_id = 0;
+                        ci->core_id   = core_leaf_id;
+                        ci->smt_id    = (uint8_t)k;
+                        ci->topology_evidence = ZXFL_CPU_EVIDENCE_STSI | ZXFL_CPU_EVIDENCE_SIGP;
+                        ci->capacity  = 100U;
                         ci->numa_node = drawer_id;
 
                         proto->cpu_count++;
                     }
+                    core_leaf_id++;
                     ptr += 16;
                 } else {
                     switch (tle->nl) {
@@ -192,8 +196,10 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
                 ci->drawer_id = 0;
                 ci->book_id   = 0;
                 ci->socket_id = 0;
-                ci->chip_id   = 0;
-                ci->thread_id = 0;
+                ci->core_id   = 0;
+                ci->smt_id    = 0;
+                ci->topology_evidence = ZXFL_CPU_EVIDENCE_SIGP | ZXFL_CPU_EVIDENCE_FALLBACK;
+                ci->capacity  = 100U;
                 ci->numa_node = 0;
                 proto->cpu_count++;
                 continue;
@@ -211,8 +217,10 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
             ci->drawer_id = drawer;
             ci->book_id   = 0;
             ci->socket_id = 0;
-            ci->chip_id   = 0;
-            ci->thread_id = 0;
+            ci->core_id   = (uint8_t)(proto->cpu_count & 0xFFU);
+            ci->smt_id    = 0;
+            ci->topology_evidence = ZXFL_CPU_EVIDENCE_SIGP | ZXFL_CPU_EVIDENCE_FALLBACK;
+            ci->capacity  = 100U;
             ci->numa_node = drawer;  // drawer = NUMA affinity domain (see STSI path above)
             proto->cpu_count++;
         }

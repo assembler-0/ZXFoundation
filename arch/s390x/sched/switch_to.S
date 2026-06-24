@@ -64,7 +64,8 @@ domain_trampoline:
     lgr     %r2, %r6
     basr    %r14, %r7
 
-    lpswe   LC_RETURN_PSW(0)
+    brasl   %r14, sched_strand_trampoline_exit
+    j       .
 
     .size   domain_trampoline, . - domain_trampoline
     .section .note.GNU-stack, "", @progbits

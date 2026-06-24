@@ -13,6 +13,9 @@ import zxfoundation.scoms.scoms_ref;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.sys.transaction;
 import zxfoundation.sys.printk;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.sync_contract;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import arch.s390x.cpu.ar;
@@ -128,10 +131,25 @@ namespace zxfoundation::portal {
                     lib::generic_error::invalid_arg));
         }
 
-        if (source_domain_id == target_domain_id) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(
-                    lib::generic_error::invalid_arg));
+        const auto authority_state = zxfoundation::dgp::sync_contract_snapshot(
+            zxfoundation::dgp::lock_context::thread,
+            zxfoundation::dgp::teardown_phase::none,
+            source_domain_id);
+        auto authority_result = zxfoundation::dgp::sync_contract_validate_authority_lookup(
+            authority_state);
+        if (!authority_result) {
+            return lib::unexpected(authority_result.error());
+        }
+
+        auto validation_result = zxfoundation::dgp::isolation_validate_portal(
+            source_domain_id,
+            target_domain_id,
+            va_start,
+            va_end,
+            zxfoundation::dgp::isolation_rights::share
+                | zxfoundation::dgp::isolation_rights::map);
+        if (!validation_result) {
+            return lib::unexpected(validation_result.error());
         }
 
         _internal::portal_create_txn txn;
@@ -193,7 +211,10 @@ namespace zxfoundation::portal {
 
         // Increment source domain's portal_count.
         auto* src = zxfoundation::domain::domain_find(source_domain_id);
-        if (src) ++src->portal_count;
+        if (src) {
+            ++src->portal_count;
+            ++src->dgp_state.active_portal_count;
+        }
 
         // Commit the transaction — disarms the automatic rollback.
         txn.commit();
@@ -223,23 +244,29 @@ namespace zxfoundation::portal {
         sys::printk::pdebug("portal: destroying id={} src={} tgt={} alet={}",
                    desc->ko.id, desc->source_domain, desc->target_domain, desc->alet);
 
-        // Tear down the hardware ALE before releasing the slot.
+        // Convert the DGP portal authority into a draining revocation before hardware reuse.
+        auto* src = zxfoundation::domain::domain_find(desc->source_domain);
+        if (src) {
+            auto revoke_result = zxfoundation::dgp::isolation_begin_portal_teardown(src->dgp_state);
+            if (!revoke_result) {
+                return lib::unexpected(revoke_result.error());
+            }
+            if (src->portal_count > 0) --src->portal_count;
+        }
+
+        // Purge the Access-List Buffer before the ALE is destroyed so stale ALET translations cannot survive reuse.
+        arch::s390x::cpu::ar::purge_alb();
+
+        // Tear down the hardware ALE after ALB invalidation and DGP revocation.
         if (desc->alet > arch::s390x::cpu::aste::ALET_RESERVED_MAX) {
             (void)arch::s390x::cpu::aste::ale_destroy(desc->alet);
         }
-
-        // Decrement source domain's portal_count.
-        auto* src = zxfoundation::domain::domain_find(desc->source_domain);
-        if (src && src->portal_count > 0) --src->portal_count;
 
         // Release the slot back to the SCOMS table.
         auto result = _internal::g_portal_table.release(id);
         if (!result) {
             return lib::unexpected(result.error());
         }
-
-        // Purge the Access-List Buffer so the CPU does not use stale ALETs.
-        arch::s390x::cpu::ar::purge_alb();
 
         return {};
     }
@@ -253,8 +280,16 @@ namespace zxfoundation::portal {
                 return p.source_domain == domain_id ||
                        p.target_domain == domain_id;
             },
-            // Cleanup: tear down the hardware ALE before the slot is released.
+            // Cleanup: revoke DGP authority, purge ALB, then tear down hardware before the slot is released.
             [](portal_desc& p) noexcept -> void {
+                auto* src = zxfoundation::domain::domain_find(p.source_domain);
+                if (src) {
+                    (void)zxfoundation::dgp::isolation_begin_portal_teardown(src->dgp_state);
+                    if (src->portal_count > 0) --src->portal_count;
+                }
+
+                arch::s390x::cpu::ar::purge_alb();
+
                 if (p.alet > arch::s390x::cpu::aste::ALET_RESERVED_MAX) {
                     (void)arch::s390x::cpu::aste::ale_destroy(p.alet);
                 }

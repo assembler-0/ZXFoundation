@@ -1,0 +1,212 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_rt.cxxm
+/// @brief Fixed-priority real-time scheduler backend with DGP admission gates.
+
+export module zxfoundation.sched.sched_rt;
+import zxfoundation.sched.sched_policy_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import lib.error;
+import lib.expected;
+import lib.list;
+
+namespace _internal {
+
+    using zxfoundation::domain::domain;
+    using zxfoundation::domain::domain_flags;
+    using zxfoundation::domain::run_queue;
+    using zxfoundation::domain::strand;
+    using zxfoundation::sched::sched_class_id;
+
+    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
+        return (d.flags & domain_flags::idle) != domain_flags::none;
+    }
+
+    [[nodiscard]] auto is_active_domain(const domain& d) noexcept -> bool {
+        return d.ko.state == zxfoundation::base::lifecycle_state::active;
+    }
+
+    [[nodiscard]] auto has_rt_authority(const domain& d) noexcept -> bool {
+        if (d.rt_capability_token != 0U && d.rt_capability_token == d.admin_token) return true;
+        return zxfoundation::dgp::has_all_rights(
+            d.dgp_state.granted_rights,
+            zxfoundation::dgp::isolation_rights::admin);
+    }
+
+    [[nodiscard]] auto policy_matches_domain_masks(
+        const domain& d,
+        const zxfoundation::sched::sched_policy& policy
+    ) noexcept -> bool {
+        if (d.allowed_cpus.bits != 0U && policy.allowed_cpus.bits != 0U
+            && (policy.allowed_cpus.bits & ~d.allowed_cpus.bits) != 0U) {
+            return false;
+        }
+        if (d.allowed_numa_nodes.bits != 0U && policy.allowed_numa_nodes.bits != 0U
+            && (policy.allowed_numa_nodes.bits & ~d.allowed_numa_nodes.bits) != 0U) {
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] auto reserve_domain_runtime(
+        domain& d,
+        u64 runtime_ns,
+        u64 period_ns
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        if (d.rt_period_ns == 0U) d.rt_period_ns = period_ns;
+        if (d.rt_budget_ns == 0U) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (period_ns != d.rt_period_ns) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (runtime_ns > d.rt_budget_ns || d.rt_reserved_ns > d.rt_budget_ns - runtime_ns) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        d.rt_reserved_ns += runtime_ns;
+        return {};
+    }
+
+    auto release_domain_runtime(domain& d, u64 runtime_ns) noexcept -> void {
+        d.rt_reserved_ns = (d.rt_reserved_ns > runtime_ns) ? (d.rt_reserved_ns - runtime_ns) : 0U;
+    }
+
+} // namespace _internal
+
+export {
+
+namespace zxfoundation::sched::rt {
+
+    using zxfoundation::domain::domain;
+    using zxfoundation::domain::run_queue;
+    using zxfoundation::domain::strand;
+
+    /// @brief Validate and reserve RT scheduling authority for a strand.
+    /// @param[in,out] owner Domain that owns the strand and RT budget.
+    /// @param[in,out] s Strand receiving RT admission metadata.
+    /// @param[in] policy Requested RT scheduler policy.
+    /// @return Admission result with reserved runtime and period, or kernel_error when denied.
+    /// @note The first implementation requires administrative DGP authority and per-domain runtime budget.
+    /// @warning Denied RT requests must not fall back to fair scheduling silently.
+    [[nodiscard]] auto admit(
+        domain& owner,
+        strand& s,
+        const sched_policy& policy
+    ) noexcept -> lib::expected<sched_admission_result, lib::kernel_error> {
+        if (!_internal::is_active_domain(owner) || _internal::is_idle_domain(owner)) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (policy.class_id != sched_class_id::rt || !_internal::policy_matches_domain_masks(owner, policy)) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto dgp_result = zxfoundation::dgp::isolation_validate_scheduler_policy(
+            owner.dgp_state,
+            policy,
+            _internal::has_rt_authority(owner));
+        if (!dgp_result) {
+            return lib::unexpected(dgp_result.error());
+        }
+
+        auto reserve_result = _internal::reserve_domain_runtime(
+            owner,
+            dgp_result->admitted_runtime_ns,
+            dgp_result->admitted_period_ns);
+        if (!reserve_result) {
+            return lib::unexpected(reserve_result.error());
+        }
+
+        s.sched_policy = policy;
+        s.sched_admission = *dgp_result;
+        s.rt_runtime_used_ns = 0U;
+        s.rt_period_start_ns = 0U;
+        return *dgp_result;
+    }
+
+    /// @brief Release RT bandwidth previously reserved for a strand.
+    /// @param[in,out] owner Domain owning the reservation.
+    /// @param[in,out] s Strand whose reservation is released.
+    /// @note The function is idempotent for non-RT strands.
+    auto release_admission(domain& owner, strand& s) noexcept -> void {
+        if (s.sched_policy.class_id != sched_class_id::rt) return;
+        _internal::release_domain_runtime(owner, s.sched_admission.admitted_runtime_ns);
+        s.sched_policy = sched_policy{};
+        s.sched_admission = sched_admission_result{};
+        s.rt_runtime_used_ns = 0U;
+        s.rt_period_start_ns = 0U;
+    }
+
+    /// @brief Enqueue an admitted RT strand on a per-CPU run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Admitted real-time strand.
+    /// @return Success or kernel_error if admission metadata is invalid.
+    [[nodiscard]] auto enqueue(
+        run_queue& rq,
+        strand& s
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        if (s.sched_policy.class_id != sched_class_id::rt
+            || s.sched_admission.class_id != sched_class_id::rt
+            || s.sched_admission.admitted_runtime_ns == 0U) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (s.on_rq) return {};
+
+        rq.rt_queue.push_back(s.sched_link);
+        s.on_rq = true;
+        ++rq.nr_running;
+        return {};
+    }
+
+    /// @brief Dequeue an admitted RT strand from a per-CPU run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Real-time strand to remove.
+    auto dequeue(run_queue& rq, strand& s) noexcept -> void {
+        if (!s.on_rq) return;
+        lib::list_head::remove(s.sched_link);
+        s.on_rq = false;
+        if (rq.nr_running) --rq.nr_running;
+    }
+
+    /// @brief Pick the highest-priority RT strand from a run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @return Best RT strand, or nullptr when no RT work is queued.
+    [[nodiscard]] auto pick_next(run_queue& rq) noexcept -> strand* {
+        strand* best = nullptr;
+        for (auto& candidate : rq.rt_queue.iter<strand, &strand::sched_link>()) {
+            if (!best || candidate.sched_policy.rt_priority > best->sched_policy.rt_priority) best = &candidate;
+        }
+        return best;
+    }
+
+    /// @brief Account an RT scheduler tick and request throttling on budget exhaustion.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Currently running real-time strand.
+    /// @note Runtime accounting is conservative until high-resolution replenishment is added.
+    auto tick(run_queue& rq, strand& s) noexcept -> void {
+        constexpr u64 RT_ACCOUNTING_TICK_NS = 1'000'000ULL;
+        if (s.sched_policy.class_id != sched_class_id::rt) return;
+        s.rt_runtime_used_ns += RT_ACCOUNTING_TICK_NS;
+        if (s.rt_runtime_used_ns >= s.sched_admission.admitted_runtime_ns) {
+            auto* owner = static_cast<domain*>(s.owner);
+            if (owner) owner->flags |= zxfoundation::domain::domain_flags::need_resched;
+            dequeue(rq, s);
+        }
+    }
+
+    /// @brief Mark the current domain for preemption when RT work wakes.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] waking Real-time strand being enqueued or woken.
+    auto check_preempt(run_queue& rq, strand& waking) noexcept -> void {
+        if (!rq.curr || waking.sched_policy.class_id != sched_class_id::rt) return;
+        auto* curr_owner = static_cast<domain*>(rq.curr->owner);
+        if (curr_owner) curr_owner->flags |= zxfoundation::domain::domain_flags::need_resched;
+    }
+
+} // namespace zxfoundation::sched::rt
+
+} // end export

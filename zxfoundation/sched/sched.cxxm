@@ -3,7 +3,12 @@
 /// @brief Scheduler core — schedule(), tick, init, work-stealing.
 
 export module zxfoundation.sched.sched;
+import zxfoundation.sched.sched_class;
+import zxfoundation.sched.sched_policy_types;
 import zxfoundation.sched.sched_fair;
+import zxfoundation.sched.sched_topology_types;
+import zxfoundation.sched.sched_topology;
+import zxfoundation.sched.sched_balance;
 import zxfoundation.sched.sched_idle;
 import zxfoundation.sched.sched_domain;
 import zxfoundation.domain.domain_types;
@@ -15,6 +20,9 @@ import zxfoundation.portal.portal;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.config;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.sync_contract;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
@@ -27,6 +35,7 @@ import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import lib.error;
+import lib.expected;
 import lib.format;
 import arch.s390x.lib.atomic;
 
@@ -42,21 +51,79 @@ namespace _internal {
 
     static zxfoundation::sys::timer::kernel_timer g_ap_tick_timers[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
+    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
+        return (d.flags & domain_flags::idle) != domain_flags::none;
+    }
+
+    [[nodiscard]] auto can_admit_domain(const domain& d) noexcept -> bool {
+        if (is_idle_domain(d)) return true;
+        auto result = zxfoundation::dgp::isolation_validate_scheduler_admission(d.dgp_state);
+        return static_cast<bool>(result);
+    }
+
+    auto validate_scheduler_irq_context(u32 domain_id = 0U) noexcept -> void {
+        const auto state = zxfoundation::dgp::sync_contract_snapshot(
+            zxfoundation::dgp::lock_context::irq_disabled,
+            zxfoundation::dgp::teardown_phase::none,
+            domain_id);
+        auto result = zxfoundation::dgp::sync_contract_validate_irq_state(
+            state,
+            zxfoundation::dgp::irq_contract::must_be_disabled);
+        if (!result) [[unlikely]] {
+            zxfoundation::sys::syschk::syschk_fatal(
+                result.error(),
+                "sched: DGP synchronization contract violated");
+        }
+    }
+
+    auto record_asce_attachment(domain& d) noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        pcp.attached_asce = d.asce.val;
+        pcp.attached_domain_id = d.ko.id;
+        pcp.attached_dgp_state = static_cast<u8>(d.dgp_state.state);
+    }
+
     auto try_steal_strand_locked(run_queue& local_rq) noexcept -> strand* {
         namespace fair = zxfoundation::sched::fair;
+        namespace balance = zxfoundation::sched::balance;
+        namespace topology = zxfoundation::sched::topology;
 
         run_queue* busiest = nullptr;
-        u32 max_running = 1;
+        u32 best_score = 0U;
 
-        for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
-            auto& rq = g_rqs[i];
-            if (&rq == &local_rq) continue;
-            if (rq.online.load(arch::s390x::lib::atomic::memory_order::acquire) == 0) continue;
+        topology::refresh_cpu_record(
+            local_rq.cpu_id,
+            local_rq.nr_running,
+            local_rq.online.load(arch::s390x::lib::atomic::memory_order::acquire) != 0U);
 
-            if (rq.nr_running > max_running) {
-                max_running = rq.nr_running;
-                busiest = &rq;
+        constexpr topology::cpu_relation tiers[] = {
+            topology::cpu_relation::same_smt_core,
+            topology::cpu_relation::same_core_group,
+            topology::cpu_relation::same_numa_node,
+            topology::cpu_relation::remote_numa_node,
+        };
+
+        for (const auto tier : tiers) {
+            for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
+                auto& rq = g_rqs[i];
+                if (&rq == &local_rq) continue;
+
+                const bool online = rq.online.load(
+                    arch::s390x::lib::atomic::memory_order::acquire) != 0U;
+                topology::refresh_cpu_record(rq.cpu_id, rq.nr_running, online);
+
+                const u32 score = balance::steal_source_score(
+                    local_rq.cpu_id,
+                    rq.cpu_id,
+                    rq.nr_running,
+                    tier);
+                if (score > best_score) {
+                    best_score = score;
+                    busiest = &rq;
+                }
             }
+
+            if (busiest) break;
         }
 
         if (!busiest) return nullptr;   // local_rq.lock still held by caller
@@ -77,7 +144,10 @@ namespace _internal {
 
                 stolen = fair::rb_node_to_strand(last);
 
-                if (stolen->cpu != busiest->cpu_id || !stolen->on_rq) [[unlikely]] {
+                const auto* stolen_domain = static_cast<const domain*>(stolen->owner);
+                auto placement_result = balance::validate_cpu_for_strand(*stolen, local_rq.cpu_id);
+                if (stolen->cpu != busiest->cpu_id || !stolen->on_rq
+                    || !can_admit_domain(*stolen_domain) || !placement_result) [[unlikely]] {
                     stolen = nullptr;
                 } else {
                     fair::dequeue(*busiest, *stolen);
@@ -128,10 +198,25 @@ namespace zxfoundation::sched {
     ) noexcept -> domain*;
 
     auto enqueue_strand(strand* s) noexcept -> void {
+        auto* d = static_cast<domain*>(s->owner);
+        if (!_internal::can_admit_domain(*d)) [[unlikely]] {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
+                "sched: DGP scheduler admission denied");
+        }
+
         auto& rq = cpu_rq(s->cpu);
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        _internal::validate_scheduler_irq_context(d->ko.id);
         rq.lock.lock();
-        fair::enqueue(rq, *s);
+        auto enqueue_result = classed::enqueue(rq, *s);
+        if (!enqueue_result) [[unlikely]] {
+            rq.lock.unlock();
+            arch::s390x::cpu::irq::irq_restore(flags);
+            sys::syschk::syschk_fatal(
+                enqueue_result.error(),
+                "sched: scheduler class enqueue denied");
+        }
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
     }
@@ -139,14 +224,79 @@ namespace zxfoundation::sched {
     auto dequeue_strand(strand* s) noexcept -> void {
         auto& rq = cpu_rq(s->cpu);
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        _internal::validate_scheduler_irq_context();
         rq.lock.lock();
-        fair::dequeue(rq, *s);
+        classed::dequeue(rq, *s);
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
     }
 
     auto enqueue_domain(domain* d) noexcept -> void {
         enqueue_strand(&d->primary_strand);
+    }
+
+    /// @brief Admit a scheduler policy for a strand before run-queue insertion.
+    /// @param[in,out] s Strand receiving the policy metadata.
+    /// @param[in] policy Requested scheduler policy.
+    /// @return Admission record on success, or kernel_error when DGP/class policy denies the request.
+    /// @note The function refuses to change policy for a strand already present on a run queue.
+    /// @warning User-visible RT callers must use this path before enqueue so denied requests never reach a run queue.
+    [[nodiscard]] auto strand_admit_policy(
+        strand& s,
+        const zxfoundation::sched::sched_policy& policy
+    ) noexcept -> lib::expected<zxfoundation::sched::sched_admission_result, lib::kernel_error> {
+        auto* owner = static_cast<domain*>(s.owner);
+        if (!owner || s.on_rq) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (!_internal::can_admit_domain(*owner)) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        return classed::admit_policy(*owner, s, policy);
+    }
+
+    /// @brief Create and optionally enqueue a secondary strand for a DGP domain.
+    /// @param[in] request Executor-style creation request containing owner, entry, argument, stack order, and CPU.
+    /// @return Pointer to the created strand, or kernel_error if validation, allocation, or admission fails.
+    /// @note The primary strand path is unchanged; this API only creates secondary strands.
+    /// @warning On scheduler admission failure the newly allocated strand is destroyed before returning an error.
+    [[nodiscard]] auto strand_spawn(
+        const zxfoundation::domain::strand_create_request& request
+    ) noexcept -> lib::expected<zxfoundation::domain::strand*, lib::kernel_error> {
+        if (!request.entry || request.stack_order != 2U) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto* owner = zxfoundation::domain::domain_find(request.owner_domain);
+        if (!owner) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+
+        if (!_internal::can_admit_domain(*owner)) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto create_result = zxfoundation::domain::strand_create(owner, request.cpu);
+        if (!create_result) {
+            return lib::unexpected(create_result.error());
+        }
+
+        auto* s = *create_result;
+        zxfoundation::sched::domain_ctx::setup_strand_context(s, request.entry, request.arg);
+
+        if (request.enqueue) {
+            if (!_internal::can_admit_domain(*owner)) {
+                (void)zxfoundation::domain::strand_destroy(*s);
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            }
+            enqueue_strand(s);
+        }
+
+        return s;
     }
 
     auto dequeue_domain(domain* d) noexcept -> void {
@@ -157,6 +307,7 @@ namespace zxfoundation::sched {
         auto& rq = this_rq();
 
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        _internal::validate_scheduler_irq_context();
         rq.lock.lock();
 
         strand* prev = rq.curr;
@@ -166,26 +317,48 @@ namespace zxfoundation::sched {
             auto* prev_dom = static_cast<domain*>(prev->owner);
             prev_dom->flags &= ~domain_flags::need_resched;
 
-            if (prev_dom->ko.state == lifecycle_state::active && !prev->on_rq
+            if (prev_dom->ko.state == lifecycle_state::active && _internal::can_admit_domain(*prev_dom)
+                && (prev->state == strand_state::running || prev->state == strand_state::runnable) && !prev->on_rq
                 && prev != rq.idle_strand) {
-                fair::enqueue(rq, *prev);
+                prev->state = strand_state::runnable;
+                auto enqueue_result = classed::enqueue(rq, *prev);
+                if (!enqueue_result) [[unlikely]] {
+                    rq.lock.unlock();
+                    arch::s390x::cpu::irq::irq_restore(flags);
+                    sys::syschk::syschk_fatal(
+                        enqueue_result.error(),
+                        "sched: scheduler class requeue denied");
+                }
             }
         }
 
-        if (rq.nr_running > 0) {
-            next = fair::pick_next(rq);
-        }
+        next = classed::select_next(rq);
+        if (next == rq.idle_strand) next = nullptr;
 
         if (!next && _internal::g_sched_initialized) {
             next = _internal::try_steal_strand_locked(rq);
             if (next) {
-                fair::enqueue(rq, *next);
-                next = fair::pick_next(rq);
+                auto enqueue_result = classed::enqueue(rq, *next);
+                if (!enqueue_result) [[unlikely]] {
+                    rq.lock.unlock();
+                    arch::s390x::cpu::irq::irq_restore(flags);
+                    sys::syschk::syschk_fatal(
+                        enqueue_result.error(),
+                        "sched: scheduler class migrated enqueue denied");
+                }
+                next = classed::select_next(rq);
+                if (next == rq.idle_strand) next = nullptr;
             }
         }
 
         if (!next) {
             next = rq.idle_strand;
+        }
+
+        auto* next_owner = static_cast<domain*>(next->owner);
+        if (!_internal::can_admit_domain(*next_owner)) [[unlikely]] {
+            next = rq.idle_strand;
+            next_owner = static_cast<domain*>(next->owner);
         }
 
         if (next == prev) {
@@ -195,20 +368,25 @@ namespace zxfoundation::sched {
         }
 
         if (next != rq.idle_strand && next->on_rq) {
-            fair::dequeue(rq, *next);
+            classed::dequeue(rq, *next);
+        }
+
+        if (next != rq.idle_strand) {
+            next->state = strand_state::running;
         }
 
         rq.curr = next;
 
         // ASCE switch if the owning domains differ.
         auto* prev_owner = prev ? static_cast<domain*>(prev->owner) : nullptr;
-        auto* next_owner = static_cast<domain*>(next->owner);
         if (next_owner->asce.val != 0 &&
             (!prev_owner || next_owner->asce.val != prev_owner->asce.val)) {
+            _internal::validate_scheduler_irq_context(next_owner->ko.id);
             const u64 next_asce_val = next_owner->asce.val;
             arch::s390x::cpu::processor::ctl_load<1, 1>(next_asce_val);
             auto* lc = arch::s390x::cpu::lowcore::get_current();
             lc->user_asce = next_asce_val;
+            _internal::record_asce_attachment(*next_owner);
         }
 
         rq.lock.unlock();
@@ -233,6 +411,23 @@ namespace zxfoundation::sched {
         }
     }
 
+    [[noreturn]] auto strand_trampoline_exit() noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto* current = reinterpret_cast<strand*>(pcp.current_strand);
+        if (current) {
+            current->on_rq = false;
+            current->state = strand_state::dead;
+            if (auto* owner = static_cast<domain*>(current->owner)) {
+                owner->flags = owner->flags | domain_flags::need_resched;
+            }
+        }
+
+        for (;;) {
+            schedule();
+            arch::s390x::cpu::psw::disabled_wait();
+        }
+    }
+
     auto watchdog_heartbeat_bump() noexcept -> void {
         arch::s390x::cpu::lowcore::this_cpu_percpu().watchdog_heartbeat++;
     }
@@ -243,6 +438,7 @@ namespace zxfoundation::sched {
         auto& rq = this_rq();
 
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        _internal::validate_scheduler_irq_context();
         rq.lock.lock();
 
         auto* curr = rq.curr;
@@ -253,7 +449,7 @@ namespace zxfoundation::sched {
             return;
         }
 
-        fair::tick(rq, *curr);
+        classed::tick(rq, *curr);
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
 
@@ -281,6 +477,8 @@ namespace zxfoundation::sched {
     auto sched_init() noexcept -> void {
         using namespace _internal;
 
+        topology::sched_topology_init();
+
         for (u32 i = 0; i < base::config::CONFIG_ZX_MAX_CPUS; ++i) {
             g_rqs[i].cpu_id = static_cast<u16>(i);
         }
@@ -303,6 +501,7 @@ namespace zxfoundation::sched {
         pcp.current_domain = reinterpret_cast<u64>(idle_dom);
         pcp.current_strand = reinterpret_cast<u64>(rq.curr);
         pcp.kernel_stack = idle_dom->primary_strand.kstack_top;
+        _internal::record_asce_attachment(*idle_dom);
 
         {
             using namespace zxfoundation::sys::timer;
@@ -370,8 +569,6 @@ namespace zxfoundation::sched {
             rq.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(ap_flags);
         }
-
-        pinfo("sched: processor {} online, idle id={}", cpu_id, idle_dom->ko.id);
     }
 
     [[noreturn]] auto sched_idle_enter() noexcept -> void {
@@ -384,3 +581,7 @@ namespace zxfoundation::sched {
 } // namespace zxfoundation::sched
 
 } // end export
+
+extern "C" [[noreturn]] auto sched_strand_trampoline_exit() noexcept -> void {
+    zxfoundation::sched::strand_trampoline_exit();
+}

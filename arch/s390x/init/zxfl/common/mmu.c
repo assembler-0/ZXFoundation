@@ -271,6 +271,7 @@ static uint64_t *alloc_page_table(void) {
     arch_ctl_load(asce, 13, 13); // Home Space
 
     proto->pgtbl_pool_end = (pool_next + 4095ULL) & ~4095ULL;
+    proto->hhdm_phys_coverage_end = map_bytes;
     proto->cr1_snapshot = asce;
     proto->cr13_snapshot = asce;
     proto->cr0_snapshot = cr0;

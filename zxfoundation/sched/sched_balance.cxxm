@@ -1,0 +1,103 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_balance.cxxm
+/// @brief Topology-aware DGP scheduler balancing policy helpers.
+
+export module zxfoundation.sched.sched_balance;
+import zxfoundation.sched.sched_policy_types;
+import zxfoundation.sched.sched_topology_types;
+import zxfoundation.sched.sched_topology;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.base.types;
+import lib.error;
+import lib.expected;
+
+export {
+
+namespace zxfoundation::sched::balance {
+
+    /// @brief Build the scheduler placement policy for a strand from its owning DGP domain.
+    /// @param[in] s Strand whose owner provides placement metadata.
+    /// @return Placement policy describing preferred NUMA node and SMT isolation sensitivity.
+    /// @note The first policy source is `domain::dgp_state.numa_node`; future executor APIs may override it per strand.
+    /// @warning A missing owner returns permissive fallback policy so idle/bootstrap paths remain schedulable.
+    [[nodiscard]] auto placement_policy_for(
+        const zxfoundation::domain::strand& s
+    ) noexcept -> topology::strand_placement_policy {
+        topology::strand_placement_policy policy{};
+        const auto* owner = static_cast<const zxfoundation::domain::domain*>(s.owner);
+        if (!owner) return policy;
+
+        policy.preferred_node = owner->dgp_state.numa_node;
+        policy.allow_remote_node = true;
+        policy.allow_smt_sibling = !zxfoundation::dgp::has_all_rights(
+            owner->dgp_state.granted_rights,
+            zxfoundation::dgp::isolation_rights::admin);
+        policy.isolation_sensitive = !policy.allow_smt_sibling;
+        return policy;
+    }
+
+    /// @brief Test whether a candidate CPU may run a strand under its placement policy.
+    /// @param[in] s Strand being migrated or admitted.
+    /// @param[in] target_cpu Candidate logical CPU.
+    /// @return Success when the CPU is online and satisfies the DGP placement constraints.
+    /// @note The policy currently treats the domain NUMA node as a preference unless strict policy is added later.
+    /// @warning SMT avoidance only applies when topology evidence exposes sibling groups.
+    [[nodiscard]] auto validate_cpu_for_strand(
+        const zxfoundation::domain::strand& s,
+        u16 target_cpu
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        const auto* target = topology::record_for(target_cpu);
+        if (!target || target->state != topology::cpu_scheduling_state::online) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        const auto policy = placement_policy_for(s);
+        if (policy.isolation_sensitive && !policy.allow_smt_sibling
+            && target->smt_evidence == topology_evidence::degraded) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (!policy.allow_remote_node && policy.preferred_node != 0xFFU
+            && target->numa_node != policy.preferred_node) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        return {};
+    }
+
+    /// @brief Score a source CPU as a steal candidate for a local CPU.
+    /// @param[in] local_cpu Logical CPU requesting work.
+    /// @param[in] source_cpu Logical CPU that may donate work.
+    /// @param[in] source_load Runnable-strand count on the source CPU.
+    /// @param[in] tier Maximum allowed topology distance for this balancing pass.
+    /// @return A non-zero score when the source is eligible; higher scores are preferred.
+    /// @note Same-node candidates are preferred before remote-node candidates by caller-selected tiers.
+    /// @warning This score does not inspect the final strand; callers must validate the selected strand before migration.
+    [[nodiscard]] auto steal_source_score(
+        u16 local_cpu,
+        u16 source_cpu,
+        u32 source_load,
+        topology::cpu_relation tier
+    ) noexcept -> u32 {
+        if (source_load <= 1U) return 0U;
+
+        const auto relation = topology::relation_between(local_cpu, source_cpu);
+        if (relation == topology::cpu_relation::unavailable || relation == topology::cpu_relation::self) {
+            return 0U;
+        }
+
+        if (static_cast<u8>(relation) > static_cast<u8>(tier)) {
+            return 0U;
+        }
+
+        const auto* source = topology::record_for(source_cpu);
+        const u32 capacity = source ? source->capacity : 100U;
+        const u32 distance_penalty = static_cast<u32>(relation) * 16U;
+        const u32 load_score = source_load * (64U + capacity);
+        return (load_score > distance_penalty) ? (load_score - distance_penalty) : 1U;
+    }
+
+} // namespace zxfoundation::sched::balance
+
+} // end export

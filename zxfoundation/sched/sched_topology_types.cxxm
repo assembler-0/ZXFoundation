@@ -1,0 +1,70 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_topology_types.cxxm
+/// @brief Scheduler CPU topology and DGP placement policy records.
+
+export module zxfoundation.sched.sched_topology_types;
+import zxfoundation.sched.sched_policy_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sched::topology {
+
+    /// @brief Relative placement distance between two logical CPUs.
+    enum class cpu_relation : u8 {
+        self = 0,
+        same_smt_core = 1,
+        same_core_group = 2,
+        same_numa_node = 3,
+        remote_numa_node = 4,
+        unavailable = 5,
+    };
+
+    /// @brief Scheduler-visible CPU lifecycle state.
+    enum class cpu_scheduling_state : u8 {
+        offline = 0,
+        online = 1,
+        draining = 2,
+        isolated = 3,
+    };
+
+    /// @brief Per-CPU topology and load record consumed by scheduler balancing.
+    struct cpu_topology_record {
+        u16 cpu_id{0};
+        u16 cpu_addr{0};
+        u8 numa_node{0};
+        u8 drawer_id{0};
+        u8 core_id{0};
+        u8 smt_id{0};
+        u8 cpu_type{0};
+        u8 capacity{100};
+        u32 run_queue_load{0};
+        u32 fair_load{0};
+        u32 rt_load{0};
+        u32 deadline_load{0};
+        u32 balance_interval_ns{1'000'000U};
+        u32 last_balance_tick{0};
+        zxfoundation::sched::topology_evidence cpu_evidence{zxfoundation::sched::topology_evidence::absent};
+        zxfoundation::sched::topology_evidence core_evidence{zxfoundation::sched::topology_evidence::absent};
+        zxfoundation::sched::topology_evidence smt_evidence{zxfoundation::sched::topology_evidence::absent};
+        zxfoundation::sched::topology_evidence capacity_evidence{zxfoundation::sched::topology_evidence::absent};
+        u8 raw_evidence_flags{0};
+        cpu_scheduling_state state{cpu_scheduling_state::offline};
+    };
+
+    /// @brief Placement policy associated with a schedulable strand.
+    struct strand_placement_policy {
+        u8 preferred_node{0xFFU};
+        bool allow_remote_node{true};
+        bool allow_smt_sibling{true};
+        bool isolation_sensitive{false};
+    };
+
+    static_assert(sizeof(cpu_relation) == sizeof(u8), "CPU relation must remain byte-sized");
+    static_assert(sizeof(cpu_scheduling_state) == sizeof(u8), "CPU scheduling state must remain byte-sized");
+    static_assert(0xFFU > 0U, "Preferred-node invalid sentinel must remain representable");
+    static_assert(sizeof(cpu_topology_record) <= 48U, "CPU topology record must remain compact for hot-path snapshots");
+
+} // namespace zxfoundation::sched::topology
+
+} // end export

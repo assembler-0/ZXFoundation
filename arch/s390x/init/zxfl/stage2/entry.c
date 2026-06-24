@@ -53,6 +53,24 @@ static void snapshot_control_regs(zxfl_boot_protocol_t *proto) {
 static uint32_t s_recs_per_trk = 12;
 static uint16_t s_heads_per_cyl = DASD_3390_HEADS_PER_CYL;
 
+static uint32_t zxfl_discovered_numa_nodes(void) {
+    uint32_t num_nodes = 1;
+    if (s_proto.flags & ZXFL_FLAG_SMP) {
+        for (uint32_t i = 0; i < s_proto.cpu_count; i++) {
+            uint32_t candidate = (uint32_t)s_proto.cpu_map[i].numa_node + 1U;
+            if (candidate > num_nodes) num_nodes = candidate;
+        }
+    }
+    if (num_nodes == 0U) num_nodes = 1U;
+    if (num_nodes > 255U) num_nodes = 255U;
+    return num_nodes;
+}
+
+static uint8_t zxfl_numa_node_for_phys(uint64_t phys, uint64_t node_chunk, uint32_t num_nodes) {
+    if (node_chunk == 0U || num_nodes == 0U) return 0U;
+    return (uint8_t)((phys / node_chunk) % num_nodes);
+}
+
 /// @brief Probe the IPL device as ECKD or FBA and populate ipl_dev_type/model.
 ///
 ///        ECKD is tried first because 3390 is the dominant IPL device type.
@@ -100,14 +118,7 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
         count++;
     }
 
-    uint32_t num_nodes = 1;
-    if (s_proto.flags & ZXFL_FLAG_SMP) {
-        for (uint32_t i = 0; i < s_proto.cpu_count; i++) {
-            if ((uint32_t)(s_proto.cpu_map[i].numa_node + 1) > num_nodes) {
-                num_nodes = s_proto.cpu_map[i].numa_node + 1;
-            }
-        }
-    }
+    uint32_t num_nodes = zxfl_discovered_numa_nodes();
 
     uint64_t actual_limit = mem_limit;
     if (actual_limit == PARMFILE_SYSSIZE_INFINITE) {
@@ -152,7 +163,7 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
         uint32_t type = ZXFL_MEM_USABLE;
         if (frame >= kernel_start && frame < kernel_end) type = ZXFL_MEM_KERNEL;
         
-        uint8_t node = (frame / node_chunk) % 4;
+        uint8_t node = zxfl_numa_node_for_phys(frame, node_chunk, num_nodes);
         if (count > 0 && map[count - 1].type == type && map[count - 1].numa_node == node && map[count - 1].base + map[count - 1].length == frame) {
             map[count - 1].length += MEM_PROBE_FRAME;
         } else {
@@ -270,7 +281,8 @@ static uint64_t load_modules(uint32_t schid, const char *cmdline, uint64_t phys_
 }
 
 static void add_usable_region(zxfl_mem_region_t *map, uint32_t *count, uint32_t max,
-                              uint64_t start, uint64_t end, uint32_t type, uint64_t node_chunk) {
+                              uint64_t start, uint64_t end, uint32_t type,
+                              uint64_t node_chunk, uint32_t num_nodes) {
     uint64_t curr = start;
     while (curr < end && *count < max) {
         uint64_t next_boundary = (curr + node_chunk) & ~(node_chunk - 1);
@@ -279,7 +291,7 @@ static void add_usable_region(zxfl_mem_region_t *map, uint32_t *count, uint32_t 
         map[*count].base      = curr;
         map[*count].length    = chunk_end - curr;
         map[*count].type      = type;
-        map[*count].numa_node = (uint8_t)((curr / node_chunk) % 4U);
+        map[*count].numa_node = zxfl_numa_node_for_phys(curr, node_chunk, num_nodes);
         (*count)++;
 
         curr = chunk_end;
@@ -317,14 +329,7 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
         
         uint64_t usable_start = 2UL * MEM_PROBE_FRAME;
         if (usable_start < sclp_size) {
-            uint32_t num_nodes = 1;
-            if (s_proto.flags & ZXFL_FLAG_SMP) {
-                for (uint32_t i = 0; i < s_proto.cpu_count; i++) {
-                    if ((uint32_t)(s_proto.cpu_map[i].numa_node + 1) > num_nodes) {
-                        num_nodes = s_proto.cpu_map[i].numa_node + 1;
-                    }
-                }
-            }
+            uint32_t num_nodes = zxfl_discovered_numa_nodes();
 
             uint64_t node_chunk = sclp_size / num_nodes;
             uint64_t temp = node_chunk;
@@ -336,11 +341,11 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
 
             // Basic split for kernel if it falls within the range
             if (kernel_start >= usable_start && kernel_end <= sclp_size) {
-                 add_usable_region(map, &count, max, usable_start, kernel_start, ZXFL_MEM_USABLE, node_chunk);
-                 add_usable_region(map, &count, max, kernel_start, kernel_end, ZXFL_MEM_KERNEL, node_chunk);
-                 add_usable_region(map, &count, max, kernel_end, sclp_size, ZXFL_MEM_USABLE, node_chunk);
+                 add_usable_region(map, &count, max, usable_start, kernel_start, ZXFL_MEM_USABLE, node_chunk, num_nodes);
+                 add_usable_region(map, &count, max, kernel_start, kernel_end, ZXFL_MEM_KERNEL, node_chunk, num_nodes);
+                 add_usable_region(map, &count, max, kernel_end, sclp_size, ZXFL_MEM_USABLE, node_chunk, num_nodes);
             } else {
-                 add_usable_region(map, &count, max, usable_start, sclp_size, ZXFL_MEM_USABLE, node_chunk);
+                 add_usable_region(map, &count, max, usable_start, sclp_size, ZXFL_MEM_USABLE, node_chunk, num_nodes);
             }
         }
         return count;

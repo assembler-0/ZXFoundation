@@ -1,0 +1,7 @@
+!files : !compile_group -> [auto] {
+    isolation_types.cxxm
+    memory_contract.cxxm
+    io_authority.cxxm
+    sync_contract.cxxm
+    isolation.cxxm
+}

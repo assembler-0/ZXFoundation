@@ -1,0 +1,137 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/sync_contract.cxxm
+/// @brief DGP synchronization-contract typestate and validation helpers.
+
+export module zxfoundation.dgp.sync_contract;
+import zxfoundation.base.types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
+import lib.error;
+import lib.expected;
+
+export {
+
+namespace zxfoundation::dgp {
+
+    /// @brief Execution context in which a DGP synchronization-sensitive operation occurs.
+    enum class lock_context : u8 {
+        boot_single_cpu = 0,
+        thread          = 1,
+        irq_disabled    = 2,
+        rcu_read_side   = 3,
+        teardown        = 4,
+    };
+
+    /// @brief Interrupt-state contract for an operation.
+    enum class irq_contract : u8 {
+        unchanged        = 0,
+        must_be_enabled  = 1,
+        must_be_disabled = 2,
+    };
+
+    /// @brief Domain teardown phase used by lock-order documentation and checks.
+    enum class teardown_phase : u8 {
+        none             = 0,
+        deny_new_entries = 1,
+        drain_gates      = 2,
+        drain_portals    = 3,
+        release_memory   = 4,
+        release_identity = 5,
+    };
+
+    /// @brief Snapshot of synchronization state supplied to a DGP contract check.
+    struct sync_contract_state {
+        u32 domain_id{0};
+        u16 cpu_id{0};
+        u16 lock_depth{0};
+        bool irqs_disabled{false};
+        bool rcu_read_side{false};
+        lock_context context{lock_context::boot_single_cpu};
+        teardown_phase phase{teardown_phase::none};
+    };
+
+    /// @brief Capture the current CPU synchronization state for a DGP call-site check.
+    /// @param[in] context Synchronization context expected by the caller.
+    /// @param[in] phase Domain teardown phase associated with the operation.
+    /// @param[in] domain_id Domain whose authority or lifecycle state is being checked.
+    /// @return Snapshot containing CPU ID, qspinlock depth, interrupt mask state, and RCU read-side state.
+    /// @note The snapshot is intentionally narrow so callers can validate context without importing scheduler internals.
+    /// @warning The returned value is a point-in-time observation and does not serialize concurrent state transitions.
+    [[nodiscard]] auto sync_contract_snapshot(
+        lock_context context,
+        teardown_phase phase = teardown_phase::none,
+        u32 domain_id = 0U
+    ) noexcept -> sync_contract_state {
+        const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+
+        sync_contract_state state{};
+        state.domain_id = domain_id;
+        state.cpu_id = pcp.cpu_id;
+        state.lock_depth = static_cast<u16>(pcp.lock_depth);
+        state.irqs_disabled = !arch::s390x::cpu::irq::irqs_enabled();
+        state.rcu_read_side = (pcp.in_rcu_read_side != 0U);
+        state.context = context;
+        state.phase = phase;
+        return state;
+    }
+
+    /// @brief Validate an IRQ-state precondition.
+    /// @param[in] state Current synchronization state.
+    /// @param[in] contract Required interrupt-state contract.
+    /// @return Success when the current state satisfies the required interrupt condition.
+    /// @note This helper records policy intent without changing the processor interrupt mask.
+    /// @warning Callers must still use the architecture IRQ primitives to actually mask or unmask interrupts.
+    [[nodiscard]] auto sync_contract_validate_irq_state(
+        const sync_contract_state& state,
+        irq_contract contract
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        if (contract == irq_contract::must_be_disabled && !state.irqs_disabled) {
+            return lib::unexpected(lib::kernel_error::from_locking(lib::locking_error::not_locked));
+        }
+
+        if (contract == irq_contract::must_be_enabled && state.irqs_disabled) {
+            return lib::unexpected(lib::kernel_error::from_locking(lib::locking_error::already_locked));
+        }
+
+        return {};
+    }
+
+    /// @brief Validate that a teardown operation follows the permitted phase order.
+    /// @param[in] current Current teardown phase.
+    /// @param[in] requested Requested teardown phase.
+    /// @return Success when the requested phase does not move backward.
+    /// @note Domain destruction must deny new entries before draining active gates and portals.
+    /// @warning This helper does not wait for RCU grace periods or drain queues by itself.
+    [[nodiscard]] auto sync_contract_validate_teardown_phase(
+        teardown_phase current,
+        teardown_phase requested
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        if (static_cast<u8>(requested) < static_cast<u8>(current)) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        return {};
+    }
+
+    /// @brief Validate that a DGP authority lookup may run in the supplied context.
+    /// @param[in] state Current synchronization state.
+    /// @return Success when the context is safe for non-blocking authority validation.
+    /// @note Gate and portal checks must remain non-blocking so they can run at dispatch chokepoints.
+    /// @warning This helper does not acquire RCU, qspinlock, or scheduler locks.
+    [[nodiscard]] auto sync_contract_validate_authority_lookup(
+        const sync_contract_state& state
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        if (state.context == lock_context::teardown && state.phase == teardown_phase::release_identity) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        return {};
+    }
+
+    static_assert(sizeof(lock_context) == sizeof(u8), "DGP lock context must remain byte-sized");
+    static_assert(sizeof(irq_contract) == sizeof(u8), "DGP IRQ contract must remain byte-sized");
+    static_assert(static_cast<u8>(teardown_phase::deny_new_entries) < static_cast<u8>(teardown_phase::release_identity), "DGP teardown phases must remain ordered");
+
+} // namespace zxfoundation::dgp
+
+} // end export

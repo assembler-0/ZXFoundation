@@ -8,6 +8,7 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.processor;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa_types;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
@@ -27,13 +28,18 @@ namespace arch::s390x::cpu::percpu {
 
         pcp.ipi_pending_count  = 0;
 
-        for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
-            for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
-                pcp.pcp.lists[z][o].head_phys = 0;
-                pcp.pcp.lists[z][o].count     = 0;
-                pcp.pcp.lists[z][o]._pad      = 0;
-            }
+        for (u32 n = 0; n < zxfoundation::memory::numa::MAX_NUMA_NODES; ++n)
+            for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
+                for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
+                    pcp.pcp.lists[n][z][o].head_phys = 0;
+                    pcp.pcp.lists[n][z][o].count     = 0;
+                    pcp.pcp.lists[n][z][o]._pad      = 0;
+                }
         pcp.drawer_id = 0;
+        pcp.core_id = 0;
+        pcp.smt_id = 0;
+        pcp.topology_evidence = 0;
+        pcp.capacity = 100;
 
         pcp.softirq_pending = 0;
     }
@@ -53,13 +59,18 @@ namespace arch::s390x::cpu::percpu {
         pcp.current_domain    = 0;
         pcp.user_asce         = 0;
 
-        for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
-            for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
-                pcp.pcp.lists[z][o].head_phys = 0;
-                pcp.pcp.lists[z][o].count     = 0;
-                pcp.pcp.lists[z][o]._pad      = 0;
-            }
-        // drawer_id is set by smp::init_aps() from ci.drawer_id after this call.
+        for (u32 n = 0; n < zxfoundation::memory::numa::MAX_NUMA_NODES; ++n)
+            for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
+                for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
+                    pcp.pcp.lists[n][z][o].head_phys = 0;
+                    pcp.pcp.lists[n][z][o].count     = 0;
+                    pcp.pcp.lists[n][z][o]._pad      = 0;
+                }
+        pcp.core_id = pcp.cpu_id & 0xFFU;
+        pcp.smt_id = 0;
+        pcp.topology_evidence = 0;
+        pcp.capacity = 100;
+        // drawer_id and topology details are set by smp::init_aps() from the boot protocol after this call.
     }
 
     /// @brief Return a reference to the current CPU's per-CPU block.

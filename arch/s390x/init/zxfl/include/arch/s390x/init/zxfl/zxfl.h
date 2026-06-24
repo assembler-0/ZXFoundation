@@ -68,6 +68,12 @@
 #define ZXFL_CPU_TYPE_ZAAP      5U   ///< zAAP (z/Arch Application Assist Processor)
 #define ZXFL_CPU_TYPE_UNKNOWN   0xFFU   ///< Unknown type
 
+/// @brief CPU topology evidence flags in zxfl_cpu_info_t::topology_evidence.
+#define ZXFL_CPU_EVIDENCE_NONE      0x00U ///< No CPU topology evidence is available
+#define ZXFL_CPU_EVIDENCE_SIGP      0x01U ///< CPU address was confirmed by SIGP Sense
+#define ZXFL_CPU_EVIDENCE_STSI      0x02U ///< CPU topology was derived from STSI 15.1.x
+#define ZXFL_CPU_EVIDENCE_FALLBACK  0x04U ///< Loader used deterministic degraded fallback
+
 /// @brief Physical lowcore address (always 0 on z/Architecture).
 #define ZXFL_LOWCORE_PHYS       0x0ULL
 
@@ -95,9 +101,10 @@ typedef struct {
     uint8_t  drawer_id; ///< Drawer ID from STSI 15.1.x
     uint8_t  book_id;   ///< Book ID from STSI 15.1.x
     uint8_t  socket_id; ///< Socket ID from STSI 15.1.x
-    uint8_t  chip_id;   ///< Chip ID from STSI 15.1.x
-    uint8_t  thread_id; ///< Thread ID from STSI 15.1.x
-    uint8_t  _pad[2];   ///< Alignment padding to 12 bytes
+    uint8_t  core_id;   ///< Core-group ID from STSI 15.1.x or degraded fallback
+    uint8_t  smt_id;    ///< SMT thread ID within core, or zero when unproven
+    uint8_t  topology_evidence; ///< ZXFL_CPU_EVIDENCE_* provenance flags
+    uint8_t  capacity;  ///< Scheduler capacity percentage, 100 when unknown
 } zxfl_cpu_info_t;
 
 /// @brief System identification — populated from STSI.
@@ -151,7 +158,7 @@ typedef struct {
     uint64_t mem_map_addr;      ///< HHDM virtual address of zxfl_mem_region_t[]
     uint32_t mem_map_count;     ///< Number of valid entries in mem_map
     uint32_t _pad3;
-    uint64_t _pad5;             ///< Reserved/Deprecated (formerly expanded storage size)
+    uint64_t hhdm_phys_coverage_end; ///< Exclusive physical end covered by initial HHDM DAT
 
     // ---- FACILITIES (264 bytes) ----
     uint64_t stfle_fac[STFLE_MAX_DWORDS]; ///< Full STFLE output (32 dwords)

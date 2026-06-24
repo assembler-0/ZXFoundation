@@ -10,6 +10,7 @@
 /// The scheduler dispatches strands, not domains.
 
 export module zxfoundation.domain.strand_types;
+import zxfoundation.sched.sched_policy_types;
 import zxfoundation.base.types;
 import zxfoundation.scoms.scoms_types;
 import arch.s390x.lib.atomic;
@@ -30,6 +31,19 @@ namespace zxfoundation::domain {
 
     /// @brief Maximum strands per domain.
     constexpr u32 MAX_STRANDS_PER_DOMAIN = 64U;
+
+    /// @brief Domain entry function type used by executor-style strand creation.
+    using strand_entry_fn = auto (*)(void*) noexcept -> void;
+
+    /// @brief Request used to create a secondary strand inside a domain.
+    struct strand_create_request {
+        u32 owner_domain{0xFFFF'FFFFU}; ///< Owning domain identifier.
+        strand_entry_fn entry{nullptr}; ///< Kernel entry function used by the first context switch.
+        void* arg{nullptr};             ///< Opaque argument passed to the entry function.
+        u16 cpu{0};                     ///< Initial CPU affinity; zero is the deterministic bootstrap CPU.
+        u32 stack_order{2U};            ///< Kernel stack allocation order; currently constrained to the domain stack order.
+        bool enqueue{true};             ///< True when the scheduler should admit the strand immediately.
+    };
 
     /// @brief Strand state — tracks the execution lifecycle.
     enum class strand_state : u8 {
@@ -109,7 +123,15 @@ namespace zxfoundation::domain {
         lib::list_node                  strand_list{};  ///< Link into domain's strand list.
         lib::list_node                  sched_link{};   ///< Link into scheduler queues.
 
-        // ── offset 160 ── User-mode register save area
+        // ── Scheduler class policy metadata
+        zxfoundation::sched::sched_policy sched_policy{}; ///< Requested/admitted scheduler policy.
+        zxfoundation::sched::sched_admission_result sched_admission{}; ///< Class admission record.
+        u64                             rt_runtime_used_ns{0}; ///< Runtime consumed during current RT period.
+        u64                             rt_period_start_ns{0}; ///< RT accounting period start.
+        u64                             deadline_runtime_used_ns{0}; ///< Runtime consumed during current deadline period.
+        u64                             absolute_deadline_ns{0}; ///< Conservative absolute deadline key.
+
+        // ── User-mode register save area
         user_regs                       uregs{};
 
         strand() noexcept = default;

@@ -6,6 +6,8 @@ export module zxfoundation.sched.sched_domain;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.base.types;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
@@ -80,6 +82,13 @@ namespace zxfoundation::sched::domain_ctx {
         auto* d = static_cast<domain*>(s->owner);
         auto* lc = arch::s390x::cpu::lowcore::get_current();
 
+        if ((d->flags & zxfoundation::domain::domain_flags::idle) == zxfoundation::domain::domain_flags::none) {
+            auto admission = zxfoundation::dgp::isolation_validate_scheduler_admission(d->dgp_state);
+            if (!admission) {
+                arch::s390x::cpu::psw::disabled_wait();
+            }
+        }
+
         lc->user_asce = d->asce.val;
         const u64 user_asce = d->asce.val;
         arch::s390x::cpu::processor::ctl_load<1, 1>(user_asce);
@@ -101,6 +110,9 @@ namespace zxfoundation::sched::domain_ctx {
         lc->current_domain = reinterpret_cast<u64>(d);
         lc->kernel_stack   = s->kstack_top;
         lc->percpu.current_strand = reinterpret_cast<u64>(s);
+        lc->percpu.attached_asce = user_asce;
+        lc->percpu.attached_domain_id = d->ko.id;
+        lc->percpu.attached_dgp_state = static_cast<u8>(d->dgp_state.state);
 
         __domain_enter_user_asm(frame_base, &s->uregs);
     }

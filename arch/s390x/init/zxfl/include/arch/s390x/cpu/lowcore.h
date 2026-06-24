@@ -24,6 +24,7 @@
 #define LC_AP_CR13          0x0338UL    ///< zx_lowcore_t::ap_cr13
 #define LC_PREEMPT_COUNT    0x0430UL    ///< arch::s390x::cpu::percpu::preempt_count
 #define LC_IRQ_NESTING      0x0438UL    ///< arch::s390x::cpu::percpu::irq_nesting
+#define LC_NUCLEUS_NESTING  0x043CUL    ///< arch::s390x::cpu::percpu::nucleus_nesting
 
 // Old PSW offsets — PoP §4.3.2.
 #define LC_EXT_OLD_PSW      0x0130UL
@@ -251,6 +252,8 @@ _Static_assert(LC_PREEMPT_COUNT == 0x0430UL,
                "LC_PREEMPT_COUNT must match lowcore_types.cxxm");
 _Static_assert(LC_IRQ_NESTING == 0x0438UL,
                "LC_IRQ_NESTING must match lowcore_types.cxxm");
+_Static_assert(LC_NUCLEUS_NESTING == 0x043CUL,
+               "LC_NUCLEUS_NESTING must match lowcore_types.cxxm");
 
 /// @brief Access lowcore via absolute addressing (DAT off).
 #define ZX_LOWCORE_RAW_INPLACE  ((zx_lowcore_t *)0x0)

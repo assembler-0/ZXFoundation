@@ -61,6 +61,18 @@ static constexpr u64 SIGP_PREFIX_MAX_PHYS = 1ULL << 31U;
 
 static ap_boot_record g_ap_boot_records[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
+static auto apply_cpu_evidence(
+    arch::s390x::cpu::percpu::s390x_percpu_data& pcp,
+    const arch::s390x::init::zxfl::cpu_info& ci
+) noexcept -> void {
+    pcp.cpu_type = ci.type;
+    pcp.drawer_id = ci.drawer_id;
+    pcp.core_id = ci.core_id;
+    pcp.smt_id = ci.smt_id;
+    pcp.topology_evidence = ci.topology_evidence;
+    pcp.capacity = (ci.capacity == 0U) ? 100U : ci.capacity;
+}
+
 [[nodiscard]] static auto tod_elapsed(const u64 start) noexcept -> u64 {
     return arch::s390x::cpu::processor::stck() - start;
 }
@@ -229,18 +241,17 @@ namespace arch::s390x::cpu::smp {
             return ::lib::unexpected(::lib::kernel_error::from_arch(::lib::arch_error::invalid_cpu_id));
         }
 
-        if (!(proto.flags & init::zxfl::ZXFL_FLAG_SMP) || proto.cpu_count <= 1)
-            return 0U;
-
-        // Set BSP's cpu_type and drawer_id from the boot protocol.
+        // Set BSP CPU topology evidence from the boot protocol before any early return.
         for (u32 i = 0; i < proto.cpu_count; ++i) {
             if (proto.cpu_map[i].cpu_addr == proto.bsp_cpu_addr) {
                 auto& bsp_pcp = lowcore::this_cpu_percpu();
-                bsp_pcp.cpu_type  = proto.cpu_map[i].type;
-                bsp_pcp.drawer_id = proto.cpu_map[i].drawer_id;
+                apply_cpu_evidence(bsp_pcp, proto.cpu_map[i]);
                 break;
             }
         }
+
+        if (!(proto.flags & init::zxfl::ZXFL_FLAG_SMP) || proto.cpu_count <= 1)
+            return 0U;
 
         const u64 ap_entry_phys =
             zxfoundation::memory::hhdm::virt_to_phys(reinterpret_cast<u64>(ap_entry));
@@ -345,8 +356,7 @@ namespace arch::s390x::cpu::smp {
             lc->nodat_stack  = zxfoundation::memory::hhdm::phys_to_virt(nodat_top);
 
             percpu::init_ap(*lc);
-            lc->percpu.drawer_id = ci.drawer_id;
-            lc->percpu.cpu_type  = ci.type;
+            apply_cpu_evidence(lc->percpu, ci);
             lowcore::register_cpu_lowcore(new_cpu_id, lc_phys);
             record.state = ap_boot_state::lowcore_initialized;
 

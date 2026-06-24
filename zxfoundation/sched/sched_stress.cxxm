@@ -1,0 +1,118 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_stress.cxxm
+/// @brief Scheduler stress-scenario contracts for boot/runtime validation hooks.
+
+export module zxfoundation.sched.sched_stress;
+import zxfoundation.sched.sched_policy_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.strand_types;
+import zxfoundation.base.types;
+import lib.error;
+import lib.expected;
+
+export {
+
+namespace zxfoundation::sched::stress {
+
+    /// @brief Stress scenario bitmask describing scheduler subsystems exercised by a hook.
+    enum class stress_flags : u32 {
+        none = 0U,
+        fair = 1U << 0,
+        rt = 1U << 1,
+        deadline = 1U << 2,
+        multi_domain = 1U << 3,
+        multi_strand = 1U << 4,
+        numa_fallback = 1U << 5,
+        ap_balance = 1U << 6,
+        teardown = 1U << 7,
+    };
+
+    /// @brief Combine scheduler stress flags.
+    /// @param[in] lhs Left-hand flag mask.
+    /// @param[in] rhs Right-hand flag mask.
+    /// @return Combined flag mask.
+    [[nodiscard]] constexpr auto operator|(stress_flags lhs, stress_flags rhs) noexcept -> stress_flags {
+        return static_cast<stress_flags>(static_cast<u32>(lhs) | static_cast<u32>(rhs));
+    }
+
+    /// @brief Intersect scheduler stress flags.
+    /// @param[in] lhs Left-hand flag mask.
+    /// @param[in] rhs Right-hand flag mask.
+    /// @return Common flag mask.
+    [[nodiscard]] constexpr auto operator&(stress_flags lhs, stress_flags rhs) noexcept -> stress_flags {
+        return static_cast<stress_flags>(static_cast<u32>(lhs) & static_cast<u32>(rhs));
+    }
+
+    /// @brief Test whether a stress flag mask contains all requested flags.
+    /// @param[in] available Available stress flag mask.
+    /// @param[in] requested Required stress flag mask.
+    /// @return True when every requested flag is present.
+    [[nodiscard]] constexpr auto has_all_flags(stress_flags available, stress_flags requested) noexcept -> bool {
+        return (static_cast<u32>(available & requested) == static_cast<u32>(requested));
+    }
+
+    /// @brief Build-time/runtime stress request for scheduler validation hooks.
+    struct scheduler_stress_request {
+        u16 domain_count{0};          ///< Number of non-idle domains the scenario intends to create.
+        u16 strands_per_domain{0};    ///< Number of runnable strands per domain.
+        u16 cpu_count{1};             ///< CPUs expected to participate in the scenario.
+        sched_class_id primary_class{sched_class_id::fair}; ///< Dominant scheduler class for created strands.
+        stress_flags flags{stress_flags::fair}; ///< Scenario dimensions exercised by the hook.
+        u64 runtime_ns{0};            ///< Runtime reservation for RT/deadline scenarios.
+        u64 deadline_ns{0};           ///< Relative deadline for deadline scenarios.
+        u64 period_ns{0};             ///< Reservation period for RT/deadline scenarios.
+    };
+
+    /// @brief Result of validating a scheduler stress scenario contract.
+    struct scheduler_stress_result {
+        u32 total_strands{0};         ///< Total strands the scenario may create.
+        bool requires_ap{false};      ///< True when the scenario needs more than one CPU.
+        bool requires_teardown{false}; ///< True when teardown behavior must be exercised.
+        bool requires_budget{false};  ///< True when class admission budgets must be configured.
+    };
+
+    /// @brief Validate a scheduler stress scenario before boot/runtime execution creates domains.
+    /// @param[in] request Stress scenario request to validate.
+    /// @return Scenario summary, or kernel_error when the hook would exceed supported bounds.
+    /// @note This function is intentionally side-effect free so boot tests can validate scenarios before allocation.
+    /// @warning Passing this function does not execute the stress; it only prevents impossible hooks from being armed.
+    [[nodiscard]] auto validate_stress_request(
+        const scheduler_stress_request& request
+    ) noexcept -> lib::expected<scheduler_stress_result, lib::kernel_error> {
+        if (request.domain_count == 0U || request.strands_per_domain == 0U || request.cpu_count == 0U) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (request.domain_count > zxfoundation::domain::MAX_DOMAINS
+            || request.strands_per_domain > zxfoundation::domain::MAX_STRANDS_PER_DOMAIN) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        const u32 total = static_cast<u32>(request.domain_count) * static_cast<u32>(request.strands_per_domain);
+        if (total == 0U || total > (zxfoundation::domain::MAX_DOMAINS * zxfoundation::domain::MAX_STRANDS_PER_DOMAIN)) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        scheduler_stress_result result{};
+        result.total_strands = total;
+        result.requires_ap = request.cpu_count > 1U || has_all_flags(request.flags, stress_flags::ap_balance);
+        result.requires_teardown = has_all_flags(request.flags, stress_flags::teardown);
+        result.requires_budget = request.primary_class == sched_class_id::rt
+            || request.primary_class == sched_class_id::deadline;
+
+        if (result.requires_budget) {
+            if (request.runtime_ns == 0U || request.period_ns == 0U || request.runtime_ns > request.period_ns) {
+                return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            }
+            if (request.primary_class == sched_class_id::deadline
+                && (request.deadline_ns == 0U || request.runtime_ns > request.deadline_ns
+                    || request.deadline_ns > request.period_ns)) {
+                return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            }
+        }
+
+        return result;
+    }
+
+} // namespace zxfoundation::sched::stress
+
+} // end export

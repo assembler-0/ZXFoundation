@@ -11,6 +11,8 @@ import arch.s390x.lib.atomic;
 import zxfoundation.memory.vm_types;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.domain.signal_types;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.sched.sched_policy_types;
 import lib.rbtree;
 import lib.list;
 
@@ -98,6 +100,9 @@ namespace zxfoundation::domain {
         u32                                                             gate_count{0};
         u32                                                             portal_count{0};
 
+        // ── DGP clean-core isolation authority state
+        dgp::isolation_domain_state                                      dgp_state{};
+
         // ── List node for global domain list
         lib::list_node                                                  domain_list{};
 
@@ -112,6 +117,17 @@ namespace zxfoundation::domain {
 
         // ── Admin capability token (set by bootstrap for domains with domain-lifecycle authority)
         u64                                                             admin_token{0};
+
+        // ── Scheduler admission budget metadata
+        u64                                                             rt_capability_token{0};
+        u64                                                             rt_period_ns{100'000'000ULL};
+        u64                                                             rt_budget_ns{20'000'000ULL};
+        u64                                                             rt_reserved_ns{0};
+        u64                                                             deadline_period_ns{100'000'000ULL};
+        u64                                                             deadline_budget_ns{10'000'000ULL};
+        u64                                                             deadline_reserved_ns{0};
+        zxfoundation::sched::sched_mask                                  allowed_cpus{};
+        zxfoundation::sched::sched_mask                                  allowed_numa_nodes{};
 
         domain() noexcept = default;
         domain(const domain&)            = delete;
@@ -147,6 +163,9 @@ namespace zxfoundation::domain {
 
         /// @brief RT FIFO queue (domains dequeued in FIFO order).
         lib::list_head                  rt_queue{};
+
+        /// @brief Conservative EDF deadline queue.
+        lib::list_head                  deadline_queue{};
 
         u16                             cpu_id{0};       ///< Logical CPU ID this run_queue belongs to.
 

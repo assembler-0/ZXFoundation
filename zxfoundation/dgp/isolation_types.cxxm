@@ -1,0 +1,175 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/isolation_types.cxxm
+/// @brief Hardware-first DGP isolation policy and lifecycle types.
+
+export module zxfoundation.dgp.isolation_types;
+import zxfoundation.base.types;
+import arch.s390x.mmu.mmu_types;
+
+export {
+
+namespace zxfoundation::dgp {
+
+    /// @brief Storage key value requesting automatic allocation by DGP policy.
+    inline constexpr u8 STORAGE_KEY_AUTO = 0xFFU;
+
+    /// @brief Number of architected storage-key access-control values.
+    /// @note z/Architecture storage keys carry a four-bit access-control field.
+    inline constexpr u8 STORAGE_KEY_COUNT = 16U;
+
+    /// @brief First user-domain storage key retained for non-nucleus domains.
+    inline constexpr u8 STORAGE_KEY_USER_BASE = 8U;
+
+    /// @brief Last user-domain storage key retained for non-nucleus domains.
+    inline constexpr u8 STORAGE_KEY_USER_MAX = 15U;
+
+    /// @brief Hardware isolation facilities required by a DGP policy.
+    enum class isolation_feature : u64 {
+        none             = 0ULL,
+        dat_asce         = 1ULL << 0,
+        storage_key      = 1ULL << 1,
+        program_call     = 1ULL << 2,
+        access_register  = 1ULL << 3,
+        edat_large_page  = 1ULL << 4,
+        numa_policy      = 1ULL << 5,
+        transactional_vm = 1ULL << 6,
+        smp_invalidation = 1ULL << 7,
+    };
+
+    /// @brief Lifecycle state for a hardware-backed DGP isolation domain.
+    enum class isolation_state : u8 {
+        embryo = 0,
+        sealed = 1,
+        active = 2,
+        draining = 3,
+        destroyed = 4,
+    };
+
+    /// @brief Revocation phase for a storage key held by a DGP domain.
+    enum class storage_key_revocation_state : u8 {
+        none = 0,
+        active = 1,
+        draining = 2,
+        reusable = 3,
+    };
+
+    /// @brief Authority bits interpreted by the DGP policy plane.
+    enum class isolation_rights : u32 {
+        none   = 0U,
+        enter  = 1U << 0,
+        map    = 1U << 1,
+        share  = 1U << 2,
+        signal = 1U << 3,
+        io     = 1U << 4,
+        admin  = 1U << 31,
+    };
+
+    /// @brief Combine two feature masks.
+    /// @param[in] lhs Left-hand feature mask.
+    /// @param[in] rhs Right-hand feature mask.
+    /// @return Combined feature mask.
+    [[nodiscard]] constexpr auto operator|(
+        isolation_feature lhs,
+        isolation_feature rhs
+    ) noexcept -> isolation_feature {
+        return static_cast<isolation_feature>(
+            static_cast<u64>(lhs) | static_cast<u64>(rhs));
+    }
+
+    /// @brief Intersect two feature masks.
+    /// @param[in] lhs Left-hand feature mask.
+    /// @param[in] rhs Right-hand feature mask.
+    /// @return Common feature mask.
+    [[nodiscard]] constexpr auto operator&(
+        isolation_feature lhs,
+        isolation_feature rhs
+    ) noexcept -> isolation_feature {
+        return static_cast<isolation_feature>(
+            static_cast<u64>(lhs) & static_cast<u64>(rhs));
+    }
+
+    /// @brief Combine two right masks.
+    /// @param[in] lhs Left-hand right mask.
+    /// @param[in] rhs Right-hand right mask.
+    /// @return Combined right mask.
+    [[nodiscard]] constexpr auto operator|(
+        isolation_rights lhs,
+        isolation_rights rhs
+    ) noexcept -> isolation_rights {
+        return static_cast<isolation_rights>(
+            static_cast<u32>(lhs) | static_cast<u32>(rhs));
+    }
+
+    /// @brief Intersect two right masks.
+    /// @param[in] lhs Left-hand right mask.
+    /// @param[in] rhs Right-hand right mask.
+    /// @return Common right mask.
+    [[nodiscard]] constexpr auto operator&(
+        isolation_rights lhs,
+        isolation_rights rhs
+    ) noexcept -> isolation_rights {
+        return static_cast<isolation_rights>(
+            static_cast<u32>(lhs) & static_cast<u32>(rhs));
+    }
+
+    /// @brief Test that all requested features are present.
+    /// @param[in] available Available feature mask.
+    /// @param[in] requested Required feature mask.
+    /// @return true when every requested feature is present.
+    [[nodiscard]] constexpr auto has_all_features(
+        isolation_feature available,
+        isolation_feature requested
+    ) noexcept -> bool {
+        return (static_cast<u64>(available & requested) == static_cast<u64>(requested));
+    }
+
+    /// @brief Test that all requested rights are present.
+    /// @param[in] available Available right mask.
+    /// @param[in] requested Required right mask.
+    /// @return true when every requested right is present.
+    [[nodiscard]] constexpr auto has_all_rights(
+        isolation_rights available,
+        isolation_rights requested
+    ) noexcept -> bool {
+        return (static_cast<u32>(available & requested) == static_cast<u32>(requested));
+    }
+
+    /// @brief Domain policy supplied to the DGP isolation core.
+    struct isolation_policy {
+        isolation_feature required_features{isolation_feature::none};
+        isolation_rights default_rights{isolation_rights::none};
+        u8 storage_key{STORAGE_KEY_AUTO};
+        u8 numa_node{0};
+        bool allow_portals{false};
+        bool allow_user_execute{false};
+        bool bootstrap_admin{false};
+    };
+
+    /// @brief Hardware-backed state recorded for one DGP isolation domain.
+    struct isolation_domain_state {
+        u32 domain_id{0};
+        isolation_state state{isolation_state::embryo};
+        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce{};
+        u64 root_phys{0};
+        u8 storage_key{0};
+        u8 numa_node{0};
+        u16 revocation_epoch{0};
+        u32 storage_key_generation{0};
+        storage_key_revocation_state storage_key_state{storage_key_revocation_state::none};
+        isolation_rights granted_rights{isolation_rights::none};
+        u32 active_gate_count{0};
+        u32 active_portal_count{0};
+    };
+
+    static_assert(sizeof(isolation_feature) == sizeof(u64), "DGP feature mask must remain 64-bit");
+    static_assert(sizeof(isolation_rights) == sizeof(u32), "DGP rights mask must remain 32-bit");
+    static_assert(sizeof(isolation_state) == sizeof(u8), "DGP lifecycle state must remain byte-sized");
+    static_assert(sizeof(storage_key_revocation_state) == sizeof(u8), "DGP storage-key revocation state must remain byte-sized");
+    static_assert(static_cast<u8>(isolation_state::embryo) == 0U, "Embryo must be the zero state");
+    static_assert(static_cast<u8>(storage_key_revocation_state::none) == 0U, "Storage-key revocation none state must be zero");
+    static_assert(static_cast<u32>(isolation_rights::admin) == (1U << 31), "Admin right must remain the high-order bit");
+    static_assert(STORAGE_KEY_USER_MAX < STORAGE_KEY_COUNT, "User storage-key range exceeds architected key count");
+
+} // namespace zxfoundation::dgp
+
+} // end export

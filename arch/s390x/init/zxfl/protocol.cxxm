@@ -47,6 +47,11 @@ namespace arch::s390x::init::zxfl {
     constexpr auto ZXFL_CPU_TYPE_ZAAP    = 5U;
     constexpr auto ZXFL_CPU_TYPE_UNKNOWN = 0xFFU;
 
+    constexpr auto ZXFL_CPU_EVIDENCE_NONE     = 0x00U;
+    constexpr auto ZXFL_CPU_EVIDENCE_SIGP     = 0x01U;
+    constexpr auto ZXFL_CPU_EVIDENCE_STSI     = 0x02U;
+    constexpr auto ZXFL_CPU_EVIDENCE_FALLBACK = 0x04U;
+
     constexpr auto ZXFL_LOWCORE_PHYS  = 0x0ULL;
 
     /// @brief One entry in the physical memory map.
@@ -67,9 +72,10 @@ namespace arch::s390x::init::zxfl {
         u8  drawer_id{};
         u8  book_id{};
         u8  socket_id{};
-        u8  chip_id{};
-        u8  thread_id{};
-        u8  _pad[2]{};
+        u8  core_id{};
+        u8  smt_id{};
+        u8  topology_evidence{};
+        u8  capacity{};
     };
 
     /// @brief System identification — populated from STSI (EBCDIC converted to ASCII by loader).
@@ -123,7 +129,7 @@ namespace arch::s390x::init::zxfl {
         u64 mem_map_addr{};    ///< HHDM virtual address of mem_region[]
         u32 mem_map_count{};
         u32 _pad3{};
-        u64 _pad5{};
+        u64 hhdm_phys_coverage_end{}; ///< Exclusive physical end covered by initial HHDM DAT.
 
         u64 stfle_fac[cpu::stfle::STFLE_MAX_DWORDS]{};
         u32 stfle_count{};

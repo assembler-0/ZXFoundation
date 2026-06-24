@@ -6,6 +6,7 @@ export module zxfoundation.memory.pmm_types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa_types;
 import lib.util;
 import arch.s390x.lib.atomic;
 
@@ -94,7 +95,7 @@ namespace zxfoundation::memory::pmm {
     struct frame_desc {
         u8  order_owner{0};
         u8  flags{0};
-        u8  numa_node{0};   ///< Drawer_id of the CPU that allocated this frame. Advisory only.
+        u8  numa_node{0};   ///< NUMA node that owns this frame for free, rollback, and PCP placement.
         u8  _r0{0};
         arch::s390x::lib::atomic::atomic<u16> refcount{0};    ///< Accessed exclusively via __atomic_* builtins in pmm.cxxm.
         u16 _r1{0};
@@ -117,7 +118,7 @@ namespace zxfoundation::memory::pmm {
         ///
         /// @param[in] o     Buddy order (0–MAX_ORDER).
         /// @param[in] ow    Owning subsystem.
-        /// @param[in] numa  CPU drawer_id at allocation time (0 if unknown).
+        /// @param[in] numa  Owning NUMA node for allocator free, rollback, and local-cache policy.
         /// @param[in] fl    Initial frame_flags bitmask.
         ///
         /// @note  refcount is reset to zero via a relaxed atomic store.  This is
@@ -147,12 +148,13 @@ namespace zxfoundation::memory::pmm {
     static_assert(sizeof(pcp_list) == 16);
 
     /// @brief Per-CPU page cache block.
+    /// @note Lists are indexed by NUMA node, zone, and order so remote frees do not poison local refill policy.
     struct pcp_pool {
-        pcp_list lists[static_cast<u32>(zone::count)][PCP_MAX_ORDER + 1]{};
+        pcp_list lists[numa::MAX_NUMA_NODES][static_cast<u32>(zone::count)][PCP_MAX_ORDER + 1]{};
     };
 
     static_assert(sizeof(pcp_pool) ==
-        static_cast<u32>(zone::count) * (PCP_MAX_ORDER + 1U) * 16U,
+        numa::MAX_NUMA_NODES * static_cast<u32>(zone::count) * (PCP_MAX_ORDER + 1U) * 16U,
         "pcp_pool layout mismatch");
 
     /// @brief Move-only, typestate-tracked physical memory allocation.
@@ -188,6 +190,31 @@ namespace zxfoundation::memory::pmm {
 
     using folio_embryo = folio<lifecycle_state::embryo>;
     using folio_active = folio<lifecycle_state::active>;
+
+    /// @brief Node-aware allocation request used by the PMM compatibility wrappers.
+    struct allocation_request {
+        u32 order{0U};
+        zone mem_zone{zone::normal};
+        purpose use{purpose::generic};
+        page_init init{page_init::uninitialized};
+        numa::allocation_policy placement{};
+    };
+
+    /// @brief Node-aware allocation result.
+    struct allocation_result {
+        u64 phys_base{0ULL};
+        u32 order{0U};
+        purpose use{purpose::generic};
+        zone mem_zone{zone::normal};
+        numa::placement_result placement{};
+
+        /// @brief Convert the result into an embryo folio typestate value.
+        /// @return Embryo folio carrying the physical allocation represented by this result.
+        /// @note The result object remains a scalar record so it can be transported by `lib::expected` without copying a typestate object.
+        [[nodiscard]] auto into_folio() const noexcept -> folio_embryo {
+            return folio_embryo{phys_base, order, use, mem_zone};
+        }
+    };
 
 } // namespace zxfoundation::memory::pmm
 

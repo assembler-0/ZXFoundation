@@ -4,6 +4,8 @@
 
 export module zxfoundation.memory.vm_types;
 import zxfoundation.base.types;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.memory_contract;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.locking.qspinlock;
 import arch.s390x.lib.atomic;
@@ -110,6 +112,15 @@ namespace zxfoundation::memory::vm {
         u32             portal_id{~0U};                 ///< Portal ID (for portal backing).
         u32             owner_domain{~0U};              ///< Owning domain ID.
 
+        u8              storage_key{0};                 ///< DGP storage-key policy selected for this region.
+        u8              numa_node{0};                   ///< DGP/PMM NUMA placement selected for this region.
+        dgp::invalidation_scope invalidate{dgp::invalidation_scope::none}; ///< Last required invalidation scope.
+        dgp::memory_scope dgp_scope{dgp::memory_scope::private_domain};     ///< DGP sharing scope.
+        dgp::memory_access dgp_access{dgp::memory_access::none};            ///< DGP access authority mask.
+        dgp::isolation_rights dgp_rights{dgp::isolation_rights::none};      ///< DGP rights required by the region.
+        u64             dgp_generation{0};             ///< DGP memory-contract generation.
+        u64             mapping_generation{0};         ///< Per-region mapping policy generation.
+
         atomic<u64>     committed{0};                   ///< Committed page count.
         atomic<u64>     resident{0};                    ///< Currently-mapped page count.
 
@@ -149,7 +160,10 @@ namespace zxfoundation::memory::vm {
 
         u64                                     brk{0};             ///< Heap break pointer.
         u64                                     mmap_base{0};       ///< mmap allocation base (top-down).
+        u64                                     dgp_generation{0};  ///< Last DGP memory-contract generation observed by this space.
+        u64                                     mapping_generation{0}; ///< Monotonic VM policy metadata generation.
 
+        u32                                     owner_domain{0};    ///< Domain identifier used for DGP memory-contract requests.
         u32                                     region_count{0};    ///< Number of active regions.
         u32                                     max_regions{4096};  ///< Maximum allowed regions.
 

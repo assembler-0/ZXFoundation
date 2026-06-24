@@ -25,9 +25,47 @@ namespace arch::s390x::mmu::_internal {
     static bool g_has_edat2{false};
     static bool g_initialized{false};
 
+    /// @brief Build the default PMM request used for DAT table pages.
+    [[nodiscard]] auto default_table_request() noexcept -> pmm::allocation_request {
+        return pmm::allocation_request{
+            .order = CRST_ALLOC_ORDER,
+            .mem_zone = pmm::zone::normal,
+            .use = pmm::purpose::page_table,
+            .init = pmm::page_init::uninitialized,
+            .placement = {},
+        };
+    }
+
+    /// @brief Allocate one DAT table using a caller-supplied placement policy.
+    [[nodiscard]] auto alloc_table_with_policy(
+        dat_level lvl,
+        const pmm::allocation_request& policy
+    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+        pmm::allocation_request request = policy;
+        request.order = (lvl == dat_level::page) ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
+        request.mem_zone = pmm::zone::normal;
+        request.use = pmm::purpose::page_table;
+
+        auto result = pmm::alloc(request);
+        if (!result) return ::lib::unexpected(result.error());
+        return result->phys_base;
+    }
+
     /// @brief Fill a freshly-allocated table with empty (invalid) entries.
-    auto init_table(dat_level lvl, u64 phys) noexcept -> void {
-        auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(phys));
+    [[nodiscard]] auto init_table(dat_level lvl, u64 phys) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        const u64 table_bytes = (lvl == dat_level::page)
+            ? static_cast<u64>(PAGE_ENTRIES) * sizeof(u64)
+            : static_cast<u64>(CRST_ENTRIES) * sizeof(u64);
+        if ((phys & (static_cast<u64>(pmm::PAGE_SIZE) - 1U)) != 0U) {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::alignment_error));
+        }
+        if (!hhdm::phys_range_is_mapped(phys, table_bytes)) {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::hhdm_init_failed));
+        }
+
+        volatile u64* table = reinterpret_cast<volatile u64*>(hhdm::phys_to_virt(phys));
         if (lvl == dat_level::page) {
             for (u32 i = 0; i < PAGE_ENTRIES; ++i)
                 table[i] = PTE_EMPTY;
@@ -36,6 +74,8 @@ namespace arch::s390x::mmu::_internal {
             for (u32 i = 0; i < CRST_ENTRIES; ++i)
                 table[i] = empty;
         }
+
+        return {};
     }
 
     /// @brief Record of one intermediate table allocated during a walk.
@@ -80,7 +120,8 @@ namespace arch::s390x::mmu::_internal {
         dat_level root_level,
         u64       virt,
         u64       phys,
-        page_prot prot
+        page_prot prot,
+        const pmm::allocation_request& table_policy
     ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
         level_state states[4]{};
         alloc_stack allocs{};
@@ -102,14 +143,19 @@ namespace arch::s390x::mmu::_internal {
                 // Need to allocate the child table.
                 const u32 order = (child_lvl == dat_level::page)
                     ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
-                auto result = pmm::alloc(
-                    order, pmm::zone::normal, pmm::purpose::page_table);
+                auto result = alloc_table_with_policy(child_lvl, table_policy);
                 if (!result) [[unlikely]] {
                     allocs.rollback();
                     return ::lib::unexpected(result.error());
                 }
-                const u64 child_phys = result->phys_base;
-                init_table(child_lvl, child_phys);
+                const u64 child_phys = *result;
+                auto init_result = init_table(child_lvl, child_phys);
+                if (!init_result) [[unlikely]] {
+                    pmm::folio_active f{child_phys, order, pmm::purpose::page_table, pmm::zone::normal};
+                    pmm::free(::lib::move(f));
+                    allocs.rollback();
+                    return ::lib::unexpected(init_result.error());
+                }
                 allocs.push(child_phys, order);
                 states[depth].alloc_phys = child_phys;
                 current = child_phys;
@@ -334,7 +380,13 @@ namespace arch::s390x::mmu::_internal {
                     return ::lib::unexpected(result.error());
                 }
                 const u64 child_phys = result->phys_base;
-                init_table(child_lvl, child_phys);
+                auto init_result = init_table(child_lvl, child_phys);
+                if (!init_result) [[unlikely]] {
+                    pmm::folio_active f{child_phys, order, pmm::purpose::page_table, pmm::zone::normal};
+                    pmm::free(::lib::move(f));
+                    allocs.rollback();
+                    return ::lib::unexpected(init_result.error());
+                }
                 allocs.push(child_phys, order);
                 states[depth].alloc_phys = child_phys;
                 current = child_phys;
@@ -411,7 +463,13 @@ namespace arch::s390x::mmu::_internal {
                     return ::lib::unexpected(result.error());
                 }
                 const u64 child_phys = result->phys_base;
-                init_table(child_lvl, child_phys);
+                auto init_result = init_table(child_lvl, child_phys);
+                if (!init_result) [[unlikely]] {
+                    pmm::folio_active f{child_phys, CRST_ALLOC_ORDER, pmm::purpose::page_table, pmm::zone::normal};
+                    pmm::free(::lib::move(f));
+                    allocs.rollback();
+                    return ::lib::unexpected(init_result.error());
+                }
                 allocs.push(child_phys, CRST_ALLOC_ORDER);
                 states[depth].alloc_phys = child_phys;
                 current = child_phys;
@@ -491,7 +549,16 @@ namespace arch::s390x::mmu {
         if (!result) [[unlikely]]
             return ::lib::unexpected(result.error());
         const u64 phys = result->phys_base;
-        _internal::init_table(Level, phys);
+        auto init_result = _internal::init_table(Level, phys);
+        if (!init_result) [[unlikely]] {
+            zxfoundation::memory::pmm::folio_active f{
+                phys,
+                CRST_ALLOC_ORDER,
+                zxfoundation::memory::pmm::purpose::page_table,
+                zxfoundation::memory::pmm::zone::normal};
+            zxfoundation::memory::pmm::free(::lib::move(f));
+            return ::lib::unexpected(init_result.error());
+        }
         return dat_table<Level>(phys);
     }
 
@@ -506,7 +573,16 @@ namespace arch::s390x::mmu {
         if (!result) [[unlikely]]
             return ::lib::unexpected(result.error());
         const u64 phys = result->phys_base;
-        _internal::init_table(dat_level::page, phys);
+        auto init_result = _internal::init_table(dat_level::page, phys);
+        if (!init_result) [[unlikely]] {
+            zxfoundation::memory::pmm::folio_active f{
+                phys,
+                PTE_ALLOC_ORDER,
+                zxfoundation::memory::pmm::purpose::page_table,
+                zxfoundation::memory::pmm::zone::normal};
+            zxfoundation::memory::pmm::free(::lib::move(f));
+            return ::lib::unexpected(init_result.error());
+        }
         return dat_table<dat_level::page>(phys);
     }
 
@@ -542,8 +618,30 @@ namespace arch::s390x::mmu {
         u64             phys,
         page_prot       prot
     ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        const auto table_policy = _internal::default_table_request();
         auto result = _internal::map_page_impl(
-            root.origin_phys, Root, virt, phys, prot);
+            root.origin_phys, Root, virt, phys, prot, table_policy);
+        return result;
+    }
+
+    /// @brief Map a single 4 KiB page with explicit page-table allocation placement.
+    /// @param[in] root Root DAT table.
+    /// @param[in] virt Virtual address to map.
+    /// @param[in] phys Physical frame to install.
+    /// @param[in] prot Hardware protection bits.
+    /// @param[in] table_policy PMM allocation request used for newly allocated DAT tables.
+    /// @return Success or kernel error.
+    /// @note Existing child tables are reused; the policy applies only to tables allocated during this map walk.
+    template <dat_level Root>
+    [[nodiscard]] auto map_page_with_policy(
+        dat_table<Root> root,
+        u64             virt,
+        u64             phys,
+        page_prot       prot,
+        const zxfoundation::memory::pmm::allocation_request& table_policy
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        auto result = _internal::map_page_impl(
+            root.origin_phys, Root, virt, phys, prot, table_policy);
         return result;
     }
 

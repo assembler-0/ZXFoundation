@@ -25,6 +25,7 @@ namespace zxfoundation::scoms {
         vm_region  = 4,
         io_binding = 5,
         capability = 6,
+        strand     = 7,
     };
 
     /// @brief ASCII name for each kobject type (debug/printk).
@@ -39,6 +40,7 @@ namespace zxfoundation::scoms {
             case kobject_type::vm_region:  return "vm_region";
             case kobject_type::io_binding: return "io_binding";
             case kobject_type::capability: return "capability";
+            case kobject_type::strand:     return "strand";
             default:                       return "unknown";
         }
     }

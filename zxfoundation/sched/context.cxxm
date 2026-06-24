@@ -17,6 +17,10 @@ namespace zxfoundation::sched::context {
         return arch::s390x::cpu::lowcore::this_cpu_percpu().irq_nesting;
     }
 
+    [[nodiscard]] inline auto nucleus_nesting_depth() noexcept -> u32 {
+        return arch::s390x::cpu::lowcore::this_cpu_percpu().nucleus_nesting;
+    }
+
     // Context predicates
     [[nodiscard]] inline auto irqs_disabled() noexcept -> bool {
         return !arch::s390x::cpu::irq::irqs_enabled();
@@ -24,6 +28,10 @@ namespace zxfoundation::sched::context {
 
     [[nodiscard]] inline auto in_interrupt() noexcept -> bool {
         return nesting_depth() >= 1U;
+    }
+
+    [[nodiscard]] inline auto in_nucleus_call() noexcept -> bool {
+        return nucleus_nesting_depth() >= 1U;
     }
 
     [[nodiscard]] inline auto in_hardirq() noexcept -> bool {
@@ -41,6 +49,7 @@ namespace zxfoundation::sched::context {
     [[nodiscard]] inline auto can_sleep() noexcept -> bool {
         const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         return pcp.irq_nesting    == 0U
+            && pcp.nucleus_nesting == 0U
             && pcp.preempt_count  == 0
             && !pcp.in_rcu_read_side
             && arch::s390x::cpu::irq::irqs_enabled();

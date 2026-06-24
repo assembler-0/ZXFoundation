@@ -143,6 +143,11 @@ namespace arch::s390x::cpu::lowcore {
         for (u32 i = 0; i < proto.cpu_count; ++i) {
             if (proto.cpu_map[i].cpu_addr == lc->percpu.cpu_addr) {
                 lc->percpu.cpu_type = proto.cpu_map[i].type;
+                lc->percpu.drawer_id = proto.cpu_map[i].drawer_id;
+                lc->percpu.core_id = proto.cpu_map[i].core_id;
+                lc->percpu.smt_id = proto.cpu_map[i].smt_id;
+                lc->percpu.topology_evidence = proto.cpu_map[i].topology_evidence;
+                lc->percpu.capacity = (proto.cpu_map[i].capacity == 0U) ? 100U : proto.cpu_map[i].capacity;
                 break;
             }
         }
@@ -150,6 +155,7 @@ namespace arch::s390x::cpu::lowcore {
         lc->percpu.lock_depth   = 0;
         lc->percpu.preempt_count = 0;
         lc->percpu.irq_nesting  = 0;
+        lc->percpu.nucleus_nesting = 0;
 
         lc->stack_canary  = __stack_chk_guard;
         lc->cpu_nr        = 0;
@@ -193,6 +199,7 @@ namespace arch::s390x::cpu::lowcore {
         lc.percpu.lock_depth    = 0;
         lc.percpu.preempt_count = 0;
         lc.percpu.irq_nesting   = 0;
+        lc.percpu.nucleus_nesting = 0;
 
         lc.percpu.current_strand = 0;
         lc.stack_canary = __stack_chk_guard;

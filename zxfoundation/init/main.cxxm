@@ -15,6 +15,7 @@ import zxfoundation.sys.syschk;
 import zxfoundation.sys.service;
 import zxfoundation.sys.io;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa;
 import zxfoundation.base.cxxrtse.cxxabi;
 import zxfoundation.memory.slub;
 import zxfoundation.rcu.rcu;
@@ -26,6 +27,7 @@ import zxfoundation.domain.domain;
 import zxfoundation.domain.domain_types;
 import zxfoundation.gate.gate;
 import zxfoundation.portal.portal;
+import zxfoundation.dgp.isolation;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.stfle_types;
 import arch.s390x.cpu.percpu;
@@ -173,6 +175,42 @@ namespace _internal {
         pinfo("hypervisor: {}", arch::s390x::cpu::processor::is_hypervisor() ? "true" : "false");
     }
 
+    /// @brief Initialize the HHDM coverage contract exported by ZXFL.
+    /// @param[in] boot Loader protocol containing the active direct-map coverage evidence.
+    /// @note The kernel treats ZXFL as the IPL authority for the initial DAT map and verifies the reported bounds locally.
+    /// @warning Failure is fatal because later PMM/MMU table initialization writes through the HHDM.
+    auto initialize_hhdm_contract(const arch::s390x::init::zxfl::protocol& boot) -> void {
+        if (boot.hhdm_phys_coverage_end == 0U
+            || boot.hhdm_phys_coverage_end < boot.pgtbl_pool_end
+            || boot.hhdm_phys_coverage_end < boot.kernel_phys_end) [[unlikely]] {
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: invalid ZXFL HHDM coverage contract");
+        }
+
+        zxfoundation::memory::hhdm::set_phys_coverage_end(boot.hhdm_phys_coverage_end);
+        pinfo("sys: HHDM physical coverage verified end={:016x}", boot.hhdm_phys_coverage_end);
+    }
+
+    /// @brief Initialize optional NUMA topology without making topology evidence a boot blocker.
+    auto initialize_numa_topology(const arch::s390x::init::zxfl::protocol& boot) -> void {
+        auto numa_result = zxfoundation::memory::numa::init(boot);
+        if (!numa_result) {
+            pnotice("sys: NUMA topology unavailable; continuing with allocator bootstrap fallback\n");
+            return;
+        }
+
+        if (zxfoundation::memory::numa::node_count() == 0U) [[unlikely]] {
+            pnotice("sys: NUMA topology empty; allocator will use bootstrap fallback\n");
+        }
+        if (!zxfoundation::memory::numa::has_loader_memory_evidence()) {
+            pnotice("sys: NUMA topology has no ZXFL memory-map node records; kernel self-discovery should refine placement later\n");
+        }
+        if (zxfoundation::memory::numa::uses_synthetic_fallback()) {
+            pnotice("sys: NUMA boot node synthesized from available boot evidence\n");
+        }
+    }
+
     auto launch_bootstrap_domain() -> void  {
         auto dom_r = zxfoundation::domain::domain_create("sys/bootstrap");
         if (!dom_r) {
@@ -225,6 +263,8 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     _internal::banner();
 
+    _internal::initialize_hhdm_contract(*protocol);
+    _internal::initialize_numa_topology(*protocol);
     zxfoundation::memory::pmm::init(*protocol);
 
     arch::s390x::mmu::mmu_init();
@@ -232,6 +272,8 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::memory::slub::slub_init();
     zxfoundation::memory::kmalloc::kmalloc_init();
     zxfoundation::memory::vm::vm_init();
+
+    zxfoundation::dgp::isolation_init();
 
     zxfoundation::sys::irq::irq_subsystem_init();
     zxfoundation::sys::timer::timer_init();

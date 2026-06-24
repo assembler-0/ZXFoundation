@@ -1,0 +1,115 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/numa_types.cxxm
+/// @brief NUMA topology and allocation policy types.
+
+export module zxfoundation.memory.numa_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::memory::numa {
+
+    /// @brief Maximum number of NUMA nodes recorded by the initial kernel topology table.
+    inline constexpr u8 MAX_NUMA_NODES = 16U;
+
+    /// @brief Wildcard NUMA node selector used by allocation policy requests.
+    inline constexpr u8 NUMA_NODE_ANY = 0xFFU;
+
+    /// @brief Deterministic bootstrap fallback node.
+    inline constexpr u8 NUMA_NODE_BOOT = 0U;
+
+    /// @brief Drawer identifier used when ZXFL could not provide drawer evidence.
+    inline constexpr u8 NUMA_DRAWER_UNKNOWN = 0xFFU;
+
+    /// @brief Page shift used for topology accounting.
+    /// @note The z/Architecture DAT model uses 4 KiB page frames for base page translation.
+    inline constexpr u8 NUMA_PAGE_SHIFT = 12U;
+
+    /// @brief Page size used for topology accounting.
+    inline constexpr u64 NUMA_PAGE_SIZE = 1ULL << NUMA_PAGE_SHIFT;
+
+    /// @brief Lifecycle state of a NUMA node record.
+    enum class node_state : u8 {
+        offline  = 0,
+        online   = 1,
+        degraded = 2,
+        draining = 3,
+    };
+
+    /// @brief Allocation fallback behavior requested by a caller.
+    enum class fallback_mode : u8 {
+        local_first   = 0,
+        strict_local  = 1,
+        interleave    = 2,
+        emergency_any = 3,
+    };
+
+    /// @brief Origin of the evidence used to create or update a node record.
+    enum class topology_source : u8 {
+        none                  = 0,
+        zxfl_memory_map       = 1,
+        zxfl_cpu_map          = 2,
+        synthetic_single_node = 3,
+    };
+
+    /// @brief NUMA node topology and allocator watermarks.
+    struct node_topology {
+        u8 node_id{NUMA_NODE_BOOT};
+        u8 drawer_id{NUMA_DRAWER_UNKNOWN};
+        node_state state{node_state::offline};
+        topology_source source{topology_source::none};
+        u64 phys_start{0ULL};
+        u64 phys_end{0ULL};
+        u64 free_pages{0ULL};
+        u64 low_watermark_pages{0ULL};
+        u64 high_watermark_pages{0ULL};
+        u32 cpu_count{0U};
+        u32 reserved{0U};
+    };
+
+    /// @brief Placement policy supplied to PMM, VM, or DGP memory-contract operations.
+    struct allocation_policy {
+        u8 preferred_node{NUMA_NODE_ANY};
+        fallback_mode fallback{fallback_mode::local_first};
+        bool require_dma31{false};
+        bool allow_remote{true};
+    };
+
+    /// @brief Result of resolving a placement policy against topology state.
+    struct placement_result {
+        u8 selected_node{NUMA_NODE_BOOT};
+        u8 fallback_distance{0U};
+        bool remote{false};
+        bool strict_violation{false};
+    };
+
+    /// @brief Test whether a byte value can address the fixed NUMA node table.
+    /// @param[in] node_id Candidate node identifier.
+    /// @return true when the node identifier is representable by the topology table.
+    [[nodiscard]] constexpr auto node_id_is_valid(u8 node_id) noexcept -> bool {
+        return node_id < MAX_NUMA_NODES;
+    }
+
+    /// @brief Test whether a topology state may satisfy memory placement.
+    /// @param[in] state Node lifecycle state.
+    /// @return true when the node may be considered for allocation fallback.
+    [[nodiscard]] constexpr auto node_state_is_allocatable(node_state state) noexcept -> bool {
+        return state == node_state::online || state == node_state::degraded;
+    }
+
+    static_assert(MAX_NUMA_NODES == 16U,
+        "initial NUMA topology table must preserve the planned 16-node storage budget");
+    static_assert(NUMA_NODE_ANY == 0xFFU,
+        "NUMA wildcard must remain outside the valid node table range");
+    static_assert(NUMA_PAGE_SIZE == 4096ULL,
+        "NUMA topology accounting assumes the z/Architecture base DAT page granule");
+    static_assert(sizeof(node_state) == sizeof(u8),
+        "NUMA node state must remain byte-sized for compact region metadata");
+    static_assert(sizeof(fallback_mode) == sizeof(u8),
+        "NUMA fallback policy must remain byte-sized for allocation requests");
+    static_assert(sizeof(allocation_policy) == 4U,
+        "NUMA allocation policy must remain compact enough for hot allocation paths");
+
+} // namespace zxfoundation::memory::numa
+
+} // end export

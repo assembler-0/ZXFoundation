@@ -1,0 +1,195 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_topology.cxxm
+/// @brief Scheduler topology records derived from per-CPU and loader evidence.
+
+export module zxfoundation.sched.sched_topology;
+import zxfoundation.sched.sched_policy_types;
+import zxfoundation.sched.sched_topology_types;
+import arch.s390x.init.zxfl.protocol;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu_types;
+
+namespace zxfoundation::sched::topology::_internal {
+
+    static cpu_topology_record g_cpu_records[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
+    [[nodiscard]] auto state_from_online(bool online) noexcept -> cpu_scheduling_state {
+        return online ? cpu_scheduling_state::online : cpu_scheduling_state::offline;
+    }
+
+    [[nodiscard]] auto has_flag(u8 flags, u8 flag) noexcept -> bool {
+        return (flags & flag) != 0U;
+    }
+
+    [[nodiscard]] auto cpu_evidence_from_flags(u8 flags) noexcept -> zxfoundation::sched::topology_evidence {
+        namespace zxfl = arch::s390x::init::zxfl;
+        if (has_flag(flags, static_cast<u8>(zxfl::ZXFL_CPU_EVIDENCE_FALLBACK)))
+            return zxfoundation::sched::topology_evidence::degraded;
+        if (has_flag(flags, static_cast<u8>(zxfl::ZXFL_CPU_EVIDENCE_STSI)))
+            return zxfoundation::sched::topology_evidence::loader_stsi;
+        if (has_flag(flags, static_cast<u8>(zxfl::ZXFL_CPU_EVIDENCE_SIGP)))
+            return zxfoundation::sched::topology_evidence::loader;
+        return zxfoundation::sched::topology_evidence::absent;
+    }
+
+    [[nodiscard]] auto stsi_or_degraded_from_flags(u8 flags) noexcept -> zxfoundation::sched::topology_evidence {
+        namespace zxfl = arch::s390x::init::zxfl;
+        if (has_flag(flags, static_cast<u8>(zxfl::ZXFL_CPU_EVIDENCE_STSI)))
+            return zxfoundation::sched::topology_evidence::loader_stsi;
+        if (has_flag(flags, static_cast<u8>(zxfl::ZXFL_CPU_EVIDENCE_FALLBACK)))
+            return zxfoundation::sched::topology_evidence::degraded;
+        return zxfoundation::sched::topology_evidence::absent;
+    }
+
+    [[nodiscard]] auto capacity_from_type(u8 cpu_type) noexcept -> u8 {
+        namespace zxfl = arch::s390x::init::zxfl;
+        switch (cpu_type) {
+            case zxfl::ZXFL_CPU_TYPE_CP:   return 100U;
+            case zxfl::ZXFL_CPU_TYPE_IFL:  return 100U;
+            case zxfl::ZXFL_CPU_TYPE_ZIIP: return 90U;
+            case zxfl::ZXFL_CPU_TYPE_ZAAP: return 90U;
+            case zxfl::ZXFL_CPU_TYPE_ICF:  return 80U;
+            default:                       return 100U;
+        }
+    }
+
+    auto apply_percpu_evidence(cpu_topology_record& record) noexcept -> void {
+        auto* pcp = arch::s390x::cpu::lowcore::cpu_percpu(record.cpu_id);
+        if (!pcp) return;
+
+        record.cpu_addr = pcp->cpu_addr;
+        record.drawer_id = pcp->drawer_id;
+        record.numa_node = pcp->drawer_id;
+        record.cpu_type = pcp->cpu_type;
+        record.core_id = pcp->core_id;
+        record.smt_id = pcp->smt_id;
+        record.raw_evidence_flags = pcp->topology_evidence;
+        record.cpu_evidence = cpu_evidence_from_flags(pcp->topology_evidence);
+        record.core_evidence = stsi_or_degraded_from_flags(pcp->topology_evidence);
+        record.smt_evidence = stsi_or_degraded_from_flags(pcp->topology_evidence);
+        record.capacity = (pcp->capacity == 0U) ? capacity_from_type(pcp->cpu_type) : pcp->capacity;
+        record.capacity_evidence = (pcp->capacity == 0U)
+            ? zxfoundation::sched::topology_evidence::degraded
+            : cpu_evidence_from_flags(pcp->topology_evidence);
+        if (record.core_evidence == zxfoundation::sched::topology_evidence::absent) {
+            record.core_id = static_cast<u8>(record.cpu_id & 0xFFU);
+            record.smt_id = 0U;
+            record.core_evidence = zxfoundation::sched::topology_evidence::degraded;
+            record.smt_evidence = zxfoundation::sched::topology_evidence::degraded;
+        }
+    }
+
+} // namespace zxfoundation::sched::topology::_internal
+
+export {
+
+namespace zxfoundation::sched::topology {
+
+    /// @brief Initialize scheduler topology records with deterministic fallback values.
+    /// @note Records are refined from per-CPU lowcore evidence as CPUs become visible to the scheduler.
+    /// @warning Missing SMT/core evidence is represented conservatively as one core per logical CPU.
+    auto sched_topology_init() noexcept -> void {
+        for (u32 i = 0U; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
+            auto& record = _internal::g_cpu_records[i];
+            record = {};
+            record.cpu_id = static_cast<u16>(i);
+            record.cpu_addr = static_cast<u16>(i);
+            record.numa_node = 0U;
+            record.drawer_id = 0U;
+            record.core_id = static_cast<u8>(i & 0xFFU);
+            record.smt_id = 0U;
+            record.cpu_type = 0U;
+            record.capacity = 100U;
+            record.run_queue_load = 0U;
+            record.fair_load = 0U;
+            record.rt_load = 0U;
+            record.deadline_load = 0U;
+            record.balance_interval_ns = 1'000'000U;
+            record.last_balance_tick = 0U;
+            record.cpu_evidence = zxfoundation::sched::topology_evidence::degraded;
+            record.core_evidence = zxfoundation::sched::topology_evidence::degraded;
+            record.smt_evidence = zxfoundation::sched::topology_evidence::degraded;
+            record.capacity_evidence = zxfoundation::sched::topology_evidence::degraded;
+            record.raw_evidence_flags = 0U;
+            record.state = cpu_scheduling_state::offline;
+        }
+
+        _internal::apply_percpu_evidence(_internal::g_cpu_records[0]);
+    }
+
+    /// @brief Refresh one CPU topology record from lowcore and scheduler load evidence.
+    /// @param[in] cpu_id Logical CPU whose record is refreshed.
+    /// @param[in] run_queue_load Current runnable-strand count for the CPU.
+    /// @param[in] online True when the CPU run queue is available for balancing.
+    /// @note This function is non-blocking and may be called from scheduler hot paths.
+    /// @warning It does not serialize against CPU hotplug; future hotplug work must add a topology sequence counter.
+    auto refresh_cpu_record(u16 cpu_id, u32 run_queue_load, bool online) noexcept -> void {
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
+
+        auto& record = _internal::g_cpu_records[cpu_id];
+        record.cpu_id = cpu_id;
+        record.run_queue_load = run_queue_load;
+        record.fair_load = run_queue_load;
+        record.state = _internal::state_from_online(online);
+        _internal::apply_percpu_evidence(record);
+    }
+
+    /// @brief Refresh class-specific load counters for one CPU topology record.
+    /// @param[in] cpu_id Logical CPU whose class counters are refreshed.
+    /// @param[in] fair_load Runnable fair-class strand count.
+    /// @param[in] rt_load Runnable RT-class strand count.
+    /// @param[in] deadline_load Runnable deadline-class strand count.
+    /// @note The counters are advisory balancing inputs and do not replace run-queue locking.
+    auto refresh_class_load(
+        u16 cpu_id,
+        u32 fair_load,
+        u32 rt_load,
+        u32 deadline_load
+    ) noexcept -> void {
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
+
+        auto& record = _internal::g_cpu_records[cpu_id];
+        record.fair_load = fair_load;
+        record.rt_load = rt_load;
+        record.deadline_load = deadline_load;
+        record.run_queue_load = fair_load + rt_load + deadline_load;
+    }
+
+    /// @brief Read the scheduler topology record for a CPU.
+    /// @param[in] cpu_id Logical CPU identifier.
+    /// @return Pointer to the topology record, or nullptr if the CPU ID is outside the configured maximum.
+    /// @note The returned record is stable storage owned by the scheduler topology module.
+    /// @warning Callers must treat the record as a snapshot and not as a hotplug lifetime pin.
+    [[nodiscard]] auto record_for(u16 cpu_id) noexcept -> const cpu_topology_record* {
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return nullptr;
+        return &_internal::g_cpu_records[cpu_id];
+    }
+
+    /// @brief Classify the topology distance between two logical CPUs.
+    /// @param[in] from_cpu Source CPU.
+    /// @param[in] to_cpu Candidate CPU.
+    /// @return Relation tier used by the scheduler balancer.
+    /// @note Missing sibling evidence falls back to per-CPU core groups, so false SMT grouping is avoided.
+    /// @warning This relation is not a performance-distance table; it is a conservative placement tier.
+    [[nodiscard]] auto relation_between(u16 from_cpu, u16 to_cpu) noexcept -> cpu_relation {
+        const auto* from = record_for(from_cpu);
+        const auto* to = record_for(to_cpu);
+        if (!from || !to) return cpu_relation::unavailable;
+        if (to->state != cpu_scheduling_state::online) return cpu_relation::unavailable;
+        if (from_cpu == to_cpu) return cpu_relation::self;
+        const bool core_verified = from->core_evidence != zxfoundation::sched::topology_evidence::degraded &&
+            to->core_evidence != zxfoundation::sched::topology_evidence::degraded;
+        const bool smt_verified = from->smt_evidence != zxfoundation::sched::topology_evidence::degraded &&
+            to->smt_evidence != zxfoundation::sched::topology_evidence::degraded;
+        if (core_verified && smt_verified && from->core_id == to->core_id && from->smt_id != to->smt_id)
+            return cpu_relation::same_smt_core;
+        if (core_verified && from->core_id == to->core_id) return cpu_relation::same_core_group;
+        if (from->numa_node == to->numa_node) return cpu_relation::same_numa_node;
+        return cpu_relation::remote_numa_node;
+    }
+
+} // namespace zxfoundation::sched::topology
+
+} // end export

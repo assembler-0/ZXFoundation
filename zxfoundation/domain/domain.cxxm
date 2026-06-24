@@ -31,16 +31,18 @@ import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
 import zxfoundation.base.types;
 import zxfoundation.memory.vm;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.sync_contract;
 
 import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
-import arch.s390x.cpu.skey;
-import arch.s390x.cpu.irq;
 import lib.error;
 import lib.expected;
 import lib.string;
 import lib.list;
 import lib.util;
+import lib.idalloc;
 
 // ── Internal state ──────────────────────────────────────────────────────────
 
@@ -60,41 +62,16 @@ namespace zxfoundation::domain::_internal {
     /// atomic slot count.
     static scoms::kobject_table<domain, MAX_DOMAINS> g_domain_table{};
 
-    /// @brief Storage key allocation bitmap.
-    /// Index is the 4-bit ACC value (0-15).  true = key is in use.
-    static bool g_key_used[16]{};
-
-    // ── Storage key allocator ───────────────────────────────────────────
-
-    /// @brief Allocate a free storage key from the user range.
-    ///
-    /// Scans SKEY_USER_BASE..SKEY_USER_MAX for an unused key.
-    ///
-    /// @return The 4-bit access-control key number on success.
-    [[nodiscard]] auto alloc_storage_key() noexcept
-        -> lib::expected<u8, lib::kernel_error>
-    {
-        for (u8 k = SKEY_USER_BASE; k <= SKEY_USER_MAX; ++k) {
-            if (!g_key_used[k]) {
-                g_key_used[k] = true;
-                return k;
-            }
-        }
-        // All 8 user keys are exhausted.
-        return lib::unexpected(
-            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
-    }
-
-    /// @brief Return a storage key to the free pool.
-    auto free_storage_key(u8 key) noexcept -> void {
-        if (key >= SKEY_USER_BASE && key <= SKEY_USER_MAX) {
-            g_key_used[key] = false;
-        }
-    }
-
     // ── Strand slab cache ────────────────────────────────────────────────
 
+    static constexpr u32 MAX_SECONDARY_STRAND_IDS = (MAX_DOMAINS * MAX_STRANDS_PER_DOMAIN) + 1U;
+
     static memory::slub::typed_slab_cache<strand> g_strand_cache{};
+    static lib::id_allocator<MAX_SECONDARY_STRAND_IDS> g_strand_ids{};
+
+    [[nodiscard]] auto secondary_strand_count(const domain& owner) noexcept -> u32 {
+        return static_cast<u32>(owner.strands.count());
+    }
 
     // ── Strand creation ────────────────────────────────────────────────
 
@@ -108,14 +85,36 @@ namespace zxfoundation::domain::_internal {
         namespace pmm  = zxfoundation::memory::pmm;
         namespace hhdm = zxfoundation::memory::hhdm;
 
+        if (secondary_strand_count(*owner) >= MAX_STRANDS_PER_DOMAIN) {
+            return lib::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        }
+
+        if (owner->ko.state != scoms::lifecycle_state::active) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
         auto result = g_strand_cache.alloc();
         if (!result) return lib::unexpected(result.error());
 
         strand* s = *result;
         ::new(static_cast<void*>(s)) strand{};
 
+        auto id_result = g_strand_ids.alloc();
+        if (!id_result) {
+            g_strand_cache.dealloc(s);
+            return lib::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        }
+
+        s->ko.id = *id_result;
+        s->ko.type = scoms::kobject_type::strand;
+        s->ko.state = scoms::lifecycle_state::embryo;
+        s->ko.generation = owner->ko.generation == 0U ? 1U : owner->ko.generation;
+
         s->owner = owner;
-        s->state = strand_state::runnable;
+        s->state = strand_state::embryo;
         s->cpu   = cpu;
         s->on_rq = false;
 
@@ -126,6 +125,7 @@ namespace zxfoundation::domain::_internal {
             pmm::purpose::stack,
             pmm::page_init::zeroed);
         if (!stack_r) {
+            g_strand_ids.free(s->ko.id);
             g_strand_cache.dealloc(s);
             return lib::unexpected(stack_r.error());
         }
@@ -136,6 +136,9 @@ namespace zxfoundation::domain::_internal {
         s->kstack_top  = stack_virt + DOMAIN_KERNEL_STACK_SIZE;
         s->ksp         = s->kstack_top;
 
+        s->ko.state = scoms::lifecycle_state::active;
+        s->state = strand_state::runnable;
+
         // Link into the domain's strand list.
         owner->strands.push_back(s->strand_list);
 
@@ -143,6 +146,39 @@ namespace zxfoundation::domain::_internal {
                    s->ko.id, owner->ko.id, static_cast<u32>(cpu));
 
         return s;
+    }
+
+    [[nodiscard]] auto strand_destroy_impl(strand& s) noexcept -> lib::expected<void, lib::kernel_error> {
+        namespace pmm  = zxfoundation::memory::pmm;
+        namespace hhdm = zxfoundation::memory::hhdm;
+
+        if (s.on_rq || s.state == strand_state::running) {
+            return lib::unexpected(
+                lib::kernel_error::from_driver(lib::driver_error::busy));
+        }
+
+        if (!s.owner) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        s.state = strand_state::dying;
+        lib::list_head::remove(s.strand_list);
+
+        if (s.kstack_base != 0U) {
+            const u64 stack_phys = hhdm::virt_to_phys(s.kstack_base);
+            pmm::folio_active stack_folio{
+                stack_phys, DOMAIN_KERNEL_STACK_ORDER,
+                pmm::purpose::stack, pmm::zone::dma31};
+            pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
+        }
+
+        s.state = strand_state::dead;
+        if (s.ko.id != scoms::KOBJECT_ID_INVALID) {
+            g_strand_ids.free(s.ko.id);
+        }
+        g_strand_cache.dealloc(&s);
+        return {};
     }
 
     // ── Domain creation transaction ─────────────────────────────────────
@@ -160,6 +196,7 @@ namespace zxfoundation::domain::_internal {
         u8   m_skey{0};
         u64  m_root_phys{0};
         u64  m_stack_phys{0};
+        zxfoundation::dgp::isolation_domain_state m_dgp_state{};
 
         bool m_has_slot{false};
         bool m_has_skey{false};
@@ -188,9 +225,9 @@ namespace zxfoundation::domain::_internal {
                 mmu::table_free<mmu::dat_level::region_1>(root_tbl);
             }
 
-            // 2. Free storage key.
+            // 2. Release DGP isolation identity and storage-key ownership.
             if (m_has_skey) {
-                free_storage_key(m_skey);
+                (void)zxfoundation::dgp::isolation_destroy_domain(m_dgp_state);
             }
 
             // 1. Release table slot (allocated first).
@@ -204,8 +241,8 @@ namespace zxfoundation::domain::_internal {
         ///
         /// Performs all allocations transactionally:
         ///   1. Allocate a table slot → embryo ref
-        ///   2. Allocate a storage key
-        ///   3. Allocate a region-1 root page table
+        ///   2. Create DGP isolation state and allocate storage-key ownership
+        ///   3. Allocate and bind a region-1 root page table
         ///   4. Allocate a kernel stack
         ///   5. Populate domain fields
         ///   6. Commit the transaction
@@ -233,11 +270,19 @@ namespace zxfoundation::domain::_internal {
             m_slot     = embryo_ref.id();
             m_has_slot = true;
 
-            // 2. Allocate a storage key.
-            auto key_result = alloc_storage_key();
-            if (!key_result)
-                return lib::unexpected(key_result.error());
-            m_skey     = *key_result;
+            // 2. Create DGP isolation state and allocate storage-key ownership.
+            zxfoundation::dgp::isolation_policy policy{};
+            policy.required_features = zxfoundation::dgp::isolation_feature::dat_asce
+                                     | zxfoundation::dgp::isolation_feature::storage_key
+                                     | zxfoundation::dgp::isolation_feature::transactional_vm
+                                     | zxfoundation::dgp::isolation_feature::smp_invalidation;
+
+            auto isolation_result = zxfoundation::dgp::isolation_create_domain(m_slot, policy);
+            if (!isolation_result)
+                return lib::unexpected(isolation_result.error());
+
+            m_dgp_state = *isolation_result;
+            m_skey     = m_dgp_state.storage_key;
             m_has_skey = true;
 
             // 3. Allocate region-1 root page table.
@@ -267,7 +312,13 @@ namespace zxfoundation::domain::_internal {
             d->root_phys    = m_root_phys;
 
             auto asce = mmu::asce_build<mmu::dat_level::region_1>(root_table);
+            auto bind_result = zxfoundation::dgp::isolation_bind_asce_root(
+                m_dgp_state, asce, m_root_phys);
+            if (!bind_result)
+                return lib::unexpected(bind_result.error());
+
             d->asce         = asce;
+            d->dgp_state    = m_dgp_state;
 
             d->primary_strand.kstack_base  = hhdm::phys_to_virt(m_stack_phys);
             d->primary_strand.kstack_top   = d->primary_strand.kstack_base + DOMAIN_KERNEL_STACK_SIZE;
@@ -283,6 +334,11 @@ namespace zxfoundation::domain::_internal {
 
             // Initialize the per-domain virtual memory space.
             zxfoundation::memory::vm::vm_space_init(d->vm_space);
+            d->vm_space.owner_domain = d->ko.id;
+
+            auto activate_result = zxfoundation::dgp::isolation_activate_domain(d->dgp_state);
+            if (!activate_result)
+                return lib::unexpected(activate_result.error());
 
             // 6. Commit the transaction — disarms on_rollback().
             commit();
@@ -304,16 +360,12 @@ namespace zxfoundation::domain {
 
     /// @brief Initialize the domain subsystem.
     ///
-    /// Initializes the SCOMS domain table and reserves storage key 0
-    /// for the nucleus.  Must be called once during boot, before any
-    /// domain_create() calls.
+    /// Initializes the SCOMS domain table.  DGP isolation policy owns
+    /// storage-key reservation and must already be initialized by early boot.
     auto domain_init() noexcept -> void {
         using namespace _internal;
 
         g_domain_table.init(scoms::kobject_type::domain);
-
-        // Key 0 is permanently reserved for the nucleus.
-        g_key_used[SKEY_NUCLEUS] = true;
 
         sys::printk::pinfo("domain: subsystem initialized, max_domains={}\n",
                            MAX_DOMAINS);
@@ -332,6 +384,7 @@ namespace zxfoundation::domain {
                 "domain: failed to create strand slab cache");
 
         g_strand_cache = *result;
+        g_strand_ids.reserve(1U);
         sys::printk::pinfo("domain: strand slab cache initialized");
     }
 
@@ -348,11 +401,26 @@ namespace zxfoundation::domain {
         return strand_create_impl(owner, cpu);
     }
 
+    /// @brief Destroy a secondary strand that has already left all run queues.
+    /// @param[in,out] s Strand whose stack and SCOMS identity should be released.
+    /// @return Success or kernel_error when the strand is still runnable or invalid.
+    /// @note The primary embedded strand must be destroyed through `domain_destroy()`.
+    /// @warning Callers must dequeue or drain a runnable strand before invoking this function.
+    [[nodiscard]] auto strand_destroy(strand& s) noexcept -> lib::expected<void, lib::kernel_error> {
+        using namespace _internal;
+        auto* owner = static_cast<domain*>(s.owner);
+        if (!owner || &owner->primary_strand == &s) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        return strand_destroy_impl(s);
+    }
+
     /// @brief Create a new domain.
     ///
-    /// Uses a transactional pattern to allocate a table slot, storage key,
-    /// root page table, and kernel stack.  If any allocation fails, all
-    /// prior allocations are automatically rolled back.
+    /// Uses a transactional pattern to allocate a table slot, DGP isolation
+    /// state, root page table, and kernel stack.  If any allocation fails,
+    /// all prior allocations are automatically rolled back.
     ///
     /// The domain is activated (embryo → active) before being returned.
     ///
@@ -403,8 +471,30 @@ namespace zxfoundation::domain {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
 
+        const auto deny_new_entries_state = zxfoundation::dgp::sync_contract_snapshot(
+            zxfoundation::dgp::lock_context::teardown,
+            zxfoundation::dgp::teardown_phase::deny_new_entries,
+            id);
+        auto teardown_result = zxfoundation::dgp::sync_contract_validate_teardown_phase(
+            zxfoundation::dgp::teardown_phase::none,
+            deny_new_entries_state.phase);
+        if (!teardown_result) {
+            return lib::unexpected(teardown_result.error());
+        }
+
         // Mark as dying.
         d->ko.state = scoms::lifecycle_state::dying;
+
+        const auto release_memory_state = zxfoundation::dgp::sync_contract_snapshot(
+            zxfoundation::dgp::lock_context::teardown,
+            zxfoundation::dgp::teardown_phase::release_memory,
+            id);
+        teardown_result = zxfoundation::dgp::sync_contract_validate_teardown_phase(
+            deny_new_entries_state.phase,
+            release_memory_state.phase);
+        if (!teardown_result) {
+            return lib::unexpected(teardown_result.error());
+        }
 
         sys::printk::pinfo("domain: destroying id={} name=\"{}\"\n", id, d->name);
 
@@ -437,8 +527,20 @@ namespace zxfoundation::domain {
             g_strand_cache.dealloc(s);
         }
 
-        // Free storage key.
-        free_storage_key(d->storage_key);
+        auto isolation_destroy_result = zxfoundation::dgp::isolation_destroy_domain(d->dgp_state);
+        if (!isolation_destroy_result)
+            return lib::unexpected(isolation_destroy_result.error());
+
+        const auto release_identity_state = zxfoundation::dgp::sync_contract_snapshot(
+            zxfoundation::dgp::lock_context::teardown,
+            zxfoundation::dgp::teardown_phase::release_identity,
+            id);
+        teardown_result = zxfoundation::dgp::sync_contract_validate_teardown_phase(
+            release_memory_state.phase,
+            release_identity_state.phase);
+        if (!teardown_result) {
+            return lib::unexpected(teardown_result.error());
+        }
 
         // Reset domain fields before releasing the slot.
         d->name         = "";
@@ -446,6 +548,7 @@ namespace zxfoundation::domain {
         d->asce         = {};
         d->root_phys    = 0;
         d->storage_key  = 0;
+        d->dgp_state    = {};
         d->primary_strand.kstack_base  = 0;
         d->primary_strand.kstack_top   = 0;
         d->primary_strand.ksp          = 0;
