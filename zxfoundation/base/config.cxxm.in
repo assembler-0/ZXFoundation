@@ -23,7 +23,7 @@ namespace zxfoundation::base::config {
     constexpr auto CONFIG_ZX_COMPILER_ID       = __VERSION__;
 
     /// @brief maximum number of CPUs
-    constexpr auto CONFIG_ZX_MAX_CPUS          = 128U;
+    constexpr auto CONFIG_ZX_MAX_CPUS          = 768UL;
 
     /// @brief build number
     constexpr auto CONFIG_ZX_BUILD_NUMBER      = "@ZXFoundation_Build@";

@@ -62,8 +62,8 @@ int arch_sclp_early_get_memsize(uint64_t *mem_size_out) {
     uint64_t rnsize = sccb.rnsize ? sccb.rnsize : sccb.rnsize2;
     if (rnmax == 0 || rnsize == 0) return -3;
 
-    /* rnsize is in MB */
+    // rnsize is in MB
     *mem_size_out = rnmax * rnsize * 1024UL * 1024UL;
-    
+
     return 0;
 }

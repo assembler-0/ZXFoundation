@@ -14,6 +14,7 @@ import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
+import arch.s390x.lib.atomic;
 import lib.error;
 import lib.expected;
 import lib.format;
@@ -50,15 +51,16 @@ namespace arch::s390x::css::ccw_io {
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
 
+        namespace irqctl = cpu::irq;
+        namespace atomic = arch::s390x::lib::atomic;
+
+        // Drain any stale status left from a prior operation before arming.
         {
             irb discard{};
             (void)tsch(entry->schid, discard);
         }
 
-        namespace irqctl = cpu::irq;
-        const auto saved_irq = irqctl::irq_save_disable();
-
-        // Build the Operation Request Block.
+        entry->io_done.store(0, atomic::memory_order::seq_cst);
         orb o{};
         o.set_format1();
         o.set_key(key);
@@ -75,7 +77,6 @@ namespace arch::s390x::css::ccw_io {
         for (u32 retry = 0; retry < MAX_START_RETRIES; ++retry) {
             const int cc = ssch(entry->schid, o);
             if (cc == 0) {
-                // I/O started — update state under lock.
                 entry->state = subchannel_state::active;
                 break;
             }
@@ -94,7 +95,6 @@ namespace arch::s390x::css::ccw_io {
                   ::lib::format::hex{static_cast<u64>(schib_diag.scsw_data.sch_status), 2, true});
 
             if (retry + 1 == MAX_START_RETRIES) {
-                irqctl::irq_restore(saved_irq);
                 return ::lib::unexpected(
                     ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
             }
@@ -108,54 +108,54 @@ namespace arch::s390x::css::ccw_io {
         const u64 start_tod = proc::stck();
         const u64 deadline  = start_tod + (timeout_us * 4096ULL);
 
-        irb result_irb{};
-
         while (true) {
-            proc::cpu_relax();
+            if (entry->io_done.load(atomic::memory_order::seq_cst) != 0) {
+                irb result_irb{};
+                ::lib::memcpy(&result_irb, &entry->last_irb, sizeof(irb));
 
-            const int tcc = tsch(entry->schid, result_irb);
-            if (tcc == 0) {
-                const u8 sc = result_irb.scsw_data.stctl();
-                const u8 ac = result_irb.scsw_data.actl();
-
-                // Store the IRB in the entry for bookkeeping.
-                ::lib::memcpy(&entry->last_irb, &result_irb, sizeof(irb));
-
-                if ((sc & (STCTL_PRIMARY |
-                           STCTL_SECONDARY)) != 0 &&
-                    (ac & (ACTL_DEV_ACTIVE |
-                           ACTL_SCH_ACTIVE)) == 0)
-                {
-                    entry->state = subchannel_state::idle;
-
-                    // Check for I/O errors.
-                    if (result_irb.scsw_data.has_error()) {
-                        pwarn("ccw_io: I/O error sch={} dev_status={} sch_status={} residual={}",
-                              ::lib::format::dec{static_cast<u64>(sch_index)},
-                              ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.dev_status), 2, true},
-                              ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.sch_status), 2, true},
-                              ::lib::format::dec{static_cast<u64>(result_irb.scsw_data.count)});
-                    irqctl::irq_restore(saved_irq);
+                if (result_irb.scsw_data.has_error()) {
+                    pwarn("ccw_io: I/O error sch={} dev_status={} sch_status={} residual={}",
+                          ::lib::format::dec{static_cast<u64>(sch_index)},
+                          ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.dev_status), 2, true},
+                          ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.sch_status), 2, true},
+                          ::lib::format::dec{static_cast<u64>(result_irb.scsw_data.count)});
                     return ::lib::unexpected(
                         ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
-                    }
-                    irqctl::irq_restore(saved_irq);
-                    return result_irb;
                 }
-                // Intermediate status — keep polling for final completion.
-            }
-            if (tcc == 3) {
-                entry->state = subchannel_state::idle;
-                irqctl::irq_restore(saved_irq);
-                return ::lib::unexpected(
-                    ::lib::kernel_error::from_driver(::lib::driver_error::not_found));
+                return result_irb;
             }
 
-            // Timeout check.
             if (proc::stck() > deadline) {
-                // Try to quiesce the subchannel.
+               const auto saved_irq = irqctl::irq_save_disable();
+
+                if (entry->io_done.load(atomic::memory_order::seq_cst) != 0) {
+                    irb result_irb{};
+                    ::lib::memcpy(&result_irb, &entry->last_irb, sizeof(irb));
+                    irqctl::irq_restore(saved_irq);
+                    if (result_irb.scsw_data.has_error())
+                        return ::lib::unexpected(
+                            ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
+                    return result_irb;
+                }
+
+                irb result_irb{};
+                const int tcc = tsch(entry->schid, result_irb);
+                if (tcc == 0) {
+                    const u8 sc = result_irb.scsw_data.stctl();
+                    const u8 ac = result_irb.scsw_data.actl();
+                    if ((sc & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0 &&
+                        (ac & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
+                        ::lib::memcpy(&entry->last_irb, &result_irb, sizeof(irb));
+                        entry->state = subchannel_state::idle;
+                        irqctl::irq_restore(saved_irq);
+                        if (result_irb.scsw_data.has_error())
+                            return ::lib::unexpected(
+                                ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
+                        return result_irb;
+                    }
+                }
+
                 (void)csch(entry->schid);
-                // Drain any resulting clear-completion status.
                 irb discard{};
                 (void)tsch(entry->schid, discard);
                 entry->state = subchannel_state::idle;
@@ -163,6 +163,8 @@ namespace arch::s390x::css::ccw_io {
                 return ::lib::unexpected(
                     ::lib::kernel_error::from_driver(::lib::driver_error::timeout));
             }
+
+            proc::cpu_relax();
         }
     }
 

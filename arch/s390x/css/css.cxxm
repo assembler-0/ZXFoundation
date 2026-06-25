@@ -153,6 +153,8 @@ namespace arch::s390x::css {
         subchannel_state                    state{subchannel_state::free};
         zxfoundation::sync::wait_queue_head io_wait{};
         irb                                 last_irb{};
+        /// @brief Completion flag set by the I/O interrupt handler.
+        lib::atomic::atomic<u32> io_done{0};
         u16                                 devno{0xFFFF};
         u32                                 owner_domain{0xFFFFFFFF};
 
@@ -221,9 +223,17 @@ namespace arch::s390x::css {
                 continue;
             }
 
-            // Enable the subchannel: set E-bit (bit 8 of PMCW word 1).
+            // Enable the subchannel and arm it for interrupt-driven I/O.
+            //   - E-bit (PMCW word-1 bit 8) makes the subchannel usable.
+            //   - ISC (bits 11-13) = 0 routes completion to I/O-interruption
+            //     subclass 0, which CR6 (below) unmasks on every CPU.
+            //   - intparm carries the subchannel number in its upper bits while
+            //     keeping the low 3 bits zero, so do_io_interrupt's ISC decode
+            //     (io_int_parm & 7) stays consistent (PoP §16.3 / §6.2.1).
             if (!info.pmcw_data.is_enabled()) {
-                info.pmcw_data.flags |= 0x0080;
+                info.pmcw_data.flags &= static_cast<u16>(~0x3800U); // clear ISC -> 0
+                info.pmcw_data.flags |= 0x0080;                     // set E-bit
+                info.pmcw_data.intparm = static_cast<u32>(sch_no) << 3;
                 const int mcc = msch(id, info);
                 if (mcc != 0) {
                     pwarn("css: msch failed for 0.0.{} cc={}",
@@ -260,11 +270,16 @@ namespace arch::s390x::css {
         _internal::g_sch_count       = found;
         _internal::g_css_initialized = true;
 
+        // CR6: I/O-interruption subclass mask (PoP §6.2.1, bits 0-7 = ISC 0-7).
+        // NOTE: ctl_store == STCTG (read CR into storage), ctl_load == LCTLG
+        // (write storage into CR).  The previous code had these swapped, which
+        // zeroed CR6 and masked ALL I/O interruptions — the device-probe stall.
+        // Read-modify-write so all eight ISCs are unmasked on this (BSP) CPU.
         {
             u64 cr6 = 0;
-            cpu::processor::ctl_load<6, 6>(cr6);
-            cr6 |= 0x00000000FF000000ULL;
-            cpu::processor::ctl_store<6, 6>(cr6);
+            cpu::processor::ctl_store<6, 6>(cr6);          // read current CR6
+            cr6 |= 0x00000000FF000000ULL;                 // unmask ISC 0-7
+            cpu::processor::ctl_load<6, 6>(cr6);          // write back to CR6
         }
 
         cpu::irq::irq_restore(irq_state);
@@ -436,15 +451,32 @@ namespace arch::s390x::css {
         irb status{};
         const int cc = tsch(entry.schid, status);
 
+        bool completed = false;
         {
             zxfoundation::locking::irq_lock_guard guard(_internal::g_css_lock);
             ::lib::memcpy(&entry.last_irb, &status, sizeof(irb));
             if (cc == 0) {
-                const auto actl = status.scsw_data.actl();
-                if ((actl & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
+                const auto stctl = status.scsw_data.stctl();
+                const auto actl  = status.scsw_data.actl();
+                // Final completion: primary/secondary status present and the
+                // subchannel/device are no longer active (PoP §16.3.2).  PCI or
+                // intermediate-only interrupts leave the operation in flight.
+                if ((stctl & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0 &&
+                    (actl  & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
                     entry.state = subchannel_state::idle;
+                    completed = true;
                 }
+            } else if (cc == 1) {
+                // No status pending for this subchannel — spurious/shared
+                // interrupt; leave any in-flight wait untouched.
             }
+        }
+
+        // Publish completion to a ccw_do_io_sync waiter BEFORE waking the queue.
+        // The seq_cst store pairs with the waiter's seq_cst load and makes the
+        // last_irb copy above visible once io_done reads as 1.
+        if (completed) {
+            entry.io_done.store(1, arch::s390x::lib::atomic::memory_order::seq_cst);
         }
 
         // Wake anyone waiting on this subchannel's I/O completion.

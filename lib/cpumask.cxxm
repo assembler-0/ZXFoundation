@@ -1,0 +1,105 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/cpumask.cxxm
+/// @brief Fixed-capacity CPU set primitive built on lib::static_bitmap.
+
+export module lib.cpumask;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import lib.bitmap;
+import lib.optional;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace lib {
+
+    /// @brief A fixed-capacity, SMP-aware set of CPU identifiers.
+    /// @note No heap allocation; the storage is static, like static_bitmap.
+    class cpumask {
+        static constexpr usize max_cpus =
+            zxfoundation::base::config::CONFIG_ZX_MAX_CPUS;
+
+        using memory_order = arch::s390x::lib::atomic::memory_order;
+
+        static_bitmap<max_cpus> m_bits{};
+
+    public:
+        constexpr cpumask() noexcept = default;
+
+        /// @brief Maximum number of CPUs this mask can represent.
+        [[nodiscard]] static constexpr auto capacity() noexcept -> usize {
+            return max_cpus;
+        }
+
+        /// @brief Atomically add a CPU to the set.
+        /// @param[in] cpu CPU identifier (0 to capacity()-1).
+        /// @param[in] order Memory ordering (default seq_cst).
+        auto set(usize cpu, memory_order order = memory_order::seq_cst) noexcept -> void {
+            m_bits.set(cpu, order);
+        }
+
+        /// @brief Atomically remove a CPU from the set.
+        /// @param[in] cpu CPU identifier (0 to capacity()-1).
+        /// @param[in] order Memory ordering (default seq_cst).
+        auto clear(usize cpu, memory_order order = memory_order::seq_cst) noexcept -> void {
+            m_bits.clear(cpu, order);
+        }
+
+        /// @brief Atomically test whether a CPU is in the set.
+        /// @param[in] cpu CPU identifier (0 to capacity()-1).
+        /// @param[in] order Memory ordering (default relaxed).
+        /// @return true if the CPU is a member.
+        [[nodiscard]] auto test(usize cpu, memory_order order = memory_order::relaxed) const noexcept -> bool {
+            return m_bits.test(cpu, order);
+        }
+
+        /// @brief Non-atomically add a CPU (use only when externally serialized).
+        auto set_relaxed(usize cpu) noexcept -> void { m_bits.set_relaxed(cpu); }
+
+        /// @brief Non-atomically remove a CPU (use only when externally serialized).
+        auto clear_relaxed(usize cpu) noexcept -> void { m_bits.clear_relaxed(cpu); }
+
+        /// @brief Index of the lowest-numbered member.
+        /// @return The CPU id, or nullopt if the set is empty.
+        [[nodiscard]] auto first_set() const noexcept -> optional<usize> {
+            return m_bits.find_first_set();
+        }
+
+        /// @brief Index of the lowest-numbered member strictly after @p after.
+        /// @param[in] after Index to search past (the result is always > after).
+        /// @return The next member CPU id, or nullopt if none follows.
+        [[nodiscard]] auto next_set(usize after) const noexcept -> optional<usize> {
+            return m_bits.find_next_set(after);
+        }
+
+        /// @brief Number of CPUs currently in the set.
+        [[nodiscard]] auto count() const noexcept -> usize { return m_bits.count(); }
+
+        /// @brief Returns true if the set is non-empty.
+        [[nodiscard]] auto any() const noexcept -> bool { return m_bits.any(); }
+
+        /// @brief Returns true if the set is empty.
+        [[nodiscard]] auto none() const noexcept -> bool { return m_bits.none(); }
+
+        /// @brief Remove every CPU from the set.
+        auto reset() noexcept -> void { m_bits.reset(); }
+
+        /// @brief Invoke @p fn for every member CPU, in ascending id order.
+        ///
+        /// @tparam Fn Callable invocable as fn(u16 cpu).
+        /// @param[in] fn      Callback receiving each member CPU id.
+        /// @param[in] confirm Memory ordering used to re-confirm membership.
+        template <typename Fn>
+        auto for_each(Fn&& fn, memory_order confirm = memory_order::acquire) const noexcept -> void {
+            for (auto cur = first_set(); cur.has_value(); cur = next_set(*cur)) {
+                const usize cpu = *cur;
+                if (m_bits.test(cpu, confirm)) {
+                    fn(static_cast<u16>(cpu));
+                }
+            }
+        }
+    };
+
+} // namespace lib
+
+} // end export

@@ -16,15 +16,14 @@
 #include <arch/s390x/init/zxfl/parmfile.h>
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/mmu.h>
+#include <arch/s390x/init/zxfl/psw.h>
 #include <zxfoundation/zxconfig.h>
 
 #define ZX_NUCLEUS_NAME         "CORE.ZXFOUNDATION.NUCLEUS"
 #define ZX_PARMFILE_NAME        "ETC.ZXFOUNDATION.PARM"
 
 #define MEM_PROBE_FRAME         (1UL << 20)
-#define MEM_PROBE_DEFAULT_MAX   (512UL << 20)
-#define MEM_PROBE_PATTERN_A     UINT64_C(0xA5A5A5A5A5A5A5A5)
-#define MEM_PROBE_PATTERN_B     UINT64_C(0x5A5A5A5A5A5A5A5A)
+#define MEM_PROBE_MAX_BYTES     (16ULL * 1024 * 1024 * 1024 * 1024)
 
 static zxfl_boot_protocol_t s_proto;
 static zxfl_mem_region_t s_mem_map[ZXFL_MEM_MAP_MAX];
@@ -99,9 +98,95 @@ static void probe_ipl_device(uint32_t schid, zxfl_boot_protocol_t *proto) {
     print("zxfl01: ipl device: unknown (sense id failed)\n");
 }
 
-static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
-                             uint64_t kernel_start, uint64_t kernel_end,
-                             uint64_t mem_limit) {
+static void add_usable_region(zxfl_mem_region_t *map, uint32_t *count, uint32_t max,
+                              uint64_t start, uint64_t end, uint32_t type,
+                              uint64_t node_chunk, uint32_t num_nodes);
+
+/// @brief Test whether the real frame at @p addr is installed storage.
+/// @param addr  Real address of the frame to test.
+/// @return true if the storage is installed, false on addressing exception.
+/// @warning Must run with DAT off and prefix zero (early loader context).
+static bool probe_frame_present(uint64_t addr) {
+    uint64_t present;
+    __asm__ volatile(
+        "   larl   %%r1,0f\n"           // r1 = fixup resume address
+        "   stg    %%r1,0x1d8\n"        // program-new PSW: instruction address
+        "   stg    %[mask],0x1d0\n"     // program-new PSW: mask (enabled, DAT off)
+        "   lghi   %[pres],1\n"         // assume installed
+        "   tprot  0(%[addr]),0\n"      // suppressed addressing exc -> fixup
+        "   j      1f\n"
+        "0: lghi   %[pres],0\n"         // fixup: addressing exception was taken
+        "1:\n"
+        : [pres] "=&d"(present)
+        : [addr] "a"(addr), [mask] "d"(PSW_MASK_KERNEL)
+        : "r1", "cc", "memory");
+    return present != 0;
+}
+
+/// @brief Find the exclusive end of installed storage via a TPROT binary search. /// @return Exclusive physical end of installed RAM, in bytes.
+/// @note Restores the disabled-wait program-check PSW before returning.
+static uint64_t probe_mem_end_bytes(void) {
+    uint64_t range  = MEM_PROBE_MAX_BYTES / MEM_PROBE_FRAME;
+    uint64_t offset = 0;
+    while (range > 1) {
+        range >>= 1;
+        uint64_t pivot = offset + range;
+        if (probe_frame_present(pivot * MEM_PROBE_FRAME))
+            offset = pivot;
+    }
+    // Restore the disabled-wait program-check PSW so a genuine later fault
+    // halts the CPU instead of silently resuming at a stale fixup label.
+    arch_psw_set_raw(PSW_LC_PROGRAM, PSW_MASK_DISABLED_WAIT,
+                     0x000000000DEAD1D0ULL);
+    return (offset + 1) * MEM_PROBE_FRAME;
+}
+
+/// @brief Query installed storage size via DIAG 0x260 (z/VM / emulator).
+/// @param out_size  Receives installed storage size in bytes on success.
+/// @return 0 on success, -1 if DIAG 0x260 is unavailable or reports nothing.
+/// @warning Must run with DAT off and prefix zero (early loader context).
+static int diag260_get_memsize(uint64_t *out_size) {
+    // 16-byte-aligned extent descriptor pair {start, end} (PoP/z/VM quadword).
+    static uint64_t extent[2] __attribute__((aligned(16)));
+    extent[0] = 0;
+    extent[1] = 0;
+
+    register unsigned long buf __asm__("2") = (unsigned long)(uintptr_t)extent; // R1 even: address
+    register unsigned long len __asm__("3") = (unsigned long)sizeof(extent);    // R1 odd:  length
+    register unsigned long sub __asm__("4") = 0x10UL;                           // R3: subcode / count
+    int present = 1;
+
+    __asm__ volatile(
+        "   larl   %%r1,0f\n"
+        "   stg    %%r1,0x1d8\n"            // program-new PSW: fixup address
+        "   stg    %[mask],0x1d0\n"         // program-new PSW: mask (enabled, DAT off)
+        "   diag   %[buf],%[sub],0x260\n"   // DIAG R1=pair(buf,len), R3=subcode
+        "   j      1f\n"
+        "0: lhi    %[pres],0\n"             // fixup: DIAG raised a program interruption
+        "1:\n"
+        : [pres] "+d"(present), [buf] "+d"(buf), [len] "+d"(len), [sub] "+d"(sub)
+        : [mask] "d"(PSW_MASK_KERNEL)
+        : "r1", "cc", "memory");
+
+    // Restore the disabled-wait program-check PSW.
+    arch_psw_set_raw(PSW_LC_PROGRAM, PSW_MASK_DISABLED_WAIT,
+                     0x000000000DEAD1D0ULL);
+
+    if (!present)
+        return -1;
+
+    const uint64_t end = extent[1];   // highest addressable byte
+    if (end == 0)
+        return -1;
+    *out_size = end + 1UL;
+    return 0;
+}
+
+/// @brief Populate the boot memory map from a known total RAM size.
+/// @return Number of regions written to @p map.
+static uint32_t build_mem_map(zxfl_mem_region_t *map, uint32_t max,
+                              uint64_t kernel_start, uint64_t kernel_end,
+                              uint64_t total_size) {
     uint32_t count = 0;
     if (count < max) {
         map[count].base = 0x0;
@@ -120,58 +205,21 @@ static uint32_t probe_memory(zxfl_mem_region_t *map, uint32_t max,
 
     uint32_t num_nodes = zxfl_discovered_numa_nodes();
 
-    uint64_t actual_limit = mem_limit;
-    if (actual_limit == PARMFILE_SYSSIZE_INFINITE) {
-        // Run a fast pre-probe pass to determine actual physical RAM size
-        uint64_t probe_limit = 0;
-        for (uint64_t frame = 2UL * MEM_PROBE_FRAME; ; frame += MEM_PROBE_FRAME) {
-            volatile uint64_t *probe = (volatile uint64_t *) frame;
-            const uint64_t saved = *probe;
-            *probe = MEM_PROBE_PATTERN_A;
-            const bool a_ok = (*probe == MEM_PROBE_PATTERN_A);
-            *probe = MEM_PROBE_PATTERN_B;
-            const bool b_ok = (*probe == MEM_PROBE_PATTERN_B);
-            *probe = saved;
-            if (!a_ok || !b_ok) {
-                probe_limit = frame;
-                break;
-            }
-        }
-        actual_limit = probe_limit;
-    }
-
-    uint64_t node_chunk = actual_limit / num_nodes;
-    uint64_t temp = node_chunk;
+    uint64_t node_chunk = total_size / num_nodes;
     uint64_t chunk_align = 256ULL * 1024 * 1024;
-    while (temp >= chunk_align * 2) {
+    while (node_chunk >= chunk_align * 2) {
         chunk_align *= 2;
     }
     node_chunk = chunk_align;
 
-    for (uint64_t frame = 2UL * MEM_PROBE_FRAME;
-         frame < actual_limit && count < max;
-         frame += MEM_PROBE_FRAME) {
-        volatile uint64_t *probe = (volatile uint64_t *) frame;
-        const uint64_t saved = *probe;
-        *probe = MEM_PROBE_PATTERN_A;
-        const bool a_ok = (*probe == MEM_PROBE_PATTERN_A);
-        *probe = MEM_PROBE_PATTERN_B;
-        const bool b_ok = (*probe == MEM_PROBE_PATTERN_B);
-        *probe = saved;
-        if (!a_ok || !b_ok) break;
-        
-        uint32_t type = ZXFL_MEM_USABLE;
-        if (frame >= kernel_start && frame < kernel_end) type = ZXFL_MEM_KERNEL;
-        
-        uint8_t node = zxfl_numa_node_for_phys(frame, node_chunk, num_nodes);
-        if (count > 0 && map[count - 1].type == type && map[count - 1].numa_node == node && map[count - 1].base + map[count - 1].length == frame) {
-            map[count - 1].length += MEM_PROBE_FRAME;
+    uint64_t usable_start = 2UL * MEM_PROBE_FRAME;
+    if (usable_start < total_size) {
+        if (kernel_start >= usable_start && kernel_end <= total_size) {
+            add_usable_region(map, &count, max, usable_start, kernel_start, ZXFL_MEM_USABLE, node_chunk, num_nodes);
+            add_usable_region(map, &count, max, kernel_start, kernel_end, ZXFL_MEM_KERNEL, node_chunk, num_nodes);
+            add_usable_region(map, &count, max, kernel_end, total_size, ZXFL_MEM_USABLE, node_chunk, num_nodes);
         } else {
-            map[count].base = frame;
-            map[count].length = MEM_PROBE_FRAME;
-            map[count].type = type;
-            map[count].numa_node = node;
-            count++;
+            add_usable_region(map, &count, max, usable_start, total_size, ZXFL_MEM_USABLE, node_chunk, num_nodes);
         }
     }
     return count;
@@ -301,58 +349,23 @@ static void add_usable_region(zxfl_mem_region_t *map, uint32_t *count, uint32_t 
 static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
                               uint64_t kernel_start, uint64_t kernel_end,
                               uint64_t mem_limit) {
-    uint64_t sclp_size = 0;
-    uint32_t count = 0;
+    uint64_t total = 0;
 
-    if (arch_sclp_early_get_memsize(&sclp_size) == 0) {
-        print("zxfl01: memory detected via sclp: ");
-        diag_print_hex8((uint32_t)(sclp_size >> 32));
-        diag_print_hex8((uint32_t)sclp_size);
-        print(" bytes\n");
-
-        if (sclp_size > mem_limit) sclp_size = mem_limit;
-
-        if (count < max) {
-            map[count].base = 0x0;
-            map[count].length = MEM_PROBE_FRAME;
-            map[count].type = ZXFL_MEM_RESERVED;
-            map[count].numa_node = 0;
-            count++;
-        }
-        if (count < max) {
-            map[count].base = MEM_PROBE_FRAME;
-            map[count].length = MEM_PROBE_FRAME;
-            map[count].type = ZXFL_MEM_LOADER;
-            map[count].numa_node = 0;
-            count++;
-        }
-        
-        uint64_t usable_start = 2UL * MEM_PROBE_FRAME;
-        if (usable_start < sclp_size) {
-            uint32_t num_nodes = zxfl_discovered_numa_nodes();
-
-            uint64_t node_chunk = sclp_size / num_nodes;
-            uint64_t temp = node_chunk;
-            uint64_t chunk_align = 256ULL * 1024 * 1024;
-            while (temp >= chunk_align * 2) {
-                chunk_align *= 2;
-            }
-            node_chunk = chunk_align;
-
-            // Basic split for kernel if it falls within the range
-            if (kernel_start >= usable_start && kernel_end <= sclp_size) {
-                 add_usable_region(map, &count, max, usable_start, kernel_start, ZXFL_MEM_USABLE, node_chunk, num_nodes);
-                 add_usable_region(map, &count, max, kernel_start, kernel_end, ZXFL_MEM_KERNEL, node_chunk, num_nodes);
-                 add_usable_region(map, &count, max, kernel_end, sclp_size, ZXFL_MEM_USABLE, node_chunk, num_nodes);
-            } else {
-                 add_usable_region(map, &count, max, usable_start, sclp_size, ZXFL_MEM_USABLE, node_chunk, num_nodes);
-            }
-        }
-        return count;
+    if (arch_sclp_early_get_memsize(&total) == 0) {
+        print("zxfl01: memory detected via sclp\n");
+    }
+    else if (diag260_get_memsize(&total) == 0) {
+        print("zxfl01: memory detected via diag 0x260\n");
+    }
+    else {
+        print("zxfl01: sclp/diag unavailable, probing storage via tprot\n");
+        total = probe_mem_end_bytes();
     }
 
-    print("zxfl01: sclp detection failed, falling back to manual probe\n");
-    return probe_memory(map, max, kernel_start, kernel_end, mem_limit);
+    if (mem_limit != PARMFILE_SYSSIZE_INFINITE && total > mem_limit)
+        total = mem_limit;
+
+    return build_mem_map(map, max, kernel_start, kernel_end, total);
 }
 
 [[noreturn]] void zxfl01_entry(const uint32_t schid) {
@@ -360,17 +373,12 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     s_proto.stfle_count = stfle_detect(s_proto.stfle_fac, STFLE_MAX_DWORDS);
     s_proto.flags |= ZXFL_FLAG_STFLE;
 
-    /* Minimum facility check — the kernel requires these to function.
-     * If any are missing, panic early with a clear message rather than
-     * crashing later with an operation exception. */
     if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_ZARCH))
         panic("zxfl01: z/Architecture (facility 2) not available");
     if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_EIMM))
         panic("zxfl01: extended-immediate facility (21) required");
     if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_GEN_INST))
         panic("zxfl01: general-instructions-extension (25) required");
-    /* EDAT-1 (bit 8) is strongly recommended but not fatal — the MMU
-     * falls back to 4K page tables without it. */
     if (!stfle_has_facility(s_proto.stfle_fac, STFLE_BIT_EDAT1))
         print("zxfl01: WARNING: EDAT-1 (facility 8) not available, using 4K pages\n");
 

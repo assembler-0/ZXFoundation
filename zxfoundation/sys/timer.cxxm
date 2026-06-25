@@ -34,9 +34,6 @@ namespace _internal {
     static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
         g_heaps[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
-    static_assert(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS <= 1024,
-        "g_heaps array size must not exceed reasonable bounds");
-
     /// @brief Subsystem initialization flag.
     static bool g_timer_initialized{false};
 

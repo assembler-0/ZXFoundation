@@ -12,6 +12,7 @@
     psw.cxxm
     sigp_types.cxxm
     sigp.cxxm
+    cpumask.cxxm
     smp.cxxm
     smp_types.cxxm
     ipi.cxxm

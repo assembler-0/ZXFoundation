@@ -181,6 +181,7 @@ namespace _internal {
     /// @warning Failure is fatal because later PMM/MMU table initialization writes through the HHDM.
     auto initialize_hhdm_contract(const arch::s390x::init::zxfl::protocol& boot) -> void {
         if (boot.hhdm_phys_coverage_end == 0U
+            || (boot.hhdm_phys_coverage_end & (4096ULL - 1ULL)) != 0U
             || boot.hhdm_phys_coverage_end < boot.pgtbl_pool_end
             || boot.hhdm_phys_coverage_end < boot.kernel_phys_end) [[unlikely]] {
             syschk_fatal(
@@ -188,8 +189,22 @@ namespace _internal {
                 "sys: invalid ZXFL HHDM coverage contract");
         }
 
+        const auto* map = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
+            boot.mem_map_addr);
+        u64 highest_ram_end = 0U;
+        for (u32 i = 0U; i < boot.mem_map_count; ++i) {
+            const u64 region_end = map[i].base + map[i].length;
+            if (region_end > highest_ram_end) highest_ram_end = region_end;
+        }
+        if (highest_ram_end > boot.hhdm_phys_coverage_end) [[unlikely]] {
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: installed RAM exceeds ZXFL HHDM direct-map coverage");
+        }
+
         zxfoundation::memory::hhdm::set_phys_coverage_end(boot.hhdm_phys_coverage_end);
-        pinfo("sys: HHDM physical coverage verified end={:016x}", boot.hhdm_phys_coverage_end);
+        pinfo("sys: HHDM physical coverage verified end={:016x} ram_end={:016x}",
+            boot.hhdm_phys_coverage_end, highest_ram_end);
     }
 
     /// @brief Initialize optional NUMA topology without making topology evidence a boot blocker.

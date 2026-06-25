@@ -96,24 +96,33 @@ static inline uint8_t hw_to_zxfl(uint8_t hw) {
     }
 }
 
+// Per-CPU-address topology metadata harvested from STSI 15.1.2.
+typedef struct {
+    uint8_t known;     // 1 if STSI 15.1.2 described this CPU address.
+    uint8_t type;      // ZXFL_CPU_TYPE_* constant.
+    uint8_t drawer_id;
+    uint8_t book_id;
+    uint8_t socket_id;
+    uint8_t core_id;
+    uint8_t smt_id;
+} cpu_topo_meta_t;
+
 static void detect_smp(zxfl_boot_protocol_t *proto) {
     uint16_t bsp = arch_cpu_addr();
-    
+
     proto->bsp_cpu_addr = bsp;
     proto->cpu_count = 0;
 
-    static uint8_t stsi_buf[4096] __attribute__((aligned(4096)));
-    int has_topology = 0;
+    // Topology metadata indexed by hardware CPU address.
+    static cpu_topo_meta_t meta[ZXFL_CPU_MAP_MAX];
+    for (uint32_t i = 0; i < ZXFL_CPU_MAP_MAX; i++)
+        meta[i].known = 0;
 
-    // Query topology via STSI(15, 1, 2):
-    //   fc=15 (current configuration topology)
-    //   sel1=1 (standard query — returns all types)
-    //   sel2=2 (max nesting level = 2, matching Hercules)
+    static uint8_t stsi_buf[4096] __attribute__((aligned(4096)));
+
     if (stsi(stsi_buf, 15, 1, 2) == 0) {
         struct sysinfo_15_1_x *info = (struct sysinfo_15_1_x *)stsi_buf;
         if (info->length >= sizeof(struct sysinfo_15_1_x)) {
-            has_topology = 1;
-
             // Container IDs are updated as the parser descends the TLE tree.
             // All IDs are normalized from PoP 1-based to 0-based by subtracting 1.
             uint8_t drawer_id = 0;
@@ -124,7 +133,7 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
             uint8_t *ptr = (uint8_t *)info->tle;
             uint8_t *end = (uint8_t *)info + info->length;
 
-            while (ptr + 8 <= end && proto->cpu_count < ZXFL_CPU_MAP_MAX) {
+            while (ptr + 8 <= end) {
                 union topology_entry *tle = (union topology_entry *)ptr;
 
                 if (tle->nl == 0) {
@@ -137,28 +146,19 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
                     uint16_t origin  = tle->cpu.origin;
                     uint8_t  hw_type = tle->cpu.cputype;
 
-                    for (int k = 0; k < 64 && proto->cpu_count < ZXFL_CPU_MAP_MAX; k++) {
+                    for (int k = 0; k < 64; k++) {
                         if (!((mask >> (63 - k)) & 1ULL)) continue;
 
-                        uint16_t addr = origin + (uint16_t)k;
+                        uint32_t addr = (uint32_t)origin + (uint32_t)k;
+                        if (addr >= ZXFL_CPU_MAP_MAX) continue;
 
-                        // Verify the CPU responds to SIGP Sense (CC=3 means not operational).
-                        if (sigp_sense(addr) == 3) continue;
-
-                        zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
-                        ci->cpu_addr  = addr;
-                        ci->type      = hw_to_zxfl(hw_type);
-                        ci->state     = (addr == bsp) ? ZXFL_CPU_ONLINE : ZXFL_CPU_STOPPED;
-                        ci->drawer_id = drawer_id;
-                        ci->book_id   = book_id;
-                        ci->socket_id = socket_id;
-                        ci->core_id   = core_leaf_id;
-                        ci->smt_id    = (uint8_t)k;
-                        ci->topology_evidence = ZXFL_CPU_EVIDENCE_STSI | ZXFL_CPU_EVIDENCE_SIGP;
-                        ci->capacity  = 100U;
-                        ci->numa_node = drawer_id;
-
-                        proto->cpu_count++;
+                        meta[addr].known     = 1;
+                        meta[addr].type      = hw_to_zxfl(hw_type);
+                        meta[addr].drawer_id = drawer_id;
+                        meta[addr].book_id   = book_id;
+                        meta[addr].socket_id = socket_id;
+                        meta[addr].core_id   = core_leaf_id;
+                        meta[addr].smt_id    = (uint8_t)k;
                     }
                     core_leaf_id++;
                     ptr += 16;
@@ -185,45 +185,42 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
         }
     }
 
-    if (!has_topology || proto->cpu_count == 0) {
-        proto->cpu_count = 0;
-        for (uint16_t addr = 0; addr < ZXFL_CPU_MAP_MAX; addr++) {
-            if (addr == bsp) {
-                zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
-                ci->cpu_addr  = addr;
-                ci->type      = ZXFL_CPU_TYPE_CP;
-                ci->state     = ZXFL_CPU_ONLINE;
-                ci->drawer_id = 0;
-                ci->book_id   = 0;
-                ci->socket_id = 0;
-                ci->core_id   = 0;
-                ci->smt_id    = 0;
-                ci->topology_evidence = ZXFL_CPU_EVIDENCE_SIGP | ZXFL_CPU_EVIDENCE_FALLBACK;
-                ci->capacity  = 100U;
-                ci->numa_node = 0;
-                proto->cpu_count++;
-                continue;
-            }
+    for (uint32_t addr = 0; addr < ZXFL_CPU_MAP_MAX; addr++) {
+        int is_bsp = (addr == bsp);
 
-            if (sigp_sense(addr) == 3) continue;
+        // CC=3 means the address is not operational (standby/reserved/absent).
+        if (!is_bsp && sigp_sense((uint16_t)addr) == 3)
+            continue;
 
-            // Assign 2 CPUs per synthetic drawer; drawer_id is the NUMA domain.
+        zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
+        ci->cpu_addr = (uint16_t)addr;
+        ci->state    = is_bsp ? ZXFL_CPU_ONLINE : ZXFL_CPU_STOPPED;
+        ci->capacity = 100U;
+
+        if (meta[addr].known) {
+            ci->type              = meta[addr].type;
+            ci->drawer_id         = meta[addr].drawer_id;
+            ci->book_id           = meta[addr].book_id;
+            ci->socket_id         = meta[addr].socket_id;
+            ci->core_id           = meta[addr].core_id;
+            ci->smt_id            = meta[addr].smt_id;
+            ci->numa_node         = meta[addr].drawer_id;
+            ci->topology_evidence = ZXFL_CPU_EVIDENCE_STSI | ZXFL_CPU_EVIDENCE_SIGP;
+        } else {
+            // Deterministic degraded fallback: 2 CPUs per synthetic drawer;
+            // drawer_id is the NUMA affinity domain.
             uint8_t drawer = (uint8_t)((proto->cpu_count / 2U) % 4U);
-
-            zxfl_cpu_info_t *ci = &proto->cpu_map[proto->cpu_count];
-            ci->cpu_addr  = addr;
-            ci->type      = ZXFL_CPU_TYPE_CP;
-            ci->state     = ZXFL_CPU_STOPPED;
-            ci->drawer_id = drawer;
-            ci->book_id   = 0;
-            ci->socket_id = 0;
-            ci->core_id   = (uint8_t)(proto->cpu_count & 0xFFU);
-            ci->smt_id    = 0;
+            ci->type              = ZXFL_CPU_TYPE_CP;
+            ci->drawer_id         = drawer;
+            ci->book_id           = 0;
+            ci->socket_id         = 0;
+            ci->core_id           = (uint8_t)(proto->cpu_count & 0xFFU);
+            ci->smt_id            = 0;
+            ci->numa_node         = drawer;
             ci->topology_evidence = ZXFL_CPU_EVIDENCE_SIGP | ZXFL_CPU_EVIDENCE_FALLBACK;
-            ci->capacity  = 100U;
-            ci->numa_node = drawer;  // drawer = NUMA affinity domain (see STSI path above)
-            proto->cpu_count++;
         }
+
+        proto->cpu_count++;
     }
 
     if (proto->cpu_count > 0) {

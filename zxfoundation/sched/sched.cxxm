@@ -30,6 +30,7 @@ import zxfoundation.sys.timer_types;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.time;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
@@ -88,13 +89,15 @@ namespace _internal {
         namespace balance = zxfoundation::sched::balance;
         namespace topology = zxfoundation::sched::topology;
 
+        namespace cpumask = arch::s390x::cpu::cpumask;
+
         run_queue* busiest = nullptr;
         u32 best_score = 0U;
 
         topology::refresh_cpu_record(
             local_rq.cpu_id,
             local_rq.nr_running,
-            local_rq.online.load(arch::s390x::lib::atomic::memory_order::acquire) != 0U);
+            cpumask::cpu_online(local_rq.cpu_id));
 
         constexpr topology::cpu_relation tiers[] = {
             topology::cpu_relation::same_smt_core,
@@ -104,24 +107,26 @@ namespace _internal {
         };
 
         for (const auto tier : tiers) {
-            for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
-                auto& rq = g_rqs[i];
-                if (&rq == &local_rq) continue;
+            topology::for_each_steal_candidate(
+                local_rq.cpu_id, tier,
+                [&](u16 i) noexcept -> void {
+                    auto& rq = g_rqs[i];
+                    if (&rq == &local_rq) return;
 
-                const bool online = rq.online.load(
-                    arch::s390x::lib::atomic::memory_order::acquire) != 0U;
-                topology::refresh_cpu_record(rq.cpu_id, rq.nr_running, online);
+                    const bool online = cpumask::cpu_online(rq.cpu_id);
+                    topology::refresh_cpu_record(rq.cpu_id, rq.nr_running, online);
+                    if (!online) return;
 
-                const u32 score = balance::steal_source_score(
-                    local_rq.cpu_id,
-                    rq.cpu_id,
-                    rq.nr_running,
-                    tier);
-                if (score > best_score) {
-                    best_score = score;
-                    busiest = &rq;
-                }
-            }
+                    const u32 score = balance::steal_source_score(
+                        local_rq.cpu_id,
+                        rq.cpu_id,
+                        rq.nr_running,
+                        tier);
+                    if (score > best_score) {
+                        best_score = score;
+                        busiest = &rq;
+                    }
+                });
 
             if (busiest) break;
         }
@@ -518,6 +523,10 @@ namespace zxfoundation::sched {
         }
 
         rq.online.store(1, arch::s390x::lib::atomic::memory_order::release);
+
+        arch::s390x::cpu::cpumask::cpu_set_online(0U);
+        topology::refresh_cpu_record(0U, 0U, true);
+        topology::topology_online_cpu(0U);
         g_sched_initialized = true;
 
         pinfo("sched: idle/0 id={}, scheduler ready", idle_dom->ko.id);
@@ -569,6 +578,9 @@ namespace zxfoundation::sched {
             rq.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(ap_flags);
         }
+        arch::s390x::cpu::cpumask::cpu_set_online(cpu_id);
+        topology::refresh_cpu_record(cpu_id, 0U, true);
+        topology::topology_online_cpu(cpu_id);
     }
 
     [[noreturn]] auto sched_idle_enter() noexcept -> void {

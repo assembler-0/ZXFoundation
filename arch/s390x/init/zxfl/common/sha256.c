@@ -62,8 +62,6 @@ static void sha256_block(zxfl_sha256_ctx_t *ctx, const uint8_t block[64]) {
 }
 
 void zxfl_sha256_init(zxfl_sha256_ctx_t *ctx) {
-    // Initial hash values: first 32 bits of fractional parts of square roots
-    // of the first 8 primes (FIPS 180-4 §5.3.3).
     ctx->state[0] = 0x6a09e667U;
     ctx->state[1] = 0xbb67ae85U;
     ctx->state[2] = 0x3c6ef372U;
@@ -127,4 +125,126 @@ void zxfl_sha256_final(zxfl_sha256_ctx_t *ctx, uint8_t digest[ZXFL_SHA256_DIGEST
         digest[i * 4U + 2U] = (uint8_t)(ctx->state[i] >>  8U);
         digest[i * 4U + 3U] = (uint8_t)(ctx->state[i]);
     }
+}
+
+/// @brief Software one-shot SHA-256 (always available).
+static void zxfl_sha256_sw(const void *data, size_t len,
+                           uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]) {
+    zxfl_sha256_ctx_t ctx;
+    zxfl_sha256_init(&ctx);
+    zxfl_sha256_update(&ctx, data, len);
+    zxfl_sha256_final(&ctx, digest);
+}
+
+#if defined(__s390x__) || defined(__zarch__)
+
+#include <arch/s390x/init/zxfl/stfle.h>
+
+/// KIMD function code for SHA-256 (PoP SA22-7832, Message-Security-Assist).
+#define ZXFL_CPACF_KIMD_SHA_256   2UL
+
+/// @brief Run KIMD (COMPUTE INTERMEDIATE MESSAGE DIGEST) for SHA-256.
+/// @param param    32-byte chaining value (also receives the result).
+/// @param src      Message segment, length a multiple of 64 bytes.
+/// @param src_len  Segment length in bytes (multiple of 64).
+/// @warning The Message-Security-Assist facility MUST be installed before this
+///          is executed, otherwise an operation exception results.
+static inline void zxfl_cpacf_kimd_sha256(void *param, const uint8_t *src,
+                                          unsigned long src_len) {
+    register unsigned long a __asm__("2") = (unsigned long)src;  // even reg
+    register unsigned long l __asm__("3") = src_len;             // odd reg
+    __asm__ volatile(
+        "   lgr   0,%[fc]\n"                    // GR0 = function code
+        "   lgr   1,%[pb]\n"                    // GR1 = parameter-block address
+        "0: .insn rre,0xb93e0000,0,%[a]\n"      // KIMD: r1 ignored, r2 = pair
+        "   brc   1,0b\n"                        // retry on partial completion
+        : [a] "+d"(a), [l] "+d"(l)
+        : [fc] "d"(ZXFL_CPACF_KIMD_SHA_256), [pb] "d"((unsigned long)param)
+        : "cc", "memory", "0", "1");
+}
+
+/// @brief Hardware one-shot SHA-256 via CPACF KIMD.
+static void zxfl_sha256_hw(const void *data, size_t len,
+                           uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]) {
+    uint32_t state[8] __attribute__((aligned(8))) = {
+        0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
+        0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U,
+    };
+    const uint8_t *p = (const uint8_t *)data;
+
+    const size_t full = len & ~(size_t)63;   // whole 64-byte blocks
+    if (full)
+        zxfl_cpacf_kimd_sha256(state, p, (unsigned long)full);
+
+    uint8_t tail[128] __attribute__((aligned(8)));
+    const size_t rem = len - full;
+    for (size_t i = 0; i < rem; i++)
+        tail[i] = p[full + i];
+    tail[rem] = 0x80U;
+
+    // One padding block unless the 0x80 byte leaves no room for the 8-byte
+    // length field (i.e. rem >= 56), in which case a second block is needed.
+    const size_t block_bytes = (rem <= 55U) ? 64U : 128U;
+    for (size_t i = rem + 1U; i < block_bytes - 8U; i++)
+        tail[i] = 0U;
+
+    const uint64_t bit_len = (uint64_t)len * 8U;
+    tail[block_bytes - 8U] = (uint8_t)(bit_len >> 56U);
+    tail[block_bytes - 7U] = (uint8_t)(bit_len >> 48U);
+    tail[block_bytes - 6U] = (uint8_t)(bit_len >> 40U);
+    tail[block_bytes - 5U] = (uint8_t)(bit_len >> 32U);
+    tail[block_bytes - 4U] = (uint8_t)(bit_len >> 24U);
+    tail[block_bytes - 3U] = (uint8_t)(bit_len >> 16U);
+    tail[block_bytes - 2U] = (uint8_t)(bit_len >>  8U);
+    tail[block_bytes - 1U] = (uint8_t)(bit_len);
+
+    zxfl_cpacf_kimd_sha256(state, tail, (unsigned long)block_bytes);
+
+    for (uint32_t i = 0; i < 8U; i++) {
+        digest[i * 4U + 0U] = (uint8_t)(state[i] >> 24U);
+        digest[i * 4U + 1U] = (uint8_t)(state[i] >> 16U);
+        digest[i * 4U + 2U] = (uint8_t)(state[i] >>  8U);
+        digest[i * 4U + 3U] = (uint8_t)(state[i]);
+    }
+}
+
+/// Tri-state cache: 0 = undecided, 1 = hardware verified, -1 = software only.
+static int g_sha256_hw = 0;
+
+/// @brief Decide whether the CPACF SHA-256 path is safe to use.
+static bool zxfl_sha256_hw_selftest(void) {
+    uint64_t fac[1] = { 0 };
+    if (stfle_detect(fac, 1U) == 0)
+        return false;
+    if (!stfle_has_facility(fac, STFLE_BIT_MSA))
+        return false;
+
+    static const uint8_t kat_in[3] = { 'a', 'b', 'c' };
+    static const uint8_t kat_expect[ZXFL_SHA256_DIGEST_SIZE] = {
+        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+        0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+        0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+        0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+    };
+    uint8_t out[ZXFL_SHA256_DIGEST_SIZE];
+    zxfl_sha256_hw(kat_in, sizeof(kat_in), out);
+    for (uint32_t i = 0; i < ZXFL_SHA256_DIGEST_SIZE; i++)
+        if (out[i] != kat_expect[i])
+            return false;
+    return true;
+}
+
+#endif /* __s390x__ */
+
+void zxfl_sha256(const void *data, size_t len,
+                 uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]) {
+#if defined(__s390x__) || defined(__zarch__)
+    if (g_sha256_hw == 0)
+        g_sha256_hw = zxfl_sha256_hw_selftest() ? 1 : -1;
+    if (g_sha256_hw == 1) {
+        zxfl_sha256_hw(data, len, digest);
+        return;
+    }
+#endif
+    zxfl_sha256_sw(data, len, digest);
 }

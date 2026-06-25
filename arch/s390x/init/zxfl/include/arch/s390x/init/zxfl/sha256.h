@@ -28,15 +28,17 @@ void zxfl_sha256_update(zxfl_sha256_ctx_t* ctx, const void* data, size_t len);
 void zxfl_sha256_final(zxfl_sha256_ctx_t* ctx, uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]);
 
 /// @brief One-shot SHA-256: hash data and write digest.
+///
+///        On z/Architecture this transparently uses the CP-Assist for
+///        Cryptographic Functions (KIMD, Message-Security-Assist) when the
+///        facility is installed AND passes a boot-time known-answer self-test;
+///        otherwise it falls back to the portable software implementation.
+///        The streaming ctx API above is always software.
 /// @param data    Input bytes
 /// @param len     Number of bytes
 /// @param digest  Output buffer (must be ZXFL_SHA256_DIGEST_SIZE bytes)
-static inline void zxfl_sha256(const void* data, size_t len,
-                               uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]) {
-    zxfl_sha256_ctx_t ctx;
-    zxfl_sha256_init(&ctx);
-    zxfl_sha256_update(&ctx, data, len);
-    zxfl_sha256_final(&ctx, digest);
-}
+/// @note Safe to call before DAT is enabled; performs no allocation.
+void zxfl_sha256(const void* data, size_t len,
+                 uint8_t digest[ZXFL_SHA256_DIGEST_SIZE]);
 
 #endif /* ZXFOUNDATION_ZXFL_SHA256_H */

@@ -78,6 +78,18 @@ namespace arch::s390x::mmu::_internal {
         return {};
     }
 
+    /// @brief Fail-closed check that a DAT table physical page is backed by the
+    ///        HHDM before it is read or written through hhdm::phys_to_virt().
+    /// @param[in] phys  Physical base of the table (CRST = 16 KiB, page = 2 KiB).
+    /// @param[in] lvl   Level whose table size is being validated.
+    [[nodiscard]] auto table_is_mapped(u64 phys, dat_level lvl) noexcept -> bool {
+        const u64 table_bytes = (lvl == dat_level::page)
+            ? static_cast<u64>(PAGE_ENTRIES) * sizeof(u64)
+            : static_cast<u64>(CRST_ENTRIES) * sizeof(u64);
+        if ((phys & (static_cast<u64>(pmm::PAGE_SIZE) - 1U)) != 0U) return false;
+        return hhdm::phys_range_is_mapped(phys, table_bytes);
+    }
+
     /// @brief Record of one intermediate table allocated during a walk.
     struct alloc_record {
         u64 phys{0};
@@ -135,6 +147,13 @@ namespace arch::s390x::mmu::_internal {
             states[depth].index      = idx;
             states[depth].alloc_phys = 0;
 
+            // Fail closed if this table's physical page is not HHDM-backed.
+            if (!table_is_mapped(current, lvl)) [[unlikely]] {
+                allocs.rollback();
+                return ::lib::unexpected(::lib::kernel_error::from_memory(
+                    ::lib::memory_error::code::hhdm_init_failed));
+            }
+
             auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
             const u64 entry = table[idx];
             const dat_level child_lvl = next_level(lvl);
@@ -179,6 +198,11 @@ namespace arch::s390x::mmu::_internal {
         }
 
         // Check PTE slot.
+        if (!table_is_mapped(current, dat_level::page)) [[unlikely]] {
+            allocs.rollback();
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::hhdm_init_failed));
+        }
         auto* pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
         const u32 pte_idx = virt_index_rt(dat_level::page, virt);
         if (!pte_is_invalid(pte_table[pte_idx])) [[unlikely]] {

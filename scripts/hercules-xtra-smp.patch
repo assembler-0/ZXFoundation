@@ -1,0 +1,50 @@
+diff --git a/configure.ac b/configure.ac
+index 14a5405..64e729d 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2480,12 +2480,7 @@ AC_ARG_ENABLE( multi-cpu,
+                 AC_MSG_RESULT( [ERROR: 'multi-cpu' value must be > 0] )
+                 hc_error=yes
+             else
+-              if test "${enableval}" -gt "$hc_cv_max_cpu_engines"; then
+-                AC_MSG_RESULT( [ERROR: 'multi-cpu' value must be <= ${hc_cv_max_cpu_engines}] )
+-                hc_error=yes
+-              else
+-                hc_cv_opt_num_cpu_engines=${enableval}
+-              fi
++                hc_cv_opt_num_cpu_engines=${enableval}
+             fi
+             ;;
+         esac
+diff --git a/hscemode.c b/hscemode.c
+index b64a421..a60cf73 100644
+--- a/hscemode.c
++++ b/hscemode.c
+@@ -2212,10 +2212,12 @@ int ipending_cmd(int argc, char *argv[], char *cmdline)
+     }
+ 
+     // "config mask "F_CPU_BITMAP" started mask "F_CPU_BITMAP" waiting mask "F_CPU_BITMAP
+-    WRMSG( HHC00870, "I", sysblk.config_mask, sysblk.started_mask, sysblk.waiting_mask );
++    WRMSG( HHC00870, "I", (U64) sysblk.config_mask, (U64) sysblk.started_mask, (U64) sysblk.waiting_mask );
+ 
+     // "syncbc mask "F_CPU_BITMAP" %s"
+-    WRMSG( HHC00871, "I", sysblk.sync_mask, sysblk.syncing ? "sync in progress" : "" );
++    WRMSG( HHC00871, "I", (U64) sysblk.sync_mask, sysblk.syncing ? "sync in progress" : "" );
+ 
+     WRMSG( HHC00872, "I", test_lock(&sysblk.sigplock) ? "" : "not ");
+     WRMSG( HHC00873, "I", test_lock(&sysblk.todlock) ? "" : "not ");
+diff --git a/hstructs.h b/hstructs.h
+index 15ab0ec..f7739f2 100644
+--- a/hstructs.h
++++ b/hstructs.h
+@@ -106,7 +106,9 @@
+   #define SUPPRESS_128BIT_PRINTF_FORMAT_WARNING
+   #define F_CPU_BITMAP        "%16.16"PRIX64
+ #else
+-  #error MAX_CPU_ENGS cannot exceed 128
++  typedef unsigned _BitInt( MAX_CPU_ENGS ) CPU_BITMAP;
++  #define SUPPRESS_128BIT_PRINTF_FORMAT_WARNING
++  #define F_CPU_BITMAP        "%16.16"PRIX64
+ #endif
+ 
+ /*-------------------------------------------------------------------*/

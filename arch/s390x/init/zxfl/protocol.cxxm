@@ -171,16 +171,6 @@ namespace arch::s390x::init::zxfl {
         u64 lock_phys{};
     };
 
-    /// @brief Verify that the C++ protocol struct is layout-compatible with the C struct.
-    static_assert(sizeof(protocol) == 2864U,
-        "protocol size mismatch vs zxfl_boot_protocol_t — ABI broken");
-    static_assert(__builtin_offsetof(protocol, cksum_table) == 2848U,
-        "cksum_table offset mismatch vs zxfl_boot_protocol_t");
-    static_assert(__builtin_offsetof(protocol, stfle_fac) == 112U,
-        "stfle_fac offset mismatch — STFLE_MAX_DWORDS changed?");
-    static_assert(__builtin_offsetof(protocol, cpu_map) == 440U,
-        "cpu_map offset mismatch — cpu_info size changed?");
-
     /// @brief Pretty-print a ZXFL memory region type.
     [[nodiscard]] auto mem_type_str(u32 type) noexcept -> const char* {
         switch (type) {

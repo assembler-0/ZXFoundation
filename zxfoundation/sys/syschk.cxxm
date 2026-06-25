@@ -11,6 +11,7 @@ import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.psw_types;
 import arch.s390x.cpu.ipi;
+import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
@@ -53,11 +54,6 @@ export {
 namespace zxfoundation::sys::syschk {
 
     /// @brief Initialize the system-check subsystem.
-    ///
-    /// Must be called once during @c zxfoundation_global_initialize, after the
-    /// boot protocol has been copied into @c zxfoundation::init::boot_protocol
-    /// and before any subsystem that may call @ref system_check is brought up.
-    ///
     /// @param[in] proto  The ZXFL boot protocol.
     ///
     /// @note  @ref system_check is safe to call even before @ref syschk_init
@@ -126,15 +122,12 @@ namespace zxfoundation::sys::syschk {
 
         stacktrace::dump_stack();
 
-        if (_internal::g_cpu_map) {
-            const u16 self_hw_addr = arch::s390x::cpu::processor::cpu_addr();
-            for (u32 i = 0; i < _internal::g_cpu_count; ++i) {
-                const auto& ci = _internal::g_cpu_map[i];
-                if (ci.cpu_addr == self_hw_addr) [[unlikely]]
-                    continue;
-                arch::s390x::cpu::ipi::send_halt_ipi(static_cast<u16>(i));
-            }
-        }
+        const u16 self_cpu_id = arch::s390x::cpu::percpu::cpu_id();
+        arch::s390x::cpu::cpumask::for_each_online_cpu(
+            [self_cpu_id](u16 cpu) noexcept -> void {
+                if (cpu == self_cpu_id) [[unlikely]] return;
+                arch::s390x::cpu::ipi::send_halt_ipi(cpu);
+            });
 
         arch::s390x::cpu::psw::disabled_wait();
     }

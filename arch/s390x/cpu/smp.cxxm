@@ -10,6 +10,7 @@ import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.sigp;
 import arch.s390x.cpu.sigp_types;
+import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.lib.atomic;
@@ -20,6 +21,7 @@ import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sched.sched;
+import zxfoundation.sched.sched_topology;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.sys.printk;
@@ -181,6 +183,18 @@ auto ap_dat_on() -> void;
     arch::s390x::cpu::processor::ctl_set_bit<0>(14);  // CR0.14: emergency-signal submask
     arch::s390x::cpu::processor::ctl_set_bit<0>(15);  // CR0.15: malfunction-alert submask
     arch::s390x::cpu::processor::ctl_set_bit<0>(52);  // CR0.52: clock-comparator submask
+
+    // CR6: I/O-interruption subclass mask (PoP §6.2.1, bits 0-7 = ISC 0-7).
+    // Every CPU that runs with I/O interruptions enabled must unmask the ISCs
+    // it is expected to service; otherwise a device completion routed to this
+    // AP would be held pending indefinitely.  ctl_store == STCTG (read),
+    // ctl_load == LCTLG (write).
+    {
+        u64 cr6 = 0;
+        arch::s390x::cpu::processor::ctl_store<6, 6>(cr6);   // read current CR6
+        cr6 |= 0x00000000FF000000ULL;                       // unmask ISC 0-7
+        arch::s390x::cpu::processor::ctl_load<6, 6>(cr6);    // write back to CR6
+    }
     (void)g_ap_online.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
 
     while (g_sched_ready.load(arch::s390x::lib::atomic::memory_order::acquire) == 0)
@@ -205,8 +219,11 @@ static auto handle_ipi(
 ) noexcept -> void {
     auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
     const u64 bits = pcp.ec_bits.exchange(0, arch::s390x::lib::atomic::memory_order::seq_cst);
-    if (bits & arch::s390x::cpu::smp::EC_HALT_BIT)
+    if (bits & arch::s390x::cpu::smp::EC_HALT_BIT) {
+        arch::s390x::cpu::cpumask::cpu_clear_online(pcp.cpu_id);
+        zxfoundation::sched::topology::topology_offline_cpu(pcp.cpu_id);
         arch::s390x::cpu::psw::disabled_wait();
+    }
 }
 
 export {
@@ -241,7 +258,7 @@ namespace arch::s390x::cpu::smp {
             return ::lib::unexpected(::lib::kernel_error::from_arch(::lib::arch_error::invalid_cpu_id));
         }
 
-        // Set BSP CPU topology evidence from the boot protocol before any early return.
+        cpumask::cpu_set_possible(0);
         for (u32 i = 0; i < proto.cpu_count; ++i) {
             if (proto.cpu_map[i].cpu_addr == proto.bsp_cpu_addr) {
                 auto& bsp_pcp = lowcore::this_cpu_percpu();
@@ -261,6 +278,8 @@ namespace arch::s390x::cpu::smp {
         u32 started = 0;
         u16 next_cpu_id = 1;
 
+        g_sched_ready.store(1, arch::s390x::lib::atomic::memory_order::release);
+
         for (u32 i = 0; i < proto.cpu_count; ++i) {
             const auto& ci = proto.cpu_map[i];
             if (ci.cpu_addr == proto.bsp_cpu_addr) continue;
@@ -276,6 +295,10 @@ namespace arch::s390x::cpu::smp {
                 .cpu_addr = ci.cpu_addr,
             };
 
+            // Record this AP as physically present.  Onlineness is published
+            // separately, by the AP itself once sched_init_ap() completes.
+            cpumask::cpu_set_possible(new_cpu_id);
+
             transaction txn;
             auto lc_f    = txn.alloc(1, zone::dma31, purpose::lowcore,    page_init::zeroed);
             if (!lc_f) {
@@ -285,7 +308,10 @@ namespace arch::s390x::cpu::smp {
                     record.cpu_id, record.cpu_addr);
                 return ::lib::unexpected(lc_f.error());
             }
-            auto stk_f   = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            // Stacks have no 31-bit constraint (only SIGP SET PREFIX needs a
+            // < 2 GiB parameter), so keep them in zone::normal and reserve the
+            // scarce dma31 zone for the prefix/lowcore page only.
+            auto stk_f   = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
             if (!stk_f) {
                 record.state = ap_boot_state::failed;
                 zxfoundation::sys::printk::pnotice(
@@ -293,7 +319,7 @@ namespace arch::s390x::cpu::smp {
                     record.cpu_id, record.cpu_addr);
                 return ::lib::unexpected(stk_f.error());
             }
-            auto async_f = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            auto async_f = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
             if (!async_f) {
                 record.state = ap_boot_state::failed;
                 zxfoundation::sys::printk::pnotice(
@@ -301,7 +327,7 @@ namespace arch::s390x::cpu::smp {
                     record.cpu_id, record.cpu_addr);
                 return ::lib::unexpected(async_f.error());
             }
-            auto mcck_f  = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            auto mcck_f  = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
             if (!mcck_f) {
                 record.state = ap_boot_state::failed;
                 zxfoundation::sys::printk::pnotice(
@@ -309,7 +335,7 @@ namespace arch::s390x::cpu::smp {
                     record.cpu_id, record.cpu_addr);
                 return ::lib::unexpected(mcck_f.error());
             }
-            auto nodat_f = txn.alloc(2, zone::dma31, purpose::stack,      page_init::zeroed);
+            auto nodat_f = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
             if (!nodat_f) {
                 record.state = ap_boot_state::failed;
                 zxfoundation::sys::printk::pnotice(
@@ -381,15 +407,28 @@ namespace arch::s390x::cpu::smp {
                 return ::lib::unexpected(reject_sigp(record, sigp::SIGP_RESTART, result));
             record.state = ap_boot_state::restarted;
             ++started;
+            // The per-AP online wait is intentionally NOT done here.  Deferring
+            // it to a single batched wait after every AP in the batch has been
+            // RESTARTed pipelines the RESTART -> online latency across all APs
+            // instead of serializing up to AP_ONLINE_TIMEOUT_TOD per CPU.
+        }
 
-            if (!wait_ap_online(started)) {
-                record.state = ap_boot_state::failed;
-                zxfoundation::sys::printk::pnotice(
-                    "smp: cpu {} addr {} did not enter AP startup before timeout",
-                    record.cpu_id, record.cpu_addr);
-                return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::stall));
-            }
-            record.state = ap_boot_state::online;
+        // Phase 3: one bounded wait for the whole batch to enter AP startup.
+        // Each AP increments g_ap_online at the very top of ap_startup, so this
+        // confirms the batch came up without blocking per CPU above.
+        if (started != 0 && !wait_ap_online(started)) {
+            const u32 arrived =
+                g_ap_online.load(arch::s390x::lib::atomic::memory_order::seq_cst);
+            zxfoundation::sys::printk::pnotice(
+                "smp: only {} of {} ap(s) entered startup before timeout",
+                arrived, started);
+            return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::stall));
+        }
+
+        // The batch is up; reflect that in each prepared AP's boot record.
+        for (u16 id = 1; id < next_cpu_id; ++id) {
+            if (g_ap_boot_records[id].state == ap_boot_state::restarted)
+                g_ap_boot_records[id].state = ap_boot_state::online;
         }
 
         if (started != 0) zxfoundation::sys::printk::pinfo("smp: {} ap(s) started", started);

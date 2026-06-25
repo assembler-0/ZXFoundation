@@ -94,6 +94,33 @@ namespace lib {
             return nullopt;
         }
 
+        /// @brief Find the first set bit strictly after a given index.
+        /// @param[in] after Index to search past (the result is always > after).
+        /// @return The index of the next set bit, or nullopt if none follows.
+        /// @note Skips fully-clear 64-bit words, so a forward sweep over the
+        ///       whole bitmap costs O(N/64 + popcount) rather than O(N) per call.
+        [[nodiscard]] auto find_next_set(usize after) const noexcept -> optional<usize> {
+            const usize start = after + 1;
+            if (start >= N) return nullopt;
+            const usize start_word = start / bits_per_word;
+            const usize start_bit  = start % bits_per_word;
+
+            for (usize i = start_word; i < word_count; ++i) {
+                u64 val = m_storage[i].load(memory_order::relaxed);
+                if (i == word_count - 1) val &= last_word_mask();
+                // For the first word, ignore bits at or before `after`.
+                if (i == start_word && start_bit != 0) {
+                    val &= lib::bit_range_mask_msb<u64>(start_bit, bits_per_word - 1);
+                }
+                if (val != 0) {
+                    usize bit = static_cast<usize>(countl_zero(val));
+                    usize res = i * bits_per_word + bit;
+                    if (res < N) return res;
+                }
+            }
+            return nullopt;
+        }
+
         /// @brief Find the first unset bit.
         /// @return The index of the first unset bit, or nullopt if all are set.
         [[nodiscard]] auto find_first_unset() const noexcept -> optional<usize> {
@@ -102,7 +129,7 @@ namespace lib {
                 if (i == word_count - 1) val &= last_word_mask();
 
                 if (val != 0) {
-                    usize bit = static_cast<usize>(countl_zero(val));
+                    auto bit = static_cast<usize>(countl_zero(val));
                     usize res = i * bits_per_word + bit;
                     if (res < N) return res;
                 }

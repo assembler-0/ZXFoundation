@@ -44,6 +44,23 @@ namespace zxfoundation::exec::_internal {
         return mmu::PAGE_KERNEL_RO;
     }
 
+    /// @brief Fail-closed validation of a physical frame before it is touched
+    ///        through the HHDM or installed into a domain mapping.
+    /// @param[in] phys  Candidate physical base address (page-aligned).
+    /// @return Empty on success; kernel_error if @p phys is outside the recorded
+    ///         HHDM coverage or beyond the PMM-managed range.
+  [[nodiscard]] auto validate_user_frame(u64 phys) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        if ((phys & (PAGE_SIZE - 1U)) != 0U
+            || !hhdm::phys_range_is_mapped(phys, PAGE_SIZE)
+            || pmm::frame_desc_of(phys) == nullptr) [[unlikely]] {
+            return lib::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+        return {};
+    }
+
     /// @brief Allocate a single physical page, zero it, and return its phys address.
     [[nodiscard]] auto alloc_user_page() noexcept
         -> lib::expected<u64, lib::kernel_error>
@@ -55,6 +72,10 @@ namespace zxfoundation::exec::_internal {
             pmm::page_init::zeroed);
         if (!result) [[unlikely]]
             return lib::unexpected(result.error());
+
+        // Fail closed before the caller dereferences hhdm::phys_to_virt(phys).
+        if (auto v = validate_user_frame(result->phys_base); !v) [[unlikely]]
+            return lib::unexpected(v.error());
         return result->phys_base;
     }
 

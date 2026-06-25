@@ -6,6 +6,7 @@
     charconv.cxxm
     compare.cxxm
     concepts.cxxm
+    cpumask.cxxm
     error.cxxm
     idalloc.cxxm
     expected.cxxm

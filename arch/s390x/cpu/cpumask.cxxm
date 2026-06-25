@@ -1,0 +1,95 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/cpumask.cxxm
+/// @brief Canonical possible / online CPU registry for the s390x platform.
+
+export module arch.s390x.cpu.cpumask;
+import zxfoundation.base.types;
+import lib.cpumask;
+import arch.s390x.lib.atomic;
+
+namespace arch::s390x::cpu::cpumask::_internal {
+
+    /// @brief CPUs that physically exist in this configuration (set at boot,
+    ///        stable thereafter).  Populated from the loader cpu_map.
+    /// @note Module linkage (not static): the exported for_each_*_cpu templates
+    ///       are instantiated in importing modules and must not reference a
+    ///       TU-local entity.
+    ::lib::cpumask g_possible_mask{};
+
+    /// @brief CPUs that are fully initialized and may be targeted by any
+    ///        cross-CPU operation.  A CPU's online bit is the single source of
+    ///        truth for "is this slot safe to touch."
+    ::lib::cpumask g_online_mask{};
+
+} // namespace arch::s390x::cpu::cpumask::_internal
+
+export {
+
+namespace arch::s390x::cpu::cpumask {
+
+    using memory_order = arch::s390x::lib::atomic::memory_order;
+
+    /// @brief Mark a CPU as possible (physically present).
+    /// @param[in] id CPU identifier from the boot cpu_map.
+    /// @note Called only during single-threaded boot setup.
+    auto cpu_set_possible(u16 id) noexcept -> void {
+        _internal::g_possible_mask.set(id, memory_order::relaxed);
+    }
+
+    /// @brief Test whether a CPU is possible (physically present).
+    /// @param[in] id CPU identifier.
+    [[nodiscard]] auto cpu_possible(u16 id) noexcept -> bool {
+        return _internal::g_possible_mask.test(id, memory_order::relaxed);
+    }
+
+    /// @brief Publish a CPU as online (fully initialized, safe to target).
+    /// @param[in] id CPU identifier.
+    /// @note Uses release ordering so that all per-CPU initialization performed
+    ///       before this call is visible to any observer that subsequently sees
+    ///       the bit via for_each_online_cpu (acquire).
+    auto cpu_set_online(u16 id) noexcept -> void {
+        _internal::g_online_mask.set(id, memory_order::release);
+    }
+
+    /// @brief Remove a CPU from the online set (halt / teardown).
+    /// @param[in] id CPU identifier.
+    /// @note Release ordering; once cleared the slot must not be revisited.
+    auto cpu_clear_online(u16 id) noexcept -> void {
+        _internal::g_online_mask.clear(id, memory_order::release);
+    }
+
+    /// @brief Test whether a CPU is currently online.
+    /// @param[in] id CPU identifier.
+    [[nodiscard]] auto cpu_online(u16 id) noexcept -> bool {
+        return _internal::g_online_mask.test(id, memory_order::acquire);
+    }
+
+    /// @brief Number of CPUs currently online.
+    [[nodiscard]] auto num_online_cpus() noexcept -> u32 {
+        return static_cast<u32>(_internal::g_online_mask.count());
+    }
+
+    /// @brief Number of CPUs that physically exist.
+    [[nodiscard]] auto num_possible_cpus() noexcept -> u32 {
+        return static_cast<u32>(_internal::g_possible_mask.count());
+    }
+
+    /// @brief Invoke @p fn for every online CPU, in ascending id order.
+    /// @tparam Fn Callable invocable as fn(u16 cpu).
+    /// @param[in] fn Callback receiving each online CPU id.
+    template <typename Fn>
+    auto for_each_online_cpu(Fn&& fn) noexcept -> void {
+        _internal::g_online_mask.for_each(static_cast<Fn&&>(fn), memory_order::acquire);
+    }
+
+    /// @brief Invoke @p fn for every possible CPU, in ascending id order.
+    /// @tparam Fn Callable invocable as fn(u16 cpu).
+    /// @param[in] fn Callback receiving each possible CPU id.
+    template <typename Fn>
+    auto for_each_possible_cpu(Fn&& fn) noexcept -> void {
+        _internal::g_possible_mask.for_each(static_cast<Fn&&>(fn), memory_order::relaxed);
+    }
+
+} // namespace arch::s390x::cpu::cpumask
+
+} // end export

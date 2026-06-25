@@ -38,6 +38,8 @@ import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import arch.s390x.lib.atomic;
+import arch.s390x.cpu.cpumask;
+import lib.cpumask;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 
@@ -51,7 +53,8 @@ namespace zxfoundation::rcu::_internal {
 
     static atomic_u64 g_gp_seq{0};    ///< GP sequence counter. Even=idle, odd=active.
     static atomic_u32 g_gp_lock{0};   ///< BSP-side GP state lock.
-    static atomic_u64 g_qs_bits[2]{{0}, {0}}; ///< Per-CPU QS bitmask (128 CPUs).
+    /// @brief Per-CPU quiescent-state set, sized to CONFIG_ZX_MAX_CPUS.
+    static ::lib::cpumask g_qs_mask{};
     static bool       g_initialized{false};
 
     auto gp_lock_acquire() noexcept -> void {
@@ -69,22 +72,17 @@ namespace zxfoundation::rcu::_internal {
     }
 
     auto record_qs(u32 cpu_id) noexcept -> void {
-        const u32 word = cpu_id >> 6U;
-        const u32 bit  = cpu_id & 63U;
-        if (word < 2)
-            (void)g_qs_bits[word].fetch_or(1ULL << bit, memory_order::release);
+        g_qs_mask.set(static_cast<usize>(cpu_id), memory_order::release);
     }
 
     auto all_qs_reported() noexcept -> bool {
-        constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
-        for (u32 i = 0; i < max_cpus; ++i) {
-            if (!arch::s390x::cpu::lowcore::get_for_cpu(static_cast<u16>(i))) continue;
-            const u32 word = i >> 6U;
-            const u32 bit  = i & 63U;
-            if (!(g_qs_bits[word].load(memory_order::acquire) & (1ULL << bit)))
-                return false;
-        }
-        return true;
+        bool all = true;
+        arch::s390x::cpu::cpumask::for_each_online_cpu(
+            [&](u16 cpu) noexcept -> void {
+                if (!g_qs_mask.test(static_cast<usize>(cpu), memory_order::acquire))
+                    all = false;
+            });
+        return all;
     }
 
     auto drain_callbacks(
@@ -113,8 +111,7 @@ namespace zxfoundation::rcu {
         using namespace _internal;
         if (g_initialized) return;
         g_gp_seq.store(0U, memory_order::relaxed);
-        g_qs_bits[0].store(0U, memory_order::relaxed);
-        g_qs_bits[1].store(0U, memory_order::relaxed);
+        g_qs_mask.reset();
         g_initialized = true;
     }
 
@@ -193,8 +190,7 @@ namespace zxfoundation::rcu {
         gp_lock_acquire();
         gp_seq_t seq = g_gp_seq.load(memory_order::acquire);
         if (!gp_in_progress(seq)) {
-            g_qs_bits[0].store(0U, memory_order::relaxed);
-            g_qs_bits[1].store(0U, memory_order::relaxed);
+            g_qs_mask.reset();
             g_gp_seq.store(seq + 1U, memory_order::release);
             seq = seq + 1U;
         }
@@ -207,13 +203,13 @@ namespace zxfoundation::rcu {
 
     /// @brief Wait until all enqueued call_rcu callbacks have fired.
     auto rcu_barrier() noexcept -> void {
-        constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
-        for (u32 i = 0; i < max_cpus; ++i) {
-            auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(static_cast<u16>(i));
-            if (!lc) continue;
-            while (lc->percpu.rcu_pending_count > 0U)
-                arch::s390x::cpu::processor::cpu_relax();
-        }
+        arch::s390x::cpu::cpumask::for_each_online_cpu(
+            [](u16 cpu) noexcept -> void {
+                auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(cpu);
+                if (!lc) return;
+                while (lc->percpu.rcu_pending_count > 0U)
+                    arch::s390x::cpu::processor::cpu_relax();
+            });
     }
 
     /// @brief Per-CPU RCU tick: report QS, manage GPs, drain callbacks.
@@ -234,21 +230,18 @@ namespace zxfoundation::rcu {
             if (gp_in_progress(gp)) {
                 if (all_qs_reported()) {
                     g_gp_seq.store(gp + 1U, memory_order::release);
-                    g_qs_bits[0].store(0U, memory_order::relaxed);
-                    g_qs_bits[1].store(0U, memory_order::relaxed);
+                    g_qs_mask.reset();
                 }
             } else {
-                constexpr u32 max_cpus = base::config::CONFIG_ZX_MAX_CPUS;
                 bool need_gp = false;
-                for (u32 i = 0; i < max_cpus && !need_gp; ++i) {
-                    auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(
-                        static_cast<u16>(i));
-                    if (lc && lc->percpu.rcu_pending_count > 0U)
-                        need_gp = true;
-                }
+                arch::s390x::cpu::cpumask::for_each_online_cpu(
+                    [&](u16 cpu) noexcept -> void {
+                        auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(cpu);
+                        if (lc && lc->percpu.rcu_pending_count > 0U)
+                            need_gp = true;
+                    });
                 if (need_gp) {
-                    g_qs_bits[0].store(0U, memory_order::relaxed);
-                    g_qs_bits[1].store(0U, memory_order::relaxed);
+                    g_qs_mask.reset();
                     g_gp_seq.store(gp + 1U, memory_order::release);
                 }
             }

@@ -5,6 +5,7 @@
 #define ZXFOUNDATION_S390X_SCLP_H
 
 #include <zxfoundation/types.h>
+#include <zxfoundation/zxconfig.h>
 
 /// @brief SCLP Command Codes
 #define SCLP_CMDW_READ_SCP_INFO             0x00020001
@@ -21,7 +22,9 @@
 #define SCLP_RC_CONTAINED_SCCB_ERROR        0x0300
 #define SCLP_RC_INSUFFICIENT_SCCB_LENGTH    0x03f0
 
-#define SCLP_MAX_CORES                      512
+/// @brief Maximum CPU cores any SCLP per-core array is sized for.
+#define SCLP_MAX_CORES                      ((uint32_t)CONFIG_ZX_MAX_CPUS)
+
 #define SCLP_SERVC_MAX_RETRIES       100
 #define SCLP_SERVC_BUSY_DELAY        100000
 

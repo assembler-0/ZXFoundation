@@ -10,6 +10,7 @@ import zxfoundation.sys.timer;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
 import arch.s390x.trap.trap;
@@ -52,36 +53,45 @@ namespace _internal {
     static u32 g_miss_count[CONFIG_ZX_MAX_CPUS]{};
     static kernel_timer g_watchdog_timer{};
 
-    /// @brief Softdog timer callback — scans all online APs, pings harddog.
+    /// @brief Softdog timer callback — monitors only online APs, pings harddog.
+    /// @note Iterates the canonical online registry rather than scanning every
+    ///       logical CPU slot.  A CPU whose online bit was cleared on teardown
+    ///       is simply not visited, so an offline processor cannot be mistaken
+    ///       for a stalled one (and its stale per-CPU state is never read).
     auto watchdog_check(void*) noexcept -> void {
-        for (u32 cpu = 1; cpu < CONFIG_ZX_MAX_CPUS; ++cpu) {
-            auto* pcp = lowcore::cpu_percpu(static_cast<u16>(cpu));
-            if (!pcp) continue;
+        arch::s390x::cpu::cpumask::for_each_online_cpu(
+            [](u16 cpu16) noexcept -> void {
+                // The BSP (id 0) runs the watchdog itself; skip self-monitoring.
+                if (cpu16 == 0U) return;
+                const u32 cpu = cpu16;
 
-            const u64 hb = pcp->watchdog_heartbeat;
+                auto* pcp = lowcore::cpu_percpu(cpu16);
+                if (!pcp) return;
 
-            if (hb == g_last_heartbeat[cpu]) {
-                ++g_miss_count[cpu];
-                if (g_miss_count[cpu] >= WATCHDOG_FATAL_THRESHOLD) {
-                    zxfoundation::sys::syschk::syschk_fatal(
-                        lib::kernel_error::from_generic(
-                            lib::generic_error::stall),
-                        "watchdog: processor {} hard stall detected "
-                        "(no heartbeat for {}s)",
-                        cpu,
-                        g_miss_count[cpu] * WATCHDOG_INTERVAL_SECONDS);
+                const u64 hb = pcp->watchdog_heartbeat;
+
+                if (hb == g_last_heartbeat[cpu]) {
+                    ++g_miss_count[cpu];
+                    if (g_miss_count[cpu] >= WATCHDOG_FATAL_THRESHOLD) {
+                        zxfoundation::sys::syschk::syschk_fatal(
+                            lib::kernel_error::from_generic(
+                                lib::generic_error::stall),
+                            "watchdog: processor {} hard stall detected "
+                            "(no heartbeat for {}s)",
+                            cpu,
+                            g_miss_count[cpu] * WATCHDOG_INTERVAL_SECONDS);
+                    }
+                    if (g_miss_count[cpu] >= WATCHDOG_MISS_THRESHOLD) {
+                        palert("watchdog: processor {} stall suspected "
+                              "(heartbeat={}, misses={}/{})",
+                            cpu, hb, g_miss_count[cpu],
+                            WATCHDOG_FATAL_THRESHOLD);
+                    }
+                } else {
+                    g_miss_count[cpu] = 0;
+                    g_last_heartbeat[cpu] = hb;
                 }
-                if (g_miss_count[cpu] >= WATCHDOG_MISS_THRESHOLD) {
-                    palert("watchdog: processor {} stall suspected "
-                          "(heartbeat={}, misses={}/{})",
-                        cpu, hb, g_miss_count[cpu],
-                        WATCHDOG_FATAL_THRESHOLD);
-                }
-            } else {
-                g_miss_count[cpu] = 0;
-                g_last_heartbeat[cpu] = hb;
-            }
-        }
+            });
 
         if (g_harddog_armed) {
             harddog_ping();

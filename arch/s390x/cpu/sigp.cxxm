@@ -23,7 +23,6 @@ namespace arch::s390x::cpu::sigp {
                 u32& status) -> int {
         processor::register_pair r1 = { .odd = parm, };
         int cc;
-
         __asm__ volatile(
             "	sigp	%[r1],%[addr],0(%[order])\n"
             "	ipm	    %[cc]\n"

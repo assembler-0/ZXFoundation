@@ -119,6 +119,15 @@ static inline int arch_is_zvm(void) {
     arch_load_psw(&halt_psw);
 }
 
+union register_pair {
+    unsigned __int128 pair;
+    struct {
+        uint64_t even;
+        uint64_t odd;
+    };
+};
+static_assert(sizeof(union register_pair) == 16, "register_pair must be exactly 128 bits");
+
 /// SIGP order codes (PoP SA22-7832 Chapter 4).
 #define SIGP_SENSE                      0x01U
 #define SIGP_EXTERNAL_CALL              0x02U
@@ -140,7 +149,6 @@ static inline int arch_is_zvm(void) {
 #define SIGP_CC_BUSY                    2
 #define SIGP_CC_NOT_OPERATIONAL         3
 
-
 /// @brief Issue a SIGP (Signal Processor) instruction.
 ///        The order code is passed in an address register per PoP SA22-7832.
 ///        On CC=1 (status stored) the CPU status word is written to *status
@@ -152,19 +160,17 @@ static inline int arch_is_zvm(void) {
 /// @return Condition code: 0 = accepted, 1 = status stored, 2 = busy, 3 = not operational.
 static inline int sigp(uint16_t cpu_addr, uint8_t order, uint32_t parm,
                        uint32_t *status) {
-    register uint32_t r1 __asm__("1") = parm;
+    union register_pair r1 = { .odd = parm, };
     int cc;
     __asm__ volatile(
-        "sigp %1,%2,0(%3)\n"
-        "ipm  %0\n"
-        "srl  %0,28\n"
-        : "=d" (cc), "+d" (r1)
-        : "d" ((uint64_t)cpu_addr), "a" ((uint64_t)order)
+        "	sigp	%[r1],%[addr],0(%[order])\n"
+        "	ipm	    %[cc]\n"
+        : [cc] "=d" (cc), [r1] "+d" (r1.pair)
+        : [addr] "d" (cpu_addr), [order] "a" (order)
         : "cc"
     );
-    if (status && cc == 1)
-        *status = r1;
-    return cc;
+    if (status) *status = r1.even;
+    return cc >> 28;
 }
 
 /// @brief Issue SIGP, retrying until the target CPU is no longer busy (CC≠2).

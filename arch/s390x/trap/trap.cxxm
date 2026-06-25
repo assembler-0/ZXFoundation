@@ -217,14 +217,9 @@ extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fr
 extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
     (void)frame;
 
-    // Read subchannel ID from lowcore at 0xB8 (PoP §7-6.4).
-    const u32 sid = *reinterpret_cast<volatile u32*>(
-        zxfoundation::memory::hhdm::phys_to_virt(0xB8));
-
-    const u32 io_int_parm = *reinterpret_cast<volatile u32*>(
-        zxfoundation::memory::hhdm::phys_to_virt(0xBC));
-
-    const u16 sch_no = static_cast<u16>(sid & 0xFFFFU);
+    const auto* lc = arch::s390x::cpu::lowcore::get_current();
+    const u16 sch_no       = lc->subchannel_nr;
+    const u32 io_int_parm  = lc->io_int_parm;
 
     // Dispatch to the CSS layer for command-RB / TSCH processing.
     arch::s390x::css::css_io_interrupt(sch_no);

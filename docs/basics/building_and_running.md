@@ -109,10 +109,10 @@ A minimal configuration that can be used for ZXFoundation testing purposes:
 ```text
 ARCHLVL      z/Arch   # Set architecture mode z/Arch or ESAME are the same 
 MAINSIZE     4G       # Desired amount of CS (Central Storage)
-MAXCPU       8        # Maximum CPUs
+MAXCPU       8        # Maximum CPUs (ZXFoundation supports up to 768 CPUs - see patching_hercules.md)
 NUMCPU       8        # CPUs active at IPL time
 DIAG8CMD     ENABLE   # Needed for ZXFoundation, if this is disabled a Specification Exception will be thrown
-0100        3390    sysres.3390 # Declare our generated 3390 disk image as device 0100
+0100         3390    sysres.3390 # Declare our generated 3390 disk image as device 0100
 
 IPL 0100 # Start the emulator by IPL-ing the 0100 device
 ```

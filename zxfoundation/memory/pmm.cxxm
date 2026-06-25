@@ -175,6 +175,22 @@ namespace zxfoundation::memory::pmm::_internal {
         return g_frame_table[phys >> PAGE_SHIFT];
     }
 
+    /// @brief Fail-closed validation of a frame handed back by the buddy / PCP layer.
+    /// @param[in] phys  Candidate physical base address taken from a free list.
+    /// @warning Triggers syschk_fatal on any inconsistency and does not return
+    ///          in that case.
+    auto assert_allocatable_frame(u64 phys) noexcept -> void {
+        const u64 max_phys = g_max_pfn << PAGE_SHIFT;
+        if (phys == 0U
+            || (phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U
+            || phys >= max_phys
+            || desc_of(phys).owner() != frame_owner::buddy) [[unlikely]] {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_address),
+                "pmm: free list returned a non-buddy or out-of-range frame (corruption)");
+        }
+    }
+
     [[nodiscard]] auto validate_page_table_allocation(
         u64 phys,
         u32 order,
@@ -228,6 +244,8 @@ namespace zxfoundation::memory::pmm::_internal {
         for (u32 ord = order; ord <= MAX_ORDER; ++ord) {
             const u64 phys = bz.pop(ord);
             if (!phys) continue;
+
+            assert_allocatable_frame(phys);
 
             // Split surplus orders, returning each right-half buddy.
             for (u32 s = ord; s > order; --s) {
@@ -352,6 +370,7 @@ namespace zxfoundation::memory::pmm::_internal {
     [[nodiscard]] auto pcp_pop(pcp_list& lst) noexcept -> u64 {
         if (!lst.head_phys) return 0;
         const u64 phys = lst.head_phys;
+        assert_allocatable_frame(phys);
         const auto* node = reinterpret_cast<const pcp_node*>(hhdm::phys_to_virt(phys));
         lst.head_phys = node->next_phys;
         --lst.count;
@@ -499,7 +518,25 @@ namespace zxfoundation::memory::pmm {
             if (resv[i].end > table_phys) table_phys = resv[i].end;
         table_phys = (table_phys + PAGE_SIZE - 1) & ~static_cast<u64>(PAGE_SIZE - 1);
 
+        // EXTREME REDUNDANCY: the entire frame-descriptor table is written through
+        // the HHDM during initialization and indexed on every desc_of() for the
+        // life of the kernel.  At CONFIG_ZX_MAX_CPUS the boot path hands out frames
+        // across all installed RAM, so the table extent must be provably backed by
+        // both installed RAM and the loader-built HHDM DAT before the first store.
+        // A region-second-translation exception (PoP code 0x003A) on the memset
+        // below is the high-core boot-crash signature; fail closed instead.
+        const u64 table_end = table_phys + (table_pages << PAGE_SHIFT);
+        if (table_end < table_phys
+            || table_end > (g_max_pfn << PAGE_SHIFT)
+            || !hhdm::phys_range_is_mapped(table_phys, table_pages << PAGE_SHIFT)) {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed),
+                "pmm: frame table extent exceeds HHDM coverage / installed RAM");
+        }
+
         g_frame_table = reinterpret_cast<frame_desc*>(hhdm::phys_to_virt(table_phys));
+
+        lib::memset(reinterpret_cast<void*>(g_frame_table), 0, table_bytes);
 
         push_resv(align_resv({ table_phys, table_phys + (table_pages << PAGE_SHIFT) }));
         {
@@ -864,12 +901,6 @@ namespace zxfoundation::memory::pmm {
 
         // Reset frame_desc so the frame shows as buddy-owned.
         desc_of(phys).set(static_cast<u8>(order), frame_owner::buddy, node);
-
-        // Use PCP when not inside a hardware interrupt handler.
-        // In hard-IRQ / MCCK context the zone lock may be held by the
-        // interrupted thread; irq_save_disable inside pcp_push/pcp_drain is
-        // safe (it saves already-off state) but pcp_drain's zone-lock path
-        // is not.  Defer directly to the zone lock path instead.
         if (order <= PCP_MAX_ORDER && !sched::context::in_interrupt()) {
             const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
             pcp_list& lst = arch::s390x::cpu::lowcore::this_cpu_percpu()
@@ -958,6 +989,29 @@ namespace zxfoundation::memory::pmm {
         if (!g_frame_table) return nullptr;
         const u64 pfn = phys >> PAGE_SHIFT;
         if (pfn >= g_max_pfn) return nullptr;
+        return &g_frame_table[pfn];
+    }
+
+    /// @brief Fail-closed frame-descriptor accessor.
+    ///
+    /// @param[in] phys  Physical address (lower PAGE_SHIFT bits are ignored).
+    /// @return Pointer into the frame descriptor table, or a kernel_error when
+    ///         the PMM is uninitialized or @p phys is outside the managed
+    ///         physical range.
+    /// @note Unlike the internal desc_of(), this never computes an
+    ///       out-of-range descriptor address, so a corrupted/over-range base
+    ///       yields a diagnosable kernel_error instead of a wild byte store
+    ///       that would take a translation exception (PoP 0x003A).
+    [[nodiscard]] auto desc_of_checked(u64 phys) noexcept
+        -> lib::expected<frame_desc*, lib::kernel_error> {
+        using namespace _internal;
+        if (!g_frame_table) [[unlikely]]
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) [[unlikely]]
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
         return &g_frame_table[pfn];
     }
 

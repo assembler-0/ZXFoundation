@@ -20,7 +20,7 @@ namespace arch::s390x::cpu::processor {
 
     constexpr u64 PREFIX_SAVE_LC = 0x0208UL;
 
-    /// @brief A 128-bit register pair for DIAGNOSE instructions.
+    /// @brief A 128-bit register pair
     union register_pair {
         u128 pair{};
         struct {
