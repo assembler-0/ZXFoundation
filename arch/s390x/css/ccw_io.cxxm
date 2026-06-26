@@ -18,7 +18,7 @@ import arch.s390x.lib.atomic;
 import lib.error;
 import lib.expected;
 import lib.format;
-import lib.string;
+import lib.cstring;
 import lib.util;
 
 export {

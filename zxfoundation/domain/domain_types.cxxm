@@ -150,7 +150,8 @@ namespace zxfoundation::domain {
 
     /// @brief Per-CPU run queue — schedules strands (execution contexts).
     struct run_queue {
-        locking::qspinlock::qspinlock   lock{};          ///< Protects all run_queue mutations.
+        locking::qspinlock::qspinlock   lock{};          ///< Protects run queue data (enqueue/dequeue/select).
+        locking::qspinlock::qspinlock   context_lock{};  ///< Serializes ASCE / CR1 loads during context switch.
         u32                             nr_running{0};   ///< Total runnable strands on this CPU.
 
         strand*                         curr{nullptr};   ///< Currently running strand.

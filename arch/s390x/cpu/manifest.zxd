@@ -7,7 +7,7 @@
     percpu_types.cxxm
     percpu.cxxm
     processor_types.cxxm
-    processor.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) ]
+    processor.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
     psw_types.cxxm
     psw.cxxm
     sigp_types.cxxm
@@ -19,7 +19,7 @@
     stfle_types.cxxm
     stfle.cxxm
     features.cxxm
-    stsi_types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) ]
+    stsi_types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) !compiler_id:gcc(-Wno-pedantic) ]
     stsi.cxxm
     clkcomp.cxxm
     cputimer.cxxm
@@ -31,4 +31,6 @@
     tx.cxxm
     uaccess.cxxm
     pc.cxxm
+    hotplug_types.cxxm
+    hotplug.cxxm
 }

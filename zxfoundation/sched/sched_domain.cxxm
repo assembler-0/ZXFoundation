@@ -13,7 +13,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.psw_types;
 import lib.util;
-import lib.string;
+import lib.cstring;
 
 extern "C" {
     /// @brief Assembly stub: sets r15 = frame_base, loads ARs/VRs, jumps to ret_to_user.

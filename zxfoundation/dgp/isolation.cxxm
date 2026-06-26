@@ -5,6 +5,7 @@
 export module zxfoundation.dgp.isolation;
 import zxfoundation.base.types;
 import zxfoundation.dgp.isolation_types;
+import zxfoundation.domain.domain_types;
 import zxfoundation.sched.sched_policy_types;
 import zxfoundation.base.config;
 import arch.s390x.mmu.mmu_types;
@@ -350,14 +351,20 @@ namespace zxfoundation::dgp {
         u32 gate_id,
         isolation_rights requested
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        (void)caller_domain_id;
-        (void)gate_id;
-
         if (!_internal::g_isolation_initialized) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
         if (requested == isolation_rights::none) {
+            return lib::unexpected(_internal::generic_invalid_arg());
+        }
+
+        if (caller_domain_id >= zxfoundation::domain::MAX_DOMAINS) {
+            return lib::unexpected(_internal::generic_invalid_arg());
+        }
+
+        const u32 ns = gate_id >> 5;
+        if (ns > 0x1F) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 

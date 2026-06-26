@@ -17,7 +17,7 @@ import zxfoundation.sys.syschk;
 import lib.util;
 import lib.error;
 import lib.expected;
-import lib.string;
+import lib.cstring;
 import lib.array;
 import lib.algorithm;
 import lib.static_vector;
@@ -609,6 +609,18 @@ namespace zxfoundation::memory::pmm {
 
         for (u8 node = 0U; node < numa::MAX_NUMA_NODES; ++node) {
             auto& node_zones = g_node_zones[node];
+            // Quick early exit: skip nodes with no pages in this zone.
+            if (node_zones.total_pages[zi] == 0) [[likely]]
+                continue;
+
+            // Check NUMA node phys range for overlap before scanning free lists.
+            const auto node_result = numa::node_at(node);
+            if (node_result) {
+                const auto& n = *node_result.value();
+                if (phys >= n.phys_end || end <= n.phys_start)
+                    continue;
+            }
+
             const locking::irq_lock_guard guard{node_zones.locks[zi]};
             auto& bz = node_zones.zones[zi];
 

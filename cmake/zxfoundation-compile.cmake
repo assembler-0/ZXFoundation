@@ -68,6 +68,13 @@ if (COMPILER_ID STREQUAL "clang")
     )
 endif()
 
+if (COMPILER_ID STREQUAL "gcc")
+    target_compile_options(core.zxfoundation.nucleus PRIVATE
+        -static-libgcc
+        -mzarch
+    )
+endif()
+
 target_compile_definitions(core.zxfoundation.nucleus PUBLIC
     $<$<COMPILE_LANGUAGE:C>:__zxfoundation__>
 )

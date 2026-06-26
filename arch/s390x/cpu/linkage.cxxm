@@ -302,8 +302,7 @@ namespace arch::s390x::cpu::linkage {
 
         /// @brief Zero-initialize for a fresh entry.
         constexpr auto clear() noexcept -> void {
-            for (auto& w : words)
-                w = 0;
+            __builtin_memset(words, 0, sizeof(words));
         }
     };
 

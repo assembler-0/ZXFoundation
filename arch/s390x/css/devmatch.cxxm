@@ -31,7 +31,7 @@ namespace arch::s390x::css::devmatch::_internal {
         const char* name;       ///< Human-readable short name.
     };
 
-    static constexpr dev_entry device_types[] = {
+    inline constexpr dev_entry device_types[] = {
         { 0x2501, dev_class::reader,     "2501 card reader"          },
         { 0x2540, dev_class::reader,     "2540 card reader/punch"    },
 
@@ -69,10 +69,10 @@ namespace arch::s390x::css::devmatch::_internal {
         { 0x3832, dev_class::virtio,     "virtio-ccw transport"      },
     };
 
-    [[maybe_unused]] static constexpr u32 NUM_DEVICE_TYPES =
+    [[maybe_unused]] inline constexpr u32 NUM_DEVICE_TYPES =
         sizeof(device_types) / sizeof(device_types[0]);
 
-    static constexpr dev_entry cu_types[] = {
+    inline constexpr dev_entry cu_types[] = {
         { 0x1750, dev_class::dasd_eckd,  "DS8000 storage ctrl"       },
         { 0x2105, dev_class::dasd_eckd,  "2105 ESS storage ctrl"     },
         { 0x2107, dev_class::dasd_eckd,  "2107 ESS storage ctrl"     },
@@ -102,10 +102,10 @@ namespace arch::s390x::css::devmatch::_internal {
         { 0x3832, dev_class::virtio,     "virtio-ccw ctrl"           },
     };
 
-    [[maybe_unused]] static constexpr u32 NUM_CU_TYPES =
+    [[maybe_unused]] inline constexpr u32 NUM_CU_TYPES =
         sizeof(cu_types) / sizeof(cu_types[0]);
 
-    static constexpr const char* class_names[] = {
+    inline constexpr const char* class_names[] = {
         "console",       // console
         "display",       // display
         "dasd-eckd",     // dasd_eckd

@@ -34,7 +34,7 @@ import arch.s390x.mmu.mmu_types;
 import arch.s390x.cpu.uaccess;
 import lib.error;
 import lib.expected;
-import lib.string;
+import lib.cstring;
 import lib.string_view;
 import lib.algorithm;
 

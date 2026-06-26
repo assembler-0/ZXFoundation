@@ -9,7 +9,7 @@ import arch.s390x.mmu.mmu_types;
 import zxfoundation.base.types;
 import zxfoundation.memory.hhdm;
 import lib.algorithm;
-import lib.string;
+import lib.cstring;
 
 namespace arch::s390x::cpu::uaccess::_internal {
 

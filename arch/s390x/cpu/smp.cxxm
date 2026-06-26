@@ -16,6 +16,8 @@ import arch.s390x.cpu.irq_frame;
 import arch.s390x.lib.atomic;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.smp_types;
+import arch.s390x.cpu.hotplug;
+import arch.s390x.cpu.hotplug_types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
@@ -27,7 +29,8 @@ import zxfoundation.base.config;
 import zxfoundation.sys.printk;
 import lib.expected;
 import lib.error;
-import lib.string;
+import lib.cstring;
+import lib.util;
 
 enum class ap_boot_state : u8 {
     allocated,
@@ -84,43 +87,46 @@ static auto apply_cpu_evidence(
         ((phys & (LOWCORE_PREFIX_ALIGNMENT - 1U)) == 0);
 }
 
+/// @brief SIGP issue with exponential backoff (helper using sigp_backoff).
 [[nodiscard]] static auto sigp_issue_bounded(
     const u16 cpu_addr,
     const u8 order,
     const u32 parm
 ) noexcept -> sigp_result {
     sigp_result result{};
-    const u64 start = arch::s390x::cpu::processor::stck();
-
-    do {
-        result.status = 0;
-        result.cc = arch::s390x::cpu::sigp::sigp_issue(cpu_addr, order, parm, result.status);
-        if (result.cc != arch::s390x::cpu::sigp::SIGP_CC_BUSY)
-            return result;
-        arch::s390x::cpu::processor::cpu_relax();
-    } while (tod_elapsed(start) < SIGP_WAIT_TIMEOUT_TOD);
-
-    result.cc = arch::s390x::cpu::sigp::SIGP_CC_BUSY;
+    const u64 deadline = arch::s390x::cpu::processor::stck() + SIGP_WAIT_TIMEOUT_TOD;
+    auto backoff = arch::s390x::cpu::sigp::default_backoff(deadline);
+    result.cc = arch::s390x::cpu::sigp::sigp_issue_bounded(
+        cpu_addr, order, parm, backoff, result.status);
     return result;
 }
 
+/// @brief Wait until CPU is stopped, with check-stop recovery.
 [[nodiscard]] static auto wait_cpu_stopped(const u16 cpu_addr) noexcept -> sigp_result {
     sigp_result result{};
-    const u64 start = arch::s390x::cpu::processor::stck();
-
-    do {
-        result = sigp_issue_bounded(cpu_addr, arch::s390x::cpu::sigp::SIGP_SENSE, 0);
-        if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_STATUS_STORED &&
-            (result.status & (arch::s390x::cpu::sigp::SIGP_STATUS_STOPPED |
-                              arch::s390x::cpu::sigp::SIGP_STATUS_CHECK_STOP)))
-            return result;
-        if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_NOT_OPERATIONAL)
-            return result;
-        arch::s390x::cpu::processor::cpu_relax();
-    } while (tod_elapsed(start) < SIGP_WAIT_TIMEOUT_TOD);
-
-    result.cc = arch::s390x::cpu::sigp::SIGP_CC_BUSY;
+    result.cc = arch::s390x::cpu::sigp::wait_cpu_stopped(cpu_addr, result.status);
     return result;
+}
+
+/// @brief Free AP resources allocated via PMM after a mid-sequence failure.
+///        Called only after txn.commit() so pages must be freed individually.
+static auto rollback_ap_resources(ap_boot_record& record) noexcept -> void {
+    using namespace zxfoundation::memory::pmm;
+
+    auto free_if = [](u64 phys, u32 order, purpose p) noexcept -> void {
+        if (phys == 0) return;
+        const zone z = (p == purpose::lowcore) ? zone::dma31 : zone::normal;
+        folio_active f{phys, order, p, z};
+        free(lib::move(f));
+    };
+
+    free_if(record.lowcore_phys,        1, purpose::lowcore);
+    free_if(record.kernel_stack_phys,   2, purpose::stack);
+    free_if(record.async_stack_phys,    2, purpose::stack);
+    free_if(record.mcck_stack_phys,     2, purpose::stack);
+    free_if(record.nodat_stack_phys,    2, purpose::stack);
+
+    record = ap_boot_record{};
 }
 
 [[nodiscard]] static auto sigp_failure_error(const sigp_result& result) noexcept -> lib::kernel_error {
@@ -138,17 +144,20 @@ static auto apply_cpu_evidence(
     return lib::kernel_error::from_generic(lib::generic_error::internal_error);
 }
 
-[[nodiscard]] static auto reject_sigp(
+[[nodiscard]] static auto reject_sigp_and_rollback(
     ap_boot_record& record,
     const u8 order,
     const sigp_result& result
 ) noexcept -> lib::kernel_error {
+    const auto err = sigp_failure_error(result);
     record.state = ap_boot_state::failed;
     record.sigp_status = result.status;
     zxfoundation::sys::printk::pnotice(
         "smp: cpu {} addr {} rejected by SIGP order {} cc {} status {}",
         record.cpu_id, record.cpu_addr, static_cast<u32>(order), result.cc, result.status);
-    return sigp_failure_error(result);
+    // Free all pages allocated for this AP (post-commit cleanup).
+    rollback_ap_resources(record);
+    return err;
 }
 
 // AP online counter — written by each AP in ap_startup, polled by BSP.
@@ -179,21 +188,16 @@ auto ap_entry() -> void;
 auto ap_dat_on() -> void;
 
 [[noreturn]] auto ap_startup() -> void {
-    arch::s390x::cpu::processor::ctl_set_bit<0>(13);  // CR0.13: external-call submask
-    arch::s390x::cpu::processor::ctl_set_bit<0>(14);  // CR0.14: emergency-signal submask
-    arch::s390x::cpu::processor::ctl_set_bit<0>(15);  // CR0.15: malfunction-alert submask
-    arch::s390x::cpu::processor::ctl_set_bit<0>(52);  // CR0.52: clock-comparator submask
+    arch::s390x::cpu::processor::ctl_set_bit<0>(13);
+    arch::s390x::cpu::processor::ctl_set_bit<0>(14);
+    arch::s390x::cpu::processor::ctl_set_bit<0>(15);
+    arch::s390x::cpu::processor::ctl_set_bit<0>(52);
 
-    // CR6: I/O-interruption subclass mask (PoP §6.2.1, bits 0-7 = ISC 0-7).
-    // Every CPU that runs with I/O interruptions enabled must unmask the ISCs
-    // it is expected to service; otherwise a device completion routed to this
-    // AP would be held pending indefinitely.  ctl_store == STCTG (read),
-    // ctl_load == LCTLG (write).
     {
         u64 cr6 = 0;
-        arch::s390x::cpu::processor::ctl_store<6, 6>(cr6);   // read current CR6
-        cr6 |= 0x00000000FF000000ULL;                       // unmask ISC 0-7
-        arch::s390x::cpu::processor::ctl_load<6, 6>(cr6);    // write back to CR6
+        arch::s390x::cpu::processor::ctl_store<6, 6>(cr6);
+        cr6 |= 0x00000000FF000000ULL;
+        arch::s390x::cpu::processor::ctl_load<6, 6>(cr6);
     }
     (void)g_ap_online.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
 
@@ -203,10 +207,8 @@ auto ap_dat_on() -> void;
     const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
     zxfoundation::sched::sched_init_ap(pcp.cpu_id);
 
-    // Signal BSP that this AP is fully initialized (after pinfo, after rq.online).
     (void)g_aps_initialized.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
 
-    // Enter the scheduler idle loop (does not return).
     zxfoundation::sched::sched_idle_enter();
 }
 
@@ -233,10 +235,15 @@ namespace arch::s390x::cpu::smp {
     auto init_bsp() noexcept -> void {
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, handle_ipi, nullptr, 0);
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   handle_ipi, nullptr, 0);
-        processor::ctl_set_bit<0>(13);  // CR0.13: external-call submask
-        processor::ctl_set_bit<0>(14);  // CR0.14: emergency-signal submask
-        processor::ctl_set_bit<0>(15);  // CR0.15: malfunction-alert submask
-        processor::ctl_set_bit<0>(52);  // CR0.52: clock-comparator submask
+        processor::ctl_set_bit<0>(13);
+        processor::ctl_set_bit<0>(14);
+        processor::ctl_set_bit<0>(15);
+        processor::ctl_set_bit<0>(52);
+
+        // Initialize hotplug subsystem and mark BSP online.
+        hotplug::hotplug_init();
+        hotplug::hotplug_mark_present(0U);
+        hotplug::hotplug_mark_possible(0U);
     }
 
     auto init_aps(const init::zxfl::protocol& proto) noexcept
@@ -248,8 +255,8 @@ namespace arch::s390x::cpu::smp {
         g_sched_ready.store(0, arch::s390x::lib::atomic::memory_order::release);
         g_aps_initialized.store(0, arch::s390x::lib::atomic::memory_order::seq_cst);
         g_total_aps = 0;
-        for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i)
-            g_ap_boot_records[i] = ap_boot_record{};
+        for (auto & g_ap_boot_record : g_ap_boot_records)
+            g_ap_boot_record = ap_boot_record{};
 
         if (proto.cpu_count > zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] {
             zxfoundation::sys::printk::pnotice(
@@ -281,13 +288,29 @@ namespace arch::s390x::cpu::smp {
         g_sched_ready.store(1, arch::s390x::lib::atomic::memory_order::release);
 
         for (u32 i = 0; i < proto.cpu_count; ++i) {
+            auto bail = [&](ap_boot_record& rec, const char* msg) -> void {
+                rec.state = ap_boot_state::failed;
+                rec.lowcore_phys = 0;
+                rec.kernel_stack_phys = 0;
+                rec.async_stack_phys = 0;
+                rec.mcck_stack_phys = 0;
+                rec.nodat_stack_phys = 0;
+                rec.sigp_status = 0;
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu {} addr {}: {}", rec.cpu_id, rec.cpu_addr, msg);
+            };
+
             const auto& ci = proto.cpu_map[i];
             if (ci.cpu_addr == proto.bsp_cpu_addr) continue;
             if (ci.state != init::zxfl::ZXFL_CPU_STOPPED) continue;
 
             const u16 new_cpu_id = next_cpu_id++;
-            if (new_cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]]
-                return ::lib::unexpected(::lib::kernel_error::from_arch(::lib::arch_error::invalid_cpu_id));
+            if (new_cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] {
+                zxfoundation::sys::printk::pnotice(
+                    "smp: cpu addr {} skipped — no free cpu_id slot", ci.cpu_addr);
+                --next_cpu_id;
+                continue;
+            }
 
             auto& record = g_ap_boot_records[new_cpu_id];
             record = ap_boot_record{
@@ -295,54 +318,22 @@ namespace arch::s390x::cpu::smp {
                 .cpu_addr = ci.cpu_addr,
             };
 
-            // Record this AP as physically present.  Onlineness is published
-            // separately, by the AP itself once sched_init_ap() completes.
             cpumask::cpu_set_possible(new_cpu_id);
+            hotplug::hotplug_mark_present(new_cpu_id);
+            hotplug::hotplug_mark_possible(new_cpu_id);
 
+            // ── Allocate per-AP pages via transaction ────────────────
             transaction txn;
             auto lc_f    = txn.alloc(1, zone::dma31, purpose::lowcore,    page_init::zeroed);
-            if (!lc_f) {
-                record.state = ap_boot_state::failed;
-                zxfoundation::sys::printk::pnotice(
-                    "smp: cpu {} addr {} lowcore allocation failed",
-                    record.cpu_id, record.cpu_addr);
-                return ::lib::unexpected(lc_f.error());
-            }
-            // Stacks have no 31-bit constraint (only SIGP SET PREFIX needs a
-            // < 2 GiB parameter), so keep them in zone::normal and reserve the
-            // scarce dma31 zone for the prefix/lowcore page only.
-            auto stk_f   = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
-            if (!stk_f) {
-                record.state = ap_boot_state::failed;
-                zxfoundation::sys::printk::pnotice(
-                    "smp: cpu {} addr {} kernel stack allocation failed",
-                    record.cpu_id, record.cpu_addr);
-                return ::lib::unexpected(stk_f.error());
-            }
-            auto async_f = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
-            if (!async_f) {
-                record.state = ap_boot_state::failed;
-                zxfoundation::sys::printk::pnotice(
-                    "smp: cpu {} addr {} async stack allocation failed",
-                    record.cpu_id, record.cpu_addr);
-                return ::lib::unexpected(async_f.error());
-            }
-            auto mcck_f  = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
-            if (!mcck_f) {
-                record.state = ap_boot_state::failed;
-                zxfoundation::sys::printk::pnotice(
-                    "smp: cpu {} addr {} mcck stack allocation failed",
-                    record.cpu_id, record.cpu_addr);
-                return ::lib::unexpected(mcck_f.error());
-            }
-            auto nodat_f = txn.alloc(2, zone::normal, purpose::stack,      page_init::zeroed);
-            if (!nodat_f) {
-                record.state = ap_boot_state::failed;
-                zxfoundation::sys::printk::pnotice(
-                    "smp: cpu {} addr {} nodat stack allocation failed",
-                    record.cpu_id, record.cpu_addr);
-                return ::lib::unexpected(nodat_f.error());
-            }
+            if (!lc_f)   { bail(record, "lowcore allocation failed"); continue; }
+            auto stk_f   = txn.alloc(2, zone::normal, purpose::stack,    page_init::zeroed);
+            if (!stk_f)  { bail(record, "kernel stack allocation failed"); continue; }
+            auto async_f = txn.alloc(2, zone::normal, purpose::stack,    page_init::zeroed);
+            if (!async_f){ bail(record, "async stack allocation failed"); continue; }
+            auto mcck_f  = txn.alloc(2, zone::normal, purpose::stack,    page_init::zeroed);
+            if (!mcck_f) { bail(record, "mcck stack allocation failed"); continue; }
+            auto nodat_f = txn.alloc(2, zone::normal, purpose::stack,    page_init::zeroed);
+            if (!nodat_f){ bail(record, "nodat stack allocation failed"); continue; }
 
             const u64 lc_phys   = lc_f->phys_base;
             const u64 stk_top   = stk_f->phys_base   + (static_cast<u64>(PAGE_SIZE) << 2);
@@ -355,16 +346,15 @@ namespace arch::s390x::cpu::smp {
             record.async_stack_phys = async_top;
             record.mcck_stack_phys = mcck_top;
             record.nodat_stack_phys = nodat_top;
-            if (!prefix_block_is_valid(lc_phys)) {
-                record.state = ap_boot_state::failed;
-                zxfoundation::sys::printk::pnotice(
-                    "smp: cpu {} addr {} invalid prefix block {}",
-                    record.cpu_id, record.cpu_addr, lc_phys);
-                return ::lib::unexpected(::lib::kernel_error::from_memory(::lib::memory_error::alignment_error));
-            }
-            txn.commit();
 
-            auto* lc = reinterpret_cast<lowcore::zx_lowcore*>(zxfoundation::memory::hhdm::phys_to_virt(lc_phys));
+            if (!prefix_block_is_valid(lc_phys)) {
+                bail(record, "lowcore prefix block misaligned or out of range");
+                continue;
+            }
+
+            // ── Write lowcore BEFORE committing the transaction ──
+            auto* lc = reinterpret_cast<lowcore::zx_lowcore*>(
+                zxfoundation::memory::hhdm::phys_to_virt(lc_phys));
 
             lowcore::init_ap(*lc, lowcore::ap_init_params{
                 .phys_lc       = lc_phys,
@@ -386,53 +376,64 @@ namespace arch::s390x::cpu::smp {
             lowcore::register_cpu_lowcore(new_cpu_id, lc_phys);
             record.state = ap_boot_state::lowcore_initialized;
 
+            txn.commit();
+
             auto result = sigp_issue_bounded(ci.cpu_addr, sigp::SIGP_INITIAL_CPU_RESET, 0);
-            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
-                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_INITIAL_CPU_RESET, result));
+            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED) {
+                (void)reject_sigp_and_rollback(record, sigp::SIGP_INITIAL_CPU_RESET, result);
+                continue;
+            }
 
             result = wait_cpu_stopped(ci.cpu_addr);
-            if (result.cc != sigp::SIGP_CC_STATUS_STORED ||
+            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED ||
                 !(result.status & sigp::SIGP_STATUS_STOPPED) ||
-                (result.status & sigp::SIGP_STATUS_CHECK_STOP))
-                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_SENSE, result));
+                (result.status & sigp::SIGP_STATUS_CHECK_STOP)) {
+                (void)reject_sigp_and_rollback(record, sigp::SIGP_SENSE, result);
+                continue;
+            }
 
             result = sigp_issue_bounded(ci.cpu_addr, sigp::SIGP_SET_PREFIX,
                 static_cast<u32>(lc_phys));
-            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
-                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_SET_PREFIX, result));
+            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED) {
+                (void)reject_sigp_and_rollback(record, sigp::SIGP_SET_PREFIX, result);
+                continue;
+            }
             record.state = ap_boot_state::prefix_set;
 
             result = sigp_issue_bounded(ci.cpu_addr, sigp::SIGP_RESTART, 0);
-            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
-                return ::lib::unexpected(reject_sigp(record, sigp::SIGP_RESTART, result));
+            if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED) {
+                (void)reject_sigp_and_rollback(record, sigp::SIGP_RESTART, result);
+                continue;
+            }
             record.state = ap_boot_state::restarted;
             ++started;
-            // The per-AP online wait is intentionally NOT done here.  Deferring
-            // it to a single batched wait after every AP in the batch has been
-            // RESTARTed pipelines the RESTART -> online latency across all APs
-            // instead of serializing up to AP_ONLINE_TIMEOUT_TOD per CPU.
         }
 
-        // Phase 3: one bounded wait for the whole batch to enter AP startup.
-        // Each AP increments g_ap_online at the very top of ap_startup, so this
-        // confirms the batch came up without blocking per CPU above.
-        if (started != 0 && !wait_ap_online(started)) {
-            const u32 arrived =
-                g_ap_online.load(arch::s390x::lib::atomic::memory_order::seq_cst);
-            zxfoundation::sys::printk::pnotice(
-                "smp: only {} of {} ap(s) entered startup before timeout",
-                arrived, started);
-            return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::stall));
-        }
+        if (started != 0) {
+            if (!wait_ap_online(started)) {
+                const u32 arrived =
+                    g_ap_online.load(arch::s390x::lib::atomic::memory_order::seq_cst);
+                zxfoundation::sys::printk::pnotice(
+                    "smp: only {} of {} ap(s) entered startup before timeout",
+                    arrived, started);
+                // Clean up APs that never came online.
+                for (u16 id = 1; id < next_cpu_id; ++id) {
+                    if (g_ap_boot_records[id].state == ap_boot_state::restarted)
+                        rollback_ap_resources(g_ap_boot_records[id]);
+                }
+                started = arrived;  // reflect what actually arrived
+            }
 
-        // The batch is up; reflect that in each prepared AP's boot record.
-        for (u16 id = 1; id < next_cpu_id; ++id) {
-            if (g_ap_boot_records[id].state == ap_boot_state::restarted)
-                g_ap_boot_records[id].state = ap_boot_state::online;
-        }
+            for (u16 id = 1; id < next_cpu_id; ++id) {
+                if (g_ap_boot_records[id].state == ap_boot_state::restarted) {
+                    g_ap_boot_records[id].state = ap_boot_state::online;
+                }
+            }
 
-        if (started != 0) zxfoundation::sys::printk::pinfo("smp: {} ap(s) started", started);
-        else zxfoundation::sys::printk::pnotice("smp: no ap(s) detected/started");
+            zxfoundation::sys::printk::pinfo("smp: {} ap(s) started", started);
+        } else {
+            zxfoundation::sys::printk::pnotice("smp: no ap(s) detected/started");
+        }
 
         g_total_aps = started;
         return started;

@@ -2,7 +2,7 @@
 /// @file string.cxxm
 /// @brief string operations
 
-export module lib.string;
+export module lib.cstring;
 import zxfoundation.base.types;
 
 export {

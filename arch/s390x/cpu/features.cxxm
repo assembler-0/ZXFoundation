@@ -64,8 +64,6 @@ namespace arch::s390x::cpu::features {
 
 } // end export
 
-module :private;
-
 namespace arch::s390x::cpu::features {
 
     /// Internal facility list cache — same size as the STFLE maximum.

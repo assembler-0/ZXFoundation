@@ -6,7 +6,7 @@ export module drivers.console.diag;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk_types;
 import lib.charconv;
-import lib.string;
+import lib.cstring;
 import lib.util;
 import lib.concepts;
 import lib.string_view;

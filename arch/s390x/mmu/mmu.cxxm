@@ -21,9 +21,9 @@ namespace arch::s390x::mmu::_internal {
 
     using namespace zxfoundation::memory;
 
-    static bool g_has_edat1{false};
-    static bool g_has_edat2{false};
-    static bool g_initialized{false};
+    inline bool g_has_edat1{false};
+    inline bool g_has_edat2{false};
+    inline bool g_initialized{false};
 
     /// @brief Build the default PMM request used for DAT table pages.
     [[nodiscard]] auto default_table_request() noexcept -> pmm::allocation_request {
@@ -532,6 +532,70 @@ namespace arch::s390x::mmu::_internal {
             r3_large_make(phys, prot);
         return {};
     }
+    /// @brief Maximum depth of recursive DAT table walk for pre-init validation.
+    inline constexpr u32 PREINIT_MAX_TABLES = 2048;
+
+    u64 g_preinit_table_phys[PREINIT_MAX_TABLES]{};
+    u32 g_preinit_table_count{0};
+
+    /// @brief Walk one DAT table level and recurse into child tables.
+    [[nodiscard]] auto validate_table_walk(
+        u64       table_phys,
+        dat_level lvl,
+        u64       hhdm_start,
+        u64       hhdm_end
+    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        if (table_phys < hhdm_start || table_phys >= hhdm_end) {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::hhdm_init_failed));
+        }
+
+        if (g_preinit_table_count >= PREINIT_MAX_TABLES) {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::out_of_memory));
+        }
+
+        const u32 this_idx = g_preinit_table_count++;
+        g_preinit_table_phys[this_idx] = table_phys;
+
+        const u64 table_virt = zxfoundation::memory::hhdm::phys_to_virt(table_phys);
+        const u32 entries = (lvl == dat_level::page) ? PAGE_ENTRIES : CRST_ENTRIES;
+        const auto* table = reinterpret_cast<const u64*>(table_virt);
+
+        for (u32 i = 0; i < entries; ++i) {
+            const u64 entry = table[i];
+            if (rste_is_invalid(entry))
+                continue;
+
+            if (lvl == dat_level::page)
+                continue;
+
+            if (lvl == dat_level::region_3 && r3_is_large(entry))
+                continue;
+
+            if (lvl == dat_level::segment && seg_is_large(entry))
+                continue;
+
+            const u64 child_phys = rste_origin(entry);
+            const dat_level child_lvl = next_level(lvl);
+
+            auto result = validate_table_walk(child_phys, child_lvl, hhdm_start, hhdm_end);
+            if (!result)
+                return result;
+        }
+
+        return {};
+    }
+
+    /// @brief Read CR1 (primary ASCE) via STCTG inline asm.
+    ///        The processor module's ctl_store template is not resolvable
+    ///        from this translation unit due to a clang C++20 modules
+    ///        visibility limitation for templates containing __asm__.
+    [[nodiscard]] inline auto read_cr1() noexcept -> u64 {
+        u64 val = 0;
+        __asm__ volatile("stctg 1, 1, %0" : "=Q"(val) :: "memory");
+        return val;
+    }
 
 } // namespace arch::s390x::mmu::_internal
 
@@ -871,6 +935,62 @@ namespace arch::s390x::mmu {
             tlb_flush_asce(asce_val);
         }
         return unmapped;
+    }
+
+    // ── Pre-init DAT map validation ───────────────────────────────────
+
+    /// @brief Validate the loader-installed DAT map before PMM init.
+    [[nodiscard]] auto validate_preinit_dat() noexcept
+        -> ::lib::expected<u32, ::lib::kernel_error>
+    {
+        if (_internal::g_initialized) {
+            return ::lib::unexpected(::lib::kernel_error::from_generic(
+                ::lib::generic_error::invalid_arg));
+        }
+
+        const u64 cr1 = _internal::read_cr1();
+        if (cr1 == 0) {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::invalid_address));
+        }
+
+        const u64 root_phys = cr1 & ASCE_ORIGIN_MASK;
+        const u64 asce_type = cr1 & ASCE_TYPE_MASK;
+
+        dat_level root_level;
+        if (asce_type == ASCE_TYPE_R1) {
+            root_level = dat_level::region_1;
+        } else if (asce_type == ASCE_TYPE_R2) {
+            root_level = dat_level::region_2;
+        } else if (asce_type == ASCE_TYPE_R3) {
+            root_level = dat_level::region_3;
+        } else if (asce_type == ASCE_TYPE_SEG) {
+            root_level = dat_level::segment;
+        } else {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::code::invalid_address));
+        }
+
+        _internal::g_preinit_table_count = 0;
+
+        const u64 hhdm_end = zxfoundation::memory::hhdm::phys_coverage_end();
+
+        auto walk_result = _internal::validate_table_walk(root_phys, root_level, 0, hhdm_end);
+        if (!walk_result)
+            return ::lib::unexpected(walk_result.error());
+        return static_cast<u32>(_internal::g_preinit_table_count);
+    }
+
+    /// @brief Return the count of pre-init DAT tables found by the last
+    ///        validate_preinit_dat() call.
+    [[nodiscard]] auto preinit_table_count() noexcept -> u32 {
+        return _internal::g_preinit_table_count;
+    }
+
+    /// @brief Return the pre-init DAT table physical address at @p index.
+    [[nodiscard]] auto preinit_table_phys(u32 index) noexcept -> u64 {
+        if (index >= _internal::g_preinit_table_count) return 0;
+        return _internal::g_preinit_table_phys[index];
     }
 
 } // namespace arch::s390x::mmu

@@ -156,8 +156,6 @@ namespace _internal {
                     "sys: nucleus checksum mismatch - unauthorized loader"
                 );
         }
-
-        pinfo("sys: nucleus checksums verified ({} segments)\n", tbl->count);
     }
 
     /// @brief Print the kernel banner.
@@ -203,8 +201,6 @@ namespace _internal {
         }
 
         zxfoundation::memory::hhdm::set_phys_coverage_end(boot.hhdm_phys_coverage_end);
-        pinfo("sys: HHDM physical coverage verified end={:016x} ram_end={:016x}",
-            boot.hhdm_phys_coverage_end, highest_ram_end);
     }
 
     /// @brief Initialize optional NUMA topology without making topology evidence a boot blocker.

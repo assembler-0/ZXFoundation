@@ -37,8 +37,6 @@ namespace arch::s390x::cpu::pc {
 
 } // end export
 
-module :private;
-
 namespace arch::s390x::cpu::pc {
 
     /// @brief Physical address of the primary ASTE (persisted for AP reload).

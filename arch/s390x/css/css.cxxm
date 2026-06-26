@@ -20,7 +20,7 @@ import arch.s390x.lib.atomic;
 import arch.s390x.cpu.processor;
 import lib.error;
 import lib.expected;
-import lib.string;
+import lib.cstring;
 import lib.format;
 
 export {
@@ -146,6 +146,12 @@ namespace arch::s390x::css {
         halting = 4,   ///< Halt or clear has been issued.
     };
 
+    /// @brief Type of the driver I/O completion callback.
+    /// @param sch_index  Subchannel table index for the completed operation.
+    /// @param status     IRB captured by the interrupt handler.
+    /// @param data       Opaque pointer registered by the driver.
+    using io_completion_fn = void (*)(u32 sch_index, const irb& status, void* data);
+
     /// @brief Per-subchannel bookkeeping entry.
     struct subchannel_entry {
         subchannel_id                       schid{};
@@ -155,6 +161,10 @@ namespace arch::s390x::css {
         irb                                 last_irb{};
         /// @brief Completion flag set by the I/O interrupt handler.
         lib::atomic::atomic<u32> io_done{0};
+        /// @brief Driver-registered completion callback (called from interrupt context).
+        io_completion_fn                    completion_cb{nullptr};
+        /// @brief Opaque data passed to completion_cb.
+        void*                               completion_data{nullptr};
         u16                                 devno{0xFFFF};
         u32                                 owner_domain{0xFFFFFFFF};
 
@@ -223,13 +233,6 @@ namespace arch::s390x::css {
                 continue;
             }
 
-            // Enable the subchannel and arm it for interrupt-driven I/O.
-            //   - E-bit (PMCW word-1 bit 8) makes the subchannel usable.
-            //   - ISC (bits 11-13) = 0 routes completion to I/O-interruption
-            //     subclass 0, which CR6 (below) unmasks on every CPU.
-            //   - intparm carries the subchannel number in its upper bits while
-            //     keeping the low 3 bits zero, so do_io_interrupt's ISC decode
-            //     (io_int_parm & 7) stays consistent (PoP §16.3 / §6.2.1).
             if (!info.pmcw_data.is_enabled()) {
                 info.pmcw_data.flags &= static_cast<u16>(~0x3800U); // clear ISC -> 0
                 info.pmcw_data.flags |= 0x0080;                     // set E-bit
@@ -270,11 +273,6 @@ namespace arch::s390x::css {
         _internal::g_sch_count       = found;
         _internal::g_css_initialized = true;
 
-        // CR6: I/O-interruption subclass mask (PoP §6.2.1, bits 0-7 = ISC 0-7).
-        // NOTE: ctl_store == STCTG (read CR into storage), ctl_load == LCTLG
-        // (write storage into CR).  The previous code had these swapped, which
-        // zeroed CR6 and masked ALL I/O interruptions — the device-probe stall.
-        // Read-modify-write so all eight ISCs are unmasked on this (BSP) CPU.
         {
             u64 cr6 = 0;
             cpu::processor::ctl_store<6, 6>(cr6);          // read current CR6
@@ -458,9 +456,6 @@ namespace arch::s390x::css {
             if (cc == 0) {
                 const auto stctl = status.scsw_data.stctl();
                 const auto actl  = status.scsw_data.actl();
-                // Final completion: primary/secondary status present and the
-                // subchannel/device are no longer active (PoP §16.3.2).  PCI or
-                // intermediate-only interrupts leave the operation in flight.
                 if ((stctl & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0 &&
                     (actl  & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
                     entry.state = subchannel_state::idle;
@@ -472,11 +467,12 @@ namespace arch::s390x::css {
             }
         }
 
-        // Publish completion to a ccw_do_io_sync waiter BEFORE waking the queue.
-        // The seq_cst store pairs with the waiter's seq_cst load and makes the
-        // last_irb copy above visible once io_done reads as 1.
         if (completed) {
             entry.io_done.store(1, arch::s390x::lib::atomic::memory_order::seq_cst);
+        }
+
+        if (completed && entry.completion_cb) [[likely]] {
+            entry.completion_cb(idx, entry.last_irb, entry.completion_data);
         }
 
         // Wake anyone waiting on this subchannel's I/O completion.

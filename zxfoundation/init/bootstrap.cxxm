@@ -26,7 +26,7 @@ import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.psw_types;
 import lib.error;
 import lib.expected;
-import lib.string;
+import lib.cstring;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;

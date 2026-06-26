@@ -14,23 +14,20 @@ import arch.s390x.cpu.cpumask;
 import arch.s390x.lib.atomic;
 import zxfoundation.memory.numa_types;
 import lib.cpumask;
+import lib.util;
 
 namespace zxfoundation::sched::topology::_internal {
 
     static cpu_topology_record g_cpu_records[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
-    /// @brief Online CPUs grouped by NUMA node (drawer).  Maintained at online
-    ///        / offline transitions so the balancer can iterate node members
-    ///        directly instead of scanning every logical CPU slot.
-    /// @note Module linkage (not static): the exported for_each_steal_candidate
-    ///       template is instantiated in importing modules and must not
-    ///       reference a TU-local entity.
+    /// @brief Online CPUs grouped by NUMA node (drawer).
     ::lib::cpumask g_node_masks[zxfoundation::memory::numa::MAX_NUMA_NODES]{};
 
-    /// @brief Per-CPU set of online core siblings (same NUMA node and verified
-    ///        core id).  Empty when core topology evidence is degraded, which is
-    ///        correct: the balancer's same-core tiers then contribute nothing.
+    /// @brief Per-CPU set of online core siblings
     ::lib::cpumask g_core_siblings[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
+    /// @brief Single mask covering all online CPUs across all NUMA nodes.
+    ::lib::cpumask g_remote_mask{};
 
     [[nodiscard]] auto state_from_online(bool online) noexcept -> cpu_scheduling_state {
         return online ? cpu_scheduling_state::online : cpu_scheduling_state::offline;
@@ -209,13 +206,6 @@ namespace zxfoundation::sched::topology {
 
     /// @brief Record a CPU as online in the per-group balancing masks.
     /// @param[in] cpu_id Logical CPU that has just become online.
-    /// @note Call after refresh_cpu_record() so the record's NUMA/core fields are
-    ///       populated.  Core-sibling links are formed only between CPUs with
-    ///       verified (non-degraded) core evidence sharing a NUMA node and core
-    ///       id; degraded topology therefore yields no same-core grouping, which
-    ///       matches relation_between().
-    /// @warning Maintenance uses release ordering paired with the acquire-confirm
-    ///          iteration in for_each_steal_candidate().
     auto topology_online_cpu(u16 cpu_id) noexcept -> void {
         if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
         const auto* rec = record_for(cpu_id);
@@ -247,6 +237,9 @@ namespace zxfoundation::sched::topology {
             _internal::g_node_masks[node].set(
                 cpu_id, arch::s390x::lib::atomic::memory_order::release);
         }
+
+        _internal::g_remote_mask.set(
+            cpu_id, arch::s390x::lib::atomic::memory_order::release);
     }
 
     /// @brief Remove a CPU from the per-group balancing masks (halt / teardown).
@@ -271,6 +264,11 @@ namespace zxfoundation::sched::topology {
             },
             arch::s390x::lib::atomic::memory_order::relaxed);
         _internal::g_core_siblings[cpu_id].reset();
+
+        if (cpu_id < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
+            _internal::g_remote_mask.clear(
+                cpu_id, arch::s390x::lib::atomic::memory_order::release);
+        }
     }
 
     /// @brief Iterate the steal candidates relevant to a balancing tier.
@@ -278,30 +276,25 @@ namespace zxfoundation::sched::topology {
     /// @param[in] local_cpu CPU requesting work.
     /// @param[in] tier      Topology tier being scanned.
     /// @param[in] fn        Callback receiving each candidate CPU id.
-    /// @note Same-core tiers iterate the local CPU's core-sibling mask, the
-    ///       same-node tier iterates the local node mask, and the remote tier
-    ///       falls back to the full online registry.  In every case iteration
-    ///       visits only members of the chosen set, never offline slots; callers
-    ///       still re-confirm onlineness from the central registry.
     template <typename Fn>
     auto for_each_steal_candidate(u16 local_cpu, cpu_relation tier, Fn&& fn) noexcept -> void {
         switch (tier) {
             case cpu_relation::same_smt_core:
             case cpu_relation::same_core_group:
                 if (local_cpu < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
-                    _internal::g_core_siblings[local_cpu].for_each(static_cast<Fn&&>(fn));
+                    _internal::g_core_siblings[local_cpu].for_each(lib::forward<Fn>(fn));
                 }
                 break;
             case cpu_relation::same_numa_node: {
                 const auto* rec = record_for(local_cpu);
                 const u8 node = rec ? rec->numa_node : 0xFFU;
                 if (node < zxfoundation::memory::numa::MAX_NUMA_NODES) {
-                    _internal::g_node_masks[node].for_each(static_cast<Fn&&>(fn));
+                    _internal::g_node_masks[node].for_each(lib::forward<Fn>(fn));
                 }
                 break;
             }
             default:
-                arch::s390x::cpu::cpumask::for_each_online_cpu(static_cast<Fn&&>(fn));
+                _internal::g_remote_mask.for_each(lib::forward<Fn>(fn));
                 break;
         }
     }

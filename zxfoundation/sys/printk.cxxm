@@ -25,13 +25,14 @@ static constexpr usize MAX_BACKENDS        = 4;
 static constexpr usize LOG_BUFFER_SIZE     = 128 * 1024;
 
 /// @brief Maximum per-message formatted length (bytes, including header + newline + NUL).
-static constexpr usize PRINTK_LINE_MAX     = 512;
+inline constexpr usize PRINTK_LINE_MAX     = 512;
 
 export {
 
 namespace zxfoundation::sys::printk {
 
     struct printk_state {
+
         locking::qspinlock::qspinlock lock;
         locking::qspinlock::qspinlock flush_lock;
         lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
@@ -196,14 +197,14 @@ namespace zxfoundation::sys::printk {
         } else {
             // Fallback: if we failed to push to the queue, emit directly to backends (best-effort).
             lib::static_vector<printk_backend, MAX_BACKENDS> snap;
-            for (usize i = 0; i < g_state.backends.size(); ++i) {
-                if (g_state.backends[i].active) {
-                    (void)snap.push_back(g_state.backends[i]);
+            for (auto & backend : g_state.backends) {
+                if (backend.active) {
+                    (void)snap.push_back(backend);
                 }
             }
             const lib::string_view msg(buf, offset);
-            for (usize i = 0; i < snap.size(); ++i) {
-                snap[i].emit(msg);
+            for (auto & i : snap) {
+                i.emit(msg);
             }
         }
 

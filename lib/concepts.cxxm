@@ -18,20 +18,36 @@ namespace lib {
     /// @brief checks if derived is derived from base.
     template <typename derived, typename base>
     concept derived_from = __is_base_of(base, derived) &&
-                         __is_convertible_to(const volatile derived*, const volatile base*);
+                         __is_convertible(const volatile derived*, const volatile base*);
 
     /// @brief checks if from is convertible to to.
     template <typename from, typename to>
-    concept convertible_to = __is_convertible_to(from, to);
+    concept convertible_to = __is_convertible(from, to);
 
     /// @brief checks if base is a base class of derived.
     template <typename base, typename derived>
     concept base_of = __is_base_of(base, derived);
 
+#if defined(__clang__)
     template <typename t> concept is_integral          = __is_integral(t);
     template <typename t> concept is_floating_point    = __is_floating_point(t);
     template <typename t> concept is_signed            = __is_signed(t);
     template <typename t> concept is_unsigned          = __is_unsigned(t);
+#else
+    template <typename t> concept is_integral          = __is_same(t, bool)       || __is_same(t, char) ||
+                                                         __is_same(t, signed char) || __is_same(t, unsigned char) ||
+                                                         __is_same(t, short)       || __is_same(t, unsigned short) ||
+                                                         __is_same(t, int)         || __is_same(t, unsigned int) ||
+                                                         __is_same(t, long)        || __is_same(t, unsigned long) ||
+                                                         __is_same(t, long long)   || __is_same(t, unsigned long long);
+    template <typename t> concept is_floating_point    = __is_same(t, float) || __is_same(t, double) || __is_same(t, long double);
+    template <typename t> concept is_signed            = __is_same(t, signed char) || __is_same(t, short) ||
+                                                         __is_same(t, int)         || __is_same(t, long) ||
+                                                         __is_same(t, long long);
+    template <typename t> concept is_unsigned          = __is_same(t, bool) || __is_same(t, unsigned char) ||
+                                                         __is_same(t, unsigned short) || __is_same(t, unsigned int) ||
+                                                         __is_same(t, unsigned long)  || __is_same(t, unsigned long long);
+#endif
     template <typename t> concept is_enum              = __is_enum(t);
     template <typename t> concept is_union             = __is_union(t);
     template <typename t> concept is_class             = __is_class(t);

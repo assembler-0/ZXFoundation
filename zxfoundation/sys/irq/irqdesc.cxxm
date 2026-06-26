@@ -10,6 +10,7 @@ import arch.s390x.cpu.lowcore_types;
 import arch.s390x.lib.atomic;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
+import lib.placementnew;
 import lib.expected;
 import lib.error;
 

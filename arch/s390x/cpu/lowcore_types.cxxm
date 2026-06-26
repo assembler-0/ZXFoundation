@@ -20,6 +20,7 @@ namespace arch::s390x::cpu::lowcore {
     constexpr u64 LC_MCCK_OLD_PSW   = 0x0160UL; ///< zx_lowcore::mcck_old_psw
     constexpr u64 LC_IO_OLD_PSW     = 0x0170UL; ///< zx_lowcore::io_old_psw
 
+    constexpr u64 LC_PSW_TEMP       = 0x0248UL; ///< Temporary PSW storage at start of pad_0x0248 – used by entry.S RESTORE_FRAME
     constexpr u64 LC_RETURN_PSW     = 0x0290UL; ///< zx_lowcore::return_psw
     constexpr u64 LC_KERNEL_STACK   = 0x0348UL; ///< zx_lowcore::kernel_stack
     constexpr u64 LC_ASYNC_STACK    = 0x0350UL; ///< zx_lowcore::async_stack
@@ -95,7 +96,8 @@ namespace arch::s390x::cpu::lowcore {
         u64    save_area_sync[8]{};               /* 0x0200 */
 
         u64    stack_canary{};                    /* 0x0240 */
-        u8     pad_0x0248[0x0280 - 0x0248]{};    /* 0x0248 */
+        psw::zx_psw  return_psw_temp{};           /* 0x0248  LC_PSW_TEMP – temporary PSW storage for RESTORE_FRAME */
+        u8     pad_0x0258[0x0280 - 0x0258]{};     /* 0x0258 */
 
         u64    save_area_restart[1]{};            /* 0x0280 */
         u64    pcpu{};                            /* 0x0288 */
@@ -190,6 +192,8 @@ namespace arch::s390x::cpu::lowcore {
     static_assert(__builtin_offsetof(zx_lowcore, io_old_psw) == LC_IO_OLD_PSW,
         "LC_IO_OLD_PSW mismatch");
 
+    static_assert(__builtin_offsetof(zx_lowcore, return_psw_temp) == LC_PSW_TEMP,
+        "LC_PSW_TEMP mismatch");
     static_assert(__builtin_offsetof(zx_lowcore, return_psw) == LC_RETURN_PSW,
         "LC_RETURN_PSW mismatch");
     static_assert(__builtin_offsetof(zx_lowcore, kernel_stack) == LC_KERNEL_STACK,

@@ -16,7 +16,7 @@ import arch.s390x.mmu.mmu_const;
 import arch.s390x.cpu.skey;
 import lib.error;
 import lib.expected;
-import lib.string;
+import lib.cstring;
 
 namespace zxfoundation::exec::_internal {
 

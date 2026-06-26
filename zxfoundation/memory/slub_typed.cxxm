@@ -6,6 +6,7 @@ export module zxfoundation.memory.slub_typed;
 import zxfoundation.memory.slub;
 import zxfoundation.memory.slub_types;
 import zxfoundation.base.types;
+import lib.placementnew;
 import lib.expected;
 import lib.error;
 

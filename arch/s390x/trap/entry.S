@@ -35,9 +35,10 @@
     vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
     lfpc    (160 + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
-    lmg     %r0, %r14, (160 + IRQ_FRAME_GPRS)(%r15)
+    mvc     LC_PSW_TEMP(16, 0), (160 + IRQ_FRAME_PSW_MASK)(%r15)
+    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
     asi     LC_IRQ_NESTING(0), -1
-    lpswe   (160 + IRQ_FRAME_PSW_MASK)(%r15)
+    lpswe   LC_PSW_TEMP(0)
 .endm
 
 .macro SAVE_NUCLEUS_FRAME reg, old_psw_lc, stack_lc
@@ -71,9 +72,10 @@
     vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
     lfpc    (160 + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
-    lmg     %r0, %r14, (160 + IRQ_FRAME_GPRS)(%r15)
+    mvc     LC_PSW_TEMP(16, 0), (160 + IRQ_FRAME_PSW_MASK)(%r15)
+    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
     asi     LC_NUCLEUS_NESTING(0), -1
-    lpswe   (160 + IRQ_FRAME_PSW_MASK)(%r15)
+    lpswe   LC_PSW_TEMP(0)
 .endm
 
 /// @brief Check for preemption after a preemptible interrupt.

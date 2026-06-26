@@ -18,7 +18,7 @@ import zxfoundation.sys.printk;
 import arch.s390x.cpu.irq;
 import lib.error;
 import lib.expected;
-import lib.string;
+import lib.cstring;
 
 // ── Aliases ────────────────────────────────────────────────────────────────
 

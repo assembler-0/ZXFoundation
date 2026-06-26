@@ -22,6 +22,7 @@ import zxfoundation.locking.lock;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.printk_types;
 import zxfoundation.sys.syschk;
+import lib.placementnew;
 import zxfoundation.base.types;
 import arch.s390x.lib.atomic;
 import arch.s390x.cpu.irq;

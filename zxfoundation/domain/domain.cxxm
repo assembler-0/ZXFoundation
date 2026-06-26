@@ -13,6 +13,7 @@
 /// embryo → active → dying → (released slot).
 
 export module zxfoundation.domain.domain;
+import lib.placementnew;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.scoms.scoms_types;
@@ -39,7 +40,7 @@ import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
 import lib.error;
 import lib.expected;
-import lib.string;
+import lib.cstring;
 import lib.list;
 import lib.util;
 import lib.idalloc;

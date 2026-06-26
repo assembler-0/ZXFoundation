@@ -21,7 +21,7 @@ import zxfoundation.sys.stacktrace;
 import arch.s390x.lib.atomic;
 import lib.error;
 import lib.string_view;
-import lib.string;
+import lib.cstring;
 import lib.source_location;
 import lib.format;
 import lib.span;

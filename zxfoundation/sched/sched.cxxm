@@ -382,7 +382,9 @@ namespace zxfoundation::sched {
 
         rq.curr = next;
 
-        // ASCE switch if the owning domains differ.
+        rq.lock.unlock();
+        rq.context_lock.lock();
+
         auto* prev_owner = prev ? static_cast<domain*>(prev->owner) : nullptr;
         if (next_owner->asce.val != 0 &&
             (!prev_owner || next_owner->asce.val != prev_owner->asce.val)) {
@@ -394,7 +396,7 @@ namespace zxfoundation::sched {
             _internal::record_asce_attachment(*next_owner);
         }
 
-        rq.lock.unlock();
+        rq.context_lock.unlock();
 
         // Update per-CPU current_strand before the switch.
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
@@ -588,6 +590,64 @@ namespace zxfoundation::sched {
             schedule();
             arch::s390x::cpu::psw::enabled_wait();
         }
+    }
+
+    /// @brief Notify the scheduler that a CPU has come online.
+    ///        Creates idle domain, publishes run queue, and adds the CPU
+    ///        to topology masks so it is visible to load balancers.
+    [[nodiscard]] auto sched_cpu_up(u16 cpu_id) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        using namespace _internal;
+
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
+            return ::lib::unexpected(::lib::kernel_error::from_arch(
+                ::lib::arch_error::invalid_cpu_id));
+
+        auto* idle_dom = idle::init_idle_domain(cpu_id);
+        if (!idle_dom)
+            return ::lib::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::out_of_memory));
+        idle_dom->name = "idle/N";
+
+        auto& rq = g_rqs[cpu_id];
+        {
+            const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+            rq.lock.lock();
+            rq.idle_strand = &idle_dom->primary_strand;
+            rq.curr = rq.idle_strand;
+            rq.online.store(1, arch::s390x::lib::atomic::memory_order::release);
+            rq.lock.unlock();
+            arch::s390x::cpu::irq::irq_restore(flags);
+        }
+
+        arch::s390x::cpu::cpumask::cpu_set_online(cpu_id);
+        topology::refresh_cpu_record(cpu_id, 0U, true);
+        topology::topology_online_cpu(cpu_id);
+        return {};
+    }
+
+    /// @brief Notify the scheduler that a CPU is going offline.
+    ///        Marks the run queue offline so no new tasks are enqueued.
+    ///        The caller (hotplug) is responsible for migrating remaining
+    ///        strands before invoking this function, and for calling
+    ///        cpu_clear_online() / topology_offline_cpu() afterwards.
+    [[nodiscard]] auto sched_cpu_down(u16 cpu_id) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+        using namespace _internal;
+
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
+            return ::lib::unexpected(::lib::kernel_error::from_arch(
+                ::lib::arch_error::invalid_cpu_id));
+
+        auto& rq = g_rqs[cpu_id];
+        {
+            const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+            rq.lock.lock();
+            rq.online.store(0, arch::s390x::lib::atomic::memory_order::release);
+            rq.curr = nullptr;
+            rq.idle_strand = nullptr;
+            rq.lock.unlock();
+            arch::s390x::cpu::irq::irq_restore(flags);
+        }
+        return {};
     }
 
 } // namespace zxfoundation::sched

@@ -1,0 +1,51 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/hotplug_types.cxxm
+/// @brief CPU hotplug lifecycle state machine type definitions.
+
+export module arch.s390x.cpu.hotplug_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::hotplug {
+
+    /// @brief CPU lifecycle states per the hotplug state machine.
+    /// @note Transition graph:
+    ///   absent → present → possible → online → offline → absent
+    ///                                 ↑  ↕  ↓
+    ///                              failed
+    enum class cpu_hotplug_state : u8 {
+        absent   = 0,  ///< Slot does not exist or has been permanently removed.
+        present  = 1,  ///< Hardware exists but is not yet released by firmware.
+        possible = 2,  ///< May be brought online via cpu_up().
+        online   = 3,  ///< Actively scheduling work.
+        offline  = 4,  ///< Was online; parked and not scheduling.
+        failed   = 5,  ///< cpu_up() or cpu_down() did not complete.
+    };
+
+    /// @brief Notification reason code for the hotplug notifier chain.
+    enum class cpu_hotplug_notify : u8 {
+        pre_up          = 0,  ///< Before online transition.
+        post_up         = 1,  ///< After successful online.
+        pre_down        = 2,  ///< Before offline transition.
+        post_down       = 3,  ///< After successful offline.
+        pre_setup       = 4,  ///< Before present → possible.
+        post_teardown   = 5,  ///< After offline → absent.
+    };
+
+    /// @brief Notifier callback signature.
+    using hotplug_callback = auto (*)(u16 cpu_id, cpu_hotplug_notify reason) noexcept -> void;
+
+    /// @brief Maximum number of registered hotplug notifiers.
+    inline constexpr u32 HOTPLUG_NOTIFIER_MAX = 8;
+
+    /// @brief Check whether a state is a valid hotplug target.
+    [[nodiscard]] constexpr auto is_valid_hotplug_target(cpu_hotplug_state s) noexcept -> bool {
+        return s == cpu_hotplug_state::online ||
+               s == cpu_hotplug_state::offline ||
+               s == cpu_hotplug_state::absent;
+    }
+
+} // namespace arch::s390x::cpu::hotplug
+
+} // end export

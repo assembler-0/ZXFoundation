@@ -1,6 +1,6 @@
 !files : !compile_group -> [auto] {
     config.cxxm !compile_options -> [ !compiler_id:clang(-Wno-pch-date-time) ]
-    types.cxxm
+    types.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) ]
     endian.cxxm
     linksym.cxxm
     typestate.cxxm

@@ -6,22 +6,58 @@ export module arch.s390x.cpu.sigp;
 import arch.s390x.cpu.sigp_types;
 import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
+import lib.algorithm;
 
 export {
 
 namespace arch::s390x::cpu::sigp {
 
+    /// @brief SIGP retry backoff state.
+    struct sigp_backoff {
+        u64 min_tod;        ///< Initial delay in TOD units (~4096 per ms).
+        u64 max_tod;        ///< Cap delay.
+        u64 current_tod;    ///< Current delay.
+        u64 deadline;       ///< Absolute TOD deadline.
+
+        /// @brief Compute the next backoff delay.
+        /// @return Delay in TOD units.
+        auto next_delay() noexcept -> u64 {
+            const u64 delay = current_tod;
+            if (current_tod < max_tod)
+                current_tod = lib::min(current_tod * 2, max_tod);
+            return delay;
+        }
+
+        /// @brief Check whether the deadline has passed.
+        [[nodiscard]] auto expired() const noexcept -> bool {
+            return processor::stck() >= deadline;
+        }
+
+        /// @brief Busy-wait for current_tod units.
+        auto wait() noexcept -> void {
+            const u64 delay = next_delay();
+            const u64 target = processor::stck() + delay;
+            while (processor::stck() < target)
+                processor::cpu_relax();
+        }
+    };
+
+    /// @brief Build a sigp_backoff with default parameters.
+    /// @param[in] timeout_tod  Absolute TOD deadline.
+    /// @return Initialized backoff state.
+    [[nodiscard]] inline auto default_backoff(u64 timeout_tod) noexcept -> sigp_backoff {
+        return sigp_backoff{
+            .min_tod     = 4'096ULL,            // ~1 ms
+            .max_tod     = 524'288ULL,           // ~128 ms
+            .current_tod = 4'096ULL,
+            .deadline    = timeout_tod,
+        };
+    }
+
     /// @brief Issue a SIGP (Signal Processor) instruction.
-    /// @param addr Target CPU address.
-    /// @param order SIGP order code (SIGP_* constants).
-    /// @param parm Parameter (placed in r1; used by Set Prefix, Set Architecture, …).
-    /// @param status Out: CPU status word on CC=1, unchanged otherwise.
-    /// @return Condition code: 0 = accepted, 1 = status stored, 2 = busy, 3 = not operational.
-    /// @note The order code is passed in an address register per PoP SA22-7832.
-    ///       On CC=1 (status stored) the CPU status word is written to status.
     inline auto sigp_issue(u16 addr, u8 order, unsigned long parm,
                 u32& status) -> int {
-        processor::register_pair r1 = { .odd = parm, };
+        processor::register_pair r1{ .even = 0, .odd = parm };
         int cc;
         __asm__ volatile(
             "	sigp	%[r1],%[addr],0(%[order])\n"
@@ -35,22 +71,91 @@ namespace arch::s390x::cpu::sigp {
     }
 
 
-    /// @brief Issue SIGP, retrying until the target CPU is no longer busy (CC≠2).
-    /// @param cpu_addr Target CPU address.
-    /// @param order SIGP order code.
-    /// @param parm Parameter value.
-    /// @param status Out: CPU status word.
-    /// @return Final condition code (0, 1, or 3).
-    /// @note Use this for all orders that must not be silently dropped.
-    inline auto sigp_busy(u16 cpu_addr, u8 order, u32 parm, u32& status) noexcept -> int {
+    /// @brief Issue SIGP with exponential backoff until the target CPU
+    ///        is no longer busy (CC != 2) or the deadline expires.
+    /// @param[in] cpu_addr Target CPU address.
+    /// @param[in] order SIGP order code.
+    /// @param[in] parm Parameter value.
+    /// @param[in] backoff Retry state controlling delay and deadline.
+    /// @param[out] status CPU status word on CC=1.
+    /// @return Final condition code (0, 1, or 3), or SIGP_CC_BUSY if timeout.
+    [[nodiscard]] inline auto sigp_issue_bounded(
+        u16 cpu_addr,
+        u8  order,
+        u32 parm,
+        sigp_backoff& backoff,
+        u32& status
+    ) noexcept -> int {
         int cc;
         do {
+            status = 0;
             cc = sigp_issue(cpu_addr, order, parm, status);
-            if (cc == SIGP_CC_BUSY) {
-                processor::cpu_relax();
-            }
-        } while (cc == SIGP_CC_BUSY);
-        return cc;
+            if (cc != SIGP_CC_BUSY)
+                return cc;
+            backoff.wait();
+        } while (!backoff.expired());
+        return SIGP_CC_BUSY;
+    }
+
+    /// @brief Issue SIGP, retrying until the target CPU is no longer busy
+    ///        with a bounded timeout (legacy interface).
+    /// @param[in] cpu_addr Target CPU address.
+    /// @param[in] order SIGP order code.
+    /// @param[in] parm Parameter value.
+    /// @param[out] status CPU status word.
+    /// @return Final condition code (0, 1, or 3), or SIGP_CC_BUSY if timeout.
+    inline auto sigp_busy(u16 cpu_addr, u8 order, u32 parm, u32& status) noexcept -> int {
+        constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
+        const u64 deadline = processor::stck() + TOD_UNITS_PER_MILLISECOND * 2'000ULL;
+        auto backoff = default_backoff(deadline);
+        return sigp_issue_bounded(cpu_addr, order, parm, backoff, status);
+    }
+
+    /// @brief Wait until a CPU is stopped, with check-stop recovery.
+    /// @param[in] cpu_addr Target CPU address.
+    /// @param[out] status  Final CPU status word.
+    [[nodiscard]] inline auto wait_cpu_stopped(u16 cpu_addr, u32& status) noexcept -> int {
+        constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
+        const u64 deadline = processor::stck() + TOD_UNITS_PER_MILLISECOND * 3'000ULL;
+
+        {
+            auto backoff = default_backoff(deadline);
+            do {
+                status = 0;
+                int cc = sigp_issue(cpu_addr, SIGP_SENSE, 0, status);
+                if (cc == SIGP_CC_NOT_OPERATIONAL)
+                    return SIGP_CC_NOT_OPERATIONAL;
+                if (cc == SIGP_CC_BUSY) {
+                    backoff.wait();
+                    continue;
+                }
+                if (status & (SIGP_STATUS_STOPPED | SIGP_STATUS_CHECK_STOP))
+                    return SIGP_CC_ORDER_CODE_ACCEPTED;
+                backoff.wait();
+            } while (!backoff.expired());
+        }
+
+        if (status & SIGP_STATUS_CHECK_STOP) {
+            u32 reset_status{0};
+            int cc = sigp_issue(cpu_addr, SIGP_INITIAL_CPU_RESET, 0, reset_status);
+            if (cc != SIGP_CC_ORDER_CODE_ACCEPTED)
+                return cc;
+
+            // Retry SENSE after reset (short timeout).
+            const u64 reset_deadline = processor::stck() + TOD_UNITS_PER_MILLISECOND * 500ULL;
+            auto backoff = default_backoff(reset_deadline);
+            do {
+                status = 0;
+                cc = sigp_issue(cpu_addr, SIGP_SENSE, 0, status);
+                if (cc == SIGP_CC_NOT_OPERATIONAL)
+                    return SIGP_CC_NOT_OPERATIONAL;
+                if (cc != SIGP_CC_BUSY && (status & SIGP_STATUS_STOPPED))
+                    return SIGP_CC_ORDER_CODE_ACCEPTED;
+                backoff.wait();
+            } while (!backoff.expired());
+        }
+
+        return SIGP_CC_BUSY;
     }
 
 } // namespace arch::s390x::cpu::sigp

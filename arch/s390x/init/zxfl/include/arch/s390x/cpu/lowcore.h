@@ -18,6 +18,7 @@
 #define LC_MCCK_STACK       0x0368UL    ///< zx_lowcore_t::mcck_stack
 #define LC_KERNEL_ASCE      0x0388UL    ///< zx_lowcore_t::kernel_asce
 #define LC_RETURN_PSW       0x0290UL    ///< zx_lowcore_t::return_psw
+#define LC_PSW_TEMP         0x0248UL    ///< Temporary PSW storage used by RESTORE_FRAME (unused padding after stack_canary)
 #define LC_CURRENT_DOMAIN   0x0340UL    ///< zx_lowcore_t::current_domain
 #define LC_KERNEL_STACK     0x0348UL    ///< zx_lowcore_t::kernel_stack
 #define LC_AP_CR0           0x0330UL    ///< zx_lowcore_t::ap_cr0
@@ -125,7 +126,8 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     /* Save areas */
     uint64_t    save_area_sync[8];              /* 0x0200 */
     uint64_t    stack_canary;                   /* 0x0240 */
-    uint8_t     pad_0x0248[0x0280 - 0x0248];   /* 0x0248 */
+    zx_psw_t    return_psw_temp;                /* 0x0248  LC_PSW_TEMP – temporary PSW storage for RESTORE_FRAME */
+    uint8_t     pad_0x0258[0x0280 - 0x0258];   /* 0x0258 */
     uint64_t    save_area_restart[1];           /* 0x0280 */
     uint64_t    pcpu;                           /* 0x0288 */
 
@@ -217,6 +219,8 @@ _Static_assert(__builtin_offsetof(zx_lowcore_t, restart_stack) == LC_RESTART_STA
                "LC_RESTART_STACK mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, kernel_asce)   == LC_KERNEL_ASCE,
                "LC_KERNEL_ASCE mismatch");
+_Static_assert(__builtin_offsetof(zx_lowcore_t, return_psw_temp) == LC_PSW_TEMP,
+               "LC_PSW_TEMP mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, return_psw)    == LC_RETURN_PSW,
                "LC_RETURN_PSW mismatch");
 _Static_assert(__builtin_offsetof(zx_lowcore_t, kernel_stack)  == LC_KERNEL_STACK,

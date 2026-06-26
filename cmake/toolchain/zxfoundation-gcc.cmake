@@ -1,0 +1,33 @@
+# ZXFoundation gcc toolchain for s390x
+
+if (NOT DEFINED ENV{GCC_PREFIX})
+    set(CMAKE_C_COMPILER s390x-linux-gnu-gcc)
+    set(CMAKE_CXX_COMPILER s390x-linux-gnu-g++)
+    set(CMAKE_ASM_COMPILER s390x-linux-gnu-gcc)
+    set(CMAKE_LINKER s390x-linux-gnu-ld)
+    set(CMAKE_AR s390x-linux-gnu-ar)
+    set(CMAKE_RANLIB s390x-linux-gnu-ranlib)
+    set(CMAKE_OBJCOPY s390x-linux-gnu-objcopy)
+    set(ZX_NM s390x-linux-gnu-nm)
+    set(ZX_CXXFILT s390x-linux-gnu-c++filt)
+else()
+    set(CMAKE_ENV_GCC_PREFIX "$ENV{GCC_PREFIX}")
+    set(CMAKE_C_COMPILER ${CMAKE_ENV_GCC_PREFIX}-gcc)
+    set(CMAKE_CXX_COMPILER ${CMAKE_ENV_GCC_PREFIX}-g++)
+    set(CMAKE_ASM_COMPILER ${CMAKE_ENV_GCC_PREFIX}-gcc)
+    set(CMAKE_LINKER ${CMAKE_ENV_GCC_PREFIX}-ld)
+    set(CMAKE_AR ${CMAKE_ENV_GCC_PREFIX}-ar)
+    set(CMAKE_RANLIB ${CMAKE_ENV_GCC_PREFIX}-ranlib)
+    set(CMAKE_OBJCOPY ${CMAKE_ENV_GCC_PREFIX}-objcopy)
+    set(ZX_NM ${CMAKE_ENV_GCC_PREFIX}-nm)
+    set(ZX_CXXFILT ${CMAKE_ENV_GCC_PREFIX}-c++filt)
+endif()
+
+set(ZX_HOST_CC gcc)
+set(COMPILER_ID "gcc")
+
+set(EXTRA_KERNEL_FLAGS "")
+set(EXTRA_LOADER_FLAGS "")
+
+set(OPT_LEVEL "2" CACHE STRING "Optimization level (0, 1, 2, 3, s, z)")
+set(DSYM_LEVEL "0" CACHE STRING "Debug symbol level (0, 1, 2, 3)")

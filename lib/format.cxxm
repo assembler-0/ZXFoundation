@@ -7,7 +7,7 @@ import zxfoundation.base.types;
 import lib.string_view;
 import lib.span;
 import lib.concepts;
-import lib.string;
+import lib.cstring;
 import lib.type_traits;
 
 export {
@@ -267,7 +267,7 @@ namespace lib::format {
             if (si < spec.size()) type_ch = spec[si];
 
             usize i = 0;
-            auto do_arg = [&]<typename T>(const T& val) {
+            [[maybe_unused]] auto do_arg = [&]<typename T>(const T& val) {
                 if (i++ != index) return;
                 if (type_ch == 'x' || type_ch == 'X') {
                     u64 v = 0;
