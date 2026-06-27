@@ -20,6 +20,7 @@ import lib.util;
 import lib.ring_buffer;
 import lib.algorithm;
 import lib.static_vector;
+import lib.placementnew;
 
 static constexpr usize MAX_BACKENDS        = 4;
 static constexpr usize LOG_BUFFER_SIZE     = 128 * 1024;

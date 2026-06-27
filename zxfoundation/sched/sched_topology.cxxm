@@ -15,6 +15,7 @@ import arch.s390x.lib.atomic;
 import zxfoundation.memory.numa_types;
 import lib.cpumask;
 import lib.util;
+import lib.placementnew;
 
 namespace zxfoundation::sched::topology::_internal {
 

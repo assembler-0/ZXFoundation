@@ -19,6 +19,7 @@ import zxfoundation.memory.vm_types;
 import zxfoundation.sys.printk;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 import lib.format;
 import lib.pair;
 

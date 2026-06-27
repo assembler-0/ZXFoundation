@@ -15,6 +15,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;
 import arch.s390x.trap.trap;
 import lib.error;
+import lib.placementnew;
 
 namespace _internal {
 

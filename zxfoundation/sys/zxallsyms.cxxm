@@ -10,6 +10,7 @@ import lib.string_view;
 import lib.expected;
 import lib.error;
 import lib.concepts;
+import lib.placementnew;
 
 extern "C" {
     extern const u64  zxallsyms_addrs[];   ///< Sorted ascending virtual addresses.

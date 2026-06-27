@@ -136,12 +136,6 @@ namespace zxfoundation::domain {
         auto operator=(domain&&)         = delete;
     };
 
-    // ── Assembly-critical offset verification ────────────────────────────
-    //
-    // The context switch assembly (__switch_to_asm) accesses strand fields
-    // through the domain pointer. These offsets MUST match the #defines in
-    // switch_to.S.
-
     static_assert(__builtin_offsetof(domain, ko) == 0,
         "domain::ko must be at offset 0 — kobject layout constraint");
 

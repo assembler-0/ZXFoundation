@@ -8,6 +8,7 @@ import zxfoundation.dgp.isolation_types;
 import zxfoundation.sys.cap_types;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 
 export {
 

@@ -15,10 +15,12 @@ import zxfoundation.sys.printk;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.base.typestate;
 import arch.s390x.css.css;
 import arch.s390x.css.css_types;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 import lib.format;
 
 export {
@@ -268,7 +270,7 @@ namespace zxfoundation::sys::cap {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
-        if (b->ko.state == lifecycle_state::dying) {
+        if (b->ko.state == base::lifecycle_state::dying) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_supported));
         }

@@ -8,6 +8,7 @@ import zxfoundation.dgp.isolation_types;
 import arch.s390x.mmu.mmu_types;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 
 export {
 

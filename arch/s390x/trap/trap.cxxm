@@ -123,7 +123,7 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
         zxfoundation::sys::syschk::syschk_fatal(
             lib::kernel_error::from_generic(lib::generic_error::internal_error),
             "program check {:#06x} at PSW {:#018x}:{:#018x} tex={:#018x}",
-            pgm_code, frame->psw_mask, frame->psw_addr, trans_exc);
+            pgm_code, static_cast<long unsigned int>(frame->psw_mask), static_cast<long unsigned int>(frame->psw_addr), trans_exc);
     }
 
     auto* lc = arch::s390x::cpu::lowcore::get_current();
@@ -171,7 +171,7 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
         zxfoundation::sys::printk::perr(
             "domain program check {:#06x} at PSW {:#018x}:{:#018x} "
             "(no current domain)\n",
-            pgm_code, frame->psw_mask, frame->psw_addr);
+            pgm_code, static_cast<long unsigned int>(frame->psw_mask), static_cast<long unsigned int>(frame->psw_addr));
         arch::s390x::cpu::psw::disabled_wait();
     }
 }

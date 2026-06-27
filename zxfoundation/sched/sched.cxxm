@@ -37,6 +37,7 @@ import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 import lib.format;
 import arch.s390x.lib.atomic;
 

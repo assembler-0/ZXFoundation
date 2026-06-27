@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# cmake/zxfl-compile.cmake — ZXFoundationLoader compilation
+# @file cmake/zxfl-compile.cmake
+# @brief ZXFoundationLoader (ZXFL) two-stage bootloader compilation.
 
 set(ZXFL_STAGE1_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/dasd_io.c
@@ -57,9 +58,9 @@ set(ZXFL_COMMON_LINK_FLAGS
     --no-dynamic-linker
 )
 
-# ---------------------------------------------------------------------------
-# Stage 1: IPL Loader (core.zxfoundationloader00.sys)
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Stage 1 — IPL Loader (core.zxfoundationloader00.sys)
+# ============================================================================
 set(ZXFL_STAGE1_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/head.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/entry.c
@@ -67,11 +68,16 @@ set(ZXFL_STAGE1_SOURCES
 )
 
 add_executable(zxfl_stage1.elf ${ZXFL_STAGE1_SOURCES})
-target_include_directories(zxfl_stage1.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(zxfl_stage1.elf SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
+)
+target_include_directories(zxfl_stage1.elf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
 target_compile_options(zxfl_stage1.elf PRIVATE ${ZXFL_COMMON_FLAGS})
 target_compile_definitions(zxfl_stage1.elf PUBLIC __zxfoundation__)
 
-if (COMPILER_ID STREQUAL "clang")
+if(COMPILER_ID STREQUAL "clang")
     target_compile_options(zxfl_stage1.elf PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
         -Wno-gnu-statement-expression-from-macro-expansion
@@ -85,9 +91,9 @@ target_link_options(zxfl_stage1.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
-# ---------------------------------------------------------------------------
-# Stage 2: 64-bit Loader (core.zxfoundationloader01.sys)
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Stage 2 — 64-bit Loader (core.zxfoundationloader01.sys)
+# ============================================================================
 set(ZXFL_STAGE2_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.c
@@ -96,11 +102,16 @@ set(ZXFL_STAGE2_SOURCES
 )
 
 add_executable(zxfl_stage2.elf ${ZXFL_STAGE2_SOURCES})
-target_include_directories(zxfl_stage2.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(zxfl_stage2.elf SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
+)
+target_include_directories(zxfl_stage2.elf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
 target_compile_options(zxfl_stage2.elf PRIVATE ${ZXFL_COMMON_FLAGS})
 target_compile_definitions(zxfl_stage2.elf PUBLIC __zxfoundation__)
 
-if (COMPILER_ID STREQUAL "clang")
+if(COMPILER_ID STREQUAL "clang")
     target_compile_options(zxfl_stage2.elf PRIVATE
         --target=${COMMON_TARGET_TRIPLE}
         -Wno-gnu-statement-expression-from-macro-expansion
@@ -114,8 +125,12 @@ target_link_options(zxfl_stage2.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
-if (CMAKE_OBJCOPY AND BIN2REC)
+# ============================================================================
+# Post-processing: ELF -> .sys conversion
+# ============================================================================
+if(ZX_CAN_PACK_LOADER)
     add_dependencies(zxfl_stage1.elf tools)
+
     add_custom_command(
         TARGET zxfl_stage1.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary zxfl_stage1.elf zxfl_stage1.bin
@@ -130,4 +145,6 @@ if (CMAKE_OBJCOPY AND BIN2REC)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "zxfoundation::build: generating Stage 2 flat binary (01)"
     )
+else()
+    message(STATUS "zxfoundation::build: loader .sys packaging disabled (objcopy or host CC missing)")
 endif()

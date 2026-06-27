@@ -13,6 +13,7 @@ import zxfoundation.base.typestate;
 import lib.error;
 import lib.expected;
 import lib.list;
+import lib.placementnew;
 
 namespace _internal {
 

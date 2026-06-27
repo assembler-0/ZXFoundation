@@ -20,6 +20,7 @@ import lib.expected;
 import lib.cstring;
 import lib.array;
 import lib.algorithm;
+import lib.placementnew;
 import lib.static_vector;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.init.zxfl.protocol;

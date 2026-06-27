@@ -25,6 +25,7 @@ import lib.cstring;
 import lib.source_location;
 import lib.format;
 import lib.span;
+import lib.placementnew;
 
 using zxfoundation::sys::printk::pemerg;
 

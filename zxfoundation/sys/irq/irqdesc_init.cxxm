@@ -1,18 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/irq/irqdesc_init.cxxm
 /// @brief IRQ subsystem boot initialization — creates the irq_desc slab cache.
-///
-/// This module exists solely to break the module import cycle:
-///
-///   irqdesc → slub → syschk → trap → irqdesc   ← CYCLE
-///
-/// Resolution:
-///   irqdesc.cxxm    does NOT import slub or slub_typed.
-///   irqdesc_init.cxxm imports BOTH irqdesc AND slub_typed.
-///   irqdesc does NOT import irqdesc_init → cycle never closes.
-///
-/// main.cxxm imports irqdesc_init and calls irq_subsystem_init() — one line,
-/// no implementation details exposed outside the irq subsystem.
 
 export module zxfoundation.sys.irq.irqdesc_init;
 import zxfoundation.sys.irq.irqdesc;
@@ -20,35 +8,29 @@ import zxfoundation.memory.slub;
 import zxfoundation.memory.slub_typed;
 import zxfoundation.memory.slub_types;
 import zxfoundation.base.types;
+import zxfoundation.sys.syschk;
+import lib.placementnew;
+import lib.error;
 
 export {
 
 namespace zxfoundation::sys::irq {
 
     /// @brief Create the irq_desc slab cache and initialize the IRQ subsystem.
-    ///
-    /// Must be called after slub_init() + kmalloc_init().
-    /// Hard-faults (__builtin_trap) on cache allocation failure — the IRQ
-    /// subsystem is TCB; a missing cache is a non-recoverable boot failure.
     auto irq_subsystem_init() noexcept -> void {
         using namespace zxfoundation::memory::slub;
 
-        // Create a dedicated cache for irq_desc objects.
-        // hwcache_align: each descriptor starts on a cache-line boundary,
-        // preventing false sharing between adjacent IRQ hot paths.
         auto result = typed_slab_cache<irq_desc>::create(
             "irq_desc",
             slub_flags::hwcache_align);
 
         if (!result) [[unlikely]]
-            __builtin_trap();   // TCB: irq_desc cache creation failed
+            syschk::syschk_fatal(lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
+                "irq: oom when allocating cache for irq dispatch subsystem"
+            );
 
-        // Cache lives for the kernel lifetime.
-        // Declared static so its destructor is never called.
         static auto g_irq_desc_cache = *result;
 
-        // Inject the allocator into irqdesc via the opaque irq_slab_ops vtable.
-        // irqdesc.cxxm never sees slub; only raw function pointers cross the boundary.
         const irq_slab_ops ops{
             .cache = static_cast<void*>(g_irq_desc_cache.raw()),
             .alloc = [](void* c) noexcept -> void* {

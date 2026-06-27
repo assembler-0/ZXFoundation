@@ -110,9 +110,6 @@ namespace lib {
         { t.~t() } noexcept;
     };
 
-    template <typename t>
-    concept is_trivially_destructible = is_destructible<t> && __is_trivially_destructible(t);
-
     template <typename T>
     concept is_nothrow_destructible = is_destructible<T> && requires(T& t) {
         { t.~t() } noexcept;
@@ -152,6 +149,12 @@ namespace lib {
     template <typename t>
     concept is_nothrow_copy_constructible = is_copy_constructible<t> &&
                                       __is_nothrow_constructible(t, const t&);
+
+    #if defined(__clang__)
+    template <typename t> concept is_trivially_destructible = is_destructible<t> && __is_trivially_destructible(t);
+#else
+    template <typename t> concept is_trivially_destructible = is_destructible<t> && __has_trivial_destructor(t);
+#endif
 
     template <typename L, typename R>
     concept assignable_from =

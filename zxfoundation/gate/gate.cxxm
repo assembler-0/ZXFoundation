@@ -1,9 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/gate/gate.cxxm
 /// @brief Gate lifecycle management — create, destroy, find gates.
-///
-/// Uses SCOMS kobject_table for unified lifecycle, refcounting, and
-/// generation-counted slot management.
 
 export module zxfoundation.gate.gate;
 import zxfoundation.gate.gate_types;
@@ -17,6 +14,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 
 using zxfoundation::gate::gate_desc;
 using zxfoundation::gate::gate_type;
@@ -24,8 +22,6 @@ using zxfoundation::gate::gate_auth;
 using zxfoundation::gate::MAX_GATES;
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
-
-// ── Internal state ──────────────────────────────────────────────────────
 
 namespace _internal {
 
@@ -37,26 +33,17 @@ namespace _internal {
 
 } // namespace _internal
 
-// ── Exported API ────────────────────────────────────────────────────────
-
 export {
 
 namespace zxfoundation::gate {
 
     /// @brief Initialize the gate subsystem.
-    ///
-    /// Initializes the SCOMS gate table.  Must be called once during kernel
-    /// bring-up before any gate_create calls.
     auto gate_init() noexcept -> void {
         _internal::g_gate_table.init(scoms::kobject_type::gate);
         pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
     }
 
     /// @brief Create a new gate descriptor.
-    ///
-    /// Allocates an embryo slot from the SCOMS table, populates the gate
-    /// fields, activates the object, and returns the kobject ID.
-    ///
     /// @param type             Gate type (nucleus or domain).
     /// @param auth             Authorization policy.
     /// @param target_domain_id Target domain ID.

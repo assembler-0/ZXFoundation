@@ -7,6 +7,7 @@ import zxfoundation.base.types;
 import lib.bit;
 import lib.array;
 import lib.optional;
+import lib.placementnew;
 import arch.s390x.lib.atomic;
 
 export {

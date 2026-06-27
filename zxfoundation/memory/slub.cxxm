@@ -22,6 +22,7 @@ import lib.error;
 import lib.expected;
 import lib.util;
 import lib.algorithm;
+import lib.placementnew;
 
 namespace zxfoundation::memory::slub::_internal {
 

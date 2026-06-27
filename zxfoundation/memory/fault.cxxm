@@ -19,6 +19,7 @@ import zxfoundation.base.types;
 import lib.error;
 import lib.rbtree;
 import lib.util;
+import lib.placementnew;
 
 export {
 

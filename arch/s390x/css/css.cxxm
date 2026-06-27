@@ -22,6 +22,7 @@ import lib.error;
 import lib.expected;
 import lib.cstring;
 import lib.format;
+import lib.placementnew;
 
 export {
 

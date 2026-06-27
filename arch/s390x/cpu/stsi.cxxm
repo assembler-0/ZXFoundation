@@ -5,6 +5,7 @@
 export module arch.s390x.cpu.stsi;
 import zxfoundation.base.types;
 import lib.expected;
+import lib.placementnew;
 import lib.error;
 import lib.bit;
 

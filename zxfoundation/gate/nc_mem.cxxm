@@ -21,6 +21,7 @@ import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 
 static constexpr u64 NC_ERROR = ~0ULL;
 

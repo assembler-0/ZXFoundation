@@ -1,33 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/rcu/rcu.cxxm
 /// @brief Read-Copy-Update — non-preemptive SMP implementation.
-///
-/// ── Model ─────────────────────────────────────────────────────────────
-///
-///   Non-preemptive SMP RCU, analogous to Linux TREE_RCU for
-///   CONFIG_PREEMPT_NONE kernels.
-///
-///   Quiescent state: a CPU is in a QS when in_rcu_read_side == 0
-///   AND not executing inside rcu_read_lock().  Every tick (10ms)
-///   is an opportunity to report a QS.
-///
-///   Grace period:
-///     g_gp_seq even  → no GP in progress.
-///     g_gp_seq odd   → GP in progress; wait for all CPUs' QS.
-///     Completing:    store gp_seq+1 (even) once all CPUs reported QS.
-///
-///   Callbacks: per-CPU pending list under preempt_disable.
-///   Drain: per-CPU on each tick, up to RCU_MAX_DRAIN_PER_TICK.
-///
-/// ── TU-local exposure constraint ──────────────────────────────────────
-///
-///   C++20 modules disallow exported inline functions from referencing
-///   TU-local entities (statics with internal linkage).  All exported
-///   API functions are therefore NOT inline — they are out-of-line
-///   definitions whose bodies are compiled into the module's TU.
-///   Only the read-side rcu_read_guard constructor/destructor are
-///   inline because they call the exported (non-TU-local) rcu_read_lock
-///   and rcu_read_unlock, which are themselves non-inline.
 
 export module zxfoundation.rcu.rcu;
 import zxfoundation.rcu.rcu_types;
@@ -40,10 +13,9 @@ import arch.s390x.cpu.processor;
 import arch.s390x.lib.atomic;
 import arch.s390x.cpu.cpumask;
 import lib.cpumask;
+import lib.placementnew;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-
-// ── Module-internal state (TU-local; NOT exported) ────────────────────────
 
 namespace zxfoundation::rcu::_internal {
 

@@ -1,4 +1,4 @@
 !files : !compile_group -> [auto] {
-    entry.S !compile_options -> [ -mvx -march=z13 ]
-    trap.cxxm
+    entry.S
+    trap.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]
 }

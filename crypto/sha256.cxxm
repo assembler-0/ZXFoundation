@@ -1,17 +1,6 @@
 /// SPDX-License-Identifier: Apache 2.0
 /// @file crypto/sha256.cxxm
-/// @brief SHA-256 streaming hash implementation with lib::span semantics.
-///
-/// Implements FIPS 180-4 SHA-256 as a freestanding, streaming-capable,
-/// C++23 module.  All public entry points use lib::span for type-safe,
-/// bounds-verified byte views and return lib::expected for explicit error
-/// propagation.
-///
-/// @par Limitations
-///   - Software-only; does not exploit IBM z/Architecture KIMD instruction.
-///   - sha256_verify() uses a non-constant-time comparison; do not use it
-///     for HMAC tag comparison over secret key material.
-///   - Maximum message length is 2^61 bytes (SHA-2 protocol limit).
+/// @brief SHA-256 streaming hash implementation
 
 export module crypto.sha256;
 import crypto.sha256_types;
@@ -19,6 +8,7 @@ import zxfoundation.base.types;
 import lib.span;
 import lib.expected;
 import lib.error;
+import lib.placementnew;
 
 namespace crypto::sha256 {
 

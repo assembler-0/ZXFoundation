@@ -16,6 +16,7 @@ import arch.s390x.cpu.psw;
 import lib.error;
 import lib.expected;
 import lib.util;
+import lib.placementnew;
 
 namespace arch::s390x::mmu::_internal {
 

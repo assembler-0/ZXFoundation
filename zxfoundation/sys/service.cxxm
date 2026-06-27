@@ -15,6 +15,7 @@ import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 import lib.cstring;
 import lib.string_view;
 import lib.algorithm;

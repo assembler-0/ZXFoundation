@@ -31,6 +31,7 @@ import lib.expected;
 import lib.error;
 import lib.cstring;
 import lib.util;
+import lib.placementnew;
 
 enum class ap_boot_state : u8 {
     allocated,

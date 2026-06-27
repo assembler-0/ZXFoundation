@@ -25,7 +25,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/toolchain")
 
 include(preconf)              # Pre-configuration
-include(dependencies) 		  # Host dependencies
+include(toolchain-validate)	  # Host dependencies
 include(ccache)				  # CCache configuration
 include(configuration) 		  # Build options
 include(platform)       	  # Platform checks

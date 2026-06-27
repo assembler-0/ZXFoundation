@@ -17,6 +17,7 @@ import arch.s390x.cpu.skey;
 import lib.error;
 import lib.expected;
 import lib.cstring;
+import lib.placementnew;
 
 namespace zxfoundation::exec::_internal {
 
@@ -49,7 +50,7 @@ namespace zxfoundation::exec::_internal {
     /// @param[in] phys  Candidate physical base address (page-aligned).
     /// @return Empty on success; kernel_error if @p phys is outside the recorded
     ///         HHDM coverage or beyond the PMM-managed range.
-  [[nodiscard]] auto validate_user_frame(u64 phys) noexcept
+    [[nodiscard]] auto validate_user_frame(u64 phys) noexcept
         -> lib::expected<void, lib::kernel_error>
     {
         if ((phys & (PAGE_SIZE - 1U)) != 0U

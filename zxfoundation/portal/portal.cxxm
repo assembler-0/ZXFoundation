@@ -23,6 +23,7 @@ import arch.s390x.cpu.aste;
 import arch.s390x.cpu.aste_types;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 
 using zxfoundation::portal::portal_desc;
 using zxfoundation::portal::portal_prot;

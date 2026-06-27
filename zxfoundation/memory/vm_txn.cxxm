@@ -18,6 +18,7 @@ import lib.error;
 import lib.expected;
 import lib.static_vector;
 import lib.util;
+import lib.placementnew;
 
 export {
 

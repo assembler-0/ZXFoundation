@@ -8,6 +8,7 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 
 export {
 

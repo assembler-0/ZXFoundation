@@ -13,6 +13,7 @@ import zxfoundation.domain.strand_types;
 import zxfoundation.base.typestate;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 
 namespace _internal {
 

@@ -7,6 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.locking.qspinlock;
 import lib.error;
+import lib.placementnew;
 import lib.static_vector;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.psw;

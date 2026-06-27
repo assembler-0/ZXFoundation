@@ -17,6 +17,7 @@ import arch.s390x.cpu.irq;
 import arch.s390x.lib.atomic;
 import lib.error;
 import lib.expected;
+import lib.placementnew;
 import lib.format;
 import lib.cstring;
 import lib.util;
