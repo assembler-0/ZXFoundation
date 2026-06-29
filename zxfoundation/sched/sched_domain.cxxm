@@ -49,20 +49,21 @@ namespace zxfoundation::sched::domain_ctx {
         domain_entry_fn entry,
         void* arg = nullptr
     ) noexcept -> void {
-        static constexpr u64 FRAME_SIZE = 160;
-        static constexpr u64 SF_GPRS    = 48;
-        static constexpr u64 SWITCH_VR_SIZE = 128;
+        static constexpr u64 SWITCH_FRAME_SIZE = 640;
+        static constexpr u64 TRAMPOLINE_FRAME_SIZE = 160;
+        static constexpr u64 SF_GPRS = 48;
 
-        const u64 sp = s->kstack_top - FRAME_SIZE;
-        const u64 ksp = sp - SWITCH_VR_SIZE;
+        const u64 ksp = s->kstack_top - SWITCH_FRAME_SIZE - TRAMPOLINE_FRAME_SIZE;
+        const u64 sp = ksp + SWITCH_FRAME_SIZE;
+        const u64 gpr_area = sp + SF_GPRS;
 
-        lib::memset(reinterpret_cast<void*>(ksp), 0, FRAME_SIZE + SWITCH_VR_SIZE);
+        lib::memset(reinterpret_cast<void*>(ksp), 0, SWITCH_FRAME_SIZE);
 
-        auto* frame = reinterpret_cast<u64*>(sp + SF_GPRS);
+        auto* frame = reinterpret_cast<u64*>(gpr_area);
         frame[0] = reinterpret_cast<u64>(arg);                    // r6  = arg
         frame[1] = reinterpret_cast<u64>(entry);                  // r7  = entry fn
         frame[8] = reinterpret_cast<u64>(&domain_trampoline);     // r14 = trampoline
-        frame[9] = sp;                                            // r15 = stack pointer
+        frame[9] = sp;                                            // r15 = stack ptr for trampoline
 
         s->ksp = ksp;
     }

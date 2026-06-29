@@ -35,5 +35,3 @@ list(LENGTH ZX_SOURCES_64_NO_STUB _len_nostub)
 if(_len_src EQUAL 0 OR _len_mod EQUAL 0 OR _len_nostub EQUAL 0)
     message(FATAL_ERROR "zxfoundation::build: no sources found for nucleus target")
 endif()
-
-message(STATUS "zxfoundation::build: ${_len_src} sources, ${_len_mod} modules (zx-discovery)")

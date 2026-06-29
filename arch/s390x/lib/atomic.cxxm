@@ -3,6 +3,7 @@
 /// @brief s390x architecture-specific atomic operations
 
 export module arch.s390x.lib.atomic;
+import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
 import lib.type_traits;
 import lib.concepts;
@@ -22,23 +23,21 @@ namespace arch::s390x::lib::atomic {
         seq_cst = 4
     };
 
-    /// @brief Full memory barrier (BCR 15,0).
-    /// @note s390x TSO-like model: all stores are ordered, loads can pass stores.
-    ///       BCR 15,0 ensures all prior memory operations complete before subsequent ones.
-    inline void memory_barrier() noexcept {
-        __asm__ volatile("bcr 15,0" ::: "memory");
+    /// @brief Full memory barrier (bcr 14,0).
+    inline auto memory_barrier() noexcept -> void {
+        cpu::processor::sync();
     }
 
-    /// @brief Acquire barrier (compiler + control dependency).
-    /// @note Prevents loads/stores after this from being reordered before it.
-    inline void acquire_barrier() noexcept {
-        __asm__ volatile("" ::: "memory");
+    /// @brief Acquire barrier — ensures loads/stores after this point see
+    ///        all stores from other CPUs that completed before this point.
+    inline auto acquire_barrier() noexcept -> void {
+        cpu::processor::sync();
     }
 
-    /// @brief Release barrier (compiler barrier).
-    /// @note Prevents loads/stores before this from being reordered after it.
-    inline void release_barrier() noexcept {
-        __asm__ volatile("" ::: "memory");
+    /// @brief Release barrier — ensures all stores before this point are
+    ///        visible to other CPUs before any subsequent stores.
+    inline auto release_barrier() noexcept -> void {
+        cpu::processor::sync();
     }
 
     /// @brief Atomic type for integral and pointer types up to 64 bits.
@@ -64,7 +63,7 @@ namespace arch::s390x::lib::atomic {
         /// @param order Memory ordering constraint.
         /// @return Current value.
         /// @note s390x: naturally aligned loads are atomic.
-        [[nodiscard]] T load(memory_order order = memory_order::seq_cst) const noexcept {
+        [[nodiscard]] auto load(memory_order order = memory_order::seq_cst) const noexcept -> T {
             storage_type result;
             if constexpr (sizeof(storage_type) == 1) {
                 __asm__ volatile("llc %0,%1" : "=d"(result) : "Q"(value) : "memory");
@@ -86,7 +85,7 @@ namespace arch::s390x::lib::atomic {
         /// @param desired New value to store.
         /// @param order Memory ordering constraint.
         /// @note s390x: naturally aligned stores are atomic.
-        void store(T desired, memory_order order = memory_order::seq_cst) noexcept {
+        auto store(T desired, memory_order order = memory_order::seq_cst) noexcept -> void {
             if (order == memory_order::release || order == memory_order::seq_cst) {
                 release_barrier();
             }
@@ -112,7 +111,7 @@ namespace arch::s390x::lib::atomic {
         /// @param order Memory ordering constraint.
         /// @return Previous value.
         /// @note Uses compare-and-swap loop.
-        [[nodiscard]] T exchange(T desired, memory_order order = memory_order::seq_cst) noexcept {
+        [[nodiscard]] auto exchange(T desired, memory_order order = memory_order::seq_cst) noexcept -> T {
             T old_val = load(memory_order::relaxed);
             while (!compare_exchange_weak(old_val, desired, order, memory_order::relaxed));
             return old_val;
@@ -126,9 +125,11 @@ namespace arch::s390x::lib::atomic {
         /// @return true if exchange occurred, false otherwise.
         /// @note Uses CS (32-bit) or CSG (64-bit) instruction.
         ///       For pointer types: susceptible to ABA problem without external mitigation.
-        [[nodiscard]] bool compare_exchange_strong(T& expected, T desired,
-                                                    memory_order success = memory_order::seq_cst,
-                                                    memory_order failure = memory_order::seq_cst) noexcept {
+        [[nodiscard]] auto compare_exchange_strong(
+            T& expected, T desired,
+            memory_order success = memory_order::seq_cst,
+            memory_order failure = memory_order::seq_cst
+        ) noexcept -> bool {
             if (success == memory_order::release || success == memory_order::seq_cst) {
                 release_barrier();
             }
@@ -177,9 +178,11 @@ namespace arch::s390x::lib::atomic {
 
         /// @brief Weak compare-and-swap (same as strong on s390x).
         /// @note s390x CS/CSG are inherently strong; no spurious failures.
-        [[nodiscard]] bool compare_exchange_weak(T& expected, T desired,
-                                                  memory_order success = memory_order::seq_cst,
-                                                  memory_order failure = memory_order::seq_cst) noexcept {
+        [[nodiscard]] auto compare_exchange_weak(
+            T& expected, T desired,
+            memory_order success = memory_order::seq_cst,
+            memory_order failure = memory_order::seq_cst
+        ) noexcept -> bool {
             return compare_exchange_strong(expected, desired, success, failure);
         }
 
@@ -189,7 +192,7 @@ namespace arch::s390x::lib::atomic {
         /// @return Previous value.
         /// @note Uses LAA (Load-And-Add) or emulated CAS loop for older hardware.
         ///       Only available for integral types.
-        [[nodiscard]] T fetch_add(T arg, memory_order order = memory_order::seq_cst) noexcept
+        [[nodiscard]] auto fetch_add(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
             requires ::lib::is_integral<T>
         {
             T old_val = load(memory_order::relaxed);
@@ -202,7 +205,7 @@ namespace arch::s390x::lib::atomic {
         /// @param order Memory ordering.
         /// @return Previous value.
         /// @note Only available for integral types.
-        [[nodiscard]] T fetch_sub(T arg, memory_order order = memory_order::seq_cst) noexcept
+        [[nodiscard]] auto fetch_sub(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
             requires ::lib::is_integral<T>
         {
             return fetch_add(-arg, order);
@@ -213,7 +216,7 @@ namespace arch::s390x::lib::atomic {
         /// @param order Memory ordering.
         /// @return Previous value.
         /// @note Only available for integral types.
-        [[nodiscard]] T fetch_and(T arg, memory_order order = memory_order::seq_cst) noexcept
+        [[nodiscard]] auto fetch_and(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
             requires ::lib::is_integral<T>
         {
             T old_val = load(memory_order::relaxed);
@@ -226,7 +229,7 @@ namespace arch::s390x::lib::atomic {
         /// @param order Memory ordering.
         /// @return Previous value.
         /// @note Only available for integral types.
-        [[nodiscard]] T fetch_or(T arg, memory_order order = memory_order::seq_cst) noexcept
+        [[nodiscard]] auto fetch_or(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
             requires ::lib::is_integral<T>
         {
             T old_val = load(memory_order::relaxed);
@@ -239,7 +242,7 @@ namespace arch::s390x::lib::atomic {
         /// @param order Memory ordering.
         /// @return Previous value.
         /// @note Only available for integral types.
-        [[nodiscard]] T fetch_xor(T arg, memory_order order = memory_order::seq_cst) noexcept
+        [[nodiscard]] auto fetch_xor(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
             requires ::lib::is_integral<T>
         {
             T old_val = load(memory_order::relaxed);
@@ -253,53 +256,53 @@ namespace arch::s390x::lib::atomic {
         }
 
         /// @brief Assignment operator.
-        T operator=(T desired) noexcept {
+        auto operator=(T desired) noexcept -> T {
             store(desired);
             return desired;
         }
 
         /// @brief Pre-increment operator (integral types only).
-        T operator++() noexcept requires ::lib::is_integral<T> {
+        auto operator++() noexcept -> T requires ::lib::is_integral<T> {
             return fetch_add(1) + 1;
         }
 
         /// @brief Post-increment operator (integral types only).
-        T operator++(int) noexcept requires ::lib::is_integral<T> {
+        auto operator++(int) noexcept -> T requires ::lib::is_integral<T> {
             return fetch_add(1);
         }
 
         /// @brief Pre-decrement operator (integral types only).
-        T operator--() noexcept requires ::lib::is_integral<T> {
+        auto operator--() noexcept -> T requires ::lib::is_integral<T> {
             return fetch_sub(1) - 1;
         }
 
         /// @brief Post-decrement operator (integral types only).
-        T operator--(int) noexcept requires ::lib::is_integral<T> {
+        auto operator--(int) noexcept -> T requires ::lib::is_integral<T> {
             return fetch_sub(1);
         }
 
         /// @brief Compound assignment += (integral types only).
-        T operator+=(T arg) noexcept requires ::lib::is_integral<T> {
+        auto operator+=(T arg) noexcept -> T requires ::lib::is_integral<T> {
             return fetch_add(arg) + arg;
         }
 
         /// @brief Compound assignment -= (integral types only).
-        T operator-=(T arg) noexcept requires ::lib::is_integral<T> {
+        auto operator-=(T arg) noexcept -> T requires ::lib::is_integral<T> {
             return fetch_sub(arg) - arg;
         }
 
         /// @brief Compound assignment &= (integral types only).
-        T operator&=(T arg) noexcept requires ::lib::is_integral<T> {
+        auto operator&=(T arg) noexcept -> T requires ::lib::is_integral<T> {
             return fetch_and(arg) & arg;
         }
 
         /// @brief Compound assignment |= (integral types only).
-        T operator|=(T arg) noexcept requires ::lib::is_integral<T> {
+        auto operator|=(T arg) noexcept -> T requires ::lib::is_integral<T> {
             return fetch_or(arg) | arg;
         }
 
         /// @brief Compound assignment ^= (integral types only).
-        T operator^=(T arg) noexcept requires ::lib::is_integral<T> {
+        auto operator^=(T arg) noexcept -> T requires ::lib::is_integral<T> {
             return fetch_xor(arg) ^ arg;
         }
 
@@ -309,7 +312,7 @@ namespace arch::s390x::lib::atomic {
         /// @brief Convert pointer to integer for storage.
         /// @param ptr Pointer value (or integral value).
         /// @return Integer representation.
-        static constexpr storage_type ptr_to_int(T ptr) noexcept {
+        static constexpr auto ptr_to_int(T ptr) noexcept -> storage_type {
             if constexpr (::lib::is_pointer<T>) {
                 return reinterpret_cast<u64>(ptr);
             } else {
@@ -320,7 +323,7 @@ namespace arch::s390x::lib::atomic {
         /// @brief Convert integer back to pointer.
         /// @param val Integer value.
         /// @return Pointer value (or integral value).
-        static constexpr T int_to_ptr(storage_type val) noexcept {
+        static constexpr auto int_to_ptr(storage_type val) noexcept -> T {
             if constexpr (::lib::is_pointer<T>) {
                 return reinterpret_cast<T>(val);
             } else {
@@ -330,11 +333,11 @@ namespace arch::s390x::lib::atomic {
 
         /// @brief Emulated CAS for 1 and 2 byte types using 4-byte CAS.
         /// @note Requires careful alignment handling and masking.
-        [[nodiscard]] bool compare_exchange_strong_emulated(T& expected, T desired,
-                                                             memory_order success,
-                                                             memory_order failure) noexcept
-            requires ::lib::is_integral<T>
-        {
+        [[nodiscard]] auto compare_exchange_strong_emulated(
+            T& expected, T desired,
+            memory_order success,
+            memory_order failure
+        ) noexcept -> bool requires ::lib::is_integral<T> {
             u64 addr = reinterpret_cast<u64>(&value);
             u32* aligned_ptr = reinterpret_cast<u32*>(addr & ~3ULL);
             

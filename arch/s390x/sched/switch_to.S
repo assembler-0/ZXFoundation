@@ -1,6 +1,7 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/sched/switch_to.S
-/// @brief Context switch — save/restore callee-saved GPRs and swap kernel stacks.
+/// @brief Context switch — save/restore callee-saved GPRs, all 32 VRs, ARs, FPC,
+///        and swap kernel stacks.
 
 #include <arch/s390x/cpu/lowcore.h>
 
@@ -9,20 +10,34 @@
 #define STRAND_KSP          120  ///< strand::ksp        (verified by static_assert)
 #define SF_GPRS             48
 
+#define FRAME_ARS          0
+#define FRAME_FPC          64
+#define FRAME_VRS          72
+#define FRAME_SIZE         640
+
     .section .text, "ax", @progbits
     .globl  __switch_to_asm
     .type   __switch_to_asm, @function
     .align  8
 
-/// @brief Low-level context switch (strand-aware).
-///   %r2 = strand* prev
-///   %r3 = strand* next
-/// Returns:
-///   %r2 = prev's owning domain (for the caller to finish domain teardown)
+/// @brief Low-level context switch (strand-aware, full register save/restore).
+///
+/// Saves:    r6-r15, v0-v31, a0-a15, FPC
+/// Restores: r6-r15, v0-v31, a0-a15, FPC
+///
+/// @param[in] %r2 = strand* prev
+/// @param[in] %r3 = strand* next
+/// @return    %r2 = prev's owning domain (for the caller to finish domain teardown)
 __switch_to_asm:
     stmg    %r6, %r15, SF_GPRS(%r15)
-    aghi    %r15, -128
-    vstm    %v8, %v15, 0(%r15)
+
+    aghi    %r15, -FRAME_SIZE
+
+    stam    %a0, %a15, FRAME_ARS(%r15)
+    stfpc   FRAME_FPC(%r15)
+    vstm    %v0, %v15, FRAME_VRS(%r15)
+    vstm    %v16, %v31, FRAME_VRS + 256(%r15)
+
     stg     %r15, STRAND_KSP(%r2)           // save prev's ksp (strand.ksp)
 
     lg      %r4, STRAND_OWNER(%r3)
@@ -33,10 +48,14 @@ __switch_to_asm:
 
     lg      %r15, STRAND_KSP(%r3)
 
-    lg      %r2, STRAND_OWNER(%r2)
+    lg      %r2, STRAND_OWNER(%r2)          // return prev's domain for teardown
 
-    vlm     %v8, %v15, 0(%r15)
-    aghi    %r15, 128
+    vlm     %v0, %v15, FRAME_VRS(%r15)
+    vlm     %v16, %v31, FRAME_VRS + 256(%r15)
+    lfpc    FRAME_FPC(%r15)
+    lam     %a0, %a15, FRAME_ARS(%r15)
+
+    aghi    %r15, FRAME_SIZE
     lmg     %r6, %r15, SF_GPRS(%r15)
     br      %r14
 

@@ -38,7 +38,7 @@ namespace arch::s390x::mmu {
         tlb_flush_asce(asce.raw());
     }
 
-    /// @brief IPTE — Invalidate Page Table Entry (all CPUs).
+    /// @brief IPTE — Invalidate Page Table Entry (all CPUs, global broadcast).
     /// @param[in] pte_table_phys  Physical address of the page table
     ///                            (lower 11 bits ignored by hardware).
     /// @param[in] virt_addr       Virtual address whose TLB entry to purge
@@ -52,6 +52,30 @@ namespace arch::s390x::mmu {
             : [r1] "a" (pte_table_phys),
               [r2] "a" (virt_addr)
             : "cc", "memory"
+        );
+    }
+
+    /// @brief IPTE — Invalidate Page Table Entry (local CPU only).
+    /// @param[in] pte_table_phys  Physical address of the page table.
+    /// @param[in] virt_addr       Virtual address whose TLB entry to purge.
+    /// @note   PoP §3-67: IPTE with M4=1 (bit 16 of M4 operand = 1) skips the
+    ///         cross-CPU broadcast, invalidating only the local TLB.  This is
+    ///         safe for mappings that are visible only to the current CPU,
+    ///         e.g., kernel-private page tables, per-CPU ASID flips.
+    /// @warning  After calling this, other CPUs may still hold stale TLB
+    ///           entries for the same virtual address.  Use only when the
+    ///           mapping is provably single-CPU.
+    auto tlb_invalidate_pte_local(
+        u64 pte_table_phys, u64 virt_addr
+    ) noexcept -> void {
+        __asm__ volatile(
+            // IPTE with M4=1: bit 16 of the M4 field (register 0) = 1
+            "   lghi   0,1\n"
+            "   ipte   %[r1],%[r2]\n"
+            :
+            : [r1] "a" (pte_table_phys),
+              [r2] "a" (virt_addr)
+            : "0", "cc", "memory"
         );
     }
 

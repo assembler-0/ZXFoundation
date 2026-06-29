@@ -20,25 +20,26 @@ namespace arch::s390x::cpu::stsi {
     /// @param sel2 Selector 2 (e.g. 1).
     /// @return 0 on success, -1 if not supported.
     inline auto stsi_issue(void* sysinfo, int fc, int sel1, int sel2) noexcept -> lib::expected<int, lib::kernel_error> {
-		u64 r0 = 0;
-		lib::bit_insert_msb(r0, 0, 3, static_cast<u64>(fc));
-		lib::bit_insert_msb(r0, 16, 31, static_cast<u64>(sel1));
-		
-		int cc;
-		__asm__ volatile (
-			"   lr      %%r0,%[r0]\n"
-			"   lr      %%r1,%[r1]\n"
-			"   stsi    %[sysinfo]\n"
-			"   ipm     %[cc]\n"
-			"   srl     %[cc],28\n"
-			: [cc] "=d" (cc), [sysinfo] "=Q" (*static_cast<char*>(sysinfo))
-			: [r0] "d" (static_cast<int>(r0)), [r1] "d" (sel2)
-			: "0", "1", "cc", "memory"
-		);
-		if (cc == 3)
-			return lib::unexpected(lib::kernel_error::from_arch(lib::arch_error::code::stsi_failed));
-    	return cc;
-	}
+        u64 r0 = 0;
+        lib::bit_insert_msb(r0, 0, 3, static_cast<u64>(fc));
+        lib::bit_insert_msb(r0, 16, 31, static_cast<u64>(sel1));
+
+        int cc;
+        register unsigned long reg0 __asm__("0") = r0;
+        register unsigned long reg1 __asm__("1") = static_cast<unsigned long>(sel2);
+
+        __asm__ volatile (
+            "   stsi    %[sysinfo]\n"
+            "   ipm     %[cc]\n"
+            "   srl     %[cc],28\n"
+            : [cc] "=d" (cc), [sysinfo] "=Q" (*static_cast<char*>(sysinfo))
+            : "d" (reg0), "d" (reg1)
+            : "cc", "memory"
+        );
+        if (cc == 3)
+            return lib::unexpected(lib::kernel_error::from_arch(lib::arch_error::code::stsi_failed));
+        return cc;
+    }
 
 } // namespace arch::s390x::cpu::stsi
 

@@ -22,7 +22,7 @@ function(_zx_parse_compiler_options INPUT_LINE OUTPUT_LIST)
 endfunction()
 
 function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
-    message(STATUS "zx_discovery: scanning for manifests in ${ROOT_DIR}")
+    message(STATUS "zxfoundation::build: scanning for manifests in ${ROOT_DIR}")
 
     file(GLOB_RECURSE _FOUND_MANIFESTS "${ROOT_DIR}/manifest.zxd")
     
@@ -42,7 +42,7 @@ function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
         set(GLOBAL_OPTIONS "")
         set(COND_STACK "T") # T for True, F for False. Base is always True.
 
-        message(VERBOSE "zx_discovery: processing ${MANIFEST}")
+        message(VERBOSE "zxfoundation::build: processing ${MANIFEST}")
 
         foreach(LINE ${LINES})
             string(STRIP "${LINE}" LINE)
@@ -108,7 +108,7 @@ function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
                     set(SECTION "FILES")
                     set(CURRENT_GROUP "${NEW_GROUP}")
                     if(NOT CURRENT_GROUP MATCHES "^(modules|standard|auto)$")
-                        message(FATAL_ERROR "zx_discovery: invalid compile group '${CURRENT_GROUP}' in ${MANIFEST}")
+                        message(FATAL_ERROR "zxfoundation::build: invalid compile group '${CURRENT_GROUP}' in ${MANIFEST}")
                     endif()
                 endif()
                 continue()
@@ -150,7 +150,7 @@ function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
                 set(FULL_PATH "${MANIFEST_DIR}/${FILE_NAME}")
 
                 if(NOT EXISTS "${FULL_PATH}")
-                    message(FATAL_ERROR "zx_discovery: file '${FILE_NAME}' not found in ${MANIFEST_DIR} (referenced by ${MANIFEST})")
+                    message(FATAL_ERROR "zxfoundation::build: file '${FILE_NAME}' not found in ${MANIFEST_DIR} (referenced by ${MANIFEST})")
                 endif()
 
                 # Classification by group and extension
@@ -199,5 +199,5 @@ function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
     list(LENGTH _LOCAL_SOURCES _LEN_SOURCES)
     list(LENGTH _LOCAL_MODULES _LEN_MODULES)
     list(LENGTH _FOUND_MANIFESTS _LEN_MANIFESTS)
-    message(STATUS "zx_discovery: found ${_LEN_SOURCES} sources and ${_LEN_MODULES} modules across ${_LEN_MANIFESTS} manifests")
+    message(STATUS "zxfoundation::build: found ${_LEN_SOURCES} sources and ${_LEN_MODULES} modules across ${_LEN_MANIFESTS} manifests")
 endfunction()

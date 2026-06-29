@@ -37,6 +37,7 @@ namespace arch::s390x::cpu::lowcore {
     constexpr u64 LC_PREEMPT_COUNT  = 0x0430UL; ///< percpu::preempt_count — used by entry.S
     constexpr u64 LC_IRQ_NESTING    = 0x0438UL; ///< percpu::irq_nesting — used by entry.S
     constexpr u64 LC_NUCLEUS_NESTING = 0x043CUL; ///< percpu::nucleus_nesting — used by entry.S
+    constexpr u64 LC_IRQ_CLASS      = 0x0444UL; ///< percpu::current_irq_class — used by entry.S
 
     /// @brief z/Architecture 8 KB prefix (lowcore) structure.
     struct alignas(8192) zx_lowcore {

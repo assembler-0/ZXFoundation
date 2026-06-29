@@ -24,10 +24,10 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/toolchain")
 
+include(configuration) 		  # Build options
 include(preconf)              # Pre-configuration
 include(toolchain-validate)	  # Host dependencies
 include(ccache)				  # CCache configuration
-include(configuration) 		  # Build options
 include(platform)       	  # Platform checks
 include(standard)   	      # C/C++ Standards
 include(hosttools)			  # Host tools

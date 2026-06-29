@@ -107,7 +107,7 @@ _zx_find_optional(ZX_CCACHE_PROGRAM "ccache" ccache)
 if(ZX_CCACHE_PROGRAM)
     set(ZX_FOUND_CCACHE TRUE CACHE BOOL "ccache was found" FORCE)
     set(CCACHE_PROGRAM "${ZX_CCACHE_PROGRAM}" CACHE FILEPATH "ccache program path" FORCE)
-    message(STATUS "  ccache max size: 12G")
+    message(STATUS "zxfoundation::validate: ccache max size: 12G")
 endif()
 
 set(ZX_CAN_BUILD_KERNEL TRUE

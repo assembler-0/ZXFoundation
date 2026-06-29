@@ -1,5 +1,5 @@
 !files : !compile_group -> [auto] {
-    switch_to.S !compile_options -> [ -mvx -march=z13 ]
+    switch_to.S
     ret_to_user.S
-    domain_enter.S !compile_options -> [ -mvx -march=z13 ]
+    domain_enter.S
 }

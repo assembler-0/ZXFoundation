@@ -41,6 +41,7 @@ macro(_zx_kernel_flags _tgt)
         -nostdlib -nostdinc
         -march=${MARCH_MODE} -mtune=${MARCH_MODE} -m64
         ${EXTRA_KERNEL_FLAGS}
+        -O${OPT_LEVEL} -g${DSYM_LEVEL}
     )
     if(COMPILER_ID STREQUAL "clang")
         target_compile_options(${_tgt} PRIVATE
@@ -53,11 +54,7 @@ macro(_zx_kernel_flags _tgt)
         )
     endif()
     target_compile_definitions(${_tgt} PUBLIC
-        $<$<COMPILE_LANGUAGE:C>:__zxfoundation__>
-    )
-    target_compile_options(${_tgt} PRIVATE
-        $<$<COMPILE_LANGUAGE:ASM>:-D__zxfoundation__>
-        -O${OPT_LEVEL} -g${DSYM_LEVEL}
+        __zxfoundation__
     )
     set_target_properties(${_tgt} PROPERTIES
         LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
@@ -66,6 +63,11 @@ macro(_zx_kernel_flags _tgt)
         -static --no-dynamic-linker -ztext
         --no-pie -g -m${TARGET_EMULATION_MODE}
     )
+    if (COMPILER_ID STREQUAL "gcc")
+        target_link_options(${_tgt} PRIVATE
+            --no-warn-rwx-segments
+        )
+    endif()
 endmacro()
 
 if(ZX_CAN_BUILD_SYMRES)

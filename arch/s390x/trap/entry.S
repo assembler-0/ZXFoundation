@@ -10,10 +10,17 @@
 
 #define TIF_NEED_RESCHED 4
 
-.macro SAVE_FRAME reg, old_psw_lc, stack_lc
+.macro SAVE_FRAME reg, old_psw_lc, stack_lc, irq_class_val
     icm     \reg, 15, LC_IRQ_NESTING(0)
     jnz     .Lnested\@
     lg      \reg, \stack_lc(0)
+    .ifnc \stack_lc, LC_MCCK_STACK
+    .else
+    ltgr    \reg, \reg
+    jnz     .Lstack_ok\@
+    lg      \reg, LC_KERNEL_STACK(0)
+.Lstack_ok\@:
+    .endif
     j       .Lalloc_frame\@
 .Lnested\@:
     lgr     \reg, %r15
@@ -28,6 +35,8 @@
     lgr     %r15, \reg
     asi     LC_IRQ_NESTING(0), 1
     la      %r2, 160(%r15)
+    lhi     \reg, \irq_class_val
+    stc     \reg, LC_IRQ_CLASS(0)
 .endm
 
 .macro RESTORE_FRAME
@@ -36,12 +45,14 @@
     lfpc    (160 + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
     mvc     LC_PSW_TEMP(16, 0), (160 + IRQ_FRAME_PSW_MASK)(%r15)
-    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
     asi     LC_IRQ_NESTING(0), -1
+    lhi     %r0, 0
+    stc     %r0, LC_IRQ_CLASS(0)
+    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm
 
-.macro SAVE_NUCLEUS_FRAME reg, old_psw_lc, stack_lc
+.macro SAVE_NUCLEUS_FRAME reg, old_psw_lc, stack_lc, irq_class_val
     tm      (\old_psw_lc + 1)(0), 0x01
     jz      .Lnucleus_keep_context\@
     xgr     \reg, \reg
@@ -65,6 +76,8 @@
     lgr     %r15, \reg
     asi     LC_NUCLEUS_NESTING(0), 1
     la      %r2, 160(%r15)
+    lhi     \reg, \irq_class_val
+    stc     \reg, LC_IRQ_CLASS(0)
 .endm
 
 .macro RESTORE_NUCLEUS_FRAME
@@ -73,8 +86,10 @@
     lfpc    (160 + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
     mvc     LC_PSW_TEMP(16, 0), (160 + IRQ_FRAME_PSW_MASK)(%r15)
-    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
     asi     LC_NUCLEUS_NESTING(0), -1
+    lhi     %r0, 0
+    stc     %r0, LC_IRQ_CLASS(0)
+    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm
 
@@ -108,7 +123,8 @@
     .section .text.trap_pgm, "ax", @progbits
     .globl  trap_pgm_entry
 trap_pgm_entry:
-    SAVE_FRAME %r1, LC_PGM_OLD_PSW, LC_ASYNC_STACK
+    // irq_class = 3 (pgm)
+    SAVE_FRAME %r1, LC_PGM_OLD_PSW, LC_ASYNC_STACK, 3
     brasl   %r14, do_pgm_check
     CHECK_PREEMPT
     RESTORE_FRAME
@@ -116,7 +132,8 @@ trap_pgm_entry:
     .section .text.trap_ext, "ax", @progbits
     .globl  trap_ext_entry
 trap_ext_entry:
-    SAVE_FRAME %r1, LC_EXT_OLD_PSW, LC_ASYNC_STACK
+    // irq_class = 1 (ext)
+    SAVE_FRAME %r1, LC_EXT_OLD_PSW, LC_ASYNC_STACK, 1
     brasl   %r14, do_ext_interrupt
     CHECK_PREEMPT
     RESTORE_FRAME
@@ -124,7 +141,8 @@ trap_ext_entry:
     .section .text.trap_io, "ax", @progbits
     .globl  trap_io_entry
 trap_io_entry:
-    SAVE_FRAME %r1, LC_IO_OLD_PSW, LC_ASYNC_STACK
+    // irq_class = 2 (io)
+    SAVE_FRAME %r1, LC_IO_OLD_PSW, LC_ASYNC_STACK, 2
     brasl   %r14, do_io_interrupt
     CHECK_PREEMPT
     RESTORE_FRAME
@@ -132,7 +150,8 @@ trap_io_entry:
     .section .text.trap_svc, "ax", @progbits
     .globl  trap_svc_entry
 trap_svc_entry:
-    SAVE_NUCLEUS_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK
+    // irq_class = 4 (svc)
+    SAVE_NUCLEUS_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK, 4
     llgh    %r3, 0x008a(0)          // Load svc_code (u16) from lowcore.
     brasl   %r14, do_svc
     RESTORE_NUCLEUS_FRAME
@@ -140,7 +159,8 @@ trap_svc_entry:
     .section .text.trap_mcck, "ax", @progbits
     .globl  trap_mcck_entry
 trap_mcck_entry:
-    SAVE_FRAME %r1, LC_MCCK_OLD_PSW, LC_MCCK_STACK
+    // irq_class = 5 (mcck)
+    SAVE_FRAME %r1, LC_MCCK_OLD_PSW, LC_MCCK_STACK, 5
     brasl   %r14, do_mcck_interrupt
     RESTORE_FRAME
 
@@ -167,8 +187,11 @@ pc_gate_entry:
 
     asi     LC_NUCLEUS_NESTING(0), 1
 
+    // irq_class = 6 (nucleus)
+    lhi     %r1, 6
+    stc     %r1, LC_IRQ_CLASS(0)
+
     lgr     %r7, %r6
-    lgr     %r6, %r5
     lgr     %r5, %r4
     lgr     %r4, %r3
     lgr     %r3, %r2
@@ -199,9 +222,10 @@ pc_gate_entry:
     vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
     lfpc    (160 + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
-    lmg     %r0, %r13, (160 + IRQ_FRAME_GPRS)(%r15)
-
     asi     LC_NUCLEUS_NESTING(0), -1
+    lhi     %r0, 0
+    stc     %r0, LC_IRQ_CLASS(0)
+    lmg     %r0, %r13, (160 + IRQ_FRAME_GPRS)(%r15)
 
     .insn   e,0x0101                    // PR instruction
     .size   pc_gate_entry, . - pc_gate_entry

@@ -15,24 +15,41 @@ namespace arch::s390x::cpu::percpu {
 
     using zxfoundation::memory::pmm::pcp_pool;
 
+    /// @brief Explicit interrupt context classification.
+    /// @note  Unlike nesting-depth heuristics, this tracks the actual interrupt
+    ///        class that is currently being serviced.  Set by the SAVE_FRAME
+    ///        macro in entry.S, cleared by RESTORE_FRAME.  Ensures correct
+    ///        detection of MCCK context even when nested within other handlers.
+    enum class irq_class : u8 {
+        none      = 0,  ///< Not in any interrupt handler.
+        ext       = 1,  ///< External interrupt (SAVE_FRAME from LC_EXT_OLD_PSW).
+        io        = 2,  ///< I/O interrupt (SAVE_FRAME from LC_IO_OLD_PSW).
+        pgm       = 3,  ///< Program check (SAVE_FRAME from LC_PGM_OLD_PSW).
+        svc       = 4,  ///< Supervisor call (SAVE_NUCLEUS_FRAME from LC_SVC_OLD_PSW).
+        mcck      = 5,  ///< Machine check (SAVE_FRAME from LC_MCCK_OLD_PSW).
+        nucleus   = 6,  ///< Program-call (PC) gate entry.
+    };
+
     /// @brief s390x per-CPU data block embedded in the lowcore at 0x0400.
     struct alignas(processor::S390X_CACHE_LINE_SIZE) s390x_percpu_data {
         u64     prefix_phys{};         ///< Physical address of this CPU's 8 KB lowcore.
-
+ 
         u16     cpu_id{};              ///< Logical CPU ID (0 = BSP, dense, 0-based).
         u16     cpu_addr{};            ///< Hardware CPU address (from STAP instruction).
         u32     _pad0{};               ///< Explicit padding to align next u64.
-
+ 
         u64     current_domain{};      ///< Virtual address of the current domain struct.
         u64     current_strand{};      ///< Virtual address of the currently executing strand.
         u64     kernel_stack{};        ///< Top of this CPU's kernel stack (virtual).
         u64     user_asce{};           ///< User ASCE (CR1 value for user address space).
-
+ 
         i32     preempt_count{};       ///< Preemption depth. >0 means non-preemptible.
         u32     softirq_pending{};     ///< Bitmask of pending deferred softirqs.
         u32     irq_nesting{};         ///< Hardware IRQ/MCCK nesting depth (0 = not in IRQ handler).
         u32     nucleus_nesting{};     ///< Synchronous SVC/PC nucleus-call nesting depth.
         u32     lock_depth{};          ///< Current qspinlock MCS node allocation depth.
+        irq_class current_irq_class{}; ///< Explicit interrupt class being serviced (set by entry.S).
+        u8      _pad_irq_class[3]{};   ///< Pad to u32 alignment.
         lib::atomic::atomic<u64> ec_bits{};
 
         zxfoundation::locking::mcs::mcs_node qnodes[zxfoundation::locking::mcs::MCS_MAX_LOCK_DEPTH]{};

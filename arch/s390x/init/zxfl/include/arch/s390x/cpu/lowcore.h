@@ -26,6 +26,7 @@
 #define LC_PREEMPT_COUNT    0x0430UL    ///< arch::s390x::cpu::percpu::preempt_count
 #define LC_IRQ_NESTING      0x0438UL    ///< arch::s390x::cpu::percpu::irq_nesting
 #define LC_NUCLEUS_NESTING  0x043CUL    ///< arch::s390x::cpu::percpu::nucleus_nesting
+#define LC_IRQ_CLASS        0x0444UL    ///< arch::s390x::cpu::percpu::current_irq_class
 
 // Old PSW offsets — PoP §4.3.2.
 #define LC_EXT_OLD_PSW      0x0130UL

@@ -401,6 +401,8 @@ namespace arch::s390x::cpu::smp {
             }
             record.state = ap_boot_state::prefix_set;
 
+            processor::sync();
+
             result = sigp_issue_bounded(ci.cpu_addr, sigp::SIGP_RESTART, 0);
             if (result.cc != sigp::SIGP_CC_ORDER_CODE_ACCEPTED) {
                 (void)reject_sigp_and_rollback(record, sigp::SIGP_RESTART, result);

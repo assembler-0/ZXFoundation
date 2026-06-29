@@ -6,6 +6,7 @@ export module zxfoundation.sched.context;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
+import arch.s390x.cpu.percpu_types;
 import zxfoundation.base.types;
 import lib.source_location;
 
@@ -34,12 +35,21 @@ namespace zxfoundation::sched::context {
         return nucleus_nesting_depth() >= 1U;
     }
 
+    /// @brief True if we are in a nested interrupt (hard-irq context).
+    /// @note Hard-irq is defined as nesting depth >= 2, meaning an interrupt
+    ///       handler has taken an additional interrupt while servicing the first.
     [[nodiscard]] inline auto in_hardirq() noexcept -> bool {
         return nesting_depth() >= 2U;
     }
 
+    /// @brief True if we are in a machine-check (MCCK) interrupt handler.
+    /// @note PoP §7-2: MCCK is the highest-priority interrupt.  It can occur
+    ///       from any context, including wait state (nesting depth = 0).  The
+    ///       explicit irq_class must be checked rather than nesting depth.
     [[nodiscard]] inline auto in_mcck() noexcept -> bool {
-        return nesting_depth() >= 3U;
+        using arch::s390x::cpu::percpu::irq_class;
+        return arch::s390x::cpu::lowcore::this_cpu_percpu().current_irq_class
+            == irq_class::mcck;
     }
 
     [[nodiscard]] inline auto preempt_disabled() noexcept -> bool {

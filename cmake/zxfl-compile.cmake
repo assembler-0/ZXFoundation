@@ -58,9 +58,7 @@ set(ZXFL_COMMON_LINK_FLAGS
     --no-dynamic-linker
 )
 
-# ============================================================================
-# Stage 1 — IPL Loader (core.zxfoundationloader00.sys)
-# ============================================================================
+# Stage 1 loader - core.zxfoundationloader00.sys
 set(ZXFL_STAGE1_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/head.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/entry.c
@@ -91,9 +89,13 @@ target_link_options(zxfl_stage1.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
-# ============================================================================
-# Stage 2 — 64-bit Loader (core.zxfoundationloader01.sys)
-# ============================================================================
+if (COMPILER_ID STREQUAL "gcc")
+    target_link_options(zxfl_stage1.elf PRIVATE
+        --no-warn-rwx-segments
+    )
+endif()
+
+# Stage 2 loader - core.zxfoundationloader01.sys
 set(ZXFL_STAGE2_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.S
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/entry.c
@@ -125,9 +127,13 @@ target_link_options(zxfl_stage2.elf PRIVATE
     ${ZXFL_COMMON_LINK_FLAGS}
 )
 
-# ============================================================================
-# Post-processing: ELF -> .sys conversion
-# ============================================================================
+if (COMPILER_ID STREQUAL "gcc")
+    target_link_options(zxfl_stage2.elf PRIVATE
+        --no-warn-rwx-segments
+    )
+endif()
+
+# Post-build: convert stage 1 to binary record, stage 2 to raw binary
 if(ZX_CAN_PACK_LOADER)
     add_dependencies(zxfl_stage1.elf tools)
 

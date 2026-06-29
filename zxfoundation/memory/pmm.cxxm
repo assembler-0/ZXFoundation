@@ -510,6 +510,18 @@ namespace zxfoundation::memory::pmm {
             while (resv.size() > n) resv.pop_back();
         }
 
+        for (u32 i = 0; i < proto.mem_map_count; ++i) {
+            if (map[i].type != arch::s390x::init::zxfl::ZXFL_MEM_RESERVED
+                && map[i].type != arch::s390x::init::zxfl::ZXFL_MEM_LOADER)
+                continue;
+            push_resv(align_resv({ map[i].base, map[i].base + map[i].length }));
+        }
+        {
+            u32 n = static_cast<u32>(resv.size());
+            sort_merge_reservations(resv.data(), n);
+            while (resv.size() > n) resv.pop_back();
+        }
+
         // Allocate the frame descriptor table immediately after all reservations.
         const u64 table_bytes = g_max_pfn * sizeof(frame_desc);
         const u64 table_pages = (table_bytes + PAGE_SIZE - 1) >> PAGE_SHIFT;
@@ -519,13 +531,6 @@ namespace zxfoundation::memory::pmm {
             if (resv[i].end > table_phys) table_phys = resv[i].end;
         table_phys = (table_phys + PAGE_SIZE - 1) & ~static_cast<u64>(PAGE_SIZE - 1);
 
-        // EXTREME REDUNDANCY: the entire frame-descriptor table is written through
-        // the HHDM during initialization and indexed on every desc_of() for the
-        // life of the kernel.  At CONFIG_ZX_MAX_CPUS the boot path hands out frames
-        // across all installed RAM, so the table extent must be provably backed by
-        // both installed RAM and the loader-built HHDM DAT before the first store.
-        // A region-second-translation exception (PoP code 0x003A) on the memset
-        // below is the high-core boot-crash signature; fail closed instead.
         const u64 table_end = table_phys + (table_pages << PAGE_SHIFT);
         if (table_end < table_phys
             || table_end > (g_max_pfn << PAGE_SHIFT)
@@ -975,18 +980,18 @@ namespace zxfoundation::memory::pmm {
     ///        May be momentarily imprecise due to pages temporarily in PCP.
     [[nodiscard]] auto free_page_count() noexcept -> u64 {
         u64 total = 0;
-        for (u32 node = 0; node < numa::MAX_NUMA_NODES; ++node)
+        for (auto & g_node_zone : _internal::g_node_zones)
             for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
-                total += _internal::g_node_zones[node].free_pages[zi];
+                total += g_node_zone.free_pages[zi];
         return total;
     }
 
     /// @brief Total managed page count (sum across all zones).
     [[nodiscard]] auto total_page_count() noexcept -> u64 {
         u64 total = 0;
-        for (u32 node = 0; node < numa::MAX_NUMA_NODES; ++node)
+        for (auto & g_node_zone : _internal::g_node_zones)
             for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
-                total += _internal::g_node_zones[node].total_pages[zi];
+                total += g_node_zone.total_pages[zi];
         return total;
     }
 

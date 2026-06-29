@@ -18,8 +18,6 @@ export {
 
 namespace arch::s390x::cpu::processor {
 
-    constexpr u64 PREFIX_SAVE_LC = 0x0208UL;
-
     /// @brief A 128-bit register pair
     union register_pair {
         u128 pair{};
@@ -112,16 +110,12 @@ namespace arch::s390x::cpu::processor {
 
     /// @brief Store Prefix (STPX) — returns the physical address in the Prefix Register.
     /// @return Physical base address of the current CPU's lowcore.
+    /// @note   z/Architecture prefix register only supports addresses < 4 GiB.
+    ///         The kernel enforces this by allocating lowcores from zone::dma31.
     [[deprecated("STPX is expensive — use lowcore::get_current() on the hot path")]]
     [[gnu::no_stack_protector]] auto get_prefix() noexcept -> u32 {
         u32 prefix;
-        __asm__ volatile (
-            "stpx %c[slot](0)\n\t"
-            "l %[prefix], %c[slot](0)\n\t"
-            : [prefix] "=d" (prefix)
-            : [slot] "i" (PREFIX_SAVE_LC)
-            : "memory", "cc"
-        );
+        __asm__ volatile ("stpx %0" : "=Q"(prefix) : : "memory");
         return prefix;
     }
 
@@ -273,6 +267,13 @@ namespace arch::s390x::cpu::processor {
         ctl_store<Reg, Reg>(reg);
         ::lib::bit_clear_msb(reg, bit);
         ctl_load<Reg, Reg>(reg);
+    }
+
+    /// @brief Full CPU serialization (bcr 14,0).
+    /// @note PoP §4-44: completes all previous storage references before
+    ///       any subsequent instructions are initiated.
+    auto sync() noexcept -> void {
+        __asm__ volatile("bcr 14,0" ::: "memory");
     }
 
 } // namespace arch::s390x::cpu::processor
