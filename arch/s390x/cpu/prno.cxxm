@@ -1,0 +1,138 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/prno.cxxm
+/// @brief PRNO (Perform Random Number Operation, 0xB93C) instruction wrappers.
+///        Function codes per IBM z/Architecture PoP:
+///          0x00 — PRNO Query (16-byte PB at GR1)
+///          0x03 — PRNO-SHA-512-DRNG Generate (240-byte PB at GR1)
+///          0x83 — PRNO-SHA-512-DRNG Seed      (bit 56 set)
+///          0x70 — PRNO-TRNG-Query-Raw-to-Conditioned-Ratio (8-byte PB at GR1)
+///          0x72 — PRNO-TRNG Generate (no PB, GR1 ignored)
+
+export module arch.s390x.cpu.prno;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::prno {
+
+    enum class prno_fc : u32 {
+        query          = 0x00,
+        drbg_sha512    = 0x03,
+
+        trng_q_r2c     = 0x70,
+        trng_generate  = 0x72,
+
+        drbg_sha512_seed = 0x83,
+    };
+
+    /// PRNO Query result (16 bytes at GR1).
+    struct alignas(16) query_pb {
+        u8 data[16]{};
+    };
+
+    /// PRNO-SHA-512-DRNG parameter block (240 bytes).
+    struct alignas(32) drbg512_pb {
+        u8 state[240]{};
+    };
+
+    /// PRNO-TRNG-Query-Raw-to-Conditioned-Ratio result (8 bytes at GR1).
+    struct alignas(8) trng_ratio_pb {
+        u8 data[8]{};
+    };
+
+    /// Generic PRNO with parameter block (Query and DRBG functions).
+    /// GR0 = function code, GR1 = param block,
+    /// (R1,R1+1) = first operand addr+len,
+    /// (R2,R2+1) = second operand addr+len.
+    template <prno_fc FC, typename PB>
+    inline auto prno(PB& pb,
+                     const void*& op1, u64& op1_len,
+                     const void*& op2, u64& op2_len) noexcept -> i32 {
+        register u64 r2 asm("2") = reinterpret_cast<u64>(op1);
+        register u64 r3 asm("3") = op1_len;
+        register u64 r4 asm("4") = reinterpret_cast<u64>(op2);
+        register u64 r5 asm("5") = op2_len;
+        i32 cc;
+
+        __asm__ volatile(
+            "   lgr 0,%[fc]\n"
+            "   lgr 1,%[pba]\n"
+            "0: .insn rre,0xb93c0000,%[op1],%[op2]\n"
+            "   brc 1,0b\n"
+            "   ipm %[cc]\n"
+            "   srl %[cc],28\n"
+            : [op1] "+d" (r2), [r3] "+d" (r3),
+              [op2] "+d" (r4), [r5] "+d" (r5),
+              [cc] "=d" (cc)
+            : [fc] "d" (static_cast<u64>(FC)),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
+            : "cc", "memory", "0", "1"
+        );
+
+        op1 = reinterpret_cast<const void*>(r2);
+        op1_len = r3;
+        op2 = reinterpret_cast<const void*>(r4);
+        op2_len = r5;
+        return cc;
+    }
+
+    /// PRNO-TRNG Generate (FC=0x72, no parameter block, GR1 ignored).
+    /// (R1,R1+1) = conditioned buffer addr/length in bits,
+    /// (R2,R2+1) = raw-to-conditioned ratio (optional, can be zeroed).
+    /// @return condition code: 0=success, 1=partial, 3=not installed/invalid.
+    inline auto trng_generate(const void*& cbuf, u64& cbuf_bits,
+                              const void*& r2c, u64& r2c_bits) noexcept -> i32 {
+        register u64 r2 asm("2") = reinterpret_cast<u64>(cbuf);
+        register u64 r3 asm("3") = cbuf_bits;
+        register u64 r4 asm("4") = reinterpret_cast<u64>(r2c);
+        register u64 r5 asm("5") = r2c_bits;
+        i32 cc;
+
+        __asm__ volatile(
+            "   lgr 0,%[fc]\n"
+            "0: .insn rre,0xb93c0000,%[cb],%[rc]\n"
+            "   brc 1,0b\n"
+            "   ipm %[cc]\n"
+            "   srl %[cc],28\n"
+            : [cb] "+d" (r2), [r3] "+d" (r3),
+              [rc] "+d" (r4), [r5] "+d" (r5),
+              [cc] "=d" (cc)
+            : [fc] "d" (static_cast<u64>(prno_fc::trng_generate))
+            : "cc", "memory", "0"
+        );
+
+        cbuf = reinterpret_cast<const void*>(r2);
+        cbuf_bits = r3;
+        r2c = reinterpret_cast<const void*>(r4);
+        r2c_bits = r5;
+        return cc;
+    }
+
+    /// Convenience: one-shot TRNG generate into a byte buffer.
+    /// Internally converts byte count to bits for the instruction.
+    inline auto trng_fill(void* buf, u64 buf_bytes) noexcept -> i32 {
+        register u64 r2 asm("2") = reinterpret_cast<u64>(buf);
+        register u64 r3 asm("3") = buf_bytes * 8U;
+        register u64 r4 asm("4") = 0;
+        register u64 r5 asm("5") = 0;
+        i32 cc;
+
+        __asm__ volatile(
+            "   lgr 0,%[fc]\n"
+            "0: .insn rre,0xb93c0000,%[cb],%[rc]\n"
+            "   brc 1,0b\n"
+            "   ipm %[cc]\n"
+            "   srl %[cc],28\n"
+            : [cb] "+d" (r2), [r3] "+d" (r3),
+              [rc] "+d" (r4), [r5] "+d" (r5),
+              [cc] "=d" (cc)
+            : [fc] "d" (static_cast<u64>(prno_fc::trng_generate))
+            : "cc", "memory", "0"
+        );
+
+        return cc;
+    }
+
+} // namespace arch::s390x::cpu::prno
+
+} // end export

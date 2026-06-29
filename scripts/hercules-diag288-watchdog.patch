@@ -1,0 +1,40 @@
+diff --git a/diagnose.c b/diagnose.c
+index 2bf0c21..e27abdf 100644
+--- a/diagnose.c
++++ b/diagnose.c
+@@ -345,14 +345,31 @@ U32   code;
+         break;
+ #endif
+ 
+-#if 0
+-    case 0x288;:
++    case 0x288:
+     /*---------------------------------------------------------------*/
+     /* Diagnose 288: Control Virtual Machine Time Bomb               */
++    /*                                                               */
++    /* Used by Linux watchdog (drivers/watchdog/diag288_wdt.c)       */
++    /* to set/change/cancel a watchdog timer.                        */
++    /*                                                               */
++    /* R1 even = function code (0=INIT, 1=CHANGE, 2=CANCEL)         */
++    /* R1 odd  = timeout in seconds                                  */
++    /* R3 even = action (0=LPAR restart, or CP cmd addr for VM)      */
++    /* R3 odd  = CP cmd length for VM, 0 for LPAR                    */
+     /*---------------------------------------------------------------*/
+-        regs->psw.cc = ARCH_DEP(vm_timebomb) (r1, r3, regs);
++    {
++        switch (regs->GR(r1)) {
++        case 0:  /* WDT_FUNC_INIT  */
++        case 1:  /* WDT_FUNC_CHANGE */
++        case 2:  /* WDT_FUNC_CANCEL */
++            regs->psw.cc = 0;
++            break;
++        default:
++            ARCH_DEP(program_interrupt)(regs, PGM_SPECIFICATION_EXCEPTION);
++            break;
++        }
+         break;
+-#endif
++    }
+ 
+ #ifdef FEATURE_EMULATE_VM
+     case 0x000:

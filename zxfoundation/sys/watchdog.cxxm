@@ -117,11 +117,11 @@ namespace zxfoundation::sys::watchdog {
                               diag::LPARWDT_RESTART, 0);
         arch::s390x::trap::set_pgm_fixup(false);
         if (rc != 0) {
-            pnotice("watchdog: diag 0x288 not available (rc={})",
+            pnotice("watchdog: harddog not available (rc={})",
                      static_cast<i32>(rc));
         } else {
             g_harddog_armed = true;
-            pinfo("watchdog: diag 0x288 armed (timeout={}s)",
+            pinfo("watchdog: harddog armed (interval={}s)",
                   diag::WDT_DEFAULT_TIMEOUT);
         }
 
@@ -133,7 +133,7 @@ namespace zxfoundation::sys::watchdog {
         t.mode         = timer_mode::periodic;
         (void)timer_add(t);
 
-        pinfo("watchdog: softdog initialized (interval={}s, miss_threshold={})",
+        pinfo("watchdog: softdog armed (interval={}s, miss_threshold={})",
             WATCHDOG_INTERVAL_SECONDS, WATCHDOG_FATAL_THRESHOLD);
     }
 

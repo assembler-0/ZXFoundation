@@ -5,6 +5,8 @@
 export module crypto.sha256;
 import crypto.sha256_types;
 import zxfoundation.base.types;
+import arch.s390x.cpu.cpacf;
+import arch.s390x.cpu.features;
 import lib.span;
 import lib.expected;
 import lib.error;
@@ -217,11 +219,38 @@ namespace crypto::sha256 {
     }
 
     /// @brief One-shot SHA-256: hash @p data and write the 32-byte digest to @p out.
-    /// @param[in]  data  Input byte span.
-    /// @param[out] out   32-byte output digest span (compile-time extent).
-    /// @return lib::expected<void, lib::kernel_error>
-    auto sha256_hash(lib::span<const u8> data, lib::span<u8, SHA256_DIGEST_SIZE> out)
+    ///        Uses CPACF KIMD/KLMD when MSA Ext 1 is available, software fallback.
+    [[nodiscard]] auto sha256_hash(lib::span<const u8> data, lib::span<u8, SHA256_DIGEST_SIZE> out)
         -> lib::expected<void, lib::kernel_error> {
+        namespace cpacf = arch::s390x::cpu::cpacf;
+        namespace feat  = arch::s390x::cpu::features;
+
+        if (feat::has(feat::facility::msa_ext1)) {
+            cpacf::sha256_pb pb{};
+            pb.state[0] = 0x6a09e667U;
+            pb.state[1] = 0xbb67ae85U;
+            pb.state[2] = 0x3c6ef372U;
+            pb.state[3] = 0xa54ff53aU;
+            pb.state[4] = 0x510e527fU;
+            pb.state[5] = 0x9b05688cU;
+            pb.state[6] = 0x1f83d9abU;
+            pb.state[7] = 0x5be0cd19U;
+
+            const void* ptr = data.data();
+            u64 remain = static_cast<u64>(data.size());
+
+            cpacf::kimd<cpacf::kimd_fc::sha256>(pb, ptr, remain);
+            cpacf::klmd<cpacf::kimd_fc::sha256>(pb, ptr, remain);
+
+            for (u32 i = 0U; i < 8U; ++i) {
+                out[i * 4U + 0U] = static_cast<u8>(pb.state[i] >> 24U);
+                out[i * 4U + 1U] = static_cast<u8>(pb.state[i] >> 16U);
+                out[i * 4U + 2U] = static_cast<u8>(pb.state[i] >>  8U);
+                out[i * 4U + 3U] = static_cast<u8>(pb.state[i]);
+            }
+            return {};
+        }
+
         sha256_ctx ctx;
         sha256_init(ctx);
         return sha256_update(ctx, data)
@@ -230,29 +259,20 @@ namespace crypto::sha256 {
             });
     }
 
-    /// @brief Hash @p data and compare the result against @p expected_digest.
-    /// @param[in] data             Input byte span to hash.
-    /// @param[in] expected_digest  32-byte reference digest span (compile-time extent).
-    /// @return lib::expected<void, lib::kernel_error>
-    auto sha256_verify(lib::span<const u8>           data,
-                       lib::span<const u8, SHA256_DIGEST_SIZE> expected_digest)
+    [[nodiscard]] auto sha256_verify(lib::span<const u8> data,
+                                     lib::span<const u8, SHA256_DIGEST_SIZE> expected)
         -> lib::expected<void, lib::kernel_error> {
         u8 computed[SHA256_DIGEST_SIZE]{};
-        lib::span<u8, SHA256_DIGEST_SIZE> computed_span(computed, SHA256_DIGEST_SIZE);
-
-        const auto hash_result = sha256_hash(data, computed_span);
+        auto hash_result = sha256_hash(data, lib::span<u8, SHA256_DIGEST_SIZE>(computed));
         if (!hash_result) {
             return hash_result;
         }
-
-        // Byte-by-byte comparison (see @warning above).
         for (u32 i = 0U; i < SHA256_DIGEST_SIZE; ++i) {
-            if (computed[i] != expected_digest[i]) {
+            if (computed[i] != expected[i]) {
                 return lib::unexpected(
                     lib::kernel_error::from_crypto(lib::crypto_error::hash_mismatch));
             }
         }
-
         return {};
     }
 

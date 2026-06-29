@@ -37,4 +37,7 @@
     clock.cxxm
     diag.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
     storage.cxxm
+    cpacf.cxxm
+    prno.cxxm
+    vector.cxxm
 }

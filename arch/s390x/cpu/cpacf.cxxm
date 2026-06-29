@@ -1,0 +1,135 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/cpacf.cxxm
+/// @brief CPACF instruction wrappers — KIMD, KLMD, KM, KMC.
+///        All CPACF instructions use RRE format with function code in GR0
+///        and parameter block address in GR1 (or R1+1 for KM/KMC).
+
+export module arch.s390x.cpu.cpacf;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::cpacf {
+
+    /// KIMD/KLMD function codes.
+    enum class kimd_fc : u32 {
+        query  = 0,
+        sha1   = 1,
+        sha256 = 2,
+        sha512 = 3,
+    };
+
+    /// KM/KMC function codes.
+    enum class km_fc : u32 {
+        query       = 0,
+        aes128      = 1,
+        aes192      = 2,
+        aes256      = 3,
+        pdea        = 16,
+        des         = 17,
+        tdea128     = 18,
+        tdea192     = 19,
+        pdea_cbc    = 20,
+        des_cbc     = 21,
+        tdea128_cbc = 22,
+        tdea192_cbc = 23,
+    };
+
+    /// SHA-256 parameter block layout (32 bytes) for KIMD/KLMD FC=2.
+    struct alignas(32) sha256_pb {
+        u32 state[8]{};
+    };
+
+    /// KIMD: Compute Intermediate Message Digest (0xB93E, RRE format).
+    /// GR0 = function code, GR1 = param block, (R2,R2+1) = source addr+len.
+    template <kimd_fc FC, typename PB>
+    inline auto kimd(PB& pb, const void*& msg, u64& len) noexcept -> void {
+        register u64 r2 asm("2") = reinterpret_cast<u64>(msg);
+        register u64 r3 asm("3") = len;
+
+        __asm__ volatile(
+            "   lgr 0,%[fc]\n"
+            "   lgr 1,%[pba]\n"
+            "0: .insn rre,0xb93e0000,0,%[src]\n"
+            "   brc 1,0b\n"
+            : [src] "+d" (r2), [r3] "+d" (r3)
+            : [fc] "d" (static_cast<u64>(FC)),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
+            : "cc", "memory", "0", "1"
+        );
+
+        msg = reinterpret_cast<const void*>(r2);
+        len = r3;
+    }
+
+    /// KLMD: Compute Last Message Digest (0xB93F, RRE format).
+    template <kimd_fc FC, typename PB>
+    inline auto klmd(PB& pb, const void*& msg, u64& len) noexcept -> void {
+        register u64 r2 asm("2") = reinterpret_cast<u64>(msg);
+        register u64 r3 asm("3") = len;
+
+        __asm__ volatile(
+            "   lgr 0,%[fc]\n"
+            "   lgr 1,%[pba]\n"
+            "0: .insn rre,0xb93f0000,0,%[src]\n"
+            "   brc 1,0b\n"
+            : [src] "+d" (r2), [r3] "+d" (r3)
+            : [fc] "d" (static_cast<u64>(FC)),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
+            : "cc", "memory", "0", "1"
+        );
+
+        msg = reinterpret_cast<const void*>(r2);
+        len = r3;
+    }
+
+    /// KM: Cipher Message (0xB92E, RRE format).
+    /// (R1,R1+1) = dst+param blk, (R2,R2+1) = src+len.  GR0 = function code.
+    template <km_fc FC, typename PB>
+    inline auto km(const void*& dst, PB& pb, const void*& src, u64& len) noexcept -> void {
+        register u64 r4 asm("4") = reinterpret_cast<u64>(dst);
+        register u64 r5 asm("5") = reinterpret_cast<u64>(&pb);
+        register u64 r2 asm("2") = reinterpret_cast<u64>(src);
+        register u64 r3 asm("3") = len;
+
+        __asm__ volatile(
+            "   lgr 0,%[fc]\n"
+            "0: .insn rre,0xb92e0000,%[dst],%[src]\n"
+            "   brc 1,0b\n"
+            : [dst] "+d" (r4), [r5] "+d" (r5),
+              [src] "+d" (r2), [r3] "+d" (r3)
+            : [fc] "d" (static_cast<u64>(FC))
+            : "cc", "memory", "0"
+        );
+
+        dst = reinterpret_cast<const void*>(r4);
+        src = reinterpret_cast<const void*>(r2);
+        len = r3;
+    }
+
+    /// KMC: Cipher Message with Chaining (0xB92F, RRE format).
+    template <km_fc FC, typename PB>
+    inline auto kmc(const void*& dst, PB& pb, const void*& src, u64& len) noexcept -> void {
+        register u64 r4 asm("4") = reinterpret_cast<u64>(dst);
+        register u64 r5 asm("5") = reinterpret_cast<u64>(&pb);
+        register u64 r2 asm("2") = reinterpret_cast<u64>(src);
+        register u64 r3 asm("3") = len;
+
+        __asm__ volatile(
+            "   lgr 0,%[fc]\n"
+            "0: .insn rre,0xb92f0000,%[dst],%[src]\n"
+            "   brc 1,0b\n"
+            : [dst] "+d" (r4), [r5] "+d" (r5),
+              [src] "+d" (r2), [r3] "+d" (r3)
+            : [fc] "d" (static_cast<u64>(FC))
+            : "cc", "memory", "0"
+        );
+
+        dst = reinterpret_cast<const void*>(r4);
+        src = reinterpret_cast<const void*>(r2);
+        len = r3;
+    }
+
+} // namespace arch::s390x::cpu::cpacf
+
+} // end export

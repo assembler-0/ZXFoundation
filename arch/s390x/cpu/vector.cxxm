@@ -1,0 +1,36 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/vector.cxxm
+/// @brief z/Architecture vector (VX) instruction wrappers.
+
+export module arch.s390x.cpu.vector;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::vector {
+
+    using v16u8  = u8  __attribute__((vector_size(16)));
+    using v8u16  = u16 __attribute__((vector_size(16)));
+    using v4u32  = u32 __attribute__((vector_size(16)));
+    using v2u64  = u64 __attribute__((vector_size(16)));
+
+    /// VL: Vector Load (0xE706, RXE) — 16-byte aligned.
+    [[nodiscard]] inline auto vl(const void* addr) noexcept -> v16u8 {
+        v16u8 result;
+        __asm__ volatile("vl %[v],0(%[a])"
+            : [v] "=v" (result)
+            : [a] "a" (addr)
+            : "memory");
+        return result;
+    }
+
+    /// VST: Vector Store (0xE70E, RXE) — 16-byte aligned.
+    inline auto vst(v16u8 v, void* addr) noexcept -> void {
+        __asm__ volatile("vst %[v],0(%[a])"
+            : : [v] "v" (v), [a] "a" (addr)
+            : "memory");
+    }
+
+} // namespace arch::s390x::cpu::vector
+
+} // end export
