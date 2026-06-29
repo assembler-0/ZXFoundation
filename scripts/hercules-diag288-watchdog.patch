@@ -1,8 +1,73 @@
 diff --git a/diagnose.c b/diagnose.c
-index 2bf0c21..e27abdf 100644
+index 2bf0c21..efa17d8 100644
 --- a/diagnose.c
 +++ b/diagnose.c
-@@ -345,14 +345,31 @@ U32   code;
+@@ -183,6 +183,64 @@ struct ipl_parameter_block {
+ #define DIAG308_RC_OK        0x0001
+ #define DIAG308_RC_NOCONFIG  0x0102
+ 
++/*-------------------------------------------------------------------*/
++/* DIAG X'288' watchdog state and helper thread.                     */
++/*-------------------------------------------------------------------*/
++static volatile time_t _wdt_expiry = 0;  /* 0 = not armed            */
++static TID            _wdt_tid    = 0;   /* Worker thread ID         */
++
++static void* _wdt_thread(void* arg)
++{
++    UNREFERENCED(arg);
++
++    LOG_THREAD_BEGIN("wdt_ipl");
++
++    while (1)
++    {
++        SLEEP(1);
++
++        if (_wdt_expiry == 0)
++            break;  /* cancelled */
++
++        if (time(NULL) >= _wdt_expiry)
++        {
++            char iplcmd[64];
++
++            _wdt_expiry = 0;
++
++            logmsg("DIAG X'288' watchdog timer expired\n");
++
++            panel_command("stopall");
++
++            while (1)
++            {
++                int i, all_stopped = 1;
++                OBTAIN_INTLOCK(NULL);
++                for (i = 0; i < sysblk.hicpu; i++)
++                {
++                    if (IS_CPU_ONLINE(i)
++                        && sysblk.regs[i]->cpustate != CPUSTATE_STOPPED)
++                    {
++                        all_stopped = 0;
++                        break;
++                    }
++                }
++                RELEASE_INTLOCK(NULL);
++                if (all_stopped) break;
++                SLEEP(1);
++            }
++
++            sprintf(iplcmd, "ipl %03X", sysblk.ipldev);
++            panel_command(iplcmd);
++            break;
++        }
++    }
++
++    _wdt_tid = 0;
++    LOG_THREAD_END("wdt_ipl");
++    return NULL;
++}
++
+ #endif // COMPILE_THIS_ONLY_ONCE
+ 
+ #ifndef STOP_CPUS_AND_IPL
+@@ -345,14 +403,51 @@ U32   code;
          break;
  #endif
  
@@ -13,7 +78,8 @@ index 2bf0c21..e27abdf 100644
      /* Diagnose 288: Control Virtual Machine Time Bomb               */
 +    /*                                                               */
 +    /* Used by Linux watchdog (drivers/watchdog/diag288_wdt.c)       */
-+    /* to set/change/cancel a watchdog timer.                        */
++    /* to set/change/cancel a watchdog timer.  On expiry the system  */
++    /* is restarted (IPL from the boot device).                      */
 +    /*                                                               */
 +    /* R1 even = function code (0=INIT, 1=CHANGE, 2=CANCEL)         */
 +    /* R1 odd  = timeout in seconds                                  */
@@ -22,14 +88,33 @@ index 2bf0c21..e27abdf 100644
      /*---------------------------------------------------------------*/
 -        regs->psw.cc = ARCH_DEP(vm_timebomb) (r1, r3, regs);
 +    {
-+        switch (regs->GR(r1)) {
++        U64 func    = regs->GR(r1);
++        U64 timeout = regs->GR(r1 + 1);
++
++        switch (func) {
 +        case 0:  /* WDT_FUNC_INIT  */
 +        case 1:  /* WDT_FUNC_CHANGE */
-+        case 2:  /* WDT_FUNC_CANCEL */
++            if (timeout < 1)
++            {
++                ARCH_DEP(program_interrupt)(regs,
++                        PGM_SPECIFICATION_EXCEPTION);
++                break;
++            }
++            _wdt_expiry = time(NULL) + (time_t)timeout;
++            if (!_wdt_tid)
++                create_thread(&_wdt_tid, DETACHED,
++                        _wdt_thread, NULL, "wdt_ipl");
 +            regs->psw.cc = 0;
 +            break;
++
++        case 2:  /* WDT_FUNC_CANCEL */
++            _wdt_expiry = 0;
++            regs->psw.cc = 0;
++            break;
++
 +        default:
-+            ARCH_DEP(program_interrupt)(regs, PGM_SPECIFICATION_EXCEPTION);
++            ARCH_DEP(program_interrupt)(regs,
++                    PGM_SPECIFICATION_EXCEPTION);
 +            break;
 +        }
          break;
