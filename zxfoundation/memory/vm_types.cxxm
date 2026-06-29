@@ -6,6 +6,7 @@ export module zxfoundation.memory.vm_types;
 import zxfoundation.base.types;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.memory_contract;
+import zxfoundation.rcu.rcu_types;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.locking.qspinlock;
 import arch.s390x.lib.atomic;
@@ -125,6 +126,7 @@ namespace zxfoundation::memory::vm {
         atomic<u64>     resident{0};                    ///< Currently-mapped page count.
 
         lib::rb_node    rb{};                           ///< Red-black tree node.
+        rcu::rcu_head   rcu{};                          ///< RCU deferred-free callback node.
 
 
         /// @brief Region size in bytes.

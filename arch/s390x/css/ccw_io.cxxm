@@ -15,6 +15,7 @@ import zxfoundation.memory.hhdm;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
 import arch.s390x.lib.atomic;
+import arch.s390x.cpu.clock;
 import lib.error;
 import lib.expected;
 import lib.placementnew;
@@ -106,7 +107,7 @@ namespace arch::s390x::css::ccw_io {
         }
 
         // Calculate timeout deadline in TOD ticks (1 µs = 4096 ticks).
-        const u64 start_tod = proc::stck();
+        const u64 start_tod = cpu::clock::stck();
         const u64 deadline  = start_tod + (timeout_us * 4096ULL);
 
         while (true) {
@@ -126,7 +127,7 @@ namespace arch::s390x::css::ccw_io {
                 return result_irb;
             }
 
-            if (proc::stck() > deadline) {
+            if (cpu::clock::stck() > deadline) {
                const auto saved_irq = irqctl::irq_save_disable();
 
                 if (entry->io_done.load(atomic::memory_order::seq_cst) != 0) {

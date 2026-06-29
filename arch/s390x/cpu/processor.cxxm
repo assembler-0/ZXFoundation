@@ -1,10 +1,17 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/processor.cxxm
-/// @brief z/Architecture CPU instruction wrappers and hardware utilities.
+/// @brief z/Architecture CPU identification, serialisation, hypervisor
+///        detection, prefix register, and spin-loop primitives.
+///
+/// Clock/TOD  → arch.s390x.cpu.clock   (stck / stckf / stcke)
+/// DIAGNOSE   → arch.s390x.cpu.diag    (diag8 / diag288)
+/// CR ops     → arch.s390x.cpu.ctlreg  (ctl_store / ctl_load / set/clear_bit)
+/// Storage    → arch.s390x.cpu.storage (set_storage_key / pfmf)
 
 export module arch.s390x.cpu.processor;
+export import arch.s390x.cpu.processor_types;
 import zxfoundation.base.types;
-import arch.s390x.cpu.processor_types;
+import arch.s390x.cpu.ctlreg;
 import lib.bit;
 
 namespace {
@@ -18,17 +25,7 @@ export {
 
 namespace arch::s390x::cpu::processor {
 
-    /// @brief A 128-bit register pair
-    union register_pair {
-        u128 pair{};
-        struct {
-            u64 even;
-            u64 odd;
-        };
-    };
-    static_assert(sizeof(register_pair) == 16, "register_pair must be exactly 128 bits");
-
-    /// @brief cpuid structure
+    /// @brief cpuid structure (STIDP result).
     struct alignas(8) [[gnu::packed]] cpuid {
         unsigned int version:8;
         unsigned int ident:24;
@@ -81,33 +78,6 @@ namespace arch::s390x::cpu::processor {
         return sp;
     }
 
-    /// @brief Store Clock (STCK) — stores the 64-bit TOD clock value.
-    /// @return 64-bit TOD clock value.
-    /// @note   STCK sets CC=1 if the clock is non-operational.  We ignore CC here;
-    ///         callers that need error handling should use stckf() with a facility check.
-    inline auto stck() noexcept -> u64 {
-        u64 tod;
-        __asm__ volatile ("stck %0" : "=Q" (tod) :: "cc", "memory");
-        return tod;
-    }
-
-    /// @brief Store Clock Fast (STCKF) — stores the 64-bit TOD clock faster.
-    /// @return 64-bit TOD clock value.
-    /// @note   Requires STFLE facility bit 25.  Caller must verify availability.
-    inline auto stckf() noexcept -> u64 {
-        u64 tod;
-        __asm__ volatile ("stckf %0" : "=Q" (tod) :: "cc", "memory");
-        return tod;
-    }
-
-    /// @brief Store Clock Extended (STCKE) — stores 128-bit TOD clock + epoch index.
-    /// @return 128-bit extended TOD value.
-    inline auto stcke() noexcept -> u128 {
-        u128 tod;
-        __asm__ volatile ("stcke %0" : "=Q" (tod) :: "cc", "memory");
-        return tod;
-    }
-
     /// @brief Store Prefix (STPX) — returns the physical address in the Prefix Register.
     /// @return Physical base address of the current CPU's lowcore.
     /// @note   z/Architecture prefix register only supports addresses < 4 GiB.
@@ -133,147 +103,12 @@ namespace arch::s390x::cpu::processor {
         return addr;
     }
 
-    /// @brief Set Storage Key (SSKE) — set the storage key for a 4 KB frame.
-    /// @param paddr  Physical address of the frame (4 KB aligned).
-    /// @param key    Storage key: bits 0–3 = access-control bits,
-    ///               bit 4 = fetch protection, bit 5 = reference, bit 6 = change.
-    auto set_storage_key(const u64 paddr, const u8 key) noexcept -> void {
-        __asm__ volatile (
-            "sske %[key], %[paddr]\n\t"
-            :
-            : [key]   "d" (static_cast<u64>(key)),
-              [paddr] "a" (paddr)
-            : "memory"
-        );
-    }
-
-    /// @brief Perform Frame Management Function (PFMF).
-    /// @param op1   Operand 1: contains the key, FC, and control bits.
-    /// @param phys  Physical address of the frame to manage.
-    auto pfmf(const u64 op1, const u64 phys) noexcept -> void {
-        __asm__ volatile (
-            "pfmf %[op1], %[addr]\n\t"
-            :
-            : [op1]  "d" (op1),
-              [addr] "a" (phys)
-            : "memory"
-        );
-    }
-
-    constexpr u32 WDT_FUNC_INIT           = 0;
-    constexpr u32 WDT_FUNC_CHANGE         = 1;
-    constexpr u32 WDT_FUNC_CANCEL         = 2;
-    constexpr u32 WDT_FUNC_CONCEAL        = 0x80000000U;
-    constexpr u32 LPARWDT_RESTART         = 0;
-
-    constexpr u32 WDT_MIN_TIMEOUT         = 15;
-    constexpr u32 WDT_MAX_TIMEOUT         = 3600;
-    constexpr u32 WDT_DEFAULT_TIMEOUT     = 30;
-
-    /// @brief Issue DIAGNOSE 0x288 (LPAR/hypervisor watchdog).
-    /// @param func    Watchdog function: WDT_FUNC_INIT (0), WDT_FUNC_CHANGE (1),
-    ///                or WDT_FUNC_CANCEL (2).  May be OR'd with WDT_FUNC_CONCEAL.
-    /// @param timeout Timeout in seconds (15–3600).
-    /// @param action  LPAR: LPARWDT_RESTART (0); z/VM: physical address of an
-    ///                EBCDIC CP command string.
-    /// @param len     Length of the z/VM command string (LPAR: 0).
-    /// @return 0 on success, nonzero condition code on failure.
-    /// @note   The caller must ensure func/timeout are valid; the hypervisor
-    ///         returns CC != 0 for invalid parameters.
-    auto diag288(u32 func, u32 timeout,
-                 u64 action, u32 len) noexcept -> i32 {
-        register_pair r1{ .even = func, .odd = timeout };
-        register_pair r3{ .even = action, .odd = len };
-        i32 rc = -1;
-        __asm__ volatile(
-            "    chi     %[rc],0\n"          // CC=1 (rc=-1 < 0); preserved if DIAG faults
-            "    diag    %[r1],%[r3],0x288\n"
-            "    ipm     %[rc]\n"
-            "    srl     %[rc],28\n"
-            : [rc] "+d" (rc)
-            : [r1] "d" (r1.pair), [r3] "d" (r3.pair)
-            : "cc", "memory");
-        return rc;
-    }
-
-    /// @brief Issue DIAG 8 (Diagnose 8) with a 64-bit buffer address.
-    /// @param addr  Buffer address (virtual, must be accessible).
-    /// @param len   Buffer length in bytes.
-    /// @note  Used for Hercules console output (DIAG 0x008).
-    auto diag8(const char* addr, const u64 len) noexcept -> void {
-        register u64 r2 __asm__("2") = reinterpret_cast<uptr>(addr);
-        register u64 r3 __asm__("3") = len;
-        __asm__ volatile (
-            "diag %[r2], %[r3], 8\n\t"
-            :
-            : [r2] "d" (r2), [r3] "d" (r3)
-            : "memory"
-        );
-    }
-
-    /// @brief Store control registers [Low..High] into a storage area (STCTG).
-    /// @tparam Low   Starting control register index (0–15).
-    /// @tparam High  Ending control register index (0–15), must be ≥ Low.
-    /// @tparam T     Storage type; sizeof(T) must cover (High-Low+1) × 8 bytes.
-    /// @param  storage  Output buffer to receive the register values.
-    template <u32 Low, u32 High, typename T>
-        requires (Low <= 15 && High <= 15 && Low <= High &&
-                  sizeof(T) >= (High - Low + 1) * 8)
-    auto ctl_store(T& storage) noexcept -> void {
-        __asm__ volatile (
-            "stctg %1, %2, %0\n\t"
-            : "=Q" (storage)
-            : "i"  (Low), "i" (High)
-            : "memory"
-        );
-    }
-
-    /// @brief Load control registers [Low..High] from a storage area (LCTLG).
-    /// @tparam Low   Starting control register index (0–15).
-    /// @tparam High  Ending control register index (0–15), must be ≥ Low.
-    /// @tparam T     Storage type; sizeof(T) must cover (High-Low+1) × 8 bytes.
-    /// @param  storage  Input buffer containing the new register values.
-    template <u32 Low, u32 High, typename T>
-        requires (Low <= 15 && High <= 15 && Low <= High &&
-                  sizeof(T) >= (High - Low + 1) * 8)
-    auto ctl_load(const T& storage) noexcept -> void {
-        __asm__ volatile (
-            "lctlg %1, %2, %0\n\t"
-            :
-            : "Q"  (storage), "i" (Low), "i" (High)
-            : "memory"
-        );
-    }
-
-    /// @brief Set a single bit (IBM MSB numbering) in a control register.
-    /// @tparam Reg  Control register index (0–15).
-    /// @param  bit  Bit number in IBM MSB-0 notation (bit 0 = MSB of the 64-bit register).
-    template <u32 Reg>
-    auto ctl_set_bit(const u32 bit) noexcept -> void {
-        static_assert(Reg <= 15, "s390x has only control registers 0–15");
-        u64 reg;
-        ctl_store<Reg, Reg>(reg);
-        ::lib::bit_set_msb(reg, bit);
-        ctl_load<Reg, Reg>(reg);
-    }
-
-    /// @brief Clear a single bit (IBM MSB numbering) in a control register.
-    /// @tparam Reg  Control register index (0–15).
-    /// @param  bit  Bit number in IBM MSB-0 notation.
-    template <u32 Reg>
-    auto ctl_clear_bit(const u32 bit) noexcept -> void {
-        static_assert(Reg <= 15, "s390x has only control registers 0–15");
-        u64 reg;
-        ctl_store<Reg, Reg>(reg);
-        ::lib::bit_clear_msb(reg, bit);
-        ctl_load<Reg, Reg>(reg);
-    }
-
-    /// @brief Full CPU serialization (bcr 14,0).
+    /// @brief Full CPU serialisation (bcr 15,0).
     /// @note PoP §4-44: completes all previous storage references before
-    ///       any subsequent instructions are initiated.
+    ///       any subsequent instructions are initiated.  BCR 15,0 is the
+    ///       unconditional form (BCR 14,0 is conditional on CC ≠ 0).
     auto sync() noexcept -> void {
-        __asm__ volatile("bcr 14,0" ::: "memory");
+        __asm__ volatile("bcr 15,0" ::: "memory");
     }
 
 } // namespace arch::s390x::cpu::processor

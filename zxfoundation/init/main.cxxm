@@ -264,7 +264,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     arch::s390x::cpu::features::init(zxfoundation::init::boot_protocol.stfle_fac);
 
-    arch::s390x::cpu::features::enable_hardware_facilities(zxfoundation::init::boot_protocol.cr0_snapshot);
+    arch::s390x::cpu::features::enable_hardware_facilities();
 
     arch::s390x::cpu::lowcore::init_bsp(zxfoundation::init::boot_protocol);
     arch::s390x::cpu::percpu::init_bsp();

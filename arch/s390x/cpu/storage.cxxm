@@ -1,0 +1,41 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/storage.cxxm
+/// @brief z/Architecture real-storage management — SSKE, PFMF, and related.
+
+export module arch.s390x.cpu.storage;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::storage {
+
+    /// @brief Set Storage Key (SSKE) — set the storage key for a 4 KB frame.
+    /// @param paddr  Physical address of the frame (4 KB aligned).
+    /// @param key    Storage key: bits 0–3 = access-control bits,
+    ///               bit 4 = fetch protection, bit 5 = reference, bit 6 = change.
+    auto set_storage_key(const u64 paddr, const u8 key) noexcept -> void {
+        __asm__ volatile (
+            "sske %[key], %[paddr]\n\t"
+            :
+            : [key]   "d" (static_cast<u64>(key)),
+              [paddr] "a" (paddr)
+            : "memory"
+        );
+    }
+
+    /// @brief Perform Frame Management Function (PFMF).
+    /// @param op1   Operand 1: contains the key, FC, and control bits.
+    /// @param phys  Physical address of the frame to manage.
+    auto pfmf(const u64 op1, const u64 phys) noexcept -> void {
+        __asm__ volatile (
+            "pfmf %[op1], %[addr]\n\t"
+            :
+            : [op1]  "d" (op1),
+              [addr] "a" (phys)
+            : "memory"
+        );
+    }
+
+} // namespace arch::s390x::cpu::storage
+
+} // end export

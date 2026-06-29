@@ -7,6 +7,7 @@ import zxfoundation.sys.timer_types;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.clock;
 import arch.s390x.cpu.clkcomp;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
@@ -44,7 +45,7 @@ namespace _internal {
             arch::s390x::cpu::clkcomp::clkcomp_set(top->deadline_tod);
         } else {
             // Far future: current TOD + ~10 seconds.
-            const u64 far_future = arch::s390x::cpu::processor::stck()
+            const u64 far_future = arch::s390x::cpu::clock::stck()
                                  + 40'960'000'000ULL;
             arch::s390x::cpu::clkcomp::clkcomp_set(far_future);
         }
@@ -144,7 +145,7 @@ namespace zxfoundation::sys::timer {
     auto timer_interrupt() noexcept -> void {
         const u16 cpu_id =
             arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
-        const u64 now = arch::s390x::cpu::processor::stck();
+        const u64 now = arch::s390x::cpu::clock::stck();
 
         auto& heap = _internal::g_heaps[cpu_id];
         constexpr _internal::timer_less less{};

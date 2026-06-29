@@ -6,8 +6,8 @@
     lowcore.cxxm
     percpu_types.cxxm
     percpu.cxxm
-    processor_types.cxxm
-    processor.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
+    processor_types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
+    processor.cxxm
     psw_types.cxxm
     psw.cxxm
     sigp_types.cxxm
@@ -33,4 +33,8 @@
     pc.cxxm
     hotplug_types.cxxm
     hotplug.cxxm
+    ctlreg.cxxm
+    clock.cxxm
+    diag.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
+    storage.cxxm
 }

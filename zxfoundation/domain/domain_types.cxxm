@@ -50,6 +50,10 @@ namespace zxfoundation::domain {
         need_resched = 1U << 2,   ///< Reschedule requested.
     };
 
+    /// @brief Must match TIF_NEED_RESCHED = 4 in arch/s390x/trap/entry.S.
+    static_assert(static_cast<u32>(domain_flags::need_resched) == 4U,
+        "domain_flags::need_resched must match TIF_NEED_RESCHED in entry.S");
+
     [[nodiscard]] constexpr auto operator|(domain_flags a, domain_flags b) noexcept -> domain_flags {
         return static_cast<domain_flags>(static_cast<u32>(a) | static_cast<u32>(b));
     }

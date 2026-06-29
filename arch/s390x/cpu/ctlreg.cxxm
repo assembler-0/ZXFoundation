@@ -1,0 +1,73 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ctlreg.cxxm
+/// @brief z/Architecture control register store/load/set/clear wrappers.
+
+export module arch.s390x.cpu.ctlreg;
+import zxfoundation.base.types;
+import lib.bit;
+
+export {
+
+namespace arch::s390x::cpu::ctlreg {
+
+    /// @brief Store control registers [Low..High] into a storage area (STCTG).
+    /// @tparam Low   Starting control register index (0–15).
+    /// @tparam High  Ending control register index (0–15), must be ≥ Low.
+    /// @tparam T     Storage type; sizeof(T) must cover (High-Low+1) × 8 bytes.
+    /// @param  storage  Output buffer to receive the register values.
+    template <u32 Low, u32 High, typename T>
+        requires (Low <= 15 && High <= 15 && Low <= High &&
+                  sizeof(T) >= (High - Low + 1) * 8)
+    auto ctl_store(T& storage) noexcept -> void {
+        __asm__ volatile (
+            "stctg %1, %2, %0\n\t"
+            : "=Q" (storage)
+            : "i"  (Low), "i" (High)
+            : "memory"
+        );
+    }
+
+    /// @brief Load control registers [Low..High] from a storage area (LCTLG).
+    /// @tparam Low   Starting control register index (0–15).
+    /// @tparam High  Ending control register index (0–15), must be ≥ Low.
+    /// @tparam T     Storage type; sizeof(T) must cover (High-Low+1) × 8 bytes.
+    /// @param  storage  Input buffer containing the new register values.
+    template <u32 Low, u32 High, typename T>
+        requires (Low <= 15 && High <= 15 && Low <= High &&
+                  sizeof(T) >= (High - Low + 1) * 8)
+    auto ctl_load(const T& storage) noexcept -> void {
+        __asm__ volatile (
+            "lctlg %1, %2, %0\n\t"
+            :
+            : "Q"  (storage), "i" (Low), "i" (High)
+            : "memory"
+        );
+    }
+
+    /// @brief Set a single bit (IBM MSB numbering) in a control register.
+    /// @tparam Reg  Control register index (0–15).
+    /// @param  bit  Bit number in IBM MSB-0 notation (bit 0 = MSB of the 64-bit register).
+    template <u32 Reg>
+    auto ctl_set_bit(const u32 bit) noexcept -> void {
+        static_assert(Reg <= 15, "s390x has only control registers 0–15");
+        u64 reg;
+        ctl_store<Reg, Reg>(reg);
+        ::lib::bit_set_msb(reg, bit);
+        ctl_load<Reg, Reg>(reg);
+    }
+
+    /// @brief Clear a single bit (IBM MSB numbering) in a control register.
+    /// @tparam Reg  Control register index (0–15).
+    /// @param  bit  Bit number in IBM MSB-0 notation.
+    template <u32 Reg>
+    auto ctl_clear_bit(const u32 bit) noexcept -> void {
+        static_assert(Reg <= 15, "s390x has only control registers 0–15");
+        u64 reg;
+        ctl_store<Reg, Reg>(reg);
+        ::lib::bit_clear_msb(reg, bit);
+        ctl_load<Reg, Reg>(reg);
+    }
+
+} // namespace arch::s390x::cpu::ctlreg
+
+} // end export

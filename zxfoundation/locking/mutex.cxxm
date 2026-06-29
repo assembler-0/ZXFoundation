@@ -1,0 +1,211 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/locking/mutex.cxxm
+/// @brief Blocking mutex — sleep/wake lock with wait-queue integration.
+
+export module zxfoundation.locking.mutex;
+import zxfoundation.base.types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.sched.context;
+import zxfoundation.sched.sched;
+import zxfoundation.sync.waitqueue_types;
+import zxfoundation.domain.strand_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.locking.lock;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.irq_types;
+import arch.s390x.lib.atomic;
+import lib.list;
+import lib.util;
+
+namespace zxfoundation::locking::mutex_detail {
+
+    using zxfoundation::domain::strand;
+    using zxfoundation::sync::wait_entry;
+
+    struct mutex_waiter {
+        wait_entry entry{};
+        strand*    strand_ptr{nullptr};
+    };
+
+} // namespace zxfoundation::locking::mutex_detail
+
+export {
+
+namespace zxfoundation::locking::mutex {
+
+    using arch::s390x::lib::atomic::atomic;
+    using arch::s390x::lib::atomic::memory_order;
+    using zxfoundation::domain::strand;
+    using zxfoundation::domain::strand_state;
+    using zxfoundation::domain::domain;
+    using zxfoundation::domain::domain_flags;
+    using zxfoundation::sync::wait_queue_head;
+    using zxfoundation::sync::wait_flags;
+    using zxfoundation::sync::wait_result;
+
+    /// @brief Blocking mutex — sleep/wake mutual exclusion.
+    ///
+    /// Fast path is a single CAS on the lock word.
+    /// Slow path uses a spinlock-protected wait queue with scheduler
+    /// integration for strand blocking and wakeup.
+    ///
+    /// @note Satisfies the @ref zxfoundation::locking::lockable concept.
+    ///       Does NOT satisfy irq_lockable — this mutex may sleep, so it
+    ///       must not be used in contexts where IRQs are disabled.
+    /// @note DGP contract: lock() asserts can_sleep() and may call schedule().
+    class mutex {
+        atomic<u32>  m_val{0};
+        wait_queue_head m_wq{};
+
+    public:
+        constexpr mutex() noexcept = default;
+
+        mutex(const mutex&)            = delete;
+        auto operator=(const mutex&)   = delete;
+        mutex(mutex&&)                 = delete;
+        auto operator=(mutex&&)        = delete;
+
+        /// @brief Acquire the mutex, blocking if contended.
+        /// @pre  can_sleep() must hold (IRQs enabled, not in interrupt,
+        ///       preemption enabled, not in RCU read-side).
+        /// @post The mutex is held.  Caller MUST call unlock() exactly once.
+        auto lock() noexcept -> void {
+            sched::context::assert_can_sleep();
+
+            const irqflags flags = arch::s390x::cpu::irq::irq_save_disable();
+
+            u32 expected = 0;
+            if (m_val.compare_exchange_strong(
+                    expected, 1, memory_order::acquire, memory_order::relaxed)) {
+                arch::s390x::cpu::irq::irq_restore(flags);
+                return;
+            }
+
+            slow_lock(flags);
+        }
+
+        /// @brief Try to acquire the mutex without blocking.
+        /// @return true if the mutex was acquired.
+        [[nodiscard]] auto try_lock() noexcept -> bool {
+            u32 expected = 0;
+            return m_val.compare_exchange_strong(
+                expected, 1, memory_order::acquire, memory_order::relaxed);
+        }
+
+        /// @brief Release the mutex and wake the first waiter, if any.
+        /// @pre The caller holds the mutex.
+        /// @post The mutex is released.
+        auto unlock() noexcept -> void {
+            strand* to_wake = nullptr;
+
+            {
+                sync::wait_entry* entry = nullptr;
+
+                {
+                    locking::irq_lock_guard wq_guard(m_wq.lock);
+
+                    if (!m_wq.entries.empty()) {
+                        lib::list_node* node = *m_wq.entries.begin();
+                        entry = lib::container_of<sync::wait_entry,
+                            lib::list_node, &sync::wait_entry::link>(node);
+
+                        entry->result = wait_result::woken;
+                        entry->active = false;
+                        lib::list_head::remove(*node);
+                    }
+
+                    m_val.store(0, memory_order::release);
+                }
+
+                if (entry) {
+                    using mutex_detail::mutex_waiter;
+                    auto* waiter = lib::container_of<mutex_waiter,
+                        sync::wait_entry, &mutex_waiter::entry>(entry);
+                    to_wake = waiter->strand_ptr;
+                }
+            }
+
+            if (to_wake) {
+                to_wake->state = strand_state::runnable;
+                zxfoundation::sched::enqueue_strand(to_wake);
+
+                auto* owner_dom = static_cast<domain*>(to_wake->owner);
+                if (owner_dom) {
+                    owner_dom->flags |= domain_flags::need_resched;
+                }
+            }
+        }
+
+        /// @brief Non-deterministic snapshot: true if the mutex appears held.
+        [[nodiscard]] auto is_locked() const noexcept -> bool {
+            return m_val.load(memory_order::relaxed) != 0;
+        }
+
+    private:
+        /// @brief Slow path: add to wait queue, block, re-contend.
+        auto slow_lock(const irqflags flags) noexcept -> void {
+            auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            auto* current = reinterpret_cast<strand*>(pcp.current_strand);
+
+            mutex_detail::mutex_waiter w{};
+            w.strand_ptr = current;
+
+            const auto* lc = arch::s390x::cpu::lowcore::get_current();
+            if (lc->current_domain != 0) {
+                w.entry.domain_id =
+                    *reinterpret_cast<const u32*>(lc->current_domain);
+            }
+
+            // Add to wait queue once; stay queued across wake/retry cycles.
+            {
+                locking::irq_lock_guard wq_guard(m_wq.lock);
+
+                u32 expected = 0;
+                if (m_val.compare_exchange_strong(
+                        expected, 1, memory_order::acquire, memory_order::relaxed)) {
+                    arch::s390x::cpu::irq::irq_restore(flags);
+                    return;
+                }
+
+                w.entry.flags = wait_flags::exclusive;
+                w.entry.active = true;
+                m_wq.entries.push_back(w.entry.link);
+            }
+
+            for (;;) {
+                // Check under wq lock to avoid racing with unlock().
+                {
+                    locking::irq_lock_guard wq_guard(m_wq.lock);
+
+                    u32 expected = 0;
+                    if (m_val.compare_exchange_strong(
+                            expected, 1, memory_order::acquire, memory_order::relaxed)) {
+                        // Acquired.  Remove from queue if still active.
+                        if (w.entry.active) {
+                            lib::list_head::remove(w.entry.link);
+                            w.entry.active = false;
+                        }
+                        arch::s390x::cpu::irq::irq_restore(flags);
+                        return;
+                    }
+
+                    if (!w.entry.active) {
+                        w.entry.active = true;
+                        m_wq.entries.push_back(w.entry.link);
+                    }
+                }
+
+                // Block and yield the CPU.
+                current->state = strand_state::blocked;
+                zxfoundation::sched::schedule();
+
+                // Woken: schedule() returned.  state is now runnable.
+                // Loop back to re-acquire under wq lock.
+            }
+        }
+    };
+
+} // namespace zxfoundation::locking::mutex
+
+} // end export

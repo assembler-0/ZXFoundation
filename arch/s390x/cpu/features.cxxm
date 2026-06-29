@@ -1,48 +1,114 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/features.cxxm
-/// @brief Centralized CPU feature detection — caches STFLE facility bits
-///        and exposes a readable, type-safe query API.
+/// @brief Centralized CPU facility registry — every facility bit the kernel
+///        cares about, cached from STFLE and queryable via has() / has_raw().
 
 export module arch.s390x.cpu.features;
 import arch.s390x.cpu.stfle;
 import arch.s390x.cpu.stfle_types;
-import arch.s390x.cpu.processor;
+import arch.s390x.cpu.ctlreg;
 import zxfoundation.base.types;
 
 export {
 
 namespace arch::s390x::cpu::features {
 
-    /// @brief Named CPU facility identifiers.
-    ///        These map to STFLE bit numbers but provide a human-readable API.
+    /// @brief Named CPU facility identifiers — every bit the kernel uses.
     enum class facility : u32 {
-        zarch           = 2,    ///< z/Architecture installed.
-        asn_lx_reuse    = 6,    ///< ASN-and-LX-Reuse (needed for PC/PT).
-        stfle           = 7,    ///< STFLE instruction.
-        edat1           = 8,    ///< Enhanced-DAT facility 1 (1 MiB large pages).
-        pfmf            = 14,   ///< Perform-Frame-Management-Function.
-        eimm            = 21,   ///< Extended-immediate facility.
-        gen_inst        = 25,   ///< General-instructions-extension.
-        mvcos           = 27,   ///< Move with Optional Specifications.
-        cssf            = 32,   ///< Compare-and-Swap-and-Store 1.
-        cssf2           = 33,   ///< Compare-and-Swap-and-Store 2.
-        execute_ext     = 35,   ///< Execute-extensions facility.
-        fp_ext          = 41,   ///< Floating-point extension.
-        dfp             = 42,   ///< Decimal-floating-point.
-        pfpo            = 44,   ///< PFPO instruction.
-        constr_te       = 50,   ///< Constrained Transactional-Execution.
-        misc_inst_ext1  = 58,   ///< Miscellaneous-instruction-extensions 1.
-        misc_inst_ext3  = 61,   ///< Miscellaneous-instruction-extensions 3.
-        transactional_exec = 73, ///< Transactional-Execution.
-        misc_inst_ext2  = 76,   ///< Miscellaneous-instruction-extensions 2.
-        edat2           = 78,   ///< Enhanced-DAT facility 2 (2 GiB large pages).
-        vector          = 129,  ///< Vector facility.
-        guarded_storage = 133,  ///< Guarded-storage facility.
-        vx_base         = 134,  ///< Vector-enhancements facility 0.
-        vector_enh1     = 135,  ///< Vector-enhancements facility 1.
-        vector_enh2     = 148,  ///< Vector-enhancements facility 2.
-        vxrs            = 149,  ///< Vector-enhancements facility 3.
-        nnpa            = 165,  ///< Neural-Network-Processing-Assist.
+        // ── Base / mandatory ──────────────────────────────────────────
+        n3                 = 0,    ///< N3 (z/Architecture arch-mode).
+        zarch_arch_mode    = 1,    ///< z/Architecture arch-mode.
+        zarch              = 2,    ///< z/Architecture installed.
+        multi_epoch        = 3,    ///< Multiple-epoch facility.
+        hfp_madd_sub       = 4,    ///< HFP multiply-add/subtract.
+        hfp_unnorm_ext     = 5,    ///< HFP unnormalized extension.
+        asn_lx_reuse       = 6,    ///< ASN-and-LX-Reuse (PC/PT).
+        stfle              = 7,    ///< STFLE instruction.
+
+        // ── DAT / paging / large pages ────────────────────────────────
+        edat1              = 8,    ///< Enhanced-DAT-1 (1 MiB large pages).
+        sense_run_stat     = 9,    ///< Sense-Running-Status facility.
+        cond_sske          = 10,   ///< Conditional-SSKE facility.
+
+        // ── TLB / IDTE ────────────────────────────────────────────────
+        idte_seg_region    = 12,   ///< IDTE segment/region flush.
+        idte_partial       = 13,   ///< IDTE partial flush.
+
+        // ── Storage / framing ─────────────────────────────────────────
+        pfmf               = 14,   ///< Perform-Frame-Management-Function.
+        idte_page          = 15,   ///< IDTE / IPTE page flush.
+
+        // ── Crypto (MSA) ──────────────────────────────────────────────
+        msa                = 17,   ///< Message-Security-Assist (KIMD/KLMD/KM).
+        msa_ext1           = 18,   ///< MSA extension 1.
+        msa_ext2           = 19,   ///< MSA extension 2.
+        msa_ext3           = 20,   ///< MSA extension 3.
+        eimm               = 21,   ///< Extended-immediate facility.
+        hfp_signaling      = 22,   ///< HFP-signaling.
+        hfp_extra          = 23,   ///< HFP-extra.
+
+        // ── Clock ─────────────────────────────────────────────────────
+        gen_inst           = 25,   ///< General-instructions-extension (STCKF).
+
+        // ── String / I/O ──────────────────────────────────────────────
+        mvcos              = 27,   ///< Move-with-Optional-Specifications.
+
+        // ── PCI / I/O ─────────────────────────────────────────────────
+        pci                = 30,   ///< PCI I/O facility.
+
+        // ── Atomic / sync ─────────────────────────────────────────────
+        cssf               = 32,   ///< Compare-and-Swap-and-Store 1.
+        cssf2              = 33,   ///< Compare-and-Swap-and-Store 2.
+        csst               = 34,   ///< Compare-and-Swap-and-Store (CSST).
+        execute_ext        = 35,   ///< Execute-extensions facility.
+
+        // ── CPU measurement ───────────────────────────────────────────
+        ctx                = 40,   ///< CPU-measurement counter.
+        fp_ext             = 41,   ///< Floating-point extension.
+        dfp                = 42,   ///< Decimal-floating-point.
+        pfpo               = 44,   ///< PFPO instruction.
+        hfp_signaling2     = 45,   ///< HFP-signaling extension.
+
+        // ── Transactional / PAI ───────────────────────────────────────
+        pai                = 49,   ///< Processor-activity-instrumentation.
+        constr_te          = 50,   ///< Constrained Transactional-Execution.
+        transactional_exec = 51,   ///< Transactional-Execution (base).
+        crypto_assist      = 52,   ///< Crypto assist (KM, KMC, etc.).
+        msa_ext5           = 53,   ///< MSA extension 5.
+
+        // ── Misc extensions ───────────────────────────────────────────
+        pai_ext1           = 55,   ///< PAI extension 1.
+        msa_ext9           = 57,   ///< MSA extension 9.
+        misc_inst_ext1     = 58,   ///< Miscellaneous-instruction-extensions 1.
+        misc_inst_ext3     = 61,   ///< Miscellaneous-instruction-extensions 3.
+
+        // ── TE (higher bits) ──────────────────────────────────────────
+        transactional_exec_high = 73, ///< Transactional-Execution (high bit).
+
+        // ── Crypto / MSA continuation ─────────────────────────────────
+        msa_ext4           = 74,   ///< MSA extension 4.
+        msa_ext6           = 75,   ///< MSA extension 6.
+        misc_inst_ext2     = 76,   ///< Miscellaneous-instruction-extensions 2.
+        msa_ext7           = 77,   ///< MSA extension 7.
+        edat2              = 78,   ///< Enhanced-DAT-2 (2 GiB large pages).
+
+        // ── Vector / SIMD ─────────────────────────────────────────────
+        vector             = 129,  ///< Vector facility.
+        vect_pde           = 130,  ///< Vector packed-decimal.
+        vect_enh           = 131,  ///< Vector enhancements.
+        vect_bcd           = 132,  ///< Vector BCD enhancements.
+        guarded_storage    = 133,  ///< Guarded-storage facility.
+        vx_base            = 134,  ///< Vector-enhancements base (VX).
+        vector_enh1        = 135,  ///< Vector-enhancements facility 1.
+        vector_enh2        = 148,  ///< Vector-enhancements facility 2.
+        vxrs               = 149,  ///< Vector-enhancements facility 3 (VXRS).
+
+        // ── Crypto (MSA continuation, high bits) ──────────────────────
+        msa_ext8           = 155,  ///< MSA extension 8.
+        msa_ext10          = 156,  ///< MSA extension 10.
+
+        // ── AI / ML ───────────────────────────────────────────────────
+        nnpa               = 165,  ///< Neural-Network-Processing-Assist.
     };
 
     /// @brief Initialize the CPU features cache.
@@ -50,15 +116,20 @@ namespace arch::s390x::cpu::features {
     ///                       (from ZXFL boot protocol or manual STFLE).
     auto init(const u64* stfle_fac) noexcept -> void;
 
-    /// @brief Query whether a specific facility is available.
+    /// @brief Query whether a specific named facility is available.
     [[nodiscard]] auto has(facility f) noexcept -> bool;
 
-    /// @brief Query a raw STFLE bit by number (for bits not in the enum).
+    /// @brief Query a raw STFLE bit by number (for facility bits not in the enum).
     [[nodiscard]] auto has_raw(u32 bit) noexcept -> bool;
 
     /// @brief Enable hardware facilities (AFP, Vector) in CR0 for the current CPU.
-    /// @param store_back store back the modified CR0
-    auto enable_hardware_facilities(u64& store_back) noexcept -> void;
+    inline auto enable_hardware_facilities() noexcept -> void {
+        ctlreg::ctl_set_bit<0>(45);
+        if (has(facility::vector))
+            ctlreg::ctl_set_bit<0>(46);
+        if (has(facility::transactional_exec) || has(facility::transactional_exec_high))
+            ctlreg::ctl_set_bit<0>(8);
+    }
 
 } // namespace arch::s390x::cpu::features
 
@@ -73,13 +144,11 @@ namespace arch::s390x::cpu::features {
     static bool g_initialized{false};
 
     auto init(const u64* stfle_fac) noexcept -> void {
-        if (g_initialized) {
+        if (g_initialized)
             return;
-        }
 
-        for (u32 i = 0; i < stfle::STFLE_MAX_DWORDS; ++i) {
+        for (u32 i = 0; i < stfle::STFLE_MAX_DWORDS; ++i)
             g_fac_list[i] = stfle_fac[i];
-        }
 
         g_initialized = true;
     }
@@ -91,25 +160,10 @@ namespace arch::s390x::cpu::features {
     auto has_raw(u32 bit) noexcept -> bool {
         const u32 dword = bit / 64U;
         const u32 pos   = bit % 64U;
-        if (dword >= stfle::STFLE_MAX_DWORDS) {
+        if (dword >= stfle::STFLE_MAX_DWORDS)
             return false;
-        }
         // s390x uses MSB-first bit numbering
         return (g_fac_list[dword] & (1ULL << (63U - pos))) != 0;
-    }
-
-    auto enable_hardware_facilities(u64& store_back) noexcept -> void {
-        processor::ctl_set_bit<0>(45);
-        store_back |= (1ULL << 18); // AFP (bit 45)
-
-        if (has(facility::vector)) {
-            processor::ctl_set_bit<0>(46);
-            store_back |= (1ULL << 17);
-        }
-
-        if (has(facility::transactional_exec)) {
-            processor::ctl_set_bit<0>(8);
-        }
     }
 
 } // namespace arch::s390x::cpu::features

@@ -8,6 +8,7 @@ import zxfoundation.memory.vm;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.rcu.rcu;
 import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
 import arch.s390x.mmu.mmu_const;

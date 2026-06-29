@@ -48,19 +48,23 @@ namespace arch::s390x::cpu::psw {
     /// @brief Home Space Mode (ASC = 11) — CR13 is the effective ASCE.
     constexpr u64 PSW_ASC_HOME       = 0x0000C00000000000ULL;
 
+    /// @brief Default PSW storage key (key 0 — master key, unrestricted).
+    ///        PoP §4-2, bits 8–11 of the PSW mask word.
+    constexpr u64 PSW_DEFAULT_KEY   = 0ULL;
+
     /// @brief 64-bit mode bits that MUST be present in every valid z/Arch PSW.
     constexpr u64 PSW_ARCH_BITS      = PSW_BIT_EA | PSW_BIT_BA;
 
-    /// @brief Kernel execution mask: supervisor, DAT off, all interrupts disabled, 64-bit,
-    constexpr u64 PSW_MASK_KERNEL    = PSW_ARCH_BITS | PSW_ASC_PRIMARY;
+    /// @brief Kernel execution mask: supervisor, DAT off, all interrupts disabled, 64-bit.
+    constexpr u64 PSW_MASK_KERNEL    = PSW_DEFAULT_KEY | PSW_ARCH_BITS | PSW_ASC_PRIMARY;
 
     /// @brief Kernel DAT-on mask: supervisor, DAT on, all interrupts disabled, 64-bit,
-    /// @brief Kernel DAT-on mask for interrupt handler new-PSWs.
-    constexpr u64 PSW_MASK_KERNEL_DAT = PSW_BIT_DAT | PSW_ARCH_BITS | PSW_ASC_HOME;
+    ///        used for interrupt handler new-PSWs and the loader's LPSWE-to-kernel jump.
+    constexpr u64 PSW_MASK_KERNEL_DAT = PSW_DEFAULT_KEY | PSW_BIT_DAT | PSW_ARCH_BITS | PSW_ASC_HOME;
 
     /// @brief Kernel DAT-on mask with interrupts enabled (normal execution).
     constexpr u64 PSW_MASK_KERNEL_ENABLED =
-        PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_BIT_MCCK |
+        PSW_DEFAULT_KEY | PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_BIT_MCCK |
         PSW_ARCH_BITS | PSW_ASC_HOME;
 
     /// @brief User-mode PSW mask for entering a domain in problem state.
@@ -68,6 +72,7 @@ namespace arch::s390x::cpu::psw {
     /// Problem state + DAT on + 64-bit + primary space mode (CR1 = user ASCE)
     /// + I/O, external, and machine-check interrupts enabled.
     constexpr u64 PSW_MASK_USER =
+        PSW_DEFAULT_KEY |
         PSW_BIT_PSTATE |     // Problem state
         PSW_BIT_DAT |        // DAT enabled
         PSW_BIT_IO |         // I/O interrupts
@@ -80,14 +85,14 @@ namespace arch::s390x::cpu::psw {
     constexpr u32 PSW_KEY_SHIFT = 52;
 
     /// @brief Disabled-wait PSW mask: wait state, no interrupts, 64-bit.
-    constexpr u64 PSW_MASK_DISABLED_WAIT = PSW_BIT_WAIT | PSW_ARCH_BITS;
+    constexpr u64 PSW_MASK_DISABLED_WAIT = PSW_DEFAULT_KEY | PSW_BIT_WAIT | PSW_ARCH_BITS;
 
     /// @brief Enabled-wait PSW mask: wait state WITH all interrupts enabled.
     /// Used by the idle loop — LPSWE atomically enables interrupts and
     /// enters wait state, so no interrupt window can be missed.
     /// DAT on + I/O + EXT + MCCK + WAIT + 64-bit + home space.
     constexpr u64 PSW_MASK_ENABLED_WAIT =
-        PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_BIT_MCCK |
+        PSW_DEFAULT_KEY | PSW_BIT_DAT | PSW_BIT_IO | PSW_BIT_EXT | PSW_BIT_MCCK |
         PSW_BIT_WAIT | PSW_ARCH_BITS | PSW_ASC_HOME;
 
     /// @brief Standard halt address (appears in disabled-wait PSW during normal shutdown).

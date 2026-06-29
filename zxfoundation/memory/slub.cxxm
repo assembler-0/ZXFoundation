@@ -17,6 +17,7 @@ import zxfoundation.locking.qspinlock;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.clock;
 import arch.s390x.lib.atomic;
 import lib.error;
 import lib.expected;
@@ -396,7 +397,7 @@ namespace zxfoundation::memory::slub {
                 lib::kernel_error::from_memory(lib::memory_error::code::out_of_memory));
 
         // STCK seeding inside lock: stable timestamp relative to slot index.
-        const u64 rseq = arch::s390x::cpu::processor::stck()
+        const u64 rseq = arch::s390x::cpu::clock::stck()
                        ^ reinterpret_cast<u64>(name)
                        ^ static_cast<u64>(object_size)
                        ^ static_cast<u64>(g_cache_count);

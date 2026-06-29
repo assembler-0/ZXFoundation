@@ -30,6 +30,8 @@ import zxfoundation.sys.timer_types;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.time;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.clock;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.irq;
@@ -390,8 +392,8 @@ namespace zxfoundation::sched {
         if (next_owner->asce.val != 0 &&
             (!prev_owner || next_owner->asce.val != prev_owner->asce.val)) {
             _internal::validate_scheduler_irq_context(next_owner->ko.id);
-            const u64 next_asce_val = next_owner->asce.val;
-            arch::s390x::cpu::processor::ctl_load<1, 1>(next_asce_val);
+             const u64 next_asce_val = next_owner->asce.val;
+            arch::s390x::cpu::ctlreg::ctl_load<1, 1>(next_asce_val);
             auto* lc = arch::s390x::cpu::lowcore::get_current();
             lc->user_asce = next_asce_val;
             _internal::record_asce_attachment(*next_owner);
@@ -514,7 +516,7 @@ namespace zxfoundation::sched {
         {
             using namespace zxfoundation::sys::timer;
             auto& t = g_bsp_tick_timer;
-            t.deadline_tod = arch::s390x::cpu::processor::stck() + TICK_INTERVAL_TOD;
+            t.deadline_tod = arch::s390x::cpu::clock::stck() + TICK_INTERVAL_TOD;
             t.interval_tod = TICK_INTERVAL_TOD;
             t.callback     = [](void*) noexcept -> void {
                 zxfoundation::sys::time::tick_advance_wall(TICK_INTERVAL_NS);
@@ -562,7 +564,7 @@ namespace zxfoundation::sched {
             timer_init_ap(cpu_id);
 
             auto& t = _internal::g_ap_tick_timers[cpu_id];
-            t.deadline_tod = arch::s390x::cpu::processor::stck() + TICK_INTERVAL_TOD;
+            t.deadline_tod = arch::s390x::cpu::clock::stck() + TICK_INTERVAL_TOD;
             t.interval_tod = TICK_INTERVAL_TOD;
             t.callback     = [](void*) noexcept -> void {
                 zxfoundation::sched::scheduler_tick();

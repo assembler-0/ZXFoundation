@@ -8,6 +8,7 @@ export module arch.s390x.cpu.aste;
 import arch.s390x.cpu.aste_types;
 import arch.s390x.cpu.ar;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.ctlreg;
 import zxfoundation.base.types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
@@ -310,7 +311,7 @@ namespace arch::s390x::cpu::aste {
     /// @param aste_origin  Physical address of the ASTE (64-byte aligned).
     auto aste_load_cr7(u64 aste_origin) noexcept -> void {
         const u64 cr7_val = aste_origin & ~0x3FULL;
-        processor::ctl_load<7, 7>(cr7_val);
+        ctlreg::ctl_load<7, 7>(cr7_val);
     }
 
     /// @brief Return a pointer to the ASTE at the given index.

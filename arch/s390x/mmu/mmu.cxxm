@@ -13,6 +13,7 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.sys.transaction;
 import arch.s390x.cpu.features;
 import arch.s390x.cpu.psw;
+import arch.s390x.cpu.ctlreg;
 import lib.error;
 import lib.expected;
 import lib.util;

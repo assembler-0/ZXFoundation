@@ -4,6 +4,8 @@
 
 export module arch.s390x.cpu.smp;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.clock;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.percpu;
@@ -80,7 +82,7 @@ static auto apply_cpu_evidence(
 }
 
 [[nodiscard]] static auto tod_elapsed(const u64 start) noexcept -> u64 {
-    return arch::s390x::cpu::processor::stck() - start;
+    return arch::s390x::cpu::clock::stck() - start;
 }
 
 [[nodiscard]] static auto prefix_block_is_valid(const u64 phys) noexcept -> bool {
@@ -95,7 +97,7 @@ static auto apply_cpu_evidence(
     const u32 parm
 ) noexcept -> sigp_result {
     sigp_result result{};
-    const u64 deadline = arch::s390x::cpu::processor::stck() + SIGP_WAIT_TIMEOUT_TOD;
+    const u64 deadline = arch::s390x::cpu::clock::stck() + SIGP_WAIT_TIMEOUT_TOD;
     auto backoff = arch::s390x::cpu::sigp::default_backoff(deadline);
     result.cc = arch::s390x::cpu::sigp::sigp_issue_bounded(
         cpu_addr, order, parm, backoff, result.status);
@@ -174,7 +176,7 @@ static arch::s390x::lib::atomic::atomic<u32> g_aps_initialized{0};
 static u32 g_total_aps{0};
 
 [[nodiscard]] static auto wait_ap_online(const u32 target) noexcept -> bool {
-    const u64 start = arch::s390x::cpu::processor::stck();
+    const u64 start = arch::s390x::cpu::clock::stck();
     while (g_ap_online.load(arch::s390x::lib::atomic::memory_order::seq_cst) < target) {
         if (tod_elapsed(start) >= AP_ONLINE_TIMEOUT_TOD)
             return false;
@@ -189,16 +191,16 @@ auto ap_entry() -> void;
 auto ap_dat_on() -> void;
 
 [[noreturn]] auto ap_startup() -> void {
-    arch::s390x::cpu::processor::ctl_set_bit<0>(13);
-    arch::s390x::cpu::processor::ctl_set_bit<0>(14);
-    arch::s390x::cpu::processor::ctl_set_bit<0>(15);
-    arch::s390x::cpu::processor::ctl_set_bit<0>(52);
+    arch::s390x::cpu::ctlreg::ctl_set_bit<0>(13);
+    arch::s390x::cpu::ctlreg::ctl_set_bit<0>(14);
+    arch::s390x::cpu::ctlreg::ctl_set_bit<0>(15);
+    arch::s390x::cpu::ctlreg::ctl_set_bit<0>(52);
 
     {
         u64 cr6 = 0;
-        arch::s390x::cpu::processor::ctl_store<6, 6>(cr6);
+        arch::s390x::cpu::ctlreg::ctl_store<6, 6>(cr6);
         cr6 |= 0x00000000FF000000ULL;
-        arch::s390x::cpu::processor::ctl_load<6, 6>(cr6);
+        arch::s390x::cpu::ctlreg::ctl_load<6, 6>(cr6);
     }
     (void)g_ap_online.fetch_add(1, arch::s390x::lib::atomic::memory_order::seq_cst);
 
@@ -236,10 +238,10 @@ namespace arch::s390x::cpu::smp {
     auto init_bsp() noexcept -> void {
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, handle_ipi, nullptr, 0);
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   handle_ipi, nullptr, 0);
-        processor::ctl_set_bit<0>(13);
-        processor::ctl_set_bit<0>(14);
-        processor::ctl_set_bit<0>(15);
-        processor::ctl_set_bit<0>(52);
+        ctlreg::ctl_set_bit<0>(13);
+        ctlreg::ctl_set_bit<0>(14);
+        ctlreg::ctl_set_bit<0>(15);
+        ctlreg::ctl_set_bit<0>(52);
 
         // Initialize hotplug subsystem and mark BSP online.
         hotplug::hotplug_init();
@@ -281,7 +283,7 @@ namespace arch::s390x::cpu::smp {
         const u64 ap_entry_phys =
             zxfoundation::memory::hhdm::virt_to_phys(reinterpret_cast<u64>(ap_entry));
         const u64 kernel_asce = lowcore::get_current()->kernel_asce;
-        u64 cr0; processor::ctl_store<0, 0>(cr0);
+        u64 cr0; ctlreg::ctl_store<0, 0>(cr0);
 
         u32 started = 0;
         u16 next_cpu_id = 1;

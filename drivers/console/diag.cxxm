@@ -12,7 +12,7 @@ import lib.concepts;
 import lib.string_view;
 import lib.span;
 import lib.algorithm;
-import arch.s390x.cpu.processor;
+import arch.s390x.cpu.diag;
 import arch.s390x.cpu.irq;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.sched.context;
@@ -71,7 +71,7 @@ namespace _internal {
 
         /// @brief Transmit the message via the DIAG 8 instruction.
         auto transmit() const noexcept -> void {
-            arch::s390x::cpu::processor::diag8(m_data, m_total_len);
+            arch::s390x::cpu::diag::diag8(m_data, m_total_len);
         }
     };
 

@@ -16,3 +16,4 @@ doxygen-build/
 convert*.py
 .junie
 .output.txt
+build/

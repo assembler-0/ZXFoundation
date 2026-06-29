@@ -10,6 +10,7 @@ import lib.error;
 import lib.placementnew;
 import lib.static_vector;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.clock;
 import arch.s390x.cpu.psw;
 import zxfoundation.sys.printk;
 
@@ -196,7 +197,7 @@ namespace zxfoundation::base::cxxrtse::cxxabi {
     ///       across CPUs (see the `__stack_chk_guard` rationale above).
     [[gnu::no_stack_protector]] void ssp_init() noexcept {
         __stack_chk_guard =
-            arch::s390x::cpu::processor::stck() ^ 0xC0FFEE00FACADE42ULL;
+            arch::s390x::cpu::clock::stck() ^ 0xC0FFEE00FACADE42ULL;
     }
 
     /// @brief Read the active kernel-wide stack-protector guard value.

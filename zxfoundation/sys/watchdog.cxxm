@@ -12,6 +12,8 @@ import zxfoundation.sys.syschk;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.diag;
+import arch.s390x.cpu.clock;
 import arch.s390x.cpu.psw;
 import arch.s390x.trap.trap;
 import lib.error;
@@ -27,11 +29,11 @@ namespace _internal {
     /// @brief Arm / re-ping the hypervisor watchdog.
     static auto harddog_ping() noexcept -> bool {
         arch::s390x::trap::set_pgm_fixup(true);
-        i32 rc = processor::diag288(processor::WDT_FUNC_CHANGE, processor::WDT_DEFAULT_TIMEOUT,
-                                         processor::LPARWDT_RESTART, 0);
+        i32 rc = diag::diag288(diag::WDT_FUNC_CHANGE, diag::WDT_DEFAULT_TIMEOUT,
+                                         diag::LPARWDT_RESTART, 0);
         if (rc != 0) {
-            rc = processor::diag288(processor::WDT_FUNC_INIT, processor::WDT_DEFAULT_TIMEOUT,
-                              processor::LPARWDT_RESTART, 0);
+            rc = diag::diag288(diag::WDT_FUNC_INIT, diag::WDT_DEFAULT_TIMEOUT,
+                              diag::LPARWDT_RESTART, 0);
         }
         arch::s390x::trap::set_pgm_fixup(false);
         return rc == 0;
@@ -111,8 +113,8 @@ namespace zxfoundation::sys::watchdog {
         using namespace zxfoundation::sys::printk;
 
         arch::s390x::trap::set_pgm_fixup(true);
-        i32 rc = processor::diag288(processor::WDT_FUNC_INIT, processor::WDT_DEFAULT_TIMEOUT,
-                              processor::LPARWDT_RESTART, 0);
+        i32 rc = diag::diag288(diag::WDT_FUNC_INIT, diag::WDT_DEFAULT_TIMEOUT,
+                              diag::LPARWDT_RESTART, 0);
         arch::s390x::trap::set_pgm_fixup(false);
         if (rc != 0) {
             pnotice("watchdog: diag 0x288 not available (rc={})",
@@ -120,11 +122,11 @@ namespace zxfoundation::sys::watchdog {
         } else {
             g_harddog_armed = true;
             pinfo("watchdog: diag 0x288 armed (timeout={}s)",
-                  processor::WDT_DEFAULT_TIMEOUT);
+                  diag::WDT_DEFAULT_TIMEOUT);
         }
 
         auto& t = g_watchdog_timer;
-        t.deadline_tod = processor::stck() + WATCHDOG_INTERVAL_TOD;
+        t.deadline_tod = clock::stck() + WATCHDOG_INTERVAL_TOD;
         t.interval_tod = WATCHDOG_INTERVAL_TOD;
         t.callback     = watchdog_check;
         t.data         = nullptr;

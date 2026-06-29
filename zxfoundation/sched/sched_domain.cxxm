@@ -10,6 +10,7 @@ import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.psw_types;
 import lib.util;
@@ -92,7 +93,7 @@ namespace zxfoundation::sched::domain_ctx {
 
         lc->user_asce = d->asce.val;
         const u64 user_asce = d->asce.val;
-        arch::s390x::cpu::processor::ctl_load<1, 1>(user_asce);
+        arch::s390x::cpu::ctlreg::ctl_load<1, 1>(user_asce);
 
         s->uregs.psw_mask |=
             (static_cast<u64>(d->storage_key) << arch::s390x::cpu::psw::PSW_KEY_SHIFT);

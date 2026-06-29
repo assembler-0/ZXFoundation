@@ -1,0 +1,75 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/diag.cxxm
+/// @brief z/Architecture DIAGNOSE instruction wrappers.
+
+export module arch.s390x.cpu.diag;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::diag {
+
+    /// @brief A 128-bit register pair
+    union register_pair {
+        u128 pair{};
+        struct {
+            u64 even;
+            u64 odd;
+        };
+    };
+    static_assert(sizeof(register_pair) == 16, "register_pair must be exactly 128 bits");
+
+    constexpr u32 WDT_FUNC_INIT           = 0;
+    constexpr u32 WDT_FUNC_CHANGE         = 1;
+    constexpr u32 WDT_FUNC_CANCEL         = 2;
+    constexpr u32 WDT_FUNC_CONCEAL        = 0x80000000U;
+    constexpr u32 LPARWDT_RESTART         = 0;
+
+    constexpr u32 WDT_MIN_TIMEOUT         = 15;
+    constexpr u32 WDT_MAX_TIMEOUT         = 3600;
+    constexpr u32 WDT_DEFAULT_TIMEOUT     = 30;
+
+    /// @brief Issue DIAGNOSE 0x288 (LPAR/hypervisor watchdog).
+    /// @param func    Watchdog function: WDT_FUNC_INIT (0), WDT_FUNC_CHANGE (1),
+    ///                or WDT_FUNC_CANCEL (2).  May be OR'd with WDT_FUNC_CONCEAL.
+    /// @param timeout Timeout in seconds (15–3600).
+    /// @param action  LPAR: LPARWDT_RESTART (0); z/VM: physical address of an
+    ///                EBCDIC CP command string.
+    /// @param len     Length of the z/VM command string (LPAR: 0).
+    /// @return 0 on success, nonzero condition code on failure.
+    /// @note   The caller must ensure func/timeout are valid; the hypervisor
+    ///         returns CC != 0 for invalid parameters.
+    auto diag288(u32 func, u32 timeout,
+                 u64 action, u32 len) noexcept -> i32 {
+        register_pair r1{ .even = func, .odd = timeout };
+        register_pair r3{ .even = action, .odd = len };
+        i32 rc = -1;
+        __asm__ volatile(
+            "    chi     %[rc],0\n"
+            "    diag    %[r1],%[r3],0x288\n"
+            "    ipm     %[rc]\n"
+            "    srl     %[rc],28\n"
+            : [rc] "+d" (rc)
+            : [r1] "d" (r1.pair), [r3] "d" (r3.pair)
+            : "cc", "memory");
+        return rc;
+    }
+
+    /// @brief Issue DIAG 8 (Diagnose 8) with a 64-bit buffer address.
+    /// @param addr  Buffer address (virtual, must be accessible).
+    /// @param len   Buffer length in bytes.
+    /// @note  Used for Hercules console output (DIAG 0x008).
+    auto diag8(const char* addr, const u64 len) noexcept -> void {
+        register u64 r2 __asm__("2") = reinterpret_cast<uptr>(addr);
+        register u64 r3 __asm__("3") = len;
+        __asm__ volatile (
+            "diag %[r2], %[r3], 8\n\t"
+            :
+            : [r2] "d" (r2), [r3] "d" (r3)
+            : "memory"
+        );
+    }
+
+} // namespace arch::s390x::cpu::diag
+
+} // end export

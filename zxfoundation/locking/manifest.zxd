@@ -1,6 +1,7 @@
 !files : !compile_group -> [auto] {
     lock.cxxm
     mcs_types.cxxm
+    mutex.cxxm
     qspinlock.cxxm
     seqlock.cxxm
 }

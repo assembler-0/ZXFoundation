@@ -109,24 +109,20 @@ namespace zxfoundation::sys::printk {
         const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
 
         bool pushed = false;
-        for (u32 iter = 0; iter < 100000; ++iter) {
-            if (g_state.lock.try_lock()) {
-                lib::span<const u8> to_push(
-                    reinterpret_cast<const u8*>(buf), offset);
-                while (to_push.size() > 0) {
-                    usize written = g_state.log_buffer.push(to_push);
-                    if (written == to_push.size()) break;
-                    u8 discard[1024];
-                    (void)g_state.log_buffer.pop(
-                        {discard, lib::min(static_cast<usize>(sizeof(discard)),
-                                           g_state.log_buffer.size())});
-                    if (written > 0) to_push = to_push.subspan(written);
-                }
-                g_state.lock.unlock();
-                pushed = true;
-                break;
+        if (g_state.lock.try_lock()) {
+            lib::span<const u8> to_push(
+                reinterpret_cast<const u8*>(buf), offset);
+            while (to_push.size() > 0) {
+                usize written = g_state.log_buffer.push(to_push);
+                if (written == to_push.size()) break;
+                u8 discard[1024];
+                (void)g_state.log_buffer.pop(
+                    {discard, lib::min(static_cast<usize>(sizeof(discard)),
+                                       g_state.log_buffer.size())});
+                if (written > 0) to_push = to_push.subspan(written);
             }
-            arch::s390x::cpu::processor::cpu_relax();
+            g_state.lock.unlock();
+            pushed = true;
         }
 
         if (pushed) {

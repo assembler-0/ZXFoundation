@@ -5,6 +5,8 @@
 export module zxfoundation.memory.vm;
 import zxfoundation.memory.vm_types;
 import zxfoundation.dgp.memory_contract;
+import zxfoundation.rcu.rcu;
+import zxfoundation.rcu.rcu_types;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
@@ -77,12 +79,35 @@ namespace zxfoundation::memory::vm::_internal {
         return true;
     }
 
-    /// @brief Remove a vm_region from the rb-tree and free it to the slab.
+    /// @brief RCU callback: free a vm_region back to the slab after a grace period.
+    auto rcu_free_region_cb(rcu::rcu_head* head) noexcept -> void {
+        auto* rgn = lib::container_of<vm_region, rcu::rcu_head,
+            &vm_region::rcu>(head);
+        g_region_cache.dealloc(rgn);
+    }
+
+    /// @brief Remove a vm_region from the rb-tree and defer freeing via RCU.
     auto rb_remove_and_free(vm_space& space, vm_region* rgn) noexcept -> void {
         lib::rb_erase_cached(&rgn->rb, space.tree);
         space.total_mapped -= rgn->size();
         space.region_count -= 1;
-        g_region_cache.dealloc(rgn);
+        rcu::call_rcu(&rgn->rcu, rcu_free_region_cb);
+    }
+
+    /// @brief RCU-safe tree walk — each pointer load uses rcu_dereference.
+    [[nodiscard]] auto rb_find_rcu(const vm_space& space, u64 va) noexcept -> vm_region* {
+        lib::rb_node* node = rcu::rcu_dereference(space.tree.root.node);
+        while (node) {
+            const auto* rgn = region_of(node);
+            if (va < rgn->va_start) {
+                node = rcu::rcu_dereference(node->left);
+            } else if (va >= rgn->va_end) {
+                node = rcu::rcu_dereference(node->right);
+            } else {
+                return const_cast<vm_region*>(rgn);
+            }
+        }
+        return nullptr;
     }
 
     /// @brief Convert VME protection to MMU page_prot.
@@ -378,21 +403,20 @@ namespace zxfoundation::memory::vm {
         space.region_count = 0;
     }
 
-    /// @brief O(log n) lookup: find the vm_region containing VA.
+    /// @brief RCU-protected lookup: find the vm_region containing VA.
+    ///
+    /// Uses rcu_read_lock internally.  The returned pointer is safe to
+    /// dereference within the caller's preemption-disabled context (page
+    /// fault handler or under vm_space::lock).  Callers that may block
+    /// after the lookup must first ensure the region cannot be freed
+    /// (e.g., by holding space.lock).
+    ///
     /// @return Pointer to the region, or nullptr if no region contains va.
     [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region* {
-        lib::rb_node* node = space.tree.root.node;
-        while (node) {
-            const auto* rgn = _internal::region_of(node);
-            if (va < rgn->va_start) {
-                node = node->left;
-            } else if (va >= rgn->va_end) {
-                node = node->right;
-            } else {
-                return const_cast<vm_region*>(rgn);
-            }
-        }
-        return nullptr;
+        rcu::rcu_read_lock();
+        auto* rgn = _internal::rb_find_rcu(space, va);
+        rcu::rcu_read_unlock();
+        return rgn;
     }
 
     /// @brief Top-down scan from mmap_base for a gap of at least size bytes.

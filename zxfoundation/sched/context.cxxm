@@ -7,6 +7,7 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.percpu_types;
+import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
 import lib.source_location;
 
@@ -65,7 +66,7 @@ namespace zxfoundation::sched::context {
             && arch::s390x::cpu::irq::irqs_enabled();
     }
 
-    // Assertion primitives — panic via disabled-wait PSW
+    // Assertion primitives -- panic via disabled-wait PSW
     inline auto assert_irqs_disabled(
         lib::source_location loc = lib::source_location::current()
     ) noexcept -> void {
@@ -103,14 +104,21 @@ namespace zxfoundation::sched::context {
     }
 
     // Preemption control
+    /// @brief Disable preemption on the current CPU.
+    /// @note Issues a full CPU serialization (bcr 14,0) after incrementing
+    ///       the counter so that all prior stores are globally visible.
     inline auto preempt_disable() noexcept -> void {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         ++pcp.preempt_count;
-        __asm__ volatile ("" ::: "memory");
+        arch::s390x::cpu::processor::sync(); // PoP §4-44
     }
 
+    /// @brief Re-enable preemption on the current CPU.
+    /// @note Issues a full CPU serialization (bcr 14,0) before decrementing
+    ///       the counter so that all prior stores are globally visible before
+    ///       we allow preemption again.
     inline auto preempt_enable() noexcept -> void {
-        __asm__ volatile ("" ::: "memory");
+        arch::s390x::cpu::processor::sync(); // PoP §4-44
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         --pcp.preempt_count;
     }
@@ -118,11 +126,11 @@ namespace zxfoundation::sched::context {
     inline auto preempt_disable_notrace() noexcept -> void {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         ++pcp.preempt_count;
-        __asm__ volatile ("" ::: "memory");
+        arch::s390x::cpu::processor::barrier();
     }
 
     inline auto preempt_enable_no_resched() noexcept -> void {
-        __asm__ volatile ("" ::: "memory");
+        arch::s390x::cpu::processor::barrier();
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         --pcp.preempt_count;
     }

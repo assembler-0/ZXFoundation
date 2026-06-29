@@ -6,6 +6,7 @@ export module zxfoundation.sys.time;
 import zxfoundation.base.types;
 import zxfoundation.locking.seqlock;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.clock;
 import arch.s390x.cpu.irq;
 import arch.s390x.lib.atomic;
 import lib.expected;
@@ -86,7 +87,7 @@ namespace zxfoundation::sys::time {
     /// Lock-free.  Reads STCK and computes delta from boot_tod.
     /// Guaranteed non-decreasing on a single CPU; SMP-consistent via STCK.
     [[nodiscard]] auto monotonic_now() noexcept -> instant {
-        const u64 now   = arch::s390x::cpu::processor::stck();
+        const u64 now   = arch::s390x::cpu::clock::stck();
         const u64 delta = (now > _internal::g_boot_tod)
                         ? (now - _internal::g_boot_tod) : 0U;
         return instant(duration::from_tod(delta).count_ns());
@@ -98,7 +99,7 @@ namespace zxfoundation::sys::time {
     /// set_realtime() write — which is expected to be rare.
     [[nodiscard]] auto realtime_now() noexcept -> instant {
         const u64 raw_ns = duration::from_tod(
-            arch::s390x::cpu::processor::stck()).count_ns();
+            arch::s390x::cpu::clock::stck()).count_ns();
         const u64 offset = _internal::g_wall_offset.read();
         return instant(raw_ns + offset);
     }
@@ -111,7 +112,7 @@ namespace zxfoundation::sys::time {
         -> lib::expected<void, lib::kernel_error>
     {
         const u64 raw_ns = duration::from_tod(
-            arch::s390x::cpu::processor::stck()).count_ns();
+            arch::s390x::cpu::clock::stck()).count_ns();
         const u64 new_offset = now.nanoseconds_since_epoch() - raw_ns;
 
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();

@@ -5,6 +5,7 @@
 export module arch.s390x.cpu.sigp;
 import arch.s390x.cpu.sigp_types;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.clock;
 import zxfoundation.base.types;
 import lib.algorithm;
 
@@ -30,14 +31,14 @@ namespace arch::s390x::cpu::sigp {
 
         /// @brief Check whether the deadline has passed.
         [[nodiscard]] auto expired() const noexcept -> bool {
-            return processor::stck() >= deadline;
+            return clock::stck() >= deadline;
         }
 
         /// @brief Busy-wait for current_tod units.
         auto wait() noexcept -> void {
             const u64 delay = next_delay();
-            const u64 target = processor::stck() + delay;
-            while (processor::stck() < target)
+            const u64 target = clock::stck() + delay;
+            while (clock::stck() < target)
                 processor::cpu_relax();
         }
     };
@@ -106,7 +107,7 @@ namespace arch::s390x::cpu::sigp {
     /// @return Final condition code (0, 1, or 3), or SIGP_CC_BUSY if timeout.
     inline auto sigp_busy(u16 cpu_addr, u8 order, u32 parm, u32& status) noexcept -> int {
         constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
-        const u64 deadline = processor::stck() + TOD_UNITS_PER_MILLISECOND * 2'000ULL;
+        const u64 deadline = clock::stck() + TOD_UNITS_PER_MILLISECOND * 2'000ULL;
         auto backoff = default_backoff(deadline);
         return sigp_issue_bounded(cpu_addr, order, parm, backoff, status);
     }
@@ -116,7 +117,7 @@ namespace arch::s390x::cpu::sigp {
     /// @param[out] status  Final CPU status word.
     [[nodiscard]] inline auto wait_cpu_stopped(u16 cpu_addr, u32& status) noexcept -> int {
         constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
-        const u64 deadline = processor::stck() + TOD_UNITS_PER_MILLISECOND * 3'000ULL;
+        const u64 deadline = clock::stck() + TOD_UNITS_PER_MILLISECOND * 3'000ULL;
 
         {
             auto backoff = default_backoff(deadline);
@@ -142,7 +143,7 @@ namespace arch::s390x::cpu::sigp {
                 return cc;
 
             // Retry SENSE after reset (short timeout).
-            const u64 reset_deadline = processor::stck() + TOD_UNITS_PER_MILLISECOND * 500ULL;
+            const u64 reset_deadline = clock::stck() + TOD_UNITS_PER_MILLISECOND * 500ULL;
             auto backoff = default_backoff(reset_deadline);
             do {
                 status = 0;

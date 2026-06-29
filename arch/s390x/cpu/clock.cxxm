@@ -1,0 +1,47 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/clock.cxxm
+/// @brief z/Architecture TOD clock instructions — STCK, STCKF, STCKE.
+
+export module arch.s390x.cpu.clock;
+import zxfoundation.base.types;
+import arch.s390x.cpu.features;
+
+export {
+
+namespace arch::s390x::cpu::clock {
+
+    /// @brief Store Clock (STCK) — stores the 64-bit TOD clock value.
+    /// @return 64-bit TOD clock value.
+    /// @note   STCK sets CC=1 if the clock is non-operational.  We ignore CC here;
+    ///         callers that need error handling should use stckf().
+    inline auto stck() noexcept -> u64 {
+        u64 tod;
+        __asm__ volatile ("stck %0" : "=Q" (tod) :: "cc", "memory");
+        return tod;
+    }
+
+    /// @brief Store Clock Fast (STCKF) — stores the 64-bit TOD clock value.
+    /// @return 64-bit TOD clock value.
+    /// @note   Falls back to STCK when facility bit 25 (GEN_INST) is absent.
+    ///         The check uses the kernel's cached facility list (features module).
+    inline auto stckf() noexcept -> u64 {
+        u64 tod{0};
+        if (features::has(features::facility::gen_inst)) [[likely]] {
+            __asm__ volatile("stckf %0" : "=Q" (tod) :: "cc", "memory");
+        } else {
+            __asm__ volatile("stck %0" : "=Q" (tod) :: "cc", "memory");
+        }
+        return tod;
+    }
+
+    /// @brief Store Clock Extended (STCKE) — stores 128-bit TOD clock + epoch index.
+    /// @return 128-bit extended TOD value.
+    inline auto stcke() noexcept -> u128 {
+        u128 tod;
+        __asm__ volatile ("stcke %0" : "=Q" (tod) :: "cc", "memory");
+        return tod;
+    }
+
+} // namespace arch::s390x::cpu::clock
+
+} // end export

@@ -6,6 +6,7 @@ export module arch.s390x.cpu.pc;
 import arch.s390x.cpu.linkage;
 import arch.s390x.cpu.aste_types;
 import arch.s390x.cpu.processor;
+import arch.s390x.cpu.ctlreg;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
@@ -122,7 +123,7 @@ namespace arch::s390x::cpu::pc {
 
         const u64 cr5 = static_cast<u64>(aste_phys & 0x7FFFFFC0ULL);
 
-        processor::ctl_load<5, 5>(cr5);
+        ctlreg::ctl_load<5, 5>(cr5);
 
         g_aste_phys = aste_phys;
         g_initialized = true;
@@ -136,7 +137,7 @@ namespace arch::s390x::cpu::pc {
         if (!g_initialized) return;
 
         const u64 cr5 = static_cast<u64>(g_aste_phys & 0x7FFFFFC0ULL);
-        processor::ctl_load<5, 5>(cr5);
+        ctlreg::ctl_load<5, 5>(cr5);
     }
 
 } // namespace arch::s390x::cpu::pc

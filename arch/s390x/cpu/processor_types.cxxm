@@ -47,6 +47,16 @@ namespace arch::s390x::cpu::processor {
     };
     static_assert(sizeof(s390x_stack_frame) == S390X_STACK_FRAME_SIZE);
 
+    /// @brief A 128-bit register pair (even/odd GPR pair).
+    union register_pair {
+        u128 pair{};
+        struct {
+            u64 even;
+            u64 odd;
+        };
+    };
+    static_assert(sizeof(register_pair) == 16, "register_pair must be exactly 128 bits");
+
 } // namespace arch::s390x::cpu::processor
 
 } // end export
