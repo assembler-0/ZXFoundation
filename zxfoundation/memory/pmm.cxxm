@@ -137,10 +137,12 @@ namespace zxfoundation::memory::pmm::_internal {
         return normalize_node_id(pcp.drawer_id);
     }
 
-    [[nodiscard]] auto desc_of(u64 phys) noexcept -> frame_desc&;
+    [[nodiscard]] auto desc_of(u64 phys) noexcept -> lib::expected<frame_desc*, lib::kernel_error>;
 
     [[nodiscard]] auto frame_node_id(u64 phys) noexcept -> u8 {
-        const u8 recorded = desc_of(phys).numa_node;
+        auto desc = desc_of(phys);
+        if (!desc) [[unlikely]] return numa::NUMA_NODE_BOOT;
+        const u8 recorded = (*desc)->numa_node;
         if (numa::node_id_is_valid(recorded)) return recorded;
 
         auto node = numa::node_for_phys(phys);
@@ -172,8 +174,17 @@ namespace zxfoundation::memory::pmm::_internal {
 
     /// @brief Access the frame_desc for a given physical address.
     /// @warning Only valid after pmm::init() has set g_frame_table.
-    [[nodiscard]] auto desc_of(u64 phys) noexcept -> frame_desc& {
-        return g_frame_table[phys >> PAGE_SHIFT];
+    [[nodiscard]] auto desc_of(u64 phys) noexcept -> lib::expected<frame_desc*, lib::kernel_error> {
+        if (!g_frame_table) [[unlikely]] {
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+        }
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) [[unlikely]] {
+            return lib::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        }
+        return &g_frame_table[pfn];
     }
 
     /// @brief Fail-closed validation of a frame handed back by the buddy / PCP layer.
@@ -182,13 +193,22 @@ namespace zxfoundation::memory::pmm::_internal {
     ///          in that case.
     auto assert_allocatable_frame(u64 phys) noexcept -> void {
         const u64 max_phys = g_max_pfn << PAGE_SHIFT;
+        auto desc = desc_of(phys);
+        bool owned_by_buddy = desc && (*desc)->owner() == frame_owner::buddy;
         if (phys == 0U
             || (phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U
             || phys >= max_phys
-            || desc_of(phys).owner() != frame_owner::buddy) [[unlikely]] {
+            || !owned_by_buddy) [[unlikely]] {
+            u64 owner_val = 0xFF;
+            u64 order_val = 0xFF;
+            if (desc) {
+                owner_val = static_cast<u64>((*desc)->owner());
+                order_val = static_cast<u64>((*desc)->order());
+            }
             sys::syschk::syschk_fatal(
                 lib::kernel_error::from_memory(lib::memory_error::invalid_address),
-                "pmm: free list returned a non-buddy or out-of-range frame (corruption)");
+                "pmm: free list corruption at phys={:#010x} owner={} order={} max_phys={:#010x}",
+                phys, owner_val, order_val, max_phys);
         }
     }
 
@@ -218,11 +238,15 @@ namespace zxfoundation::memory::pmm::_internal {
             return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
         }
 
-        const auto& fd = desc_of(phys);
-        if (fd.owner() != frame_owner::page_table || fd.order() != order || fd.numa_node != node_id) {
+        auto fde = desc_of(phys);
+        if (!fde) {
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+        auto* fd = *fde;
+        if (fd->owner() != frame_owner::page_table || fd->order() != order || fd->numa_node != node_id) {
             return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::purpose_mismatch));
         }
-        if ((fd.flags & (ff_offline | ff_shared)) != 0U) {
+        if ((fd->flags & (ff_offline | ff_shared)) != 0U) {
             return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
         }
 
@@ -231,7 +255,10 @@ namespace zxfoundation::memory::pmm::_internal {
 
     auto quarantine_failed_allocation(u64 phys, u32 order, u8 node_id) noexcept -> void {
         if (!g_frame_table || (phys >> PAGE_SHIFT) >= g_max_pfn) return;
-        desc_of(phys).set(static_cast<u8>(order), frame_owner::reserved, node_id, ff_suspect);
+        auto fde = desc_of(phys);
+        if (fde) [[likely]] {
+            (*fde)->set(static_cast<u8>(order), frame_owner::reserved, node_id, ff_suspect);
+        }
     }
 
     /// @brief Allocate a block of the given order from a node-owned zone.
@@ -252,7 +279,10 @@ namespace zxfoundation::memory::pmm::_internal {
             for (u32 s = ord; s > order; --s) {
                 const u64 buddy_phys = phys + (static_cast<u64>(PAGE_SIZE) << (s - 1));
                 bz.push(s - 1, buddy_phys);
-                desc_of(buddy_phys).set(static_cast<u8>(s - 1), frame_owner::buddy, node);
+                auto fde = desc_of(buddy_phys);
+                if (fde) [[likely]] {
+                    (*fde)->set(static_cast<u8>(s - 1), frame_owner::buddy, node);
+                }
             }
 
             g_node_zones[node].free_pages[zi] -= 1ULL << order;
@@ -275,28 +305,35 @@ namespace zxfoundation::memory::pmm::_internal {
 
             if (zone_of(buddy) != z) break;
 
-            const auto& bd = desc_of(buddy);
-            if (bd.owner() != frame_owner::buddy) break;
-            if (bd.numa_node != node) break;
+            auto bde = desc_of(buddy);
+            if (!bde) break;
+            auto* bd = *bde;
+            if (bd->owner() != frame_owner::buddy) break;
+            if (bd->numa_node != node) break;
 
             // EC-3: never merge across an MCCK-offline frame.
-            if (bd.flags & ff_offline) {
-                desc_of(phys).flags |= ff_suspect;
+            if (bd->flags & ff_offline) {
+                auto pde = desc_of(phys);
+                if (pde) [[likely]] (*pde)->flags |= ff_suspect;
                 break;
             }
 
-            if (bd.order() != static_cast<u8>(ord)) break;
+            if (bd->order() != static_cast<u8>(ord)) break;
 
             bz.remove(ord, buddy);
             g_node_zones[node].free_pages[zi] -= 1ULL << ord;
-            desc_of(buddy).set(0, frame_owner::none, node);
+            auto fde = desc_of(buddy);
+            if (fde) [[likely]] (*fde)->set(0, frame_owner::none, node);
             phys = lib::min(phys, buddy);
             // ord is incremented at the top of the next iteration → merge goes up
         }
 
         // Push at the *final merged* order (fixes the original coalescing bug).
         bz.push(ord, phys);
-        desc_of(phys).set(static_cast<u8>(ord), frame_owner::buddy, node);
+        auto pde = desc_of(phys);
+        if (pde) [[likely]] {
+            (*pde)->set(static_cast<u8>(ord), frame_owner::buddy, node);
+        }
         g_node_zones[node].free_pages[zi] += 1ULL << ord;
     }
 
@@ -397,7 +434,8 @@ namespace zxfoundation::memory::pmm::_internal {
             const u64 phys = alloc_locked(ord, z, node);
             if (!phys) break;
             // Pages in PCP are owned by buddy until popped for a real caller.
-            desc_of(phys).set(static_cast<u8>(ord), frame_owner::buddy, node);
+            auto fde = desc_of(phys);
+            if (fde) [[likely]] (*fde)->set(static_cast<u8>(ord), frame_owner::buddy, node);
             pcp_push(lst, phys);
         }
     }
@@ -563,8 +601,10 @@ namespace zxfoundation::memory::pmm {
                 const u64 skip_to = resv_skip_end(cur, resv.data(), static_cast<u32>(resv.size()));
                 if (skip_to) {
                     const u64 resv_end = lib::min(skip_to, region_end);
-                    for (u64 p = cur; p < resv_end; p += PAGE_SIZE)
-                        desc_of(p).set(0, frame_owner::reserved, 0);
+                    for (u64 p = cur; p < resv_end; p += PAGE_SIZE) {
+                        auto fde = desc_of(p);
+                        if (fde) [[likely]] (*fde)->set(0, frame_owner::reserved, 0);
+                    }
                     cur = resv_end;
                     continue;
                 }
@@ -588,7 +628,8 @@ namespace zxfoundation::memory::pmm {
                     const u32 zi = static_cast<u32>(z);
                     const u8 node = boot_region_node_id(map[i], run);
                     g_node_zones[node].zones[zi].push(ord, run);
-                    desc_of(run).set(static_cast<u8>(ord), frame_owner::buddy, node);
+                    auto fde = desc_of(run);
+                    if (fde) [[likely]] (*fde)->set(static_cast<u8>(ord), frame_owner::buddy, node);
 
                     const u64 block_pages = 1ULL << ord;
                     g_node_zones[node].free_pages[zi] += block_pages;
@@ -641,7 +682,10 @@ namespace zxfoundation::memory::pmm {
                         bz.remove(ord, cur);
                         node_zones.free_pages[zi] -= 1ULL << ord;
                         node_zones.total_pages[zi] -= 1ULL << ord;
-                        desc_of(cur).set(static_cast<u8>(ord), frame_owner::reserved, node);
+                        {
+                            auto fde = desc_of(cur);
+                            if (fde) [[likely]] (*fde)->set(static_cast<u8>(ord), frame_owner::reserved, node);
+                        }
 
                         // Return pages below the reserved range.
                         if (cur < phys) {
@@ -654,7 +698,10 @@ namespace zxfoundation::memory::pmm {
                                     else break;
                                 }
                                 bz.push(ret_ord, ret);
-                                desc_of(ret).set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                {
+                                auto fde = desc_of(ret);
+                                if (fde) [[likely]] (*fde)->set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                }
                                 node_zones.free_pages[zi] += 1ULL << ret_ord;
                                 node_zones.total_pages[zi] += 1ULL << ret_ord;
                                 ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
@@ -672,7 +719,10 @@ namespace zxfoundation::memory::pmm {
                                     else break;
                                 }
                                 bz.push(ret_ord, ret);
-                                desc_of(ret).set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                {
+                                auto fde = desc_of(ret);
+                                if (fde) [[likely]] (*fde)->set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                }
                                 node_zones.free_pages[zi] += 1ULL << ret_ord;
                                 node_zones.total_pages[zi] += 1ULL << ret_ord;
                                 ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
@@ -707,8 +757,8 @@ namespace zxfoundation::memory::pmm {
             // EC-5: skip frames that were marked ff_offline by MCCK during
             // the transaction window (they are already accounted as lost).
             for (u32 i = 0; i < m_count; ++i) {
-                const auto& fd = desc_of(m_slots[i].phys);
-                if (fd.flags & ff_offline) continue;
+                auto fde = desc_of(m_slots[i].phys);
+                if (!fde || ((*fde)->flags & ff_offline)) continue;
                 const u32 zi = static_cast<u32>(m_slots[i].z);
                 const u8 node = normalize_node_id(m_slots[i].node_id);
                 const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
@@ -762,7 +812,10 @@ namespace zxfoundation::memory::pmm {
                     lib::memory_error::zone_exhausted));
 
             const frame_owner fo = owner_for_purpose(p);
-            desc_of(allocation.phys).set(static_cast<u8>(order), fo, allocation.node_id);
+            {
+                auto fde_txn = desc_of(allocation.phys);
+                if (fde_txn) [[likely]] (*fde_txn)->set(static_cast<u8>(order), fo, allocation.node_id);
+            }
 
             if (p == purpose::page_table) {
                 auto validation = validate_page_table_allocation(allocation.phys, order, z, allocation.node_id);
@@ -848,7 +901,10 @@ namespace zxfoundation::memory::pmm {
                 lib::memory_error::zone_exhausted));
 
         const frame_owner fo = owner_for_purpose(request.use);
-        desc_of(allocation.phys).set(static_cast<u8>(request.order), fo, allocation.node_id);
+        {
+            auto fde = desc_of(allocation.phys);
+            if (fde) [[likely]] (*fde)->set(static_cast<u8>(request.order), fo, allocation.node_id);
+        }
 
         if (request.use == purpose::page_table) {
             auto validation = validate_page_table_allocation(allocation.phys, request.order, z, allocation.node_id);
@@ -918,7 +974,10 @@ namespace zxfoundation::memory::pmm {
         const u8    node  = frame_node_id(phys);
 
         // Reset frame_desc so the frame shows as buddy-owned.
-        desc_of(phys).set(static_cast<u8>(order), frame_owner::buddy, node);
+        {
+            auto fde = desc_of(phys);
+            if (fde) [[likely]] (*fde)->set(static_cast<u8>(order), frame_owner::buddy, node);
+        }
         if (order <= PCP_MAX_ORDER && !sched::context::in_interrupt()) {
             const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
             pcp_list& lst = arch::s390x::cpu::lowcore::this_cpu_percpu()

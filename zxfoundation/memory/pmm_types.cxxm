@@ -93,7 +93,7 @@ namespace zxfoundation::memory::pmm {
 
     /// @brief 16-byte per-physical-frame metadata record.
     struct frame_desc {
-        u8  order_owner{0};
+        arch::s390x::lib::atomic::atomic<u8> order_owner{0};
         u8  flags{0};
         u8  numa_node{0};   ///< NUMA node that owns this frame for free, rollback, and PCP placement.
         u8  _r0{0};
@@ -101,17 +101,23 @@ namespace zxfoundation::memory::pmm {
         u16 _r1{0};
         u64 storage_key{0}; ///< Reserved for future s390x storage-key / protection use.
 
-        [[nodiscard]] constexpr auto order() const noexcept -> u8 {
-            return static_cast<u8>(order_owner >> 4);
+        [[nodiscard]] auto order() const noexcept -> u8 {
+            const u8 val = order_owner.load(arch::s390x::lib::atomic::memory_order::acquire);
+            return static_cast<u8>(val >> 4);
         }
-        [[nodiscard]] constexpr auto owner() const noexcept -> frame_owner {
-            return static_cast<frame_owner>(order_owner & 0x0FU);
+        [[nodiscard]] auto owner() const noexcept -> frame_owner {
+            const u8 val = order_owner.load(arch::s390x::lib::atomic::memory_order::acquire);
+            return static_cast<frame_owner>(val & 0x0FU);
         }
-        constexpr auto set_order(u8 o) noexcept -> void {
-            order_owner = static_cast<u8>((o << 4) | (order_owner & 0x0FU));
+        auto set_order(u8 o) noexcept -> void {
+            const u8 cur = order_owner.load(arch::s390x::lib::atomic::memory_order::relaxed);
+            order_owner.store(static_cast<u8>((o << 4) | (cur & 0x0FU)),
+                              arch::s390x::lib::atomic::memory_order::release);
         }
-        constexpr auto set_owner(frame_owner ow) noexcept -> void {
-            order_owner = static_cast<u8>((order_owner & 0xF0U) | static_cast<u8>(ow));
+        auto set_owner(frame_owner ow) noexcept -> void {
+            const u8 cur = order_owner.load(arch::s390x::lib::atomic::memory_order::relaxed);
+            order_owner.store(static_cast<u8>((cur & 0xF0U) | static_cast<u8>(ow)),
+                              arch::s390x::lib::atomic::memory_order::release);
         }
 
         /// @brief Initialize all fields in one call.
@@ -124,12 +130,13 @@ namespace zxfoundation::memory::pmm {
         /// @note  refcount is reset to zero via a relaxed atomic store.  This is
         ///        safe only while the caller holds the zone lock or the frame has
         ///        not been published to another CPU.
-        constexpr auto set(u8 o, frame_owner ow, u8 numa = 0, u8 fl = ff_none) noexcept -> void {
-            order_owner = static_cast<u8>((o << 4) | static_cast<u8>(ow));
+        auto set(u8 o, frame_owner ow, u8 numa = 0, u8 fl = ff_none) noexcept -> void {
+            order_owner.store(static_cast<u8>((o << 4) | static_cast<u8>(ow)),
+                              arch::s390x::lib::atomic::memory_order::release);
             flags       = fl;
             numa_node   = numa;
             _r0         = 0;
-            refcount.store(0, arch::s390x::lib::atomic::memory_order::relaxed);
+            refcount.store(0, arch::s390x::lib::atomic::memory_order::release);
             _r1         = 0;
             storage_key = 0;
         }
