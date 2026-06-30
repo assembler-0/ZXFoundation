@@ -51,8 +51,11 @@ set(COMPILER_ID "clang") # supported values are "clang", "gcc" and "unknown"-beh
 set(EXTRA_KERNEL_FLAGS "") # extra flags added to kernel compilation
 set(EXTRA_LOADER_FLAGS "") # same as above but for ZXFL
 
-set(OPT_LEVEL "2" CACHE STRING "Optimization level (0, 1, 2, 3, s, z)")
-set(DSYM_LEVEL "0" CACHE STRING "Debug symbol level (0, 1, 2, 3)")
+# Default is the recommended value, change if needed
+set(OPT_LEVEL "2" CACHE STRING "Optimization level (0, 1, 2, 3, s, z)") # Select your optimization level
+set(DSYM_LEVEL "0" CACHE STRING "Debug symbol level (0, 1, 2, 3)")      # Select your debug symbol level
+set(MARCH_MODE "z13" CACHE STRING "Architecture mode, for -march and -mtune") # Select model-specific optimizations
+set(DASD_SERIAL "001842095440" CACHE STRING "Dasd serial")              # Select your DASD serial (unused if dependencies not met)
 ```
 
 ### Configuring and build

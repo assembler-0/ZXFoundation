@@ -209,11 +209,9 @@ namespace arch::s390x::css {
 
     /// @brief Probe all subchannels, enable valid ones, and populate the table.
     auto css_init() noexcept -> void {
-        using zxfoundation::sys::printk::pinfo;
-        using zxfoundation::sys::printk::pnotice;
-        using zxfoundation::sys::printk::pwarn;
+        using namespace zxfoundation::sys::printk;
 
-        pinfo("css: starting subchannel probe (cssid=0, ssid=0)");
+        pdebug("css: starting subchannel probe (cssid=0, ssid=0)");
 
         u32 found = 0;
 
@@ -265,7 +263,7 @@ namespace arch::s390x::css {
                 entry.state  = subchannel_state::idle;
             }
 
-            pinfo("css: found subchannel 0.0.{} devno={}",
+            ptrace("css: found subchannel 0.0.{} devno={}",
                   ::lib::format::hex{sch_no, 4, true},
                   ::lib::format::hex{static_cast<u64>(info.pmcw_data.devno), 4, true});
 

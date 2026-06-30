@@ -20,7 +20,8 @@ namespace zxfoundation::sys::printk {
         WARN    = 4, ///< Warning (W)
         NOTICE  = 5, ///< Normal but significant (N)
         INFO    = 6, ///< Informational (default) (I)
-        DEBUG   = 7  ///< Debug detail (D)
+        DEBUG   = 7, ///< Debug detail (D)
+        TRACE   = 8  ///< High-volume trace details (T)
     };
 
     /// @brief Interface for a logging backend.

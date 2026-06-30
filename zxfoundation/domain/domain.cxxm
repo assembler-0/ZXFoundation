@@ -445,7 +445,7 @@ namespace zxfoundation::domain {
         auto result = txn.execute(name);
 
         if (result) {
-            sys::printk::pinfo("domain: created id={} name=\"{}\" skey={}\n",
+            sys::printk::pdebug("domain: created id={} name=\"{}\" skey={}\n",
                                (*result)->ko.id, name, (*result)->storage_key);
         }
 

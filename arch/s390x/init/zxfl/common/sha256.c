@@ -3,7 +3,6 @@
 //
 /// @brief Freestanding SHA-256 (FIPS 180-4).
 
-#include <arch/s390x/init/zxfl/stfle.h>
 #include <arch/s390x/init/zxfl/sha256.h>
 
 static const uint32_t K[64] = {
@@ -137,6 +136,10 @@ static void zxfl_sha256_sw(const void *data, size_t len,
     zxfl_sha256_final(&ctx, digest);
 }
 
+#if defined(__s390x__) || defined(__s390__) || defined(__zarch__)
+
+#include <arch/s390x/init/zxfl/stfle.h>
+
 /// KIMD function code for SHA-256 (PoP SA22-7832, Message-Security-Assist).
 #define ZXFL_CPACF_KIMD_SHA_256   2UL
 
@@ -241,3 +244,5 @@ void zxfl_sha256(const void *data, size_t len,
     }
     zxfl_sha256_sw(data, len, digest);
 }
+
+#endif

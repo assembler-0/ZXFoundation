@@ -231,6 +231,7 @@ namespace zxfoundation::sys::printk {
             case log_level::NOTICE: tag = 'N'; break;
             case log_level::INFO:   tag = 'I'; break;
             case log_level::DEBUG:  tag = 'D'; break;
+            case log_level::TRACE:  tag = 'T'; break;
             default:                tag = '?'; break;
         }
 
@@ -275,6 +276,7 @@ namespace zxfoundation::sys::printk {
     template <typename... Args> auto pnotice(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::NOTICE, fmt, lib::forward<Args>(args)...); }
     template <typename... Args> auto pinfo(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::INFO,   fmt, lib::forward<Args>(args)...); }
     template <typename... Args> auto pdebug(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::DEBUG,  fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto ptrace(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::TRACE,  fmt, lib::forward<Args>(args)...); }
 
 } // namespace zxfoundation::sys::printk
 

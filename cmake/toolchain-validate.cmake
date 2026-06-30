@@ -101,6 +101,22 @@ if(ZX_DASDLOAD_PROGRAM)
     set(DASDLOAD "${ZX_DASDLOAD_PROGRAM}" CACHE FILEPATH "dasdload program path" FORCE)
 endif()
 
+# CCKDCSDK
+set(ZX_FOUND_CCKDCDSK FALSE CACHE BOOL "cckdcdsk tool was found" FORCE)
+_zx_find_optional(ZX_DCCKDCDSK_PROGRAM "cckdcdsk" cckdcdsk64 cckdcdsk)
+if(ZX_DCCKDCDSK_PROGRAM)
+    set(ZX_FOUND_CCKDCDSK TRUE CACHE BOOL "cckdcdsk tool was found" FORCE)
+    set(CCKDCDSK "${ZX_DCCKDCDSK_PROGRAM}" CACHE FILEPATH "cckdcdsk program path" FORCE)
+endif()
+
+# DASDSER
+set(ZX_FOUND_DASDSER FALSE CACHE BOOL "dasdser tool was found" FORCE)
+_zx_find_optional(ZX_DASDSER_PROGRAM "dasdser" dasdser)
+if(ZX_DASDSER_PROGRAM)
+    set(ZX_FOUND_DASDSER TRUE CACHE BOOL "dasdser tool was found" FORCE)
+    set(DASDSER "${ZX_DASDSER_PROGRAM}" CACHE FILEPATH "dasdser program path" FORCE)
+endif()
+
 # CCache
 set(ZX_FOUND_CCACHE FALSE CACHE BOOL "ccache was found" FORCE)
 _zx_find_optional(ZX_CCACHE_PROGRAM "ccache" ccache)
@@ -118,7 +134,7 @@ set(ZX_CAN_BUILD_LOADER TRUE
 if(ZX_FOUND_NM AND ZX_FOUND_CXXFILT AND ZX_FOUND_HOST_CC)
     set(ZX_CAN_BUILD_SYMRES TRUE
         CACHE BOOL "Two-pass symbol table generation" FORCE)
-    message(STATUS "zxfoundation::validate: Symbol table: nm + c++filt + host CC available")
+    message(STATUS "zxfoundation::validate: Symbol table: nm = ${CMAKE_NM} c++filt = ${ZX_CXXFILT}")
 else()
     set(ZX_CAN_BUILD_SYMRES FALSE
         CACHE BOOL "Two-pass symbol table generation" FORCE)
@@ -128,7 +144,7 @@ endif()
 if(ZX_FOUND_HOST_CC)
     set(ZX_CAN_SIGN_KERNEL TRUE
         CACHE BOOL "Sign kernel segments post-link" FORCE)
-    message(STATUS "zxfoundation::validate: Kernel signing: host CC available")
+    message(STATUS "zxfoundation::validate: Kernel signing: available")
 else()
     set(ZX_CAN_SIGN_KERNEL FALSE
         CACHE BOOL "Sign kernel segments post-link" FORCE)
@@ -138,27 +154,47 @@ endif()
 if(CMAKE_OBJCOPY AND ZX_FOUND_HOST_CC)
     set(ZX_CAN_PACK_LOADER TRUE
         CACHE BOOL "Convert loader ELF -> .sys format" FORCE)
-    message(STATUS "zxfoundation::validate: Loader packaging: objcopy + host CC available")
+    message(STATUS "zxfoundation::validate: Loader packaging: objcopy = ${CMAKE_OBJCOPY}")
 else()
     set(ZX_CAN_PACK_LOADER FALSE
         CACHE BOOL "Convert loader ELF -> .sys format" FORCE)
     message(STATUS "zxfoundation::validate: Loader packaging: objcopy or host CC missing")
 endif()
 
-if(ZX_FOUND_DASDLOAD)
+if(ZX_FOUND_DASDLOAD AND DASD_SERIAL)
     set(ZX_CAN_BUILD_DASD TRUE
         CACHE BOOL "Build sysres.3390 disk image" FORCE)
-    message(STATUS "zxfoundation::validate: DASD image: dasdload available")
+    message(STATUS "zxfoundation::validate: DASD image: dasdload available = ${DASDLOAD}")
 else()
     set(ZX_CAN_BUILD_DASD FALSE
         CACHE BOOL "Build sysres.3390 disk image" FORCE)
     message(STATUS "zxfoundation::validate: DASD image: dasdload missing")
 endif()
 
+if(ZX_FOUND_DASDLOAD AND ZX_FOUND_CCKDCDSK)
+    set(ZX_CAN_CHECK_DASD TRUE
+            CACHE BOOL "Validate sysres.3390 disk image" FORCE)
+    message(STATUS "zxfoundation::validate: DASD check: cckdcdsk available = ${CCKDCDSK}")
+else()
+    set(ZX_CAN_CHECK_DASD FALSE
+            CACHE BOOL "Validate sysres.3390 disk image" FORCE)
+    message(STATUS "zxfoundation::validate: DASD check: cckdcdsk missing")
+endif()
+
+if(ZX_FOUND_DASDLOAD AND ZX_FOUND_DASDSER)
+    set(ZX_CAN_SERIAL_DASD TRUE
+            CACHE BOOL "Serial sysres.3390 disk image" FORCE)
+    message(STATUS "zxfoundation::validate: DASD serial: dasdser available = ${DASDSER}")
+else()
+    set(ZX_CAN_SERIAL_DASD FALSE
+            CACHE BOOL "Serial sysres.3390 disk image" FORCE)
+    message(STATUS "zxfoundation::validate: DASD serial: dasdser missing")
+endif()
+
 if(ZX_FOUND_HOST_CC)
     set(ZX_CAN_BUILD_HOST_TOOLS TRUE
         CACHE BOOL "Build host tools (bin2rec, zxsign, zxallsyms_gen)" FORCE)
-    message(STATUS "zxfoundation::validate: Host tools: host CC available")
+    message(STATUS "zxfoundation::validate: Host tools: available")
 else()
     set(ZX_CAN_BUILD_HOST_TOOLS FALSE
         CACHE BOOL "Build host tools (bin2rec, zxsign, zxallsyms_gen)" FORCE)

@@ -254,24 +254,24 @@ namespace arch::s390x::css::ccw_io {
             const auto m = dm::match(dev_type, cu_type);
 
             if (m.dev_name && m.cu_name) {
-                pinfo("ccw_io: sch[{}] devno={} -> {} ({})",
+                ptrace("ccw_io: sch[{}] devno={} -> {} ({})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       m.dev_name, m.cu_name);
             } else if (m.dev_name) {
-                pinfo("ccw_io: sch[{}] devno={} -> {} (cu={})",
+                ptrace("ccw_io: sch[{}] devno={} -> {} (cu={})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       m.dev_name,
                       ::lib::format::hex{static_cast<u64>(cu_type), 4, true});
             } else if (m.cu_name) {
-                pinfo("ccw_io: sch[{}] devno={} -> dev={} ({})",
+                ptrace("ccw_io: sch[{}] devno={} -> dev={} ({})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       ::lib::format::hex{static_cast<u64>(dev_type), 4, true},
                       m.cu_name);
             } else {
-                pinfo("ccw_io: sch[{}] devno={} -> dev={} cu={}",
+                ptrace("ccw_io: sch[{}] devno={} -> dev={} cu={}",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       ::lib::format::hex{static_cast<u64>(dev_type), 4, true},
@@ -282,6 +282,10 @@ namespace arch::s390x::css::ccw_io {
         pinfo("ccw_io: SENSE ID complete, {}/{} device(s) identified",
               ::lib::format::dec{static_cast<u64>(identified)},
               ::lib::format::dec{static_cast<u64>(count)});
+
+        if (identified != count) {
+            pnotice("ccw_io: some devices are not identified");
+        }
     }
 
 } // namespace ccw_io

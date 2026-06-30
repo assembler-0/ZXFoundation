@@ -225,9 +225,8 @@ namespace _internal {
     auto launch_bootstrap_domain() -> void  {
         auto dom_r = zxfoundation::domain::domain_create("sys/bootstrap");
         if (!dom_r) {
-            syschk_fatal(
-                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
-                "sys: cannot create sys/bootstrap domain");
+            zxfoundation::sys::printk::pcrit("sys: cannot launch bootstrap domain");
+            return;
         }
         auto* d = *dom_r;
 

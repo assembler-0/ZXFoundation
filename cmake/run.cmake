@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # @brief Post-build / run targets.
 
-if(ZX_CAN_BUILD_DASD)
+if (ZX_CAN_BUILD_DASD)
     add_custom_command(
         OUTPUT sysres.3390
         COMMAND ${CMAKE_COMMAND} -E rm -f sysres.3390
@@ -20,8 +20,32 @@ if(ZX_CAN_BUILD_DASD)
         COMMENT "zxfoundation::build: generating sysres.3390"
     )
     add_custom_target(dasd ALL DEPENDS sysres.3390)
-else()
-    message(STATUS "zxfoundation::run: dasdload not found — DASD image target disabled")
+endif()
+
+if (ZX_CAN_BUILD_DASD AND ZX_CAN_CHECK_DASD)
+    add_custom_command(
+        OUTPUT sysres.3390.chk
+        COMMAND ${CCKDCDSK} -ro -3 sysres.3390
+        COMMAND ${CMAKE_COMMAND} -E touch sysres.3390.chk
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        VERBATIM
+        DEPENDS dasd
+        COMMENT "zxfoundation::build: checking sysres.3390"
+    )
+    add_custom_target(dasdcheck ALL DEPENDS sysres.3390.chk sysres.3390)
+endif()
+
+if (ZX_CAN_BUILD_DASD AND ZX_CAN_SERIAL_DASD AND DASD_SERIAL)
+    add_custom_command(
+        OUTPUT sysres.3390.serial
+        COMMAND ${DASDSER} sysres.3390 ${DASD_SERIAL}
+        COMMAND ${CMAKE_COMMAND} -E touch sysres.3390.serial
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        VERBATIM
+        DEPENDS dasd
+        COMMENT "zxfoundation::build: serializing sysres.3390"
+    )
+    add_custom_target(dasdserial ALL DEPENDS sysres.3390.serial sysres.3390)
 endif()
 
 file(READ ${CMAKE_SOURCE_DIR}/BUILD_NUMBER BUILD_VERSION)
