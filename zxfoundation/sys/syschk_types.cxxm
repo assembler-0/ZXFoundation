@@ -14,9 +14,10 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Severity annotation for a system-check event.
     enum class syschk_severity : u8 {
-        warning  = 0x0U, ///< Non-fatal annotation; execution may theoretically continue.
-        critical = 0x1U, ///< Severe kernel invariant violation.
-        fatal    = 0x2U, ///< Unrecoverable condition; halt is unconditional.
+        notice   = 0x0U, ///< Non-fatal annotation; execution may theoretically continue.
+        warning  = 0x1U, ///< Non-fatal annotation; execution may theoretically continue.
+        critical = 0x2U, ///< Severe kernel invariant violation.
+        fatal    = 0x3U, ///< Unrecoverable condition; halt is unconditional.
     };
 
     /// @brief Return a short ASCII label for a severity level.
@@ -27,6 +28,7 @@ namespace zxfoundation::sys::syschk {
             case syschk_severity::fatal:    return "fatal";
             case syschk_severity::critical: return "critical";
             case syschk_severity::warning:  return "warning";
+            case syschk_severity::notice:   return "notice";
             default:                        return "unknown";
         }
     }

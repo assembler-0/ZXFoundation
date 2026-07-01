@@ -8,10 +8,9 @@
 ///
 /// State transitions:
 ///
-///   embryo ──┬──► active ◄──► suspended
-///            │       │            │
-///            │       ▼            │
-///            └──► dying ◄────────┘
+///   embryo → sealed → active ↔ suspended
+///                    │       │
+///                    └───► dying ──► destroyed
 
 export module zxfoundation.base.typestate;
 import zxfoundation.base.types;
@@ -23,12 +22,14 @@ namespace zxfoundation::base {
     /// @brief Unified lifecycle states for ALL typestate-tracked resources.
     ///
     /// Every SCOMS-managed object, every folio, and every slab cache
-    /// uses exactly these four states.  No subsystem may define its own.
+    /// uses exactly these states. No subsystem may define its own.
     enum class lifecycle_state : u8 {
-        embryo    = 0, ///< Allocated, fields being populated. Not usable yet.
-        active    = 1, ///< Fully initialized, accepting operations.
-        suspended = 2, ///< Temporarily inactive (blocked, quiesced).
-        dying     = 3, ///< Teardown in progress. No new operations.
+        embryo     = 0, ///< Allocated, fields being populated. Not usable yet.
+        sealed     = 1, ///< Resources bound (storage key, ASCE), not yet active.
+        active     = 2, ///< Fully initialized, accepting operations.
+        suspended  = 3, ///< Temporarily inactive (blocked, quiesced).
+        dying      = 4, ///< Teardown in progress. No new operations.
+        destroyed  = 5, ///< Fully torn down, awaiting reclamation.
     };
 
     /// @brief Backward-compatible aliases for subsystems still using
@@ -77,9 +78,11 @@ namespace zxfoundation::base {
         -> const char* {
         switch (s) {
             case lifecycle_state::embryo:    return "embryo";
+            case lifecycle_state::sealed:    return "sealed";
             case lifecycle_state::active:    return "active";
             case lifecycle_state::suspended: return "suspended";
             case lifecycle_state::dying:     return "dying";
+            case lifecycle_state::destroyed: return "destroyed";
             default:                         return "unknown";
         }
     }

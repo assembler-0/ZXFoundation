@@ -22,9 +22,13 @@ import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.signal;
 import zxfoundation.domain.signal_types;
-import zxfoundation.gate.dispatch;
+import zxfoundation.sys.syscall_self;
 import zxfoundation.base.typestate;
 import lib.error;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.gate.dispatch_table;
+
+static bool s_pgm_fixup_active = false;
 
 constexpr u16 PGM_OPERATION          = 0x0001;
 constexpr u16 PGM_PRIVILEGED_OP      = 0x0002;
@@ -60,8 +64,7 @@ constexpr u16 EXT_EXTERNAL_CALL      = 0x1202;
 constexpr u16 EXT_TIMING_ALERT       = 0x1406;
 constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;
 
-static bool s_pgm_fixup_active = false;
-
+constexpr u64 MCIC_ADDRESS           = 0xE8UL;
 constexpr u64 MCIC_SYSTEM_DAMAGE     = 1ULL << 63;  // bit 0
 constexpr u64 MCIC_INSTRUCTION_PROC  = 1ULL << 62;  // bit 1
 constexpr u64 MCIC_SYSTEM_RECOVERY   = 1ULL << 61;  // bit 2
@@ -73,7 +76,7 @@ constexpr u64 MCIC_KEY               = 1ULL << 56;  // bit 7
 
 /// @brief Log an unhandled domain program exception.
 static void log_domain_pgm(
-    u16 pgm_code, const arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+    u16 pgm_code, const arch::s390x::cpu::irq::irq_frame* frame,
     u64 trans_exc
 ) noexcept {
     zxfoundation::sys::printk::perr(
@@ -95,8 +98,15 @@ static bool is_exec_from_teid(u64 teid) noexcept {
     return (teid & (1ULL << 60)) != 0;
 }
 
+/// Forward declaration for PC dispatch (defined below).
+extern "C" auto do_pc_interrupt(
+    u64 call_nr, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
+) noexcept -> u64;
+
+extern "C" [[noreturn]] void sched_strand_trampoline_exit() noexcept;
+
 /// @brief Program check handler.
-extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+extern "C" auto do_pgm_check(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     const u16 pgm_code = *reinterpret_cast<const u16*>(0x8EUL);
     const u64 trans_exc = *reinterpret_cast<const u64*>(0xA8UL);
     const u32 data_exc_code = pgm_code == PGM_DATA
@@ -124,6 +134,34 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
             lib::kernel_error::from_generic(lib::generic_error::internal_error),
             "program check {:#06x} at PSW {:#018x}:{:#018x} tex={:#018x}",
             pgm_code, static_cast<long unsigned int>(frame->psw_mask), static_cast<long unsigned int>(frame->psw_addr), trans_exc);
+        return;
+    }
+
+    if (pgm_code == PGM_PRIVILEGED_OP) {
+        const u64 call_nr = frame->gprs[0];
+        if (call_nr < 256U) {
+            const u64 a0 = frame->gprs[2];
+            const u64 a1 = frame->gprs[3];
+            const u64 a2 = frame->gprs[4];
+            const u64 a3 = frame->gprs[5];
+            const u64 a4 = frame->gprs[6];
+
+            const u64 psw_before = frame->psw_addr;
+            const u64 gprs2_before = frame->gprs[2];
+            zxfoundation::sys::printk::pdebug("trap: PC call_nr={} psw_addr_before={:#x} gprs[2]={:#x}\n",
+                                             call_nr, psw_before, gprs2_before);
+
+            frame->gprs[2] = do_pc_interrupt(call_nr, a0, a1, a2, a3, a4);
+
+            const u64 psw_after = frame->psw_addr;
+            const u64 result = frame->gprs[2];
+            zxfoundation::sys::printk::pdebug("trap: PC call_nr={} psw_addr_after={:#x} result={:#x}\n",
+                                             call_nr, psw_after, result);
+
+            // Advance return PSW past the 4-byte RRE instruction
+            frame->psw_addr += 4;
+            return;
+        }
     }
 
     auto* lc = arch::s390x::cpu::lowcore::get_current();
@@ -162,22 +200,25 @@ extern "C" auto do_pgm_check(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame)
         log_domain_pgm(pgm_code, frame, trans_exc);
         if (pgm_code == PGM_DATA) {
             zxfoundation::sys::printk::perr(
-                "  data-exception code={:#010x}\n", data_exc_code);
+                "pgm: data-exception code={:#010x}\n", data_exc_code);
         }
 
         d->ko.state = zxfoundation::base::lifecycle_state::dying;
         d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
+
+        frame->gprs[15] = d->primary_strand.kstack_top - 160U;
+        frame->psw_mask = arch::s390x::cpu::psw::PSW_MASK_KERNEL_DAT;
+        frame->psw_addr = reinterpret_cast<u64>(&sched_strand_trampoline_exit);
     } else {
-        zxfoundation::sys::printk::perr(
+        zxfoundation::sys::syschk::syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::internal_error),
             "domain program check {:#06x} at PSW {:#018x}:{:#018x} "
             "(no current domain)\n",
             pgm_code, static_cast<long unsigned int>(frame->psw_mask), static_cast<long unsigned int>(frame->psw_addr));
-        arch::s390x::cpu::psw::disabled_wait();
     }
 }
 
 /// @brief External interrupt handler.
-extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     (void)frame;
 
     const u16 ext_code = *reinterpret_cast<const u16*>(0x86UL);
@@ -191,18 +232,18 @@ extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fr
         static bool once = false;
         if (!once) {
             once = true;
-            zxfoundation::sys::printk::pinfo("ext: CPU timer interrupt (ignored)\n");
+            zxfoundation::sys::printk::pnotice("ext: CPU timer interrupt (ignored)\n");
         }
         return;
     }
 
     if (ext_code == EXT_TIMING_ALERT) {
-        zxfoundation::sys::printk::pdebug("ext: timing-alert\n");
+        zxfoundation::sys::printk::ptrace("ext: timing-alert\n");
         return;
     }
 
     if (ext_code == EXT_SERVICE_SIGNAL) {
-        zxfoundation::sys::printk::pdebug("ext: service signal\n");
+        zxfoundation::sys::printk::ptrace("ext: service signal\n");
         return;
     }
 
@@ -214,7 +255,7 @@ extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fr
 }
 
 /// @brief I/O interrupt handler.
-extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     (void)frame;
 
     const auto* lc = arch::s390x::cpu::lowcore::get_current();
@@ -232,54 +273,85 @@ extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* fra
         arch::s390x::cpu::irq::ZX_IRQ_CLASS_IO);
 }
 
-/// @brief SVC handler — nucleus call dispatch.
-extern "C" auto do_svc(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame, u16 svc_code) noexcept -> void {
-    const u64 result = zxfoundation::gate::dispatch::nucleus_dispatch(
+/// @brief SVC handler — ONLY self-domain operations allowed (yield, deadline, now, console).
+///        All other operations MUST go through PC dispatch with DGP enforcement.
+extern "C" auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 svc_code) noexcept -> void {
+    const u64 result = zxfoundation::sys::syscall_self::handle(
         static_cast<u32>(svc_code),
         frame->gprs[2], frame->gprs[3], frame->gprs[4],
         frame->gprs[5], frame->gprs[6]);
     frame->gprs[2] = result;
 }
 
+/// @brief C-linkage entry point for PC (cross-domain gate calls).
+extern "C" auto do_pc_interrupt(
+    u64 call_nr, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
+) noexcept -> u64 {
+    using zxfoundation::domain::domain;
+    using zxfoundation::base::lifecycle_state;
+
+    auto* lc = arch::s390x::cpu::lowcore::get_current();
+    auto* d = lc ? reinterpret_cast<domain*>(lc->current_domain) : nullptr;
+
+    if (!d || d->iso_state != lifecycle_state::active) {
+        return ~0ULL;
+    }
+
+    return zxfoundation::gate::dispatch_table::dispatch(
+        static_cast<u32>(call_nr), a0, a1, a2, a3, a4);
+}
+
+
 /// @brief Machine-check handler — decode MCIC and attempt recovery.
-extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::arch_s390x_irq_frame* frame) noexcept -> void {
+extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     (void)frame;
 
     // Read and clear the MCIC from lowcore (0xE8) to prevent re-trigger.
-    const u64 mcck_code = *reinterpret_cast<const u64*>(0xE8UL);
+    const u64 mcck_code = *reinterpret_cast<const u64*>(MCIC_ADDRESS);
 
     if (mcck_code == 0) return;
 
     // Clear the MCIC (must write 0 to acknowledge per PoP §7-4.4).
-    *reinterpret_cast<volatile u64*>(0xE8UL) = 0ULL;
+    *reinterpret_cast<volatile u64*>(MCIC_ADDRESS) = 0ULL;
 
     // Decode MCIC bits (PoP Figure 7-13).
     if (mcck_code & MCIC_SYSTEM_DAMAGE) {
-        zxfoundation::sys::printk::pcrit("mcck: SYSTEM DAMAGE\n");
-        // System damage is usually unrecoverable.
-        arch::s390x::cpu::psw::disabled_wait();
+        zxfoundation::sys::syschk::syschk_fatal(
+            lib::kernel_error::from_machine(lib::machine_error::system_damage),
+            "mcck: system damage"
+        );
     }
     if (mcck_code & MCIC_INSTRUCTION_PROC) {
         const u64 fail_addr = *reinterpret_cast<const u64*>(0xF8UL);
-        zxfoundation::sys::printk::pcrit(
-            "mcck: instruction-processing damage at addr={:#018x}\n", fail_addr);
-        // May be recoverable — attempt re-execution.
+        zxfoundation::sys::syschk::syschk_critical(
+            lib::kernel_error::from_machine(lib::machine_error::inst_process_damage),
+            "mcck: instruction-processing damage at addr{:#018x}", fail_addr
+        );
     }
     if (mcck_code & MCIC_SYSTEM_RECOVERY) {
-        zxfoundation::sys::printk::pnotice("mcck: system recovery completed\n");
+        zxfoundation::sys::syschk::syschk_notice(
+            lib::kernel_error::from_machine(lib::machine_error::system_recovery),
+            "mcck: system recovery completed"
+        );
     }
     if (mcck_code & MCIC_TIMING_FACILITY) {
-        zxfoundation::sys::printk::pnotice("mcck: timing facility damage — TOD may be stale\n");
+        zxfoundation::sys::syschk::syschk_critical(
+            lib::kernel_error::from_machine(lib::machine_error::timing_facility),
+            "mcck: timing facility damange - TOD may be stale"
+        );
     }
     if (mcck_code & MCIC_EXT_DAMAGE) {
-        const u32 ext_damage = *reinterpret_cast<const u32*>(0xF4UL);
-        zxfoundation::sys::printk::pcrit(
-            "mcck: external damage code={:#010x}\n", ext_damage);
+        zxfoundation::sys::syschk::syschk_fatal(
+            lib::kernel_error::from_machine(lib::machine_error::external_damage),
+            "mcck: external system damage"
+        );
     }
     if (mcck_code & MCIC_FAILING_STOR_ADDR) {
         const u64 fail_stor = *reinterpret_cast<const u64*>(0xF8UL);
-        zxfoundation::sys::printk::pnotice(
-            "mcck: failing storage addr={:#018x}\n", fail_stor);
+        zxfoundation::sys::syschk::syschk_critical(
+            lib::kernel_error::from_machine(lib::machine_error::inst_process_damage),
+            "mcck: failing storage address={:#018x}", fail_stor
+        );
     }
 
     // Dispatch through IRQ subsystem for any registered machine-check listeners.

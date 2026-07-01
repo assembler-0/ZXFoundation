@@ -20,7 +20,7 @@ namespace zxfoundation::sched::balance {
     /// @brief Build the scheduler placement policy for a strand from its owning DGP domain.
     /// @param[in] s Strand whose owner provides placement metadata.
     /// @return Placement policy describing preferred NUMA node and SMT isolation sensitivity.
-    /// @note The first policy source is `domain::dgp_state.numa_node`; future executor APIs may override it per strand.
+    /// @note The first policy source is `domain::numa_node`; future executor APIs may override it per strand.
     /// @warning A missing owner returns permissive fallback policy so idle/bootstrap paths remain schedulable.
     [[nodiscard]] auto placement_policy_for(
         const zxfoundation::domain::strand& s
@@ -29,10 +29,10 @@ namespace zxfoundation::sched::balance {
         const auto* owner = static_cast<const zxfoundation::domain::domain*>(s.owner);
         if (!owner) return policy;
 
-        policy.preferred_node = owner->dgp_state.numa_node;
+        policy.preferred_node = owner->numa_node;
         policy.allow_remote_node = true;
         policy.allow_smt_sibling = !zxfoundation::dgp::has_all_rights(
-            owner->dgp_state.granted_rights,
+            owner->granted_rights,
             zxfoundation::dgp::isolation_rights::admin);
         policy.isolation_sensitive = !policy.allow_smt_sibling;
         return policy;

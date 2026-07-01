@@ -4,11 +4,14 @@
 
 export module zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import arch.s390x.mmu.mmu_types;
 
 export {
 
 namespace zxfoundation::dgp {
+
+    using zxfoundation::base::lifecycle_state;
 
     /// @brief Storage key value requesting automatic allocation by DGP policy.
     inline constexpr u8 STORAGE_KEY_AUTO = 0xFFU;
@@ -34,15 +37,6 @@ namespace zxfoundation::dgp {
         numa_policy      = 1ULL << 5,
         transactional_vm = 1ULL << 6,
         smp_invalidation = 1ULL << 7,
-    };
-
-    /// @brief Lifecycle state for a hardware-backed DGP isolation domain.
-    enum class isolation_state : u8 {
-        embryo = 0,
-        sealed = 1,
-        active = 2,
-        draining = 3,
-        destroyed = 4,
     };
 
     /// @brief Revocation phase for a storage key held by a DGP domain.
@@ -148,7 +142,7 @@ namespace zxfoundation::dgp {
     /// @brief Hardware-backed state recorded for one DGP isolation domain.
     struct isolation_domain_state {
         u32 domain_id{0};
-        isolation_state state{isolation_state::embryo};
+        lifecycle_state state{lifecycle_state::embryo};
         arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce{};
         u64 root_phys{0};
         u8 storage_key{0};
@@ -163,9 +157,9 @@ namespace zxfoundation::dgp {
 
     static_assert(sizeof(isolation_feature) == sizeof(u64), "DGP feature mask must remain 64-bit");
     static_assert(sizeof(isolation_rights) == sizeof(u32), "DGP rights mask must remain 32-bit");
-    static_assert(sizeof(isolation_state) == sizeof(u8), "DGP lifecycle state must remain byte-sized");
+    static_assert(sizeof(lifecycle_state) == sizeof(u8), "DGP lifecycle state must remain byte-sized");
     static_assert(sizeof(storage_key_revocation_state) == sizeof(u8), "DGP storage-key revocation state must remain byte-sized");
-    static_assert(static_cast<u8>(isolation_state::embryo) == 0U, "Embryo must be the zero state");
+    static_assert(static_cast<u8>(lifecycle_state::embryo) == 0U, "Embryo must be the zero state");
     static_assert(static_cast<u8>(storage_key_revocation_state::none) == 0U, "Storage-key revocation none state must be zero");
     static_assert(static_cast<u32>(isolation_rights::admin) == (1U << 31), "Admin right must remain the high-order bit");
     static_assert(STORAGE_KEY_USER_MAX < STORAGE_KEY_COUNT, "User storage-key range exceeds architected key count");

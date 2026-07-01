@@ -34,7 +34,7 @@ namespace arch::s390x::cpu::irq {
     /// @brief Interrupt frame saved by entry.S on every trap or interrupt.
     /// Saves all 32 vector registers (v0-v31), all 16 access registers,
     /// and the FPC (floating-point control register) per PoP §4-67.
-    struct [[gnu::packed]] alignas(8) arch_s390x_irq_frame {
+    struct [[gnu::packed]] alignas(8) irq_frame {
         u64 gprs[16]{};      ///< General-purpose registers r0–r15 at interrupt time.
         u64 psw_mask{};      ///< Old PSW mask word (hardware-saved in lowcore, copied here).
         u64 psw_addr{};      ///< Old PSW instruction address (hardware-saved, copied here).
@@ -45,19 +45,19 @@ namespace arch::s390x::cpu::irq {
         u64 vector_regs_hi[16][2]{}; ///< Vector registers v16-v31 (upper half).
     };
 
-    static_assert(sizeof(arch_s390x_irq_frame) == IRQ_FRAME_SIZE,
+    static_assert(sizeof(irq_frame) == IRQ_FRAME_SIZE,
         "arch_s390x_irq_frame size must be IRQ_FRAME_SIZE (0x2D8 = 728 bytes)");
-    static_assert(__builtin_offsetof(arch_s390x_irq_frame, psw_mask) == IRQ_FRAME_PSW_MASK,
+    static_assert(__builtin_offsetof(irq_frame, psw_mask) == IRQ_FRAME_PSW_MASK,
         "IRQ_FRAME_PSW_MASK offset mismatch");
-    static_assert(__builtin_offsetof(arch_s390x_irq_frame, psw_addr) == IRQ_FRAME_PSW_ADDR,
+    static_assert(__builtin_offsetof(irq_frame, psw_addr) == IRQ_FRAME_PSW_ADDR,
         "IRQ_FRAME_PSW_ADDR offset mismatch");
-    static_assert(__builtin_offsetof(arch_s390x_irq_frame, access_regs) == IRQ_FRAME_ARS,
+    static_assert(__builtin_offsetof(irq_frame, access_regs) == IRQ_FRAME_ARS,
         "IRQ_FRAME_ARS offset mismatch");
-    static_assert(__builtin_offsetof(arch_s390x_irq_frame, fpc) == IRQ_FRAME_FPC,
+    static_assert(__builtin_offsetof(irq_frame, fpc) == IRQ_FRAME_FPC,
         "IRQ_FRAME_FPC offset mismatch");
-    static_assert(__builtin_offsetof(arch_s390x_irq_frame, vector_regs_lo) == IRQ_FRAME_VRS,
+    static_assert(__builtin_offsetof(irq_frame, vector_regs_lo) == IRQ_FRAME_VRS,
         "IRQ_FRAME_VRS offset mismatch for vector_regs_lo");
-    static_assert(__builtin_offsetof(arch_s390x_irq_frame, vector_regs_hi) == IRQ_FRAME_VRS + 256,
+    static_assert(__builtin_offsetof(irq_frame, vector_regs_hi) == IRQ_FRAME_VRS + 256,
         "IRQ_FRAME_VRS + 256 offset mismatch for vector_regs_hi");
 
     /// @brief Interrupt class tag — identifies which lowcore new-PSW slot fired.

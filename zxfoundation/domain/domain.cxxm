@@ -16,6 +16,8 @@ export module zxfoundation.domain.domain;
 import lib.placementnew;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
+import zxfoundation.domain.signal;
+import zxfoundation.domain.signal_types;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.scoms.scoms_ref;
 import zxfoundation.scoms.scoms_table;
@@ -31,6 +33,7 @@ import zxfoundation.locking.lock;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.memory.vm;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
@@ -228,7 +231,15 @@ namespace zxfoundation::domain::_internal {
 
             // 2. Release DGP isolation identity and storage-key ownership.
             if (m_has_skey) {
-                (void)zxfoundation::dgp::isolation_destroy_domain(m_dgp_state);
+                (void)zxfoundation::dgp::isolation_destroy_domain(
+                    m_dgp_state.state,
+                    m_dgp_state.active_gate_count,
+                    m_dgp_state.active_portal_count,
+                    m_dgp_state.storage_key,
+                    m_dgp_state.storage_key_generation,
+                    m_dgp_state.storage_key_state,
+                    m_dgp_state.revocation_epoch
+                );
             }
 
             // 1. Release table slot (allocated first).
@@ -319,7 +330,13 @@ namespace zxfoundation::domain::_internal {
                 return lib::unexpected(bind_result.error());
 
             d->asce         = asce;
-            d->dgp_state    = m_dgp_state;
+            d->iso_state    = m_dgp_state.state;
+            d->granted_rights = m_dgp_state.granted_rights;
+            d->revocation_epoch = m_dgp_state.revocation_epoch;
+            d->storage_key_generation = m_dgp_state.storage_key_generation;
+            d->storage_key_state = m_dgp_state.storage_key_state;
+            d->active_gate_count = 0;
+            d->active_portal_count = 0;
 
             d->primary_strand.kstack_base  = hhdm::phys_to_virt(m_stack_phys);
             d->primary_strand.kstack_top   = d->primary_strand.kstack_base + DOMAIN_KERNEL_STACK_SIZE;
@@ -337,7 +354,7 @@ namespace zxfoundation::domain::_internal {
             zxfoundation::memory::vm::vm_space_init(d->vm_space);
             d->vm_space.owner_domain = d->ko.id;
 
-            auto activate_result = zxfoundation::dgp::isolation_activate_domain(d->dgp_state);
+            auto activate_result = zxfoundation::dgp::isolation_activate_domain(d->iso_state, d->asce, d->root_phys, d->storage_key);
             if (!activate_result)
                 return lib::unexpected(activate_result.error());
 
@@ -499,6 +516,10 @@ namespace zxfoundation::domain {
 
         sys::printk::pinfo("domain: destroying id={} name=\"{}\"\n", id, d->name);
 
+        // Signal storage key revocation to the domain before teardown.
+        zxfoundation::domain::signal::signal_enqueue(
+            *d, zxfoundation::domain::signal::signal_kind::fault, 0xDEADBEEF);
+
         // Free kernel stack.
         if (d->primary_strand.kstack_base != 0) {
             const u64 stack_phys = hhdm::virt_to_phys(d->primary_strand.kstack_base);
@@ -528,7 +549,15 @@ namespace zxfoundation::domain {
             g_strand_cache.dealloc(s);
         }
 
-        auto isolation_destroy_result = zxfoundation::dgp::isolation_destroy_domain(d->dgp_state);
+        auto isolation_destroy_result = zxfoundation::dgp::isolation_destroy_domain(
+            d->iso_state,
+            d->active_gate_count,
+            d->active_portal_count,
+            d->storage_key,
+            d->storage_key_generation,
+            d->storage_key_state,
+            d->revocation_epoch
+        );
         if (!isolation_destroy_result)
             return lib::unexpected(isolation_destroy_result.error());
 
@@ -544,19 +573,26 @@ namespace zxfoundation::domain {
         }
 
         // Reset domain fields before releasing the slot.
-        d->name         = "";
-        d->flags        = domain_flags::none;
-        d->asce         = {};
-        d->root_phys    = 0;
-        d->storage_key  = 0;
-        d->dgp_state    = {};
+        d->name                  = "";
+        d->flags                 = domain_flags::none;
+        d->asce                  = {};
+        d->root_phys             = 0;
+        d->storage_key           = 0;
+        d->iso_state             = zxfoundation::base::lifecycle_state::embryo;
+        d->granted_rights        = zxfoundation::dgp::isolation_rights::none;
+        d->numa_node             = 0;
+        d->revocation_epoch      = 0;
+        d->storage_key_generation = 0;
+        d->storage_key_state     = zxfoundation::dgp::storage_key_revocation_state::none;
+        d->active_gate_count     = 0;
+        d->active_portal_count   = 0;
         d->primary_strand.kstack_base  = 0;
         d->primary_strand.kstack_top   = 0;
         d->primary_strand.ksp          = 0;
         d->primary_strand.on_rq        = false;
         d->primary_strand.cpu          = 0;
-        d->gate_count   = 0;
-        d->portal_count = 0;
+        d->gate_count         = 0;
+        d->portal_count       = 0;
 
         // Re-initialize the strand list head (self-linked sentinel).
         ::new(static_cast<void*>(&d->strands)) lib::list_head{};

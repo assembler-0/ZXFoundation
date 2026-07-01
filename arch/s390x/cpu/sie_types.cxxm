@@ -1,0 +1,154 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/sie_types.cxxm
+/// @brief SIE (Start Interpretive Execution) type definitions for z/Architecture virtualization.
+
+export module arch.s390x.cpu.sie_types;
+
+
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::sie {
+
+    /// @brief SIE intercept codes (from PoP §14-7).
+    enum class intercept_code : u16 {
+        instruction            = 0x0008,  // Intercept instruction
+        program_interrupt      = 0x0010,  // Guest program interrupt
+        svc_interrupt          = 0x0014,  // Guest SVC
+        external_interrupt     = 0x0020,  // External interrupt
+        io_interrupt           = 0x0024,  // I/O interrupt
+        machine_check          = 0x0028,  // Machine check
+        validity               = 0x0040,  // Validity intercept
+        specification          = 0x0044,  // Specification intercept
+        data_exception         = 0x0048,  // Data exception
+        crypto                 = 0x0050,  // Crypto intercept
+        sie                    = 0x0080,  // SIE instruction in guest
+        diagnosis              = 0x0084,  // Diagnose instruction
+        service_signal         = 0x0088,  // Service signal
+        timer_update           = 0x008C,  // TOD clock update
+        emergency_signal       = 0x0090,  // Emergency signal
+        external_call          = 0x0094,  // External call
+        clock_comparator       = 0x0098,  // Clock comparator
+        cpu_timer              = 0x009C,  // CPU timer
+        timing_alert           = 0x00A0,  // Timing alert
+        service                = 0x00A4,  // Service interrupt
+        restart                = 0x00A8,  // Restart interrupt
+    };
+
+    /// @brief SIE exit reason codes.
+    enum class exit_reason : u32 {
+        normal              = 0,   // Normal exit (intercept handled)
+        guest_program_check = 1,   // Guest program check not handled
+        guest_machine_check = 2,   // Guest machine check
+        validity            = 3,   // Validity intercept
+        specification       = 4,   // Specification intercept
+        data_exception      = 5,   // Data exception
+        cpu_failure         = 6,   // CPU failure
+        external_damage     = 7,   // External damage
+    };
+
+    /// @brief SIE State Control Block (SCB) — PoP §14-5.
+    /// Must be 4096-byte aligned.
+    struct [[gnu::packed]] state_control_block {
+        alignas(4096) u64  gcr0_gcr15[16];       // 0x000-0x07F: Guest control regs 0-15
+        u64  gcr16_gcr31[16];      // 0x080-0x0FF: Guest control regs 16-31
+        u64  gcr32_gcr47[16];      // 0x100-0x17F: Guest control regs 32-47
+        u64  gcr48_gcr63[16];      // 0x180-0x1FF: Guest control regs 48-63
+        u64  gcr64_gcr79[16];      // 0x200-0x27F: Guest control regs 64-79
+        u64  gcr80_gcr95[16];      // 0x280-0x2FF: Guest control regs 80-95
+        u64  gcr96_gcr111[16];     // 0x300-0x37F: Guest control regs 96-111
+        u64  gcr112_gcr127[16];    // 0x380-0x3FF: Guest control regs 112-127
+
+        u64  gpsw_mask;            // 0x400: Guest PSW mask
+        u64  gpsw_addr;            // 0x408: Guest PSW address
+
+        u64  ggr0_ggr15[16];       // 0x410-0x48F: Guest general regs 0-15
+
+        u64  gfpr0_gfpr15[16];     // 0x490-0x50F: Guest FPRs 0-15
+
+        u64  gcr0_gcr15_shadow[16]; // 0x510-0x58F: Shadow CRs (SIE2)
+
+        u8   gacrs[16];             // 0x590-0x59F: Guest access regs 0-15
+
+        u64  gpref_fprs[16];       // 0x5A0-0x61F: Guest prefixed FPRs (SIE2)
+
+        // Intercept controls
+        u32  intercept_instruction : 1;     // 0x620 bit 0
+        u32  intercept_svc : 1;             // 0x620 bit 1
+        u32  intercept_diagnose : 1;        // 0x620 bit 2
+        u32  intercept_crypto : 1;          // 0x620 bit 3
+        u32  intercept_external : 1;        // 0x620 bit 4
+        u32  intercept_io : 1;              // 0x620 bit 5
+        u32  intercept_machine_check : 1;   // 0x620 bit 6
+        u32  intercept_program : 1;         // 0x620 bit 7
+        u32  intercept_validity : 1;        // 0x620 bit 8
+        u32  intercept_specification : 1;   // 0x620 bit 9
+        u32  intercept_data : 1;            // 0x620 bit 10
+        u32  intercept_restart : 1;         // 0x620 bit 11
+        u32  reserved_intercept : 20;       // 0x620 bits 12-31
+
+        u32  intercept_io_subcodes[8];      // 0x624-0x643: I/O intercept subcodes
+
+        // Guest prefix and AEA
+        u64  guest_prefix;                  // 0x644: Guest prefix register
+        u64  guest_aea;                     // 0x64C: Guest AEA (SIE2)
+
+        // SIE exit information
+        u32  exit_reason;                   // 0x654: Exit reason code
+        u16  intercept_code;                // 0x658: Intercept code
+        u16  exit_cpu_addr;                 // 0x65A: CPU address at exit
+
+        u64  exit_parm;                     // 0x65C: Exit parameter
+
+        // Timer and clock
+        u64  guest_tod;                     // 0x664: Guest TOD clock
+        u64  guest_clock_comparator;        // 0x66C: Guest clock comparator
+        u64  guest_cpu_timer;               // 0x674: Guest CPU timer
+
+        // Crypto and facility controls
+        u64  guest_facility_list[8];        // 0x67C-0x6BC: Guest facility list
+        u64  guest_crypto_control;          // 0x6C4: Guest crypto control
+
+        // I/O and external
+        u64  guest_io_interrupt_parm;       // 0x6CC: Guest I/O interrupt parm
+        u64  guest_ext_interrupt_parm;      // 0x6D4: Guest external interrupt parm
+
+        // SIE2 enhancements
+        u64  guest_pfault_token;            // 0x6DC: PFAULT token (SIE2)
+        u64  guest_pfault_compare;          // 0x6E4: PFAULT compare (SIE2)
+        u64  guest_pfault_select;           // 0x6EC: PFAULT select (SIE2)
+
+        u8   reserved2[0x1000 - 0x6EC];     // Pad to 4KB
+    };
+
+    static_assert(sizeof(state_control_block) == 4096, "SCB must be exactly 4KB");
+
+    /// @brief SIE guest state.
+    struct guest_state {
+        u16                     id{0};              // Logical guest ID
+        state_control_block*    scb{nullptr};       // Virtual address of SCB
+        u64                     scb_phys{0};        // Physical address of SCB
+        bool                    active{false};      // Currently in SIE
+        u32                     last_exit_reason{0};
+        u16                     last_intercept_code{0};
+    };
+
+    /// @brief SIE facility bits (for CR0/CR14 facility indication).
+    enum class facility_bit : u16 {
+        sie           = 2,   // Basic SIE
+        sie2          = 78,  // Enhanced SIE (SIE2)
+        gpere         = 8,   // General Purpose Enhanced
+        etf2          = 17,  // ETF2
+        etf3          = 75,  // ETF3
+        ib            = 73,  // Interrupt Buffer
+        msf           = 77,  // Message Security Assist
+    };
+
+    /// @brief STFLE facility bit numbers for SIE and SIE2 (per PoP Appendix B).
+    constexpr u32 STFLE_BIT_SIE  = 2;
+    constexpr u32 STFLE_BIT_SIE2 = 78;
+
+} // namespace arch::s390x::cpu::sie
+
+} // end export

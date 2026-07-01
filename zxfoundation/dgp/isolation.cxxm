@@ -4,6 +4,7 @@
 
 export module zxfoundation.dgp.isolation;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.domain.domain_types;
 import zxfoundation.sched.sched_policy_types;
@@ -116,7 +117,7 @@ namespace zxfoundation::dgp {
 
         isolation_domain_state state{};
         state.domain_id = domain_id;
-        state.state = isolation_state::sealed;
+        state.state = lifecycle_state::sealed;
         state.storage_key = *key_result;
         state.storage_key_generation = _internal::storage_key_generation(*key_result);
         state.storage_key_state = storage_key_revocation_state::active;
@@ -142,7 +143,7 @@ namespace zxfoundation::dgp {
         arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
         u64 root_phys
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (state.state != isolation_state::sealed || root_phys == 0ULL || asce.raw() == 0ULL) {
+        if (state.state != lifecycle_state::sealed || root_phys == 0ULL || asce.raw() == 0ULL) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
@@ -152,18 +153,24 @@ namespace zxfoundation::dgp {
     }
 
     /// @brief Activate a sealed DGP isolation domain.
-    /// @param[in,out] state Isolation state to activate.
+    /// @param[in] state Isolation state to activate.
+    /// @param[in] asce Typed region-first ASCE constructed from the committed DAT root.
+    /// @param[in] root_phys Physical address of the committed region-first root table.
+    /// @param[in] storage_key The domain's hardware storage key.
     /// @return Success when the domain transitions to active.
     /// @note Activation requires committed ASCE root metadata before scheduler admission.
     /// @warning Active domains must deny new gate and portal entries before destruction.
     [[nodiscard]] auto isolation_activate_domain(
-        isolation_domain_state& state
+        lifecycle_state& state,
+        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
+        u64 root_phys,
+        [[maybe_unused]] u8 storage_key
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (state.state != isolation_state::sealed || state.root_phys == 0ULL || state.asce.raw() == 0ULL) {
+        if (state != lifecycle_state::sealed || root_phys == 0ULL || asce.raw() == 0ULL) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
-        state.state = isolation_state::active;
+        state = lifecycle_state::active;
         return {};
     }
 
@@ -173,78 +180,97 @@ namespace zxfoundation::dgp {
     /// @note Storage-key reuse is delayed until callers have invalidated DAT and ALB state associated with the domain.
     /// @warning This function does not modify hardware storage keys; it records the software authority transition.
     [[nodiscard]] auto isolation_begin_storage_key_revocation(
-        isolation_domain_state& state
+        lifecycle_state& state,
+        u32 active_gate_count,
+        u32 active_portal_count,
+        storage_key_revocation_state& storage_key_state,
+        u16& revocation_epoch
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (state.state == isolation_state::destroyed
-            || state.storage_key_state == storage_key_revocation_state::reusable) {
+        if (state == lifecycle_state::destroyed
+            || storage_key_state == storage_key_revocation_state::reusable) {
             return {};
         }
 
-        if (state.active_gate_count != 0U || state.active_portal_count != 0U) {
+        if (active_gate_count != 0U || active_portal_count != 0U) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
-        state.state = isolation_state::draining;
-        state.storage_key_state = storage_key_revocation_state::draining;
-        ++state.revocation_epoch;
+        state = lifecycle_state::dying;
+        storage_key_state = storage_key_revocation_state::draining;
+        ++revocation_epoch;
         return {};
     }
 
     /// @brief Complete storage-key revocation after required translation invalidation is done.
     /// @param[in,out] state Isolation state whose storage key can be returned to DGP policy.
+    /// @param[in,out] storage_key The domain's hardware storage key.
+    /// @param[in,out] storage_key_generation Storage key generation counter.
+    /// @param[in,out] storage_key_state Storage key revocation state.
     /// @return Success when DGP-owned key metadata is no longer reusable by stale mappings.
     /// @note The key generation is advanced by the storage-key allocator when the key is released.
     /// @warning Callers must only invoke this after VM, DAT, and portal teardown have completed.
     [[nodiscard]] auto isolation_complete_storage_key_revocation(
-        isolation_domain_state& state
+        lifecycle_state& state,
+        u8& storage_key,
+        u32& storage_key_generation,
+        storage_key_revocation_state& storage_key_state
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (state.storage_key_state == storage_key_revocation_state::reusable
-            || state.storage_key == 0U) {
-            state.storage_key_state = storage_key_revocation_state::reusable;
+        if (storage_key_state == storage_key_revocation_state::reusable
+            || storage_key == 0U) {
+            storage_key_state = storage_key_revocation_state::reusable;
             return {};
         }
 
-        if (state.storage_key_state != storage_key_revocation_state::draining) {
+        if (storage_key_state != storage_key_revocation_state::draining) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
-        const u8 released_key = state.storage_key;
+        const u8 released_key = storage_key;
         _internal::release_storage_key(released_key);
-        state.storage_key_generation = _internal::storage_key_generation(released_key);
-        state.storage_key_state = storage_key_revocation_state::reusable;
+        storage_key_generation = _internal::storage_key_generation(released_key);
+        storage_key_state = storage_key_revocation_state::reusable;
+        state = lifecycle_state::destroyed;
         return {};
     }
 
     /// @brief Record that a portal authority is leaving the active DGP set.
     /// @param[in,out] state Isolation state for the source domain that held the portal.
+    /// @param[in,out] active_portal_count Count of active portals.
+    /// @param[in,out] revocation_epoch Revocation epoch counter.
     /// @return Success when one active portal reference was converted into revocation progress.
     /// @note Portal teardown must purge ALB state before the corresponding `ALE` can be reused.
     /// @warning This function only updates DGP metadata; callers still destroy hardware access-list entries.
     [[nodiscard]] auto isolation_begin_portal_teardown(
-        isolation_domain_state& state
+        [[maybe_unused]] lifecycle_state& state,
+        u32& active_portal_count,
+        u16& revocation_epoch
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (state.active_portal_count == 0U) {
+        if (active_portal_count == 0U) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
-        --state.active_portal_count;
-        ++state.revocation_epoch;
+        --active_portal_count;
+        ++revocation_epoch;
         return {};
     }
 
     /// @brief Validate that a DGP domain may be admitted to a CPU run queue.
     /// @param[in] state Isolation state associated with the candidate domain.
+    /// @param[in] root_phys Physical address of the region-first root table.
+    /// @param[in] asce_raw Raw ASCE value.
     /// @return Success when the domain is active and has committed ASCE metadata.
     /// @note Scheduler admission is a hardware boundary because a later context switch may load the ASCE into CR1.
     /// @warning Callers must still serialize run-queue mutation with the scheduler lock after this check succeeds.
     [[nodiscard]] auto isolation_validate_scheduler_admission(
-        const isolation_domain_state& state
+        const lifecycle_state state,
+        u64 root_phys,
+        u64 asce_raw
     ) noexcept -> lib::expected<void, lib::kernel_error> {
         if (!_internal::g_isolation_initialized) {
             return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::uninitialized));
         }
 
-        if (state.state != isolation_state::active || state.root_phys == 0ULL || state.asce.raw() == 0ULL) {
+        if (state != lifecycle_state::active || root_phys == 0ULL || asce_raw == 0ULL) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
@@ -259,11 +285,11 @@ namespace zxfoundation::dgp {
     /// @note RT and deadline bandwidth reservation is completed by scheduler backends after this DGP check.
     /// @warning User-visible RT requests must pass this function before any run-queue insertion.
     [[nodiscard]] auto isolation_validate_scheduler_policy(
-        const isolation_domain_state& state,
+        const lifecycle_state state,
         const zxfoundation::sched::sched_policy& policy,
         bool has_rt_authority
     ) noexcept -> lib::expected<zxfoundation::sched::sched_admission_result, lib::kernel_error> {
-        if (state.state != isolation_state::active) {
+        if (state != lifecycle_state::active) {
             return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
@@ -311,42 +337,53 @@ namespace zxfoundation::dgp {
     }
 
     /// @brief Destroy DGP isolation state for a domain.
-    /// @param[in,out] state Isolation state to destroy.
+    /// @param[in] state Domain lifecycle state.
+    /// @param[in,out] active_gate_count Count of active gates.
+    /// @param[in,out] active_portal_count Count of active portals.
+    /// @param[in,out] storage_key The domain's hardware storage key.
+    /// @param[in,out] storage_key_generation Storage key generation counter.
+    /// @param[in,out] storage_key_state Storage key revocation state.
+    /// @param[in,out] revocation_epoch Revocation epoch counter.
     /// @return Success when storage-key ownership is released and the state is marked destroyed.
     /// @note This helper releases DGP-owned identity only; the caller remains responsible for DAT tables, VM regions, portals, gates, and stacks.
     /// @warning Destruction with active gate or portal counts is rejected to prevent stale authority use.
     [[nodiscard]] auto isolation_destroy_domain(
-        isolation_domain_state& state
+        lifecycle_state& state,
+        u32& active_gate_count,
+        u32& active_portal_count,
+        u8& storage_key,
+        u32& storage_key_generation,
+        storage_key_revocation_state& storage_key_state,
+        u16& revocation_epoch
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (state.state == isolation_state::destroyed) {
+        if (state == lifecycle_state::destroyed) {
             return {};
         }
 
-        if (state.active_gate_count != 0U || state.active_portal_count != 0U) {
+        if (active_gate_count != 0U || active_portal_count != 0U) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
-        auto begin_revocation = isolation_begin_storage_key_revocation(state);
+        auto begin_revocation = isolation_begin_storage_key_revocation(
+            state, active_gate_count, active_portal_count,
+            storage_key_state, revocation_epoch
+        );
         if (!begin_revocation) return lib::unexpected(begin_revocation.error());
 
-        auto complete_revocation = isolation_complete_storage_key_revocation(state);
+        auto complete_revocation = isolation_complete_storage_key_revocation(
+            state, storage_key, storage_key_generation, storage_key_state
+        );
         if (!complete_revocation) return lib::unexpected(complete_revocation.error());
 
-        state.state = isolation_state::destroyed;
-        state.asce = arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1>{};
-        state.root_phys = 0ULL;
-        state.storage_key = 0U;
-        state.granted_rights = isolation_rights::none;
         return {};
     }
 
-    /// @brief Validate entry into a DGP gate chokepoint.
+    /// @brief Validate entry into a DGP gate chokepoint (structural validation only).
     /// @param[in] caller_domain_id Domain requesting entry.
     /// @param[in] gate_id Gate identifier being entered.
     /// @param[in] requested Rights required by the gate operation.
-    /// @return Success when the request is structurally valid for the current clean-core stage.
-    /// @note Later migration binds this validation to generation-counted capabilities and PC linkage metadata.
-    /// @warning A successful structural check is not a permanent authorization bypass; dispatch wiring must supply real policy state.
+    /// @return Success when the request is structurally valid.
+    /// @note Full gate validation (existence, state, rights) is performed by dispatch_table::validate_call.
     [[nodiscard]] auto isolation_validate_gate_entry(
         u32 caller_domain_id,
         u32 gate_id,

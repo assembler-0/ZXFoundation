@@ -148,7 +148,7 @@ namespace zxfoundation::sys::stacktrace {
 
     /// @brief Print a backtrace from an IRQ frame (interrupt/pgm-check context).
     auto dump_stack_from_irq(
-        const arch::s390x::cpu::irq::arch_s390x_irq_frame* frame
+        const arch::s390x::cpu::irq::irq_frame* frame
     ) noexcept -> void {
         using zxfoundation::sys::printk::pemerg;
 

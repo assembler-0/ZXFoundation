@@ -210,6 +210,7 @@ export {
 
 namespace zxfoundation::gate::nc_dom {
 
+    /// @brief Dispatch a domain operation.
     auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
         using zxfoundation::gate::dom_op;
 
@@ -230,6 +231,12 @@ namespace zxfoundation::gate::nc_dom {
             zxfoundation::sys::printk::perr("dom_dispatch: unknown op {}", op);
             return NC_ERROR;
         }
+    }
+
+    /// @brief Static dispatch wrapper for a specific dom_op.
+    template <dom_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
     }
 
 } // namespace zxfoundation::gate::nc_dom

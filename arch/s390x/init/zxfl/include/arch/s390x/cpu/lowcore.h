@@ -19,6 +19,7 @@
 #define LC_KERNEL_ASCE      0x0388UL    ///< zx_lowcore_t::kernel_asce
 #define LC_RETURN_PSW       0x0290UL    ///< zx_lowcore_t::return_psw
 #define LC_PSW_TEMP         0x0248UL    ///< Temporary PSW storage used by RESTORE_FRAME (unused padding after stack_canary)
+#define LC_SCRATCH0         0x0260UL    ///< Temporary scratch for SAVE_FRAME / SAVE_NUCLEUS_FRAME (pad_0x0258)
 #define LC_CURRENT_DOMAIN   0x0340UL    ///< zx_lowcore_t::current_domain
 #define LC_KERNEL_STACK     0x0348UL    ///< zx_lowcore_t::kernel_stack
 #define LC_AP_CR0           0x0330UL    ///< zx_lowcore_t::ap_cr0
@@ -107,7 +108,7 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     uint64_t    breaking_event_addr;            /* 0x0110 */
     uint8_t     pad_0x0118[0x0120 - 0x0118];   /* 0x0118 */
 
-    /* Old PSWs (saved by hardware on interrupt) */
+    /* Old PSWs (saved hardware interrupt) */
     zx_psw_t    restart_old_psw;                /* 0x0120 */
     zx_psw_t    external_old_psw;               /* 0x0130 */
     zx_psw_t    svc_old_psw;                    /* 0x0140 */
@@ -116,7 +117,7 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     zx_psw_t    io_old_psw;                     /* 0x0170 */
     uint8_t     pad_0x0180[0x01a0 - 0x0180];   /* 0x0180 */
 
-    /* New PSWs (loaded by hardware on interrupt) — PoP §4.3.3 */
+    /* New PSWs (loaded by hardware interrupt) — PoP §4.3.3 */
     zx_psw_t    restart_psw;                    /* 0x01a0  PSW_LC_RESTART  */
     zx_psw_t    external_new_psw;               /* 0x01b0  PSW_LC_EXTERNAL */
     zx_psw_t    svc_new_psw;                    /* 0x01c0  PSW_LC_SVC      */
@@ -143,7 +144,7 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     uint64_t    mcck_enter_timer;               /* 0x02c0 */
     uint64_t    exit_timer;                     /* 0x02c8 */
     uint64_t    user_timer;                     /* 0x02d0 */
-    uint64_t    guest_timer;                    /* 0x02d8 */
+    uint64_t    guest_timer;YCLE              /* 0x02d8 */
     uint64_t    system_timer;                   /* 0x02e0 */
     uint64_t    hardirq_timer;                  /* 0x02e8 */
     uint64_t    softirq_timer;                  /* 0x02f0 */
@@ -213,7 +214,7 @@ typedef struct __attribute__((packed, aligned(8192))) zx_lowcore {
     uint8_t     pad_0x1900[0x2000 - 0x1900];   /* 0x1900 */
 } zx_lowcore_t;
 
-_Static_assert(sizeof(zx_lowcore_t) == LOWCORE_SIZE, "zx_lowcore_t must be 8192 bytes");
+_Static_assert(sizeof(zx_lowcore_t) == LOWCORE_SIZE, "zx金陵 Must be 8192 bytes");
 
 /// @brief Compile-time verification that the named assembly offsets match the C struct.
 _Static_assert(__builtin_offsetof(zx_lowcore_t, restart_stack) == LC_RESTART_STACK,
@@ -243,67 +244,10 @@ _Static_assert(__builtin_offsetof(zx_lowcore_t, ext_int_code) == 0x0086,
 
 /// @brief Verify that LC_CPU_ID_OFFSET matches the actual field in the struct.
 ///        If zx_percpu_t layout changes, this will catch the silent breakage
-///        in arch_smp_processor_id() which inlines the constant 0x408.
+///        in arch_smp_processor_id() which inlines the constant 0x408UL.
 _Static_assert(
     LC_PERCPU_OFFSET + __builtin_offsetof(zx_percpu_t, cpu_id) == LC_CPU_ID_OFFSET,
     "LC_CPU_ID_OFFSET does not match actual zx_percpu_t::cpu_id offset; "
     "update processor.h inline constant 0x408UL to match");
 
-/// @brief Trap entry uses these per-CPU offsets from the C++ lowcore layout.
-///        The C loader header exports the constants for assembly inclusion;
-///        arch/s390x/cpu/lowcore_types.cxxm validates them against the C++
-///        percpu layout that owns preempt_count and irq_nesting.
-_Static_assert(LC_PREEMPT_COUNT == 0x0430UL,
-               "LC_PREEMPT_COUNT must match lowcore_types.cxxm");
-_Static_assert(LC_IRQ_NESTING == 0x0438UL,
-               "LC_IRQ_NESTING must match lowcore_types.cxxm");
-_Static_assert(LC_NUCLEUS_NESTING == 0x043CUL,
-               "LC_NUCLEUS_NESTING must match lowcore_types.cxxm");
-
-/// @brief Access lowcore via absolute addressing (DAT off).
-#define ZX_LOWCORE_RAW_INPLACE  ((zx_lowcore_t *)0x0)
-
-static inline zx_lowcore_t *zx_lowcore_raw(void) {
-    return (zx_lowcore_t *)(uintptr_t)0x0;
-}
-static inline zx_lowcore_t *zx_lowcore(void) {
-    return (zx_lowcore_t *)(uintptr_t)hhdm_phys_to_virt(0x0);
-}
-
-/// @brief Write the restart new PSW into a lowcore for AP bringup.
-///
-///        Uses PSW_MASK_KERNEL (DAT off, 64-bit, all interrupts disabled).
-///        The address MUST be the *physical* address of ap_entry because DAT
-///        is not yet active on the AP when the restart PSW is loaded.
-///
-/// @param lc         AP lowcore (HHDM-mapped pointer).
-/// @param entry_phys Physical address of ap_entry.
-static inline void lc_set_restart_psw(zx_lowcore_t *lc, uint64_t entry_phys) {
-    lc->restart_psw.mask = PSW_MASK_KERNEL;
-    lc->restart_psw.addr = entry_phys;
-}
-
-/// @brief Store the kernel ASCE into an AP's lowcore so ap_entry can load it.
-/// @param lc   AP lowcore (HHDM-mapped pointer).
-/// @param asce Kernel ASCE value (from CR1 on the BSP after mmu_init()).
-static inline void lc_set_kernel_asce(zx_lowcore_t *lc, uint64_t asce) {
-    lc->kernel_asce = asce;
-}
-
-/// @brief Install the four interrupt handler new PSWs into any lowcore.
-///
-///        Must be called for the BSP lowcore (in zx_lowcore_setup_late) and
-///        for every AP lowcore before SIGP RESTART is issued.  Each CPU's
-///        prefix register points to its own lowcore; the hardware reads the
-///        new PSW from that CPU's lowcore, not the BSP's.
-///
-/// @param lc  HHDM-mapped pointer to the target lowcore.
-void lc_install_handler_psws(zx_lowcore_t *lc);
-
-/// @brief Install live handler PSWs into the BSP's HHDM-mapped lowcore.
-///        Called as the very first action in zxfoundation_global_initialize(),
-///        after the HHDM is active.  Replaces the disabled-wait PSWs installed
-///        by zx_lowcore_setup_pre_dat() with real handler entry points.
-void zx_lowcore_setup_bsp(void);
-
-#endif /* __ASSEMBLER__ */
+#endif // __ASSEMBLER__

@@ -219,7 +219,7 @@ auto ap_dat_on() -> void;
 
 static auto handle_ipi(
     [[maybe_unused]] u16 irq,
-    [[maybe_unused]] arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+    [[maybe_unused]] arch::s390x::cpu::irq::irq_frame* frame,
     [[maybe_unused]] void* data
 ) noexcept -> void {
     auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();

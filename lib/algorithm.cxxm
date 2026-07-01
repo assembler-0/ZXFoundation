@@ -53,8 +53,9 @@ namespace lib {
     }
 
     /// @brief Fills a range with a value.
-    template <forward_iterator ForwardIt, typename T>
-    constexpr auto fill(ForwardIt first, ForwardIt last, const T& value) -> void {
+    /// @note Accepts input_iterator (not forward_iterator) so raw pointers work too.
+    template <input_iterator InputIt, typename T>
+    constexpr auto fill(InputIt first, InputIt last, const T& value) -> void {
         while (first != last) {
             *first++ = value;
         }

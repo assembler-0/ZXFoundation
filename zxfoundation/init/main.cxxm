@@ -26,6 +26,7 @@ import zxfoundation.init.bootstrap;
 import zxfoundation.domain.domain;
 import zxfoundation.domain.domain_types;
 import zxfoundation.gate.gate;
+import zxfoundation.gate.gate_registration;
 import zxfoundation.portal.portal;
 import zxfoundation.dgp.isolation;
 import arch.s390x.init.zxfl.protocol;
@@ -293,10 +294,15 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::domain::strand_init();
     zxfoundation::sys::service::service_init();
     zxfoundation::gate::gate_init();
-
+    {
+        auto r = zxfoundation::gate::gate_registration::register_all_handlers();
+        if (!r) {
+            zxfoundation::sys::printk::perr("init: some PC handlers failed — {}", r.error());
+        }
+    }
     zxfoundation::portal::portal_init();
-    arch::s390x::cpu::aste::aste_subsystem_init();
 
+    arch::s390x::cpu::aste::aste_subsystem_init();
     arch::s390x::cpu::pc::init();
 
     zxfoundation::sched::sched_init();

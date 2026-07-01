@@ -33,6 +33,7 @@
 export module zxfoundation.sys.transaction;
 import arch.s390x.lib.atomic;
 import zxfoundation.base.types;
+import zxfoundation.sys.printk;
 
 export {
 
@@ -44,6 +45,7 @@ namespace zxfoundation {
         using memory_order  = arch::s390x::lib::atomic::memory_order;
 
         atomic_bool m_committed{false};
+        atomic_bool m_rolled_back{false};
 
     protected:
         /// @brief Destructor: fires on_rollback() if commit() was never called.
@@ -51,8 +53,11 @@ namespace zxfoundation {
         /// The acquire-load ensures that any CPU that observes the destruction
         /// (e.g., via RAII on a stack) sees a consistent committed state.
         ~transaction() noexcept {
-            if (!m_committed.load(memory_order::acquire))
+            if (!m_committed.load(memory_order::acquire) &&
+                !m_rolled_back.load(memory_order::acquire)) {
                 static_cast<Derived*>(this)->on_rollback();
+                m_rolled_back.store(true, memory_order::release);
+            }
         }
 
     public:
@@ -67,12 +72,33 @@ namespace zxfoundation {
         /// in committed(), establishing happens-before across CPU boundaries if
         /// the transaction object is published after commit.
         auto commit() noexcept -> void {
-            m_committed.store(true, memory_order::release);
+            bool expected = false;
+            if (!m_committed.compare_exchange_strong(expected, true,
+                    memory_order::release, memory_order::relaxed)) {
+                sys::printk::pwarn("transaction: double commit detected for %p",
+                                   static_cast<const void*>(this));
+                return;
+            }
+            if (m_rolled_back.load(memory_order::acquire)) {
+                sys::printk::pwarn("transaction: commit after rollback for %p",
+                                   static_cast<const void*>(this));
+            }
         }
 
         /// @brief Return true if commit() has been called.
         [[nodiscard]] auto committed() const noexcept -> bool {
             return m_committed.load(memory_order::acquire);
+        }
+
+        /// @brief Return true if rollback has been executed.
+        [[nodiscard]] auto rolled_back() const noexcept -> bool {
+            return m_rolled_back.load(memory_order::acquire);
+        }
+
+        /// @brief Explicitly mark as rolled back (for derived classes that do
+        ///        custom rollback before destruction).
+        auto mark_rolled_back() noexcept -> void {
+            m_rolled_back.store(true, memory_order::release);
         }
     };
 

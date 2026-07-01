@@ -61,7 +61,8 @@ namespace _internal {
 
     [[nodiscard]] auto can_admit_domain(const domain& d) noexcept -> bool {
         if (is_idle_domain(d)) return true;
-        auto result = zxfoundation::dgp::isolation_validate_scheduler_admission(d.dgp_state);
+        auto result = zxfoundation::dgp::isolation_validate_scheduler_admission(
+            d.iso_state, d.root_phys, d.asce.val);
         return static_cast<bool>(result);
     }
 
@@ -84,7 +85,7 @@ namespace _internal {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         pcp.attached_asce = d.asce.val;
         pcp.attached_domain_id = d.ko.id;
-        pcp.attached_dgp_state = static_cast<u8>(d.dgp_state.state);
+        pcp.attached_dgp_state = static_cast<u8>(d.iso_state);
     }
 
     auto try_steal_strand_locked(run_queue& local_rq) noexcept -> strand* {
@@ -434,7 +435,7 @@ namespace zxfoundation::sched {
 
         for (;;) {
             schedule();
-            arch::s390x::cpu::psw::disabled_wait();
+            arch::s390x::cpu::psw::enabled_wait();
         }
     }
 

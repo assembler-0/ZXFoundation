@@ -16,6 +16,10 @@ import lib.error;
 import lib.expected;
 import lib.placementnew;
 
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.domain.domain;
+
 using zxfoundation::gate::gate_desc;
 using zxfoundation::gate::gate_type;
 using zxfoundation::gate::gate_auth;
@@ -57,6 +61,17 @@ namespace zxfoundation::gate {
         u64       entry_va,
         u8        target_key
     ) noexcept -> lib::expected<u32, lib::kernel_error> {
+
+        // ── Hardware enforcement: validate storage key matches target domain ─────
+        auto* target = zxfoundation::domain::domain_find(target_domain_id);
+        if (!target) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (target->storage_key != target_key) {
+            perr("gate_create: target_key={} does not match target domain {} storage_key={}",
+                 target_key, target_domain_id, target->storage_key);
+            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::capability_invalid));
+        }
 
         auto alloc_result = _internal::g_gate_table.alloc();
         if (!alloc_result) {

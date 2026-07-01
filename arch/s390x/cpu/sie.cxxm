@@ -1,0 +1,204 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/sie.cxxm
+/// @brief SIE (Start Interpretive Execution) support for z/Architecture virtualization.
+///
+/// Implements hardware-assisted virtualization using the SIE instruction.
+/// Provides guest state management, SIE control blocks (SCB), and intercept handling.
+
+export module arch.s390x.cpu.sie;
+import arch.s390x.cpu.sie_types;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.stfle;
+import arch.s390x.cpu.stfle_types;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk;
+import lib.error;
+import lib.expected;
+import lib.span;
+import lib.algorithm;
+import lib.placementnew;
+
+export {
+
+namespace arch::s390x::cpu::sie {
+
+    /// @brief Maximum number of concurrent SIE guests.
+    constexpr u32 MAX_SIE_GUESTS = 16;
+
+    /// @brief Initialize the SIE subsystem.
+    auto sie_init() noexcept -> void;
+
+    /// @brief Create a new SIE guest.
+    /// @param guest_id   Logical guest ID.
+    /// @param scb_phys   Physical address of the State Control Block (SCB).
+    /// @return Success or kernel_error.
+    [[nodiscard]] auto sie_guest_create(u16 guest_id, u64 scb_phys) noexcept
+        -> ::lib::expected<void, ::lib::kernel_error>;
+
+    /// @brief Destroy a SIE guest.
+    /// @param guest_id   Logical guest ID.
+    /// @return Success or kernel_error.
+    [[nodiscard]] auto sie_guest_destroy(u16 guest_id) noexcept
+        -> ::lib::expected<void, ::lib::kernel_error>;
+
+    /// @brief Enter SIE mode for a guest.
+    /// @param guest_id   Logical guest ID.
+    /// @return SIE exit reason code, or ~0ULL on error.
+    [[nodiscard]] auto sie_enter(u16 guest_id) noexcept -> u32;
+
+    /// @brief Get the State Control Block (SCB) for a guest.
+    /// @param guest_id   Logical guest ID.
+    /// @return Pointer to SCB, or nullptr if invalid.
+    [[nodiscard]] auto sie_get_scb(u16 guest_id) noexcept -> void*;
+
+    /// @brief Check if SIE is available on this CPU.
+    [[nodiscard]] constexpr auto sie_available() noexcept -> bool {
+        // Check via STFLE facility bit 2 (SIE)
+        return false; // Runtime check needed
+    }
+
+    /// @brief Check if SIE2 (enhanced SIE) is available.
+    [[nodiscard]] constexpr auto sie2_available() noexcept -> bool {
+        // Check via STFLE facility bit 78 (SIE2)
+        return false; // Runtime check needed
+    }
+
+    /// @brief Runtime check for SIE facility.
+    [[nodiscard]] auto sie_check_available() noexcept -> bool {
+        using namespace arch::s390x::cpu::stfle;
+        u64 fac_list[32]{};
+        for (u32 i = 0; i < 32; ++i) fac_list[i] = 0ULL;
+        ::lib::span<u64, 32> span{fac_list};
+        const auto fac = stfle_detect(span);
+        if (!fac) return false;
+        return stfle_has_facility<STFLE_BIT_SIE>(fac_list);
+    }
+
+    /// @brief Runtime check for SIE2 facility.
+    [[nodiscard]] auto sie2_check_available() noexcept -> bool {
+        using namespace arch::s390x::cpu::stfle;
+        u64 fac_list[32]{};
+        for (u32 i = 0; i < 32; ++i) fac_list[i] = 0ULL;
+        ::lib::span<u64, 32> span{fac_list};
+        const auto fac = stfle_detect(span);
+        if (!fac) return false;
+        return stfle_has_facility<STFLE_BIT_SIE2>(fac_list);
+    }
+
+} // namespace arch::s390x::cpu::sie
+
+} // end export
+
+// ─── Implementation ────────────────────────────────────────────────────────
+
+namespace arch::s390x::cpu::sie {
+
+    using zxfoundation::memory::hhdm::phys_to_virt;
+
+    // External assembly entry for SIE instruction
+    extern "C" u32 sie_enter_asm(state_control_block* scb);
+
+    // SIE guest table
+    static guest_state g_guests[MAX_SIE_GUESTS]{};
+    static u32 g_guest_count{0};
+
+    auto sie_init() noexcept -> void {
+        if (!sie_check_available()) {
+            zxfoundation::sys::printk::pwarn("sie: SIE facility not available on this CPU");
+            return;
+        }
+
+        zxfoundation::sys::printk::pinfo("sie: SIE facility available%s",
+            sie2_check_available() ? " (SIE2 enabled)" : "");
+    }
+
+    [[nodiscard]] auto sie_guest_create(u16 guest_id, u64 scb_phys) noexcept
+        -> ::lib::expected<void, ::lib::kernel_error> {
+        if (guest_id >= MAX_SIE_GUESTS) {
+            return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+
+        if (g_guests[guest_id].active) {
+            return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::internal_error));
+        }
+
+        // Map SCB physical to virtual
+        auto* scb = reinterpret_cast<state_control_block*>(phys_to_virt(scb_phys));
+        if (!scb) {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(::lib::memory_error::invalid_address));
+        }
+
+        // Verify SCB is 4KB aligned
+        if ((scb_phys & 0xFFFULL) != 0) {
+            return ::lib::unexpected(::lib::kernel_error::from_memory(::lib::memory_error::alignment_error));
+        }
+
+        g_guests[guest_id] = guest_state{
+            .id = guest_id,
+            .scb = scb,
+            .scb_phys = scb_phys,
+            .active = false,
+            .last_exit_reason = 0,
+            .last_intercept_code = 0
+        };
+
+        ++g_guest_count;
+
+        zxfoundation::sys::printk::pinfo("sie: guest {} created with SCB @ {:#x}",
+            guest_id, scb_phys);
+
+        return {};
+    }
+
+    [[nodiscard]] auto sie_guest_destroy(u16 guest_id) noexcept
+        -> ::lib::expected<void, ::lib::kernel_error> {
+        if (guest_id >= MAX_SIE_GUESTS) {
+            return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+
+        if (!g_guests[guest_id].active && g_guests[guest_id].scb == nullptr) {
+            return ::lib::unexpected(::lib::kernel_error::from_generic(::lib::generic_error::not_found));
+        }
+
+        g_guests[guest_id] = guest_state{};
+        --g_guest_count;
+
+        zxfoundation::sys::printk::pinfo("sie: guest {} destroyed", guest_id);
+        return {};
+    }
+
+    [[nodiscard]] auto sie_enter(u16 guest_id) noexcept -> u32 {
+        if (guest_id >= MAX_SIE_GUESTS) {
+            return ~0U;
+        }
+
+        auto& guest = g_guests[guest_id];
+        if (!guest.active && guest.scb == nullptr) {
+            return ~0U;
+        }
+
+        guest.active = true;
+
+        // Execute SIE instruction
+        const u32 exit_code = sie_enter_asm(guest.scb);
+
+        guest.active = false;
+        guest.last_exit_reason = exit_code & 0xFFFF;
+        guest.last_intercept_code = static_cast<u16>(exit_code >> 16);
+
+        return exit_code;
+    }
+
+    [[nodiscard]] auto sie_get_scb(u16 guest_id) noexcept -> void* {
+        if (guest_id >= MAX_SIE_GUESTS) {
+            return nullptr;
+        }
+        return g_guests[guest_id].scb;
+    }
+
+} // namespace arch::s390x::cpu::sie

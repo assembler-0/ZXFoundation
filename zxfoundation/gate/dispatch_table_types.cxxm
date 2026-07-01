@@ -1,0 +1,49 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/dispatch_table_types.cxxm
+/// @brief Dispatch table types — flat handler table for 256 nucleus calls.
+
+export module zxfoundation.gate.dispatch_table_types;
+import zxfoundation.base.types;
+import zxfoundation.gate.gate_types;
+
+export {
+
+namespace zxfoundation::gate::dispatch_table {
+
+    using zxfoundation::gate::call_namespace;
+
+    /// @brief Gate authorization level enforced at dispatch time.
+    enum class gate_auth_level : u8 {
+        none        = 0, ///< No capability check — self-domain, time, console.
+        capability  = 1, ///< Capability token required in a0.
+        admin       = 2, ///< Admin-level capability required.
+        domain_map  = 3, ///< Domain capability with map right required.
+        storage_key = 4, ///< Storage-key match required between caller and target.
+    };
+
+    /// @brief Metadata attached to each dispatch table entry.
+    struct dispatch_entry_meta {
+        u8              namespace_id{0};
+        u8              operation_id{0};
+        gate_auth_level auth{gate_auth_level::none};
+        bool            requires_admin{false};
+    };
+
+    /// @brief Maximum entries: 8 namespaces x 32 operations = 256.
+    constexpr u32 DISPATCH_TABLE_SIZE = 256U;
+
+    /// @brief Pack a namespace and operation into a table index.
+    [[nodiscard]] constexpr auto pack_index(
+        call_namespace ns, u32 op
+    ) noexcept -> u32 {
+        return (static_cast<u32>(ns) << 5) | (op & 0x1FU);
+    }
+
+    /// @brief Handler function signature for all nucleus calls.
+    using dispatch_handler = auto (*)(
+        u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
+    ) noexcept -> u64;
+
+} // namespace zxfoundation::gate::dispatch_table
+
+} // end export

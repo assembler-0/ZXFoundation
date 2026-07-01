@@ -214,7 +214,7 @@ namespace zxfoundation::portal {
         auto* src = zxfoundation::domain::domain_find(source_domain_id);
         if (src) {
             ++src->portal_count;
-            ++src->dgp_state.active_portal_count;
+            ++src->active_portal_count;
         }
 
         // Commit the transaction — disarms the automatic rollback.
@@ -248,7 +248,10 @@ namespace zxfoundation::portal {
         // Convert the DGP portal authority into a draining revocation before hardware reuse.
         auto* src = zxfoundation::domain::domain_find(desc->source_domain);
         if (src) {
-            auto revoke_result = zxfoundation::dgp::isolation_begin_portal_teardown(src->dgp_state);
+            auto revoke_result = zxfoundation::dgp::isolation_begin_portal_teardown(
+                src->iso_state,
+                src->active_portal_count,
+                src->revocation_epoch);
             if (!revoke_result) {
                 return lib::unexpected(revoke_result.error());
             }
@@ -285,7 +288,10 @@ namespace zxfoundation::portal {
             [](portal_desc& p) noexcept -> void {
                 auto* src = zxfoundation::domain::domain_find(p.source_domain);
                 if (src) {
-                    (void)zxfoundation::dgp::isolation_begin_portal_teardown(src->dgp_state);
+                    (void)zxfoundation::dgp::isolation_begin_portal_teardown(
+                        src->iso_state,
+                        src->active_portal_count,
+                        src->revocation_epoch);
                     if (src->portal_count > 0) --src->portal_count;
                 }
 

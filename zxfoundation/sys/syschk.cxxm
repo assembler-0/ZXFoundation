@@ -7,6 +7,10 @@ import zxfoundation.sys.syschk_types;
 import zxfoundation.sys.printk;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import zxfoundation.sys.stacktrace;
+import zxfoundation.sys.watchdog;
+import zxfoundation.sys.printk_types;
+import arch.s390x.lib.atomic;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.psw_types;
@@ -17,8 +21,6 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
 import arch.s390x.init.zxfl.protocol;
-import zxfoundation.sys.stacktrace;
-import arch.s390x.lib.atomic;
 import lib.error;
 import lib.string_view;
 import lib.cstring;
@@ -48,6 +50,16 @@ namespace _internal {
     /// @brief Hardware CPU address of the BSP — used to skip self when halting APs.
     static u16 g_bsp_cpu_addr{0};
 
+    zxfoundation::sys::printk::log_level to_log_level(syschk_severity sev) {
+        switch (sev) {
+            case syschk_severity::notice: return zxfoundation::sys::printk::log_level::NOTICE;
+            case syschk_severity::warning: return zxfoundation::sys::printk::log_level::WARN;
+            case syschk_severity::critical: return zxfoundation::sys::printk::log_level::CRIT;
+            case syschk_severity::fatal:
+            default: return zxfoundation::sys::printk::log_level::EMERG;
+        }
+    }
+
 } // namespace _internal
 
 export {
@@ -66,7 +78,7 @@ namespace zxfoundation::sys::syschk {
         _internal::g_bsp_cpu_addr  = proto.bsp_cpu_addr;
     }
 
-    /// @brief Halt the entire system and record a kernel error.
+    /// @brief Record a kernel error. Conditionally halt.
     ///
     /// @param[in] err      The @ref lib::kernel_error that triggered this check.
     ///                     Its @c category and @c code are stored verbatim in the
@@ -77,7 +89,7 @@ namespace zxfoundation::sys::syschk {
     /// @param[in] msg      Human-readable reason string.  Truncated to
     ///                     @ref ZX_CRASH_MSG_LEN - 1 bytes.
     /// @param[in] location Source location of the call site.
-    [[noreturn]] auto system_check(
+    auto system_check(
         lib::kernel_error    err,
         syschk_severity      sev,
         lib::string_view     msg,
@@ -91,6 +103,7 @@ namespace zxfoundation::sys::syschk {
                 expected, 1U,
                 arch::s390x::lib::atomic::memory_order::seq_cst,
                 arch::s390x::lib::atomic::memory_order::relaxed)) [[unlikely]] {
+            watchdog::watchdog_disarm();
             arch::s390x::cpu::psw::disabled_wait();
         }
 
@@ -113,15 +126,17 @@ namespace zxfoundation::sys::syschk {
         // Write the message — strncpy guarantees NUL termination.
         lib::strncpy(rec->msg, msg.data(), ZX_CRASH_MSG_LEN);
 
-        pemerg(
+        printk::printk(_internal::to_log_level(sev),
             "syschk: [class={} category={}]\n",
             severity_name(sev),
             err
         );
 
-        pemerg("syschk: {}: {}\n", location.function_name(), msg);
+        printk::printk(_internal::to_log_level(sev), "syschk: {}: {}\n", location.function_name(), msg);
 
         stacktrace::dump_stack();
+
+        if (sev < syschk_severity::critical) return;
 
         const u16 self_cpu_id = arch::s390x::cpu::percpu::cpu_id();
         arch::s390x::cpu::cpumask::for_each_online_cpu(
@@ -130,7 +145,9 @@ namespace zxfoundation::sys::syschk {
                 arch::s390x::cpu::ipi::send_halt_ipi(cpu);
             });
 
+        watchdog::watchdog_disarm();
         arch::s390x::cpu::psw::disabled_wait();
+        __builtin_unreachable();
     }
 
     /// @brief Issue a fatal system check with a formatted message.
@@ -154,6 +171,7 @@ namespace zxfoundation::sys::syschk {
         char buf[ZX_CRASH_MSG_LEN];
         lib::format::format_to(lib::span(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
         system_check(err, syschk_severity::fatal, lib::string_view(buf), fl.loc);
+        __builtin_unreachable();
     }
 
     /// @brief Issue a critical system check with a formatted message.
@@ -172,6 +190,7 @@ namespace zxfoundation::sys::syschk {
         char buf[ZX_CRASH_MSG_LEN];
         lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
         system_check(err, syschk_severity::critical, lib::string_view(buf), fl.loc);
+        __builtin_unreachable();
     }
 
     /// @brief Issue a warning-level system check with a formatted message.
@@ -182,7 +201,7 @@ namespace zxfoundation::sys::syschk {
     ///
     /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1 bytes.
     template <typename... Args>
-    [[noreturn]] auto syschk_warning(
+    auto syschk_warning(
         lib::kernel_error err,
         fmt_loc           fl,
         Args&&...         args
@@ -190,6 +209,24 @@ namespace zxfoundation::sys::syschk {
         char buf[ZX_CRASH_MSG_LEN];
         lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
         system_check(err, syschk_severity::warning, lib::string_view(buf), fl.loc);
+    }
+
+    /// @brief Issue a notice-level system check with a formatted message.
+    ///
+    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
+    ///
+    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    template <typename... Args>
+    auto syschk_notice(
+        lib::kernel_error err,
+        fmt_loc           fl,
+        Args&&...         args
+    ) noexcept -> void {
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::notice, lib::string_view(buf), fl.loc);
     }
 
 } // namespace zxfoundation::sys::syschk

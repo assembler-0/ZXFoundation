@@ -21,7 +21,8 @@ namespace lib {
         driver,      ///< Device driver errors.
         init,        ///< Initialization and boot errors.
         time,        ///< Time and clock errors.
-        generic      ///< Generic kernel errors.
+        generic,     ///< Generic kernel errors.
+        machine      ///< Machine errors.
     };
 
     /// @brief s390x architecture-specific error codes.
@@ -130,6 +131,19 @@ namespace lib {
         };
     }
 
+    /// @brief machine error (for mcck)
+    namespace machine_error {
+        enum code : u32 {
+            none                = 0,
+            system_damage       = 1,
+            inst_process_damage = 2,
+            system_recovery     = 3,
+            timing_facility     = 4,
+            external_damage     = 5,
+            failing_stor_addr   = 6,
+        };
+    }
+
     /// @brief Unified kernel error type.
     /// @note Combines an error category with a subsystem-specific code.
     ///       Use the from_* factory methods for type-safe construction.
@@ -204,6 +218,13 @@ namespace lib {
             return kernel_error(error_category::generic, static_cast<u32>(c));
         }
 
+        // @brief Construct generic error.
+        /// @param[in] c  generic_error::code value.
+        /// @return kernel_error with category=generic.
+        static constexpr auto from_machine(machine_error::code c) noexcept -> kernel_error {
+            return kernel_error(error_category::machine, static_cast<u32>(c));
+        }
+
         /// @brief Check if two errors are identical.
         constexpr auto operator==(const kernel_error& other) const noexcept -> bool {
             return category == other.category && code == other.code;
@@ -239,6 +260,7 @@ namespace lib {
             case error_category::init:    return "init";
             case error_category::time:    return "time";
             case error_category::generic: return "generic";
+            case error_category::machine: return "machine";
             default:                      return "unknown";
         }
     }
@@ -336,6 +358,17 @@ namespace lib {
                     case generic_error::out_of_range:    return "out_of_range";
                     case generic_error::uninitialized:   return "uninitialized";
                     case generic_error::stall:           return "stall";
+                    default: return "?";
+                }
+            case error_category::machine:
+                switch (code) {
+                    case machine_error::none:                return "none";
+                    case machine_error::system_damage:       return "system_damage";
+                    case machine_error::inst_process_damage: return "inst_process_damage";
+                    case machine_error::system_recovery:     return "system_recovery";
+                    case machine_error::timing_facility:     return "timing_facility";
+                    case machine_error::external_damage:     return "external_damage";
+                    case machine_error::failing_stor_addr:   return "failing_stor_addr";
                     default: return "?";
                 }
             default:

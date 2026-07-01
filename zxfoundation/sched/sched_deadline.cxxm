@@ -34,7 +34,7 @@ namespace _internal {
     [[nodiscard]] auto has_deadline_authority(const domain& d) noexcept -> bool {
         if (d.rt_capability_token != 0U && d.rt_capability_token == d.admin_token) return true;
         return zxfoundation::dgp::has_all_rights(
-            d.dgp_state.granted_rights,
+            d.granted_rights,
             zxfoundation::dgp::isolation_rights::admin);
     }
 
@@ -86,7 +86,7 @@ namespace zxfoundation::sched::deadline {
         }
 
         auto dgp_result = zxfoundation::dgp::isolation_validate_scheduler_policy(
-            owner.dgp_state,
+            owner.iso_state,
             policy,
             _internal::has_deadline_authority(owner));
         if (!dgp_result) return lib::unexpected(dgp_result.error());

@@ -1,7 +1,9 @@
 !files : !compile_group -> [auto] {
     gate_types.cxxm
     gate.cxxm
-    dispatch.cxxm
+    dispatch_table_types.cxxm
+    dispatch_table.cxxm
+    gate_registration.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) !compiler_id:gcc(-Wno-pedantic ) ]
     nc_cap.cxxm
     nc_dom.cxxm
     nc_gate.cxxm

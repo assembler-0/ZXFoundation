@@ -10,104 +10,121 @@
 
 #define TIF_NEED_RESCHED 4
 
+// ============================================================================
+// SAVE_FRAME — save interrupt register state on the async stack.
+//   
+//   The scratch register ('reg', always %r1 in current callers) is used to
+//   compute the frame address.  It MUST be preserved so that stmg stores
+//   the *original* user/kernel value, not the frame address.
+// ============================================================================
 .macro SAVE_FRAME reg, old_psw_lc, stack_lc, irq_class_val
+    // Preserve scratch register before it is clobbered.
+    stg     \reg, LC_SCRATCH0(0)
     icm     \reg, 15, LC_IRQ_NESTING(0)
-    jnz     .Lnested\@
+    jnz     1f
     lg      \reg, \stack_lc(0)
+    // For non-MCCK paths, fall back to kernel_stack if the designated stack
+    // pointer is zero.
     .ifnc \stack_lc, LC_MCCK_STACK
-    .else
     ltgr    \reg, \reg
-    jnz     .Lstack_ok\@
+    jnz     2f
     lg      \reg, LC_KERNEL_STACK(0)
-.Lstack_ok\@:
+2:
     .endif
-    j       .Lalloc_frame\@
-.Lnested\@:
+    j       3f
+1:
     lgr     \reg, %r15
-.Lalloc_frame\@:
-    aghi    \reg, -(160 + IRQ_FRAME_SIZE)
-    stmg    %r0, %r15, (160 + IRQ_FRAME_GPRS)(\reg)
-    mvc     (160 + IRQ_FRAME_PSW_MASK)(16, \reg), \old_psw_lc(0)
-    stam    %a0, %a15, (160 + IRQ_FRAME_ARS)(\reg)
-    stfpc   (160 + IRQ_FRAME_FPC)(\reg)
-    vstm    %v0, %v15, (160 + IRQ_FRAME_VRS)(\reg)
-    vstm    %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(\reg)
+3:
+    aghi    \reg, -(IRQ_FRAME_BIAS + IRQ_FRAME_SIZE)
+    stmg    %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(\reg)
+    mvc     (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(16, \reg), \old_psw_lc(0)
+    stam    %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(\reg)
+    stfpc   (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(\reg)
+    vstm    %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(\reg)
+    vstm    %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(\reg)
     lgr     %r15, \reg
+    // Restore the original scratch-register value into the saved frame so
+    // that RESTORE_FRAME gives back the correct register contents.
+    lg      \reg, LC_SCRATCH0(0)
+    stg     \reg, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
     asi     LC_IRQ_NESTING(0), 1
-    la      %r2, 160(%r15)
+    la      %r2, IRQ_FRAME_BIAS(%r15)
     lhi     \reg, \irq_class_val
     stc     \reg, LC_IRQ_CLASS(0)
 .endm
 
 .macro RESTORE_FRAME
-    vlm     %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
-    vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
-    lfpc    (160 + IRQ_FRAME_FPC)(%r15)
-    lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
-    mvc     LC_PSW_TEMP(16, 0), (160 + IRQ_FRAME_PSW_MASK)(%r15)
+    vlm     %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(%r15)
+    vlm     %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(%r15)
+    lfpc    (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
+    lam     %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
+    mvc     LC_PSW_TEMP(16, 0), (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(%r15)
     asi     LC_IRQ_NESTING(0), -1
     lhi     %r0, 0
     stc     %r0, LC_IRQ_CLASS(0)
-    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
+    lmg     %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm
 
 .macro SAVE_NUCLEUS_FRAME reg, old_psw_lc, stack_lc, irq_class_val
+    stg     \reg, LC_SCRATCH0(0)
     tm      (\old_psw_lc + 1)(0), 0x01
-    jz      .Lnucleus_keep_context\@
+    jz      1f
     xgr     \reg, \reg
     st      \reg, LC_IRQ_NESTING(0)
     st      \reg, LC_NUCLEUS_NESTING(0)
-.Lnucleus_keep_context\@:
+1:
     icm     \reg, 15, LC_NUCLEUS_NESTING(0)
-    jnz     .Lnucleus_nested\@
+    jnz     2f
     lg      \reg, \stack_lc(0)
-    j       .Lnucleus_alloc_frame\@
-.Lnucleus_nested\@:
+    j       3f
+2:
     lgr     \reg, %r15
-.Lnucleus_alloc_frame\@:
-    aghi    \reg, -(160 + IRQ_FRAME_SIZE)
-    stmg    %r0, %r15, (160 + IRQ_FRAME_GPRS)(\reg)
-    mvc     (160 + IRQ_FRAME_PSW_MASK)(16, \reg), \old_psw_lc(0)
-    stam    %a0, %a15, (160 + IRQ_FRAME_ARS)(\reg)
-    stfpc   (160 + IRQ_FRAME_FPC)(\reg)
-    vstm    %v0, %v15, (160 + IRQ_FRAME_VRS)(\reg)
-    vstm    %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(\reg)
+3:
+    aghi    \reg, -(IRQ_FRAME_BIAS + IRQ_FRAME_SIZE)
+    stmg    %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(\reg)
+    mvc     (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(16, \reg), \old_psw_lc(0)
+    stam    %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(\reg)
+    stfpc   (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(\reg)
+    vstm    %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(\reg)
+    vstm    %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(\reg)
     lgr     %r15, \reg
+    lg      \reg, LC_SCRATCH0(0)
+    stg     \reg, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
     asi     LC_NUCLEUS_NESTING(0), 1
-    la      %r2, 160(%r15)
+    la      %r2, IRQ_FRAME_BIAS(%r15)
     lhi     \reg, \irq_class_val
     stc     \reg, LC_IRQ_CLASS(0)
 .endm
 
 .macro RESTORE_NUCLEUS_FRAME
-    vlm     %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
-    vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
-    lfpc    (160 + IRQ_FRAME_FPC)(%r15)
-    lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
-    mvc     LC_PSW_TEMP(16, 0), (160 + IRQ_FRAME_PSW_MASK)(%r15)
+    vlm     %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(%r15)
+    vlm     %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(%r15)
+    lfpc    (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
+    lam     %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
+    mvc     LC_PSW_TEMP(16, 0), (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(%r15)
     asi     LC_NUCLEUS_NESTING(0), -1
     lhi     %r0, 0
     stc     %r0, LC_IRQ_CLASS(0)
-    lmg     %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
+    lmg     %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm
 
 /// @brief Check for preemption after a preemptible interrupt.
 .macro CHECK_PREEMPT
-    tm      (160 + IRQ_FRAME_PSW_MASK + 1)(%r15), 0x01
-    jz      .Lno_preempt\@
+    tm      (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK + 1)(%r15), 0x01
+    jz      1f
 
     l       %r1, LC_PREEMPT_COUNT(0)
     ltr     %r1, %r1
-    jnz     .Lno_preempt\@
+    jnz     1f
 
     lg      %r1, LC_CURRENT_DOMAIN(0)
     ltgr    %r1, %r1
-    jz      .Lno_preempt\@
+    jz      1f
     l       %r1, DOMAIN_FLAGS_OFF(%r1)
     tmll    %r1, TIF_NEED_RESCHED
-    jz      .Lno_preempt\@
+    jz      1f
 
     lg      %r1, LC_KERNEL_STACK(0)
     aghi    %r1, -160
@@ -117,7 +134,7 @@
     brasl   %r14, _ZN12zxfoundation5schedW12zxfoundationW5schedW5sched8scheduleEv
 
     lg      %r15, 0(%r15)
-.Lno_preempt\@:
+1:
 .endm
 
     .section .text.trap_pgm, "ax", @progbits
@@ -153,7 +170,7 @@ trap_svc_entry:
     // irq_class = 4 (svc)
     SAVE_NUCLEUS_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK, 4
     llgh    %r3, 0x008a(0)          // Load svc_code (u16) from lowcore.
-    brasl   %r14, do_svc
+    brasl   %r14, do_svc_interrupt
     RESTORE_NUCLEUS_FRAME
 
     .section .text.trap_mcck, "ax", @progbits
@@ -164,26 +181,36 @@ trap_mcck_entry:
     brasl   %r14, do_mcck_interrupt
     RESTORE_FRAME
 
+// ============================================================================
+// pc_gate_entry — fast PC (Program Call) dispatch path.
+//   Preserves and restores R1, which was previously clobbered by the
+//   icm instructions and never restored.
+// ============================================================================
     .section .text.pc_entry, "ax", @progbits
     .globl  pc_gate_entry
     .type   pc_gate_entry, @function
     .align  8
 pc_gate_entry:
+    stg     %r1, LC_SCRATCH0(0)
     icm     %r1, 15, LC_IRQ_NESTING(0)
-    jnz     .Lpc_nested
+    jnz     1f
     icm     %r1, 15, LC_NUCLEUS_NESTING(0)
-    jnz     .Lpc_nested
+    jnz     1f
     lg      %r15, LC_KERNEL_STACK(0)
-    j       .Lpc_alloc_frame
-.Lpc_nested:
-.Lpc_alloc_frame:
-    aghi    %r15, -(160 + IRQ_FRAME_SIZE)
+    j       2f
+1:
+2:
+    aghi    %r15, -(IRQ_FRAME_BIAS + IRQ_FRAME_SIZE)
 
-    stmg    %r0, %r15, (160 + IRQ_FRAME_GPRS)(%r15)
-    stam    %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
-    stfpc   (160 + IRQ_FRAME_FPC)(%r15)
-    vstm    %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
-    vstm    %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
+     stmg    %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
+     // Fix: overwrite the R1 slot with the original value before the
+     // clobber so lmg at exit restores the correct register.
+     lg      %r1, LC_SCRATCH0(0)
+     stg     %r1, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
+     stam    %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
+    stfpc   (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
+    vstm    %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(%r15)
+    vstm    %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(%r15)
 
     asi     LC_NUCLEUS_NESTING(0), 1
 
@@ -197,18 +224,18 @@ pc_gate_entry:
     lgr     %r3, %r2
     lgr     %r2, %r0
 
-    brasl   %r14, do_nucleus_dispatch
+    brasl   %r14, do_pc_interrupt
 
     l       %r1, LC_PREEMPT_COUNT(0)
     ltr     %r1, %r1
-    jnz     .Lpc_no_preempt
+    jnz     3f
 
     lg      %r1, LC_CURRENT_DOMAIN(0)
     ltgr    %r1, %r1
-    jz      .Lpc_no_preempt
+    jz      3f
     l       %r1, DOMAIN_FLAGS_OFF(%r1)
     tmll    %r1, TIF_NEED_RESCHED
-    jz      .Lpc_no_preempt
+    jz      3f
 
     lg      %r1, LC_KERNEL_STACK(0)
     aghi    %r1, -160
@@ -217,17 +244,17 @@ pc_gate_entry:
     brasl   %r14, _ZN12zxfoundation5schedW12zxfoundationW5schedW5sched8scheduleEv
     lg      %r15, 0(%r15)           // restore original frame pointer
 
-.Lpc_no_preempt:
-    vlm     %v0, %v15, (160 + IRQ_FRAME_VRS)(%r15)
-    vlm     %v16, %v31, (160 + IRQ_FRAME_VRS + 256)(%r15)
-    lfpc    (160 + IRQ_FRAME_FPC)(%r15)
-    lam     %a0, %a15, (160 + IRQ_FRAME_ARS)(%r15)
+3:
+    vlm     %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(%r15)
+    vlm     %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(%r15)
+    lfpc    (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
+    lam     %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
     asi     LC_NUCLEUS_NESTING(0), -1
     lhi     %r0, 0
-    stc     %r0, LC_IRQ_CLASS(0)
-    lmg     %r0, %r13, (160 + IRQ_FRAME_GPRS)(%r15)
+     stc     %r0, LC_IRQ_CLASS(0)
+     lmg     %r0, %r13, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
 
-    .insn   e,0x0101                    // PR instruction
+     .insn   e,0x0101                    // PR instruction
     .size   pc_gate_entry, . - pc_gate_entry
 
     .section .note.GNU-stack, "", @progbits

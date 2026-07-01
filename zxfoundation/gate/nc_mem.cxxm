@@ -23,6 +23,9 @@ import lib.error;
 import lib.expected;
 import lib.placementnew;
 
+import zxfoundation.dgp.memory_contract;
+import zxfoundation.dgp.isolation_types;
+
 static constexpr u64 NC_ERROR = ~0ULL;
 
 using zxfoundation::domain::domain;
@@ -145,6 +148,23 @@ namespace __mem_detail {
 
         const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
+        // ── DGP memory contract validation ───────────────────────────
+        zxfoundation::dgp::memory_contract_request req{};
+        req.domain_id = d->ko.id;
+        req.va_start = va;
+        req.va_end = va + aligned_size;
+        req.phys_start = phys;
+        req.length = aligned_size;
+        req.storage_key = d->storage_key;
+        req.access = zxfoundation::dgp::memory_access::read | zxfoundation::dgp::memory_access::write;
+        req.scope = zxfoundation::dgp::memory_scope::private_domain;
+
+        auto contract_result = zxfoundation::dgp::memory_contract_authorize_mapping(req);
+        if (!contract_result) {
+            zxfoundation::sys::printk::perr("mem_map: DGP memory contract denied");
+            return NC_ERROR;
+        }
+
         vm::vm_prot prot = vm::vm_prot::read;
         if (prot_bits & 0x2) prot = prot | vm::vm_prot::write;
         if (prot_bits & 0x4) prot = prot | vm::vm_prot::exec;
@@ -256,6 +276,31 @@ namespace __mem_detail {
             return NC_ERROR;
         }
 
+        // ── Reject cross-domain KISS (storage key) transfers ──────────
+        if (target->storage_key == self->storage_key && self->storage_key != 0) {
+            zxfoundation::sys::printk::perr(
+                "mem_share: rejected — cross-domain storage key overlap (key={})",
+                self->storage_key);
+            return NC_ERROR;
+        }
+
+        // ── DGP memory contract validation ───────────────────────────
+        zxfoundation::dgp::memory_contract_request req{};
+        req.domain_id = self->ko.id;
+        req.va_start = 0;  // Sharing does not bind a specific VA range here
+        req.va_end = 0;
+        req.phys_start = 0;
+        req.length = 0;
+        req.storage_key = self->storage_key;
+        req.access = zxfoundation::dgp::memory_access::share;
+        req.scope = zxfoundation::dgp::memory_scope::portal_shared;
+
+        auto contract_result = zxfoundation::dgp::memory_contract_authorize_mapping(req);
+        if (!contract_result) {
+            zxfoundation::sys::printk::perr("mem_share: DGP memory contract denied");
+            return NC_ERROR;
+        }
+
         // Acquire a capability token for the target domain with read+write rights,
         // which the caller can use to access shared memory regions set with the
         // target's storage key.
@@ -297,6 +342,11 @@ namespace zxfoundation::gate::nc_mem {
             zxfoundation::sys::printk::perr("mem_dispatch: unknown op {}", op);
             return NC_ERROR;
         }
+    }
+
+    template <mem_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
     }
 
 } // namespace zxfoundation::gate::nc_mem

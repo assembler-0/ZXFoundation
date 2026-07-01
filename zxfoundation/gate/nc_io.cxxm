@@ -51,8 +51,8 @@ namespace __io_detail {
             .operation = zxfoundation::dgp::io_authority_operation::bind,
             .token = {},
             .required_rights = zxfoundation::sys::cap::cap_rights::admin,
-            .granted_rights = d->dgp_state.granted_rights,
-            .bootstrap_admin = (d->dgp_state.granted_rights & zxfoundation::dgp::isolation_rights::admin)
+            .granted_rights = d->granted_rights,
+            .bootstrap_admin = (d->granted_rights & zxfoundation::dgp::isolation_rights::admin)
                 == zxfoundation::dgp::isolation_rights::admin,
         });
         if (!authority) return NC_ERROR;
@@ -82,7 +82,7 @@ namespace __io_detail {
             .operation = zxfoundation::dgp::io_authority_operation::unbind,
             .token = token,
             .required_rights = zxfoundation::sys::cap::cap_rights::destroy,
-            .granted_rights = d->dgp_state.granted_rights,
+            .granted_rights = d->granted_rights,
             .bootstrap_admin = false,
         });
         if (!authority) return NC_ERROR;
@@ -111,7 +111,7 @@ namespace __io_detail {
             .operation = zxfoundation::dgp::io_authority_operation::submit,
             .token = token,
             .required_rights = zxfoundation::sys::cap::cap_rights::exec,
-            .granted_rights = d->dgp_state.granted_rights,
+            .granted_rights = d->granted_rights,
             .bootstrap_admin = false,
         });
         if (!authority) return NC_ERROR;
@@ -151,7 +151,7 @@ namespace __io_detail {
             .operation = zxfoundation::dgp::io_authority_operation::irq_bind,
             .token = token,
             .required_rights = zxfoundation::sys::cap::cap_rights::write,
-            .granted_rights = d->dgp_state.granted_rights,
+            .granted_rights = d->granted_rights,
             .bootstrap_admin = false,
         });
         if (!authority) return NC_ERROR;
@@ -187,6 +187,11 @@ namespace zxfoundation::gate::nc_io {
             zxfoundation::sys::printk::perr("io_dispatch: unknown op {}", op);
             return NC_ERROR;
         }
+    }
+
+    template <io_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
     }
 
 } // namespace zxfoundation::gate::nc_io

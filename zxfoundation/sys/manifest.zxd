@@ -17,4 +17,5 @@
     service.cxxm
     io_types.cxxm
     io.cxxm
+    syscall_self.cxxm
 }

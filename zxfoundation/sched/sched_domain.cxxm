@@ -85,7 +85,8 @@ namespace zxfoundation::sched::domain_ctx {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
 
         if ((d->flags & zxfoundation::domain::domain_flags::idle) == zxfoundation::domain::domain_flags::none) {
-            auto admission = zxfoundation::dgp::isolation_validate_scheduler_admission(d->dgp_state);
+            auto admission = zxfoundation::dgp::isolation_validate_scheduler_admission(
+                d->iso_state, d->root_phys, d->asce.val);
             if (!admission) {
                 arch::s390x::cpu::psw::disabled_wait();
             }
@@ -114,7 +115,7 @@ namespace zxfoundation::sched::domain_ctx {
         lc->percpu.current_strand = reinterpret_cast<u64>(s);
         lc->percpu.attached_asce = user_asce;
         lc->percpu.attached_domain_id = d->ko.id;
-        lc->percpu.attached_dgp_state = static_cast<u8>(d->dgp_state.state);
+        lc->percpu.attached_dgp_state = static_cast<u8>(d->iso_state);
 
         __domain_enter_user_asm(frame_base, &s->uregs);
     }

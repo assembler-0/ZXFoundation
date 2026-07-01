@@ -29,7 +29,7 @@ namespace zxfoundation::sys::irq {
 
     using handler_fn = void(*)(
         u16                                           irq,
-        arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+        arch::s390x::cpu::irq::irq_frame* frame,
         void*                                         data) noexcept;
 
     /// @brief IRQ descriptor — dynamically allocated per active vector.
@@ -112,7 +112,7 @@ namespace zxfoundation::sys::irq {
     /// @brief Dispatch an IRQ — called from C interrupt entry stubs (trap.cxxm).
     auto irq_dispatch(
         u16                                           irq,
-        arch::s390x::cpu::irq::arch_s390x_irq_frame* frame,
+        arch::s390x::cpu::irq::irq_frame* frame,
         arch::s390x::cpu::irq::arch_s390x_irq_class  cls
     ) noexcept -> void {
         using namespace _internal;

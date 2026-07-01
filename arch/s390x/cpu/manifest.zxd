@@ -40,4 +40,7 @@
     cpacf.cxxm
     prno.cxxm
     vector.cxxm
+    sie.cxxm
+    sie_types.cxxm
+    sie.S
 }

@@ -22,7 +22,7 @@ namespace arch::s390x::cpu::processor {
     constexpr usize S390X_MCCK_STACK_SIZE = 0x4000; // 16 KiB
 
     /// @brief Per-CPU async (interrupt) stack size.
-    constexpr usize S390X_ASYNC_STACK_SIZE = 0x4000; // 16 KiB
+    constexpr usize S390X_ASYNC_STACK_SIZE = 0x10000; // 64 KiB
 
     /// @brief Per-CPU no-DAT (nodat) stack size.
     constexpr usize S390X_NODAT_STACK_SIZE = 0x2000; // 8 KiB

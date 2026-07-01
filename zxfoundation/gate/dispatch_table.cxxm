@@ -1,0 +1,294 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/dispatch_table.cxxm
+/// @brief Flat dispatch table — register, validate, and dispatch nucleus calls.
+
+export module zxfoundation.gate.dispatch_table;
+import zxfoundation.gate.dispatch_table_types;
+import zxfoundation.gate.gate_types;
+import zxfoundation.gate.gate;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.domain;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.sys.cap;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.printk;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.sync_contract;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import arch.s390x.cpu.lowcore;
+import lib.error;
+import lib.expected;
+import lib.placementnew;
+
+namespace zxfoundation::gate::dispatch_table::_internal {
+    using zxfoundation::sys::cap::cap_token;
+    using zxfoundation::sys::cap::cap_rights;
+    using zxfoundation::dgp::isolation_rights;
+    using zxfoundation::dgp::lock_context;
+    using zxfoundation::dgp::teardown_phase;
+    using zxfoundation::base::lifecycle_state;
+    using zxfoundation::gate::gate_desc;
+    using zxfoundation::gate::gate_auth;
+    using zxfoundation::dgp::has_all_rights;
+
+    struct entry {
+        dispatch_handler handler{nullptr};
+        dispatch_entry_meta meta{};
+    };
+
+    static entry s_table[DISPATCH_TABLE_SIZE]{};
+    static locking::qspinlock::qspinlock s_lock{};
+
+    [[nodiscard]] auto acquire_caller_domain() noexcept
+        -> zxfoundation::domain::domain * {
+        auto *lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<zxfoundation::domain::domain *>(lc->current_domain);
+    }
+
+    [[nodiscard]] auto dgp_rights_for(gate_auth_level auth) noexcept
+        -> isolation_rights {
+        switch (auth) {
+            case gate_auth_level::none:
+                return isolation_rights::enter;
+            case gate_auth_level::capability:
+                return isolation_rights::enter;
+            case gate_auth_level::admin:
+                return isolation_rights::enter | isolation_rights::admin;
+            case gate_auth_level::domain_map:
+                return isolation_rights::enter | isolation_rights::map;
+            case gate_auth_level::storage_key:
+                return isolation_rights::enter | isolation_rights::share;
+        }
+        return isolation_rights::enter;
+    }
+
+    /// @brief Full DGP gate validation — checks gate state, rights, and auth.
+    /// @param gate       Pointer to the gate_desc (must be non-null).
+    /// @return true if authorized.
+    [[nodiscard]] auto validate_gate_entry(
+        u32 caller_domain_id,
+        zxfoundation::gate::gate_desc* gate,
+        isolation_rights requested
+    ) noexcept -> bool {
+        // Check gate is active
+        if (gate->ko.state != lifecycle_state::active) return false;
+
+        // Check target domain
+        auto* target_domain = zxfoundation::domain::domain_find(gate->target_domain);
+        if (!target_domain) return false;
+        if (target_domain->iso_state != lifecycle_state::active) return false;
+
+        // Check caller domain
+        auto* caller_domain = zxfoundation::domain::domain_find(caller_domain_id);
+        if (!caller_domain) return false;
+        if (caller_domain->iso_state != lifecycle_state::active) return false;
+
+        // Check caller has the required isolation rights
+        if (!has_all_rights(caller_domain->granted_rights, requested)) return false;
+
+        // Check gate authorization policy
+        switch (gate->auth) {
+            case gate_auth::any:
+                break;
+            case gate_auth::keyed:
+                if (!has_all_rights(caller_domain->granted_rights, isolation_rights::admin)) return false;
+                break;
+            case gate_auth::owner:
+                if (caller_domain_id != gate->target_domain) return false;
+                break;
+        }
+
+        // Increment active gate count on target domain
+        ++target_domain->active_gate_count;
+        return true;
+    }
+
+    /// @brief Validate DGP contract + capability before dispatch.
+    /// @return true if the call is authorized.
+    [[nodiscard]] auto validate_call(
+        u32 packed_nr,
+        u64 a0,
+        const entry &ent,
+        zxfoundation::domain::domain *caller
+    ) noexcept -> bool {
+        if (!caller) [[unlikely]] return false;
+
+        // ── DGP synchronization contract ──────────────────────
+        const auto sync_state = dgp::sync_contract_snapshot(
+            lock_context::thread, teardown_phase::none, caller->ko.id);
+        auto sync_r = dgp::sync_contract_validate_authority_lookup(sync_state);
+        if (!sync_r) {
+            sys::printk::perr("dispatch: call {} — DGP sync contract failed",
+                              packed_nr);
+            return false;
+        }
+
+        // ── DGP gate entry validation (full) ─────────────────────────
+        // Static kernel dispatch entries (registered via register_handler) do NOT
+        // have corresponding SCOMS gate_desc entries — gate_find(packed_nr) would
+        // always return nullptr, so gate validation is only performed when a gate
+        // with the matching ID actually exists (i.e. dynamic user-created gates).
+        // The capability switch below provides the authorization enforcement for
+        // static entries.
+        if (ent.meta.auth != gate_auth_level::none) {
+            if (auto* gate = zxfoundation::gate::gate_find(packed_nr)) {
+                if (!validate_gate_entry(caller->ko.id, gate,
+                                         dgp_rights_for(ent.meta.auth))) {
+                    sys::printk::perr("dispatch: call {} — DGP gate validation failed",
+                                      packed_nr);
+                    return false;
+                }
+            }
+        }
+
+        // ── Capability enforcement (if required) ──────────────
+        switch (ent.meta.auth) {
+            case gate_auth_level::none:
+            case gate_auth_level::storage_key:
+                break;
+
+            case gate_auth_level::capability: {
+                auto cap_r = sys::cap::cap_validate_generic(
+                    cap_token{a0}, cap_rights::none);
+                if (!cap_r) {
+                    sys::printk::perr("dispatch: call {} — capability validation failed",
+                                      packed_nr);
+                    return false;
+                }
+                break;
+            }
+
+            case gate_auth_level::admin: {
+                auto cap_r = sys::cap::cap_validate_generic(
+                    cap_token{a0}, cap_rights::admin);
+                if (!cap_r) {
+                    sys::printk::perr("dispatch: call {} — admin cap validation failed",
+                                      packed_nr);
+                    return false;
+                }
+                break;
+            }
+
+            case gate_auth_level::domain_map: {
+                auto cap_r = sys::cap::cap_validate_generic(
+                    cap_token{a0}, cap_rights::map);
+                if (!cap_r) {
+                    sys::printk::perr("dispatch: call {} — domain_map cap validation failed",
+                                      packed_nr);
+                    return false;
+                }
+                break;
+            }
+        }
+
+        return true;
+    }
+} // namespace zxfoundation::gate::dispatch_table::_internal
+
+export {
+    namespace zxfoundation::gate::dispatch_table {
+        using zxfoundation::domain::domain;
+        using zxfoundation::sys::cap::cap_token;
+        using zxfoundation::sys::cap::cap_rights;
+        using zxfoundation::dgp::isolation_rights;
+        using zxfoundation::dgp::lock_context;
+        using zxfoundation::dgp::teardown_phase;
+
+        // ── Public API ───────────────────────────────────────────────────────
+
+        /// @brief Register a handler at a given packed call slot.
+        /// @param packed_nr  Table index: (namespace << 5) | operation.
+        /// @param handler    The handler function.
+        /// @param meta       Authorization metadata.
+        /// @return Success, or kernel_error if slot occupied or out of range.
+        [[nodiscard]] auto register_handler(
+            u32 packed_nr,
+            dispatch_handler handler,
+            const dispatch_entry_meta &meta
+        ) noexcept -> lib::expected<void, lib::kernel_error> {
+            if (packed_nr >= DISPATCH_TABLE_SIZE) {
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::out_of_range));
+            }
+            if (!handler) {
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            }
+
+            const locking::irq_lock_guard guard{_internal::s_lock};
+
+            if (_internal::s_table[packed_nr].handler) {
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::internal_error));
+            }
+
+            _internal::s_table[packed_nr].handler = handler;
+            _internal::s_table[packed_nr].meta = meta;
+
+            return {};
+        }
+
+        /// @brief Bulk-register all handlers for a namespace.
+        /// @param ns      The namespace whose handlers to register.
+        /// @param ops     Array of (operation_id, handler, meta) tuples.
+        /// @param count   Number of entries in @p ops.
+        /// @return Success, or the first registration error encountered.
+        struct registration_op {
+            u8 operation_id{};
+            dispatch_handler handler{};
+            dispatch_entry_meta meta;
+        };
+
+        [[nodiscard]] auto register_namespace_handlers(
+            call_namespace ns,
+            const registration_op ops[],
+            u32 count
+        ) noexcept -> lib::expected<void, lib::kernel_error> {
+            for (u32 i = 0; i < count; ++i) {
+                auto r = register_handler(
+                    pack_index(ns, ops[i].operation_id),
+                    ops[i].handler,
+                    ops[i].meta);
+                if (!r) return r;
+            }
+            return {};
+        }
+
+        /// @brief Dispatch a nucleus call through the table.
+        /// @param packed_nr  Table index.
+        /// @param a0-a4      Arguments.
+        /// @return Handler return value, or ~0ULL on error.
+        [[nodiscard]] auto dispatch(
+            u32 packed_nr,
+            u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
+        ) noexcept -> u64 {
+            if (packed_nr >= DISPATCH_TABLE_SIZE) [[unlikely]] {
+                sys::printk::perr("dispatch: packed_nr {} out of range", packed_nr);
+                return ~0ULL;
+            }
+
+            const auto &ent = _internal::s_table[packed_nr];
+            if (!ent.handler) [[unlikely]] {
+                sys::printk::perr("dispatch: no handler for packed_nr {}", packed_nr);
+                return ~0ULL;
+            }
+
+            auto *caller = _internal::acquire_caller_domain();
+            if (!_internal::validate_call(packed_nr, a0, ent, caller)) [[unlikely]] {
+                return ~0ULL;
+            }
+
+            return ent.handler(a0, a1, a2, a3, a4);
+        }
+
+        /// @brief Return true if the given slot has a registered handler.
+        [[nodiscard]] auto is_registered(u32 packed_nr) noexcept -> bool {
+            if (packed_nr >= DISPATCH_TABLE_SIZE) return false;
+            return _internal::s_table[packed_nr].handler != nullptr;
+        }
+    } // namespace zxfoundation::gate::dispatch_table
+} // end export

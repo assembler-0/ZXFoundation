@@ -138,7 +138,7 @@ namespace arch::s390x::cpu::features {
 namespace arch::s390x::cpu::features {
 
     /// Internal facility list cache — same size as the STFLE maximum.
-    static u64  g_fac_list[stfle::STFLE_MAX_DWORDS]{};
+    static u64 g_fac_list[stfle::STFLE_MAX_DWORDS]{};
 
     /// Guard: ensures init() is only applied once.
     static bool g_initialized{false};
@@ -157,12 +157,11 @@ namespace arch::s390x::cpu::features {
         return has_raw(static_cast<u32>(f));
     }
 
-    auto has_raw(u32 bit) noexcept -> bool {
+    auto has_raw(const u32 bit) noexcept -> bool {
         const u32 dword = bit / 64U;
         const u32 pos   = bit % 64U;
         if (dword >= stfle::STFLE_MAX_DWORDS)
             return false;
-        // s390x uses MSB-first bit numbering
         return (g_fac_list[dword] & (1ULL << (63U - pos))) != 0;
     }
 

@@ -4,6 +4,7 @@
 
 export module zxfoundation.domain.domain_types;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.domain.strand_types;
 import arch.s390x.mmu.mmu_types;
@@ -79,7 +80,7 @@ namespace zxfoundation::domain {
     struct sched_class;
 
     /// @brief The domain struct — the central entity of the DGP kernel.
-    struct domain {
+struct domain {
         // ── offset 0 ──  SCOMS kobject header (24 bytes)
         scoms::kobject                                                  ko{};
 
@@ -104,8 +105,16 @@ namespace zxfoundation::domain {
         u32                                                             gate_count{0};
         u32                                                             portal_count{0};
 
-        // ── DGP clean-core isolation authority state
-        dgp::isolation_domain_state                                      dgp_state{};
+        // ── DGP clean-core isolation authority state (merged from isolation_domain_state)
+        //    These fields replace the separate dgp_state sub-struct.
+        zxfoundation::base::lifecycle_state                             iso_state{zxfoundation::base::lifecycle_state::embryo};
+        zxfoundation::dgp::isolation_rights                             granted_rights{zxfoundation::dgp::isolation_rights::none};
+        u8                                                              numa_node{0};
+        u16                                                             revocation_epoch{0};
+        u32                                                             storage_key_generation{0};
+        zxfoundation::dgp::storage_key_revocation_state                 storage_key_state{zxfoundation::dgp::storage_key_revocation_state::none};
+        u32                                                             active_gate_count{0};
+        u32                                                             active_portal_count{0};
 
         // ── List node for global domain list
         lib::list_node                                                  domain_list{};

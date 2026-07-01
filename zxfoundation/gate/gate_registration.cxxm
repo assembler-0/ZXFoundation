@@ -1,0 +1,148 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/gate/gate_registration.cxxm
+/// @brief Register all PC-accessible handlers into the dispatch table.
+
+export module zxfoundation.gate.gate_registration;
+import zxfoundation.gate.dispatch_table;
+import zxfoundation.gate.dispatch_table_types;
+import zxfoundation.gate.gate_types;
+import zxfoundation.gate.nc_dom;
+import zxfoundation.gate.nc_mem;
+import zxfoundation.gate.nc_gate;
+import zxfoundation.gate.nc_portal;
+import zxfoundation.gate.nc_io;
+import zxfoundation.gate.nc_sgn;
+import zxfoundation.gate.nc_cap;
+import zxfoundation.gate.nc_sys;
+import zxfoundation.sys.printk;
+import zxfoundation.base.types;
+import lib.error;
+import lib.expected;
+
+export {
+
+namespace zxfoundation::gate::gate_registration {
+
+    using zxfoundation::gate::dispatch_table::dispatch_handler;
+    using zxfoundation::gate::dispatch_table::dispatch_entry_meta;
+    using zxfoundation::gate::dispatch_table::gate_auth_level;
+    using zxfoundation::gate::dispatch_table::registration_op;
+    using zxfoundation::gate::dispatch_table::register_namespace_handlers;
+    using zxfoundation::gate::call_namespace;
+    using zxfoundation::gate::dom_op;
+    using zxfoundation::gate::mem_op;
+    using zxfoundation::gate::gate_op;
+    using zxfoundation::gate::portal_op;
+    using zxfoundation::gate::io_op;
+    using zxfoundation::gate::sgn_op;
+    using zxfoundation::gate::cap_op;
+    using zxfoundation::gate::sys_op;
+    using zxfoundation::sys::printk::perr;
+    using zxfoundation::sys::printk::pinfo;
+
+    [[nodiscard]] constexpr auto op(
+        u8                      op_id,
+        dispatch_handler        handler,
+        gate_auth_level         auth   = gate_auth_level::none
+    ) noexcept -> registration_op {
+        return registration_op{
+            .operation_id = op_id,
+            .handler      = handler,
+            .meta         = dispatch_entry_meta{
+                .operation_id    = op_id,
+                .auth            = auth,
+            },
+        };
+    }
+
+    /// @brief Register PC-accessible handlers into the dispatch table.
+    /// Tries every namespace and accumulates errors — does not stop on first
+    /// failure.  The caller logs the returned error and may continue booting;
+    /// a partial registration means some PC gate calls will be unavailable
+    /// but SVC direct calls are unaffected.
+    [[nodiscard]] auto register_all_handlers() noexcept -> lib::expected<void, lib::kernel_error> {
+        lib::kernel_error first_err{};
+
+        auto try_ns = [&](const char* name, call_namespace ns, const registration_op* ops, u32 count) {
+            auto r = register_namespace_handlers(ns, ops, count);
+            if (!r) {
+                perr("reg: {} (ns={}) — {}", name, static_cast<u32>(ns), r.error());
+                if (!first_err) first_err = r.error();
+            }
+        };
+
+        try_ns("dom",    call_namespace::dom,
+            (const registration_op[]){
+                op(0, nc_dom::dispatch_wrap<dom_op::create>,  gate_auth_level::admin),
+                op(1, nc_dom::dispatch_wrap<dom_op::destroy>, gate_auth_level::admin),
+                op(2, nc_dom::dispatch_wrap<dom_op::exit>,    gate_auth_level::none),
+                op(3, nc_dom::dispatch_wrap<dom_op::info>,    gate_auth_level::none),
+                op(4, nc_dom::dispatch_wrap<dom_op::query>,   gate_auth_level::none),
+                op(5, nc_dom::dispatch_wrap<dom_op::strand_create>, gate_auth_level::admin),
+            }, 6);
+
+        try_ns("mem",    call_namespace::mem,
+            (const registration_op[]){
+                op(0, nc_mem::dispatch_wrap<mem_op::alloc>,    gate_auth_level::none),
+                op(1, nc_mem::dispatch_wrap<mem_op::free>,     gate_auth_level::none),
+                op(2, nc_mem::dispatch_wrap<mem_op::map>,      gate_auth_level::domain_map),
+                op(3, nc_mem::dispatch_wrap<mem_op::unmap>,    gate_auth_level::none),
+                op(4, nc_mem::dispatch_wrap<mem_op::protect>,  gate_auth_level::none),
+                op(5, nc_mem::dispatch_wrap<mem_op::share>,    gate_auth_level::none),
+            }, 6);
+
+        try_ns("gate",   call_namespace::gate,
+            (const registration_op[]){
+                op(0, nc_gate::dispatch_wrap<gate_op::create>,  gate_auth_level::admin),
+                op(1, nc_gate::dispatch_wrap<gate_op::destroy>, gate_auth_level::admin),
+            }, 2);
+
+        try_ns("portal", call_namespace::portal,
+            (const registration_op[]){
+                op(0, nc_portal::dispatch_wrap<portal_op::create>,  gate_auth_level::admin),
+                op(1, nc_portal::dispatch_wrap<portal_op::destroy>, gate_auth_level::admin),
+            }, 2);
+
+        try_ns("io",     call_namespace::io,
+            (const registration_op[]){
+                op(0, nc_io::dispatch_wrap<io_op::bind>,     gate_auth_level::capability),
+                op(1, nc_io::dispatch_wrap<io_op::unbind>,   gate_auth_level::capability),
+                op(2, nc_io::dispatch_wrap<io_op::submit>,   gate_auth_level::capability),
+                op(3, nc_io::dispatch_wrap<io_op::irq_bind>, gate_auth_level::capability),
+            }, 4);
+
+        try_ns("sgn",    call_namespace::sgn,
+            (const registration_op[]){
+                op(0, nc_sgn::dispatch_wrap<sgn_op::register_handler>, gate_auth_level::none),
+                op(1, nc_sgn::dispatch_wrap<sgn_op::poll>,             gate_auth_level::none),
+                op(2, nc_sgn::dispatch_wrap<sgn_op::ack>,              gate_auth_level::none),
+            }, 3);
+
+        try_ns("cap",    call_namespace::cap,
+            (const registration_op[]){
+                op(0, nc_cap::dispatch_wrap<cap_op::acquire>,  gate_auth_level::none),
+                op(1, nc_cap::dispatch_wrap<cap_op::release>,  gate_auth_level::none),
+                op(2, nc_cap::dispatch_wrap<cap_op::validate>, gate_auth_level::none),
+            }, 3);
+
+        // Notes 0-3 (time_yield, deadline, now, console_write) are
+        // SVC-only self-domain operations — never routed through PC.
+        try_ns("sys",    call_namespace::sys,
+            (const registration_op[]){
+                op(4, nc_sys::dispatch_wrap<sys_op::service_register>,   gate_auth_level::capability),
+                op(5, nc_sys::dispatch_wrap<sys_op::service_lookup>,     gate_auth_level::none),
+                op(6, nc_sys::dispatch_wrap<sys_op::service_unregister>, gate_auth_level::capability),
+            }, 3);
+
+        if (first_err) {
+            perr("gate: PC handler registration completed with errors");
+            return lib::unexpected(first_err);
+        }
+
+        pinfo("gate: all 32 PC handlers registered");
+        return {};
+    }
+
+} // namespace zxfoundation::gate::gate_registration
+
+} // end export

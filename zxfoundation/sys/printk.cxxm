@@ -33,7 +33,6 @@ export {
 namespace zxfoundation::sys::printk {
 
     struct printk_state {
-
         locking::qspinlock::qspinlock lock;
         locking::qspinlock::qspinlock flush_lock;
         lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
@@ -41,18 +40,10 @@ namespace zxfoundation::sys::printk {
         lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
     };
 
-} // namespace zxfoundation::sys::printk
-
-} // end export
-
-export {
-
-namespace zxfoundation::sys::printk {
-
     printk_state g_state;
 
     auto init() noexcept -> void {
-        g_state.min_level = log_level::DEBUG;
+        g_state.min_level = log_level::TRACE;
     }
 
     auto register_backend(const printk_backend& backend) noexcept -> void {

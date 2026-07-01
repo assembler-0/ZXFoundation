@@ -107,6 +107,16 @@ export {
 
 namespace zxfoundation::sys::watchdog {
 
+    auto watchdog_disarm() noexcept -> void {
+        using namespace _internal;
+
+        arch::s390x::trap::set_pgm_fixup(true);
+        diag::diag288(diag::WDT_FUNC_CANCEL, 0, diag::LPARWDT_RESTART, 0);
+        arch::s390x::trap::set_pgm_fixup(false);
+
+        g_harddog_armed = false;
+    }
+
     auto watchdog_init() noexcept -> void {
         using namespace _internal;
         using namespace zxfoundation::sys::timer;
