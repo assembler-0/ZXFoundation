@@ -6,14 +6,11 @@
 #   ZX_SOURCES_64          — regular source files (no stub, no generated data)
 #   ZX_SOURCES_MODULES_64  — C++ module interface files
 #   ZX_SOURCES_64_NO_STUB  — regular + module sources (for pass1 target)
-#
-# NOTE: Symbol table source (zxallsyms_stub.cxx or zxallsyms_data.cxx)
-#       is added by each kernel target individually.  Do not append
-#       generated data here.
 
 set(ZX_SOURCES_64 "")
 set(ZX_SOURCES_MODULES_64 "")
 set(ZX_MANIFEST_LIST "")
+set(ZX_VALIDATE_HEADER "${CMAKE_SOURCE_DIR}/zxfoundation/base/precpp.hxx")
 
 zx_discover_nucleus(ZX_SOURCES_64 ZX_SOURCES_MODULES_64 ZX_MANIFEST_LIST
     "${CMAKE_CURRENT_SOURCE_DIR}")

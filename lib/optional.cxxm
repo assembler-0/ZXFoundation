@@ -11,6 +11,7 @@ import lib.expected;
 import lib.error;
 import lib.compare;
 import lib.format;
+import lib.type_traits;
 
 export {
 
@@ -241,7 +242,7 @@ namespace lib {
                 using U = decltype(f(storage.val));
                 return optional<U>(f(storage.val));
             } else {
-                using U = decltype(f(lib::decl_val<T&>()));
+                using U = decltype(f(lib::declval<T&>()));
                 return optional<U>(nullopt);
             }
         }
@@ -253,7 +254,7 @@ namespace lib {
                 using U = decltype(f(storage.val));
                 return optional<U>(f(storage.val));
             } else {
-                using U = decltype(f(lib::decl_val<const T&>()));
+                using U = decltype(f(lib::declval<const T&>()));
                 return optional<U>(nullopt);
             }
         }
@@ -331,7 +332,7 @@ export {
         auto format(format_context& ctx, const optional<T>& val) const noexcept -> void {
             if (val.has_value()) {
                 ctx.write("optional<value(");
-                formatter<unqualified<T>>{}.format(ctx, *val);
+                formatter<remove_cvref_t<T>>{}.format(ctx, *val);
                 ctx.write(")>");
             } else {
                 ctx.write("optional<none()>");

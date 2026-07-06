@@ -20,3 +20,6 @@
 
 /// @brief maximum number of CPUs
 #define CONFIG_ZX_MAX_CPUS           768UL
+
+/// @brief dasd serial
+#define CONFIG_ZX_BOOT_DASD_SERIAL   "@ZXFoundation_Dasd_Boot_Serial@";

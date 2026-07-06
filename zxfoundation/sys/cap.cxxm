@@ -143,7 +143,8 @@ namespace zxfoundation::sys::cap::_internal {
     [[nodiscard]] auto check_rights(cap_token token, cap_rights needed) noexcept
         -> lib::expected<void, lib::kernel_error>
     {
-        if ((token.rights() & needed) == cap_rights::none) {
+        if (needed != cap_rights::none &&
+            (token.rights() & needed) == cap_rights::none) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
@@ -176,7 +177,7 @@ namespace zxfoundation::sys::cap {
 
         const cap_token token = cap_token::make(type, obj_id, static_cast<u16>(gen), rights);
 
-        pdebug("cap_acquire: type={} id={} gen={} rights={:#x} token={:#016x}",
+        pverbose("cap_acquire: type={} id={} gen={} rights={:#x} token={:#016x}",
                cap_type_name(type), static_cast<u32>(obj_id),
                static_cast<u32>(gen), static_cast<u16>(rights), token.raw);
 
@@ -213,7 +214,7 @@ namespace zxfoundation::sys::cap {
         // Decrement the reference count.
         const bool last = ko->ref.put();
 
-        pdebug("cap_release: type={} id={} gen={} last={}",
+        pverbose("cap_release: type={} id={} gen={} last={}",
                cap_type_name(token.type()), static_cast<u32>(token.object_id()),
                static_cast<u32>(token.generation()), last);
 

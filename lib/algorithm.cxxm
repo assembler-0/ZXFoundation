@@ -6,6 +6,7 @@ export module lib.algorithm;
 import zxfoundation.base.types;
 import lib.concepts;
 import lib.util;
+import lib.iterator;
 
 export {
 

@@ -43,7 +43,7 @@ namespace zxfoundation::sys::printk {
     printk_state g_state;
 
     auto init() noexcept -> void {
-        g_state.min_level = log_level::TRACE;
+        g_state.min_level = log_level::VERBOSE;
     }
 
     auto register_backend(const printk_backend& backend) noexcept -> void {
@@ -221,8 +221,7 @@ namespace zxfoundation::sys::printk {
             case log_level::WARN:   tag = 'W'; break;
             case log_level::NOTICE: tag = 'N'; break;
             case log_level::INFO:   tag = 'I'; break;
-            case log_level::DEBUG:  tag = 'D'; break;
-            case log_level::TRACE:  tag = 'T'; break;
+            case log_level::VERBOSE:tag = 'V'; break;
             default:                tag = '?'; break;
         }
 
@@ -232,7 +231,7 @@ namespace zxfoundation::sys::printk {
             offset = lib::format::format_to({buf, PRINTK_LINE_MAX},
                 "ZXF!-[(XXXX).xxxxxx] [({}){}] {} ",
                 prefix,
-                lib::format::dec{static_cast<u64>(cpu), 2, true},
+                lib::format::dec{static_cast<u64>(cpu), 3, true},
                 tag
             );
         } else {
@@ -241,7 +240,7 @@ namespace zxfoundation::sys::printk {
                 lib::format::dec{s, 4, true},
                 lib::format::dec{us, 6, true},
                 prefix,
-                lib::format::dec{static_cast<u64>(cpu), 2, true},
+                lib::format::dec{static_cast<u64>(cpu), 3, true},
                 tag
             );
         }
@@ -266,8 +265,7 @@ namespace zxfoundation::sys::printk {
     template <typename... Args> auto pwarn(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::WARN,   fmt, lib::forward<Args>(args)...); }
     template <typename... Args> auto pnotice(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::NOTICE, fmt, lib::forward<Args>(args)...); }
     template <typename... Args> auto pinfo(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::INFO,   fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pdebug(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::DEBUG,  fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto ptrace(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::TRACE,  fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pverbose(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::VERBOSE,  fmt, lib::forward<Args>(args)...); }
 
 } // namespace zxfoundation::sys::printk
 

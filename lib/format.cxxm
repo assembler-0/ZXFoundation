@@ -80,10 +80,10 @@ namespace lib::format {
     };
 
     /// @brief Base formatter for integers.
-    template <is_integral T>
+    template <typename T> requires is_integral_v<T>
     struct formatter<T> {
         auto format(format_context& ctx, T val) const noexcept -> void {
-            if constexpr (is_signed<T>) {
+            if constexpr (is_signed_v<T>) {
                 if (val < 0) {
                     ctx.write('-');
                     format_unsigned(ctx, static_cast<make_unsigned<T>::type>(-val), 0, false);
@@ -129,10 +129,10 @@ namespace lib::format {
             ctx.write("span<array([");
             for (usize i = 0; i < val.size(); ++i) {
                 if (i) ctx.write(", ");
-                formatter<unqualified<T>>{}.format(ctx, val[i]);
+                formatter<remove_cvref_t<T>>{}.format(ctx, val[i]);
             }
             ctx.write("]), size(");
-            formatter<unqualified<T>>{}.format(ctx, val.size());
+            formatter<remove_cvref_t<T>>{}.format(ctx, val.size());
             ctx.write(")>");
         }
     };
@@ -271,27 +271,27 @@ namespace lib::format {
                 if (i++ != index) return;
                 if (type_ch == 'x' || type_ch == 'X') {
                     u64 v = 0;
-                    if constexpr (is_integral<unqualified<T>>) v = static_cast<u64>(val);
-                    else if constexpr (is_pointer<unqualified<T>>)
+                    if constexpr (is_integral_v<remove_cvref_t<T>>) v = static_cast<u64>(val);
+                    else if constexpr (is_pointer_v<remove_cvref_t<T>>)
                         v = reinterpret_cast<u64>(val);
                     write_hex(v, alt, width, pad_zero);
                 } else if (type_ch == 's') {
-                    if constexpr (is_same<unqualified<T>, string_view>)
+                    if constexpr (is_same_v<remove_cvref_t<T>, string_view>)
                         ctx.write(val);
-                    else if constexpr (is_same<unqualified<T>, const char*>)
+                    else if constexpr (is_same_v<remove_cvref_t<T>, const char*>)
                         ctx.write(val ? string_view(val) : "(null)");
                     else
-                        formatter<unqualified<T>>{}.format(ctx, val);
+                        formatter<remove_cvref_t<T>>{}.format(ctx, val);
                 } else {
-                    if constexpr (is_same<unqualified<T>, char>) {
+                    if constexpr (is_same_v<remove_cvref_t<T>, char>) {
                         ctx.write(val);
-                    } else if constexpr (is_integral<unqualified<T>>) {
-                        if constexpr (is_signed<unqualified<T>>) {
+                    } else if constexpr (is_integral_v<remove_cvref_t<T>>) {
+                        if constexpr (is_signed_v<remove_cvref_t<T>>) {
                             if (val < 0) { ctx.write('-'); write_dec(static_cast<u64>(-val), width, pad_zero); return; }
                         }
                         write_dec(static_cast<u64>(val), width, pad_zero);
                     } else {
-                        formatter<unqualified<T>>{}.format(ctx, val);
+                        formatter<remove_cvref_t<T>>{}.format(ctx, val);
                     }
                 }
             };

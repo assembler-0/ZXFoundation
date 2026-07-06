@@ -1,0 +1,33 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/watchdog_types.cxxm
+/// @brief Primitive watchdog disarm operation — no kernel-subsystem imports.
+
+export module zxfoundation.sys.watchdog_disarm;
+import zxfoundation.base.types;
+import arch.s390x.cpu.diag;
+import arch.s390x.trap.fixup;
+
+export {
+
+namespace zxfoundation::sys::watchdog {
+
+    /// @brief Cancel the LPAR hardware watchdog (diag288 CANCEL).
+    /// @note  Must not call any function that can in turn call
+    ///        @ref system_check — this function is called from inside
+    ///        the panic path and re-entrancy would deadlock on g_halting.
+    ///
+    /// @warning  Not safe to call with external interrupts enabled if the
+    ///           caller is inside a crash handler (the fixup guard is
+    ///           already maintained by the hardware fixup mechanism).
+    auto watchdog_disarm_raw() noexcept -> void {
+        using namespace arch::s390x::cpu::diag;
+        using namespace arch::s390x::trap::fixup;
+
+        set(true);
+        (void)diag288(WDT_FUNC_CANCEL, 0, LPARWDT_RESTART, 0);
+        set(false);
+    }
+
+} // namespace zxfoundation::sys::watchdog
+
+} // end export

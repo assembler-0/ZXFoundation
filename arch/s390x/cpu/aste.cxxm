@@ -183,7 +183,7 @@ namespace arch::s390x::cpu::aste {
 
         g_aste_used[idx] = true;
 
-        pinfo("aste: allocated ASTE slot {} — ASCE={:#x} AX={}",
+        zxfoundation::sys::printk::pverbose("aste: allocated ASTE slot {} — ASCE={:#x} AX={}",
               idx, target_asce, auth_index);
 
         return idx;
@@ -301,7 +301,7 @@ namespace arch::s390x::cpu::aste {
         // Purge the ALB so the CPU does not use the now-invalid entry.
         ar::purge_alb();
 
-        pinfo("aste: destroyed ALE slot {}", alet);
+        zxfoundation::sys::printk::pverbose("aste: destroyed ALE slot {}", alet);
 
         return {};
     }

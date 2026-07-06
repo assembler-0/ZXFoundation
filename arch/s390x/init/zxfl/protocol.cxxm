@@ -241,13 +241,13 @@ namespace arch::s390x::init::zxvl {
     }
 
     struct [[gnu::packed]] checksum_entry {
-        uint64_t phys_start{};
-        uint64_t size{};
-        uint8_t  digest[crypto::sha256::SHA256_DIGEST_SIZE]{};
+        u64 phys_start{};
+        u64 size{};
+        u8  digest[crypto::sha256::SHA256_DIGEST_SIZE]{};
     };
 
     struct [[gnu::packed]] checksum_table {
-        uint32_t magic{}, version{}, algo{}, count{};
+        u32 magic{}, version{}, algo{}, count{};
         checksum_entry entries[ZXVL_CKSUM_MAX_ENTRIES]{};
     };
 

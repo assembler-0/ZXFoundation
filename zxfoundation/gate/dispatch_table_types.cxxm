@@ -19,6 +19,7 @@ namespace zxfoundation::gate::dispatch_table {
         admin       = 2, ///< Admin-level capability required.
         domain_map  = 3, ///< Domain capability with map right required.
         storage_key = 4, ///< Storage-key match required between caller and target.
+        io          = 5, ///< I/O authority required (a0 is op-specific, not a cap).
     };
 
     /// @brief Metadata attached to each dispatch table entry.

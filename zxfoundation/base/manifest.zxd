@@ -1,6 +1,6 @@
 !files : !compile_group -> [auto] {
     config.cxxm !compile_options -> [ !compiler_id:clang(-Wno-pch-date-time) ]
-    types.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) ]
+    types.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic -DZX_NO_BITINT) !compiler_id:clang(-Wno-pedantic -DZX_NO_COMP_FLOAT -Xclang -fexperimental-max-bitint-width=65536 -Wno-bit-int-extension -Wno-gnu-anonymous-struct -Wno-nested-anon-types) ]
     endian.cxxm
     linksym.cxxm
     typestate.cxxm

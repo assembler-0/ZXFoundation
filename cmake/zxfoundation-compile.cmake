@@ -38,7 +38,8 @@ macro(_zx_kernel_flags _tgt)
         -fstack-protector-strong -pipe
         -mno-packed-stack -mhard-float -mvx
         -fno-exceptions -fno-rtti
-        -nostdlib -nostdinc
+        -nostdlib
+        -include ${ZX_VALIDATE_HEADER}
         -march=${MARCH_MODE} -mtune=${MARCH_MODE} -m64
         ${EXTRA_KERNEL_FLAGS}
         -O${OPT_LEVEL} -g${DSYM_LEVEL}

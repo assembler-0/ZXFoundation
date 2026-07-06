@@ -21,13 +21,14 @@ import arch.s390x.cpu.processor;
 import arch.s390x.lib.atomic;
 import zxfoundation.base.types;
 import lib.concepts;
+import lib.type_traits;
 
 export {
 
 namespace zxfoundation::locking {
 
     template<typename T>
-        requires lib::is_trivially_copyable<T>
+        requires lib::is_trivially_copyable_v<T>
     class seqlock {
         using atomic_u64   = arch::s390x::lib::atomic::atomic<u64>;
         using memory_order = arch::s390x::lib::atomic::memory_order;

@@ -1,0 +1,70 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file iterator.cxxm
+/// @brief basic iterator types
+
+export module lib.iterator;
+import lib.concepts;
+import lib.type_traits;
+import zxfoundation.base.types;
+
+export {
+
+namespace lib {
+
+    template <typename I>
+    concept iterator = requires(I it) {
+            { *it };
+            { ++it } -> same_as<I&>;
+    };
+
+    template <typename i>
+    using iter_value = remove_cvref_t<decltype(*declval<i>())>;
+
+    template <typename i>
+    concept input_iterator = iterator<i> && equality_comparable<i>;
+
+    template <typename i, typename t>
+    concept output_iterator = iterator<i> && requires(i it, t&& val) {
+        { *it = static_cast<t&&>(val) };
+    };
+
+    template <typename i>
+    concept forward_iterator = input_iterator<i> &&
+        is_default_constructible_v<i> &&
+        requires(i it) {
+        { it++ } -> same_as<i>;
+        { *it++ };
+        };
+
+    template <typename i>
+    concept bidirectional_iterator = forward_iterator<i> &&
+        requires(i it) {
+        { --it  } -> same_as<i&>;
+        { it--  } -> same_as<i>;
+        };
+
+    template <typename i>
+    concept random_access_iterator = bidirectional_iterator<i> &&
+        totally_ordered<i> &&
+        requires(i it, i jt, isize n) {
+        { it + n  } -> same_as<i>;
+        { it - n  } -> same_as<i>;
+        { it - jt } -> same_as<isize>;
+        { it[n]   };
+        };
+
+    template <typename R>
+    concept range = requires(R& r) {
+        { r.begin() } -> iterator;
+        { r.end()   };
+    };
+
+    template <typename R>
+    concept homogeneous_range = requires(R& r) {
+        { r.begin() } -> forward_iterator;
+        { r.end()   } -> same_as<decltype(r.begin())>;
+    };
+
+}
+
+}

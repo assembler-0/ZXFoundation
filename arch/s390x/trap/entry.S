@@ -7,24 +7,14 @@
 #include <arch/s390x/cpu/lowcore.h>
 
 #define DOMAIN_FLAGS_OFF  32  // domain.flags after kobject[24] and name[8].
-
 #define TIF_NEED_RESCHED 4
 
-// ============================================================================
 // SAVE_FRAME — save interrupt register state on the async stack.
-//   
-//   The scratch register ('reg', always %r1 in current callers) is used to
-//   compute the frame address.  It MUST be preserved so that stmg stores
-//   the *original* user/kernel value, not the frame address.
-// ============================================================================
 .macro SAVE_FRAME reg, old_psw_lc, stack_lc, irq_class_val
-    // Preserve scratch register before it is clobbered.
     stg     \reg, LC_SCRATCH0(0)
     icm     \reg, 15, LC_IRQ_NESTING(0)
     jnz     1f
     lg      \reg, \stack_lc(0)
-    // For non-MCCK paths, fall back to kernel_stack if the designated stack
-    // pointer is zero.
     .ifnc \stack_lc, LC_MCCK_STACK
     ltgr    \reg, \reg
     jnz     2f
@@ -127,8 +117,8 @@
     jz      1f
 
     lg      %r1, LC_KERNEL_STACK(0)
-    aghi    %r1, -160
-    stg     %r15, 0(%r1)            // backchain = async stack pointer
+    aghi    %r1, -IRQ_FRAME_BIAS
+    stg     %r15, 0(%r1)            // backchain = interrupt frame pointer
     lgr     %r15, %r1               // r15 = kernel stack frame
 
     brasl   %r14, _ZN12zxfoundation5schedW12zxfoundationW5schedW5sched8scheduleEv
@@ -142,7 +132,7 @@
 trap_pgm_entry:
     // irq_class = 3 (pgm)
     SAVE_FRAME %r1, LC_PGM_OLD_PSW, LC_ASYNC_STACK, 3
-    brasl   %r14, do_pgm_check
+    brasl   %r14, do_pgm_interrupt
     CHECK_PREEMPT
     RESTORE_FRAME
 
@@ -167,10 +157,11 @@ trap_io_entry:
     .section .text.trap_svc, "ax", @progbits
     .globl  trap_svc_entry
 trap_svc_entry:
-    // irq_class = 4 (svc)
+    // irq_class = 4 (svc) — nucleus call dispatch (was the PC gate).
     SAVE_NUCLEUS_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK, 4
-    llgh    %r3, 0x008a(0)          // Load svc_code (u16) from lowcore.
-    brasl   %r14, do_svc_interrupt
+    llgh    %r3, 0x008a(0)          // %r3 = svc_code (u16) from lowcore PSA+0x8A
+    brasl   %r14, do_svc_interrupt // C handler: dispatch nucleus call
+    CHECK_PREEMPT
     RESTORE_NUCLEUS_FRAME
 
     .section .text.trap_mcck, "ax", @progbits
@@ -180,81 +171,5 @@ trap_mcck_entry:
     SAVE_FRAME %r1, LC_MCCK_OLD_PSW, LC_MCCK_STACK, 5
     brasl   %r14, do_mcck_interrupt
     RESTORE_FRAME
-
-// ============================================================================
-// pc_gate_entry — fast PC (Program Call) dispatch path.
-//   Preserves and restores R1, which was previously clobbered by the
-//   icm instructions and never restored.
-// ============================================================================
-    .section .text.pc_entry, "ax", @progbits
-    .globl  pc_gate_entry
-    .type   pc_gate_entry, @function
-    .align  8
-pc_gate_entry:
-    stg     %r1, LC_SCRATCH0(0)
-    icm     %r1, 15, LC_IRQ_NESTING(0)
-    jnz     1f
-    icm     %r1, 15, LC_NUCLEUS_NESTING(0)
-    jnz     1f
-    lg      %r15, LC_KERNEL_STACK(0)
-    j       2f
-1:
-2:
-    aghi    %r15, -(IRQ_FRAME_BIAS + IRQ_FRAME_SIZE)
-
-     stmg    %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
-     // Fix: overwrite the R1 slot with the original value before the
-     // clobber so lmg at exit restores the correct register.
-     lg      %r1, LC_SCRATCH0(0)
-     stg     %r1, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
-     stam    %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
-    stfpc   (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
-    vstm    %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(%r15)
-    vstm    %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(%r15)
-
-    asi     LC_NUCLEUS_NESTING(0), 1
-
-    // irq_class = 6 (nucleus)
-    lhi     %r1, 6
-    stc     %r1, LC_IRQ_CLASS(0)
-
-    lgr     %r7, %r6
-    lgr     %r5, %r4
-    lgr     %r4, %r3
-    lgr     %r3, %r2
-    lgr     %r2, %r0
-
-    brasl   %r14, do_pc_interrupt
-
-    l       %r1, LC_PREEMPT_COUNT(0)
-    ltr     %r1, %r1
-    jnz     3f
-
-    lg      %r1, LC_CURRENT_DOMAIN(0)
-    ltgr    %r1, %r1
-    jz      3f
-    l       %r1, DOMAIN_FLAGS_OFF(%r1)
-    tmll    %r1, TIF_NEED_RESCHED
-    jz      3f
-
-    lg      %r1, LC_KERNEL_STACK(0)
-    aghi    %r1, -160
-    stg     %r15, 0(%r1)            // backchain = current frame pointer
-    lgr     %r15, %r1
-    brasl   %r14, _ZN12zxfoundation5schedW12zxfoundationW5schedW5sched8scheduleEv
-    lg      %r15, 0(%r15)           // restore original frame pointer
-
-3:
-    vlm     %v0, %v15, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS)(%r15)
-    vlm     %v16, %v31, (IRQ_FRAME_BIAS + IRQ_FRAME_VRS + 256)(%r15)
-    lfpc    (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
-    lam     %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
-    asi     LC_NUCLEUS_NESTING(0), -1
-    lhi     %r0, 0
-     stc     %r0, LC_IRQ_CLASS(0)
-     lmg     %r0, %r13, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
-
-     .insn   e,0x0101                    // PR instruction
-    .size   pc_gate_entry, . - pc_gate_entry
 
     .section .note.GNU-stack, "", @progbits

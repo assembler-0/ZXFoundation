@@ -18,11 +18,11 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
 import arch.s390x.cpu.skey;
 import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.mmu_tlb;
 import arch.s390x.mmu.mmu_types;
 import lib.error;
 import lib.expected;
 import lib.placementnew;
-
 import zxfoundation.dgp.memory_contract;
 import zxfoundation.dgp.isolation_types;
 
@@ -243,6 +243,10 @@ namespace __mem_detail {
             zxfoundation::sys::printk::perr("mem_protect: vm_protect failed at va={:#x}", va);
             return NC_ERROR;
         }
+
+        // Flush the local TLB so that the new protection bits take effect
+        // immediately on this CPU.
+        arch::s390x::mmu::tlb_flush_local();
 
         return 0;
     }

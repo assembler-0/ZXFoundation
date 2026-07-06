@@ -151,8 +151,6 @@ namespace zxfoundation::dgp {
         u32 storage_key_generation{0};
         storage_key_revocation_state storage_key_state{storage_key_revocation_state::none};
         isolation_rights granted_rights{isolation_rights::none};
-        u32 active_gate_count{0};
-        u32 active_portal_count{0};
     };
 
     static_assert(sizeof(isolation_feature) == sizeof(u64), "DGP feature mask must remain 64-bit");

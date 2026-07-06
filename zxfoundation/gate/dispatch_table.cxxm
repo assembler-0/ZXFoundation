@@ -13,7 +13,7 @@ import zxfoundation.base.typestate;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.printk;
-import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
 import zxfoundation.locking.qspinlock;
@@ -62,6 +62,8 @@ namespace zxfoundation::gate::dispatch_table::_internal {
                 return isolation_rights::enter | isolation_rights::map;
             case gate_auth_level::storage_key:
                 return isolation_rights::enter | isolation_rights::share;
+            case gate_auth_level::io:
+                return isolation_rights::enter | isolation_rights::io;
         }
         return isolation_rights::enter;
     }
@@ -77,33 +79,19 @@ namespace zxfoundation::gate::dispatch_table::_internal {
         // Check gate is active
         if (gate->ko.state != lifecycle_state::active) return false;
 
-        // Check target domain
-        auto* target_domain = zxfoundation::domain::domain_find(gate->target_domain);
-        if (!target_domain) return false;
-        if (target_domain->iso_state != lifecycle_state::active) return false;
-
-        // Check caller domain
         auto* caller_domain = zxfoundation::domain::domain_find(caller_domain_id);
-        if (!caller_domain) return false;
-        if (caller_domain->iso_state != lifecycle_state::active) return false;
+        auto* target_domain = zxfoundation::domain::domain_find(gate->target_domain);
+        if (!caller_domain || !target_domain) return false;
 
-        // Check caller has the required isolation rights
-        if (!has_all_rights(caller_domain->granted_rights, requested)) return false;
+        auto result = zxfoundation::dgp::dgp_authorize(
+            *caller_domain, *target_domain,
+            zxfoundation::dgp::operation_kind::gate_entry,
+            zxfoundation::dgp::dgp_authorization_metadata 
+                { .requested_rights = requested, .gate_id = gate->ko.id }
+        );
+        if (!result) return false;
 
-        // Check gate authorization policy
-        switch (gate->auth) {
-            case gate_auth::any:
-                break;
-            case gate_auth::keyed:
-                if (!has_all_rights(caller_domain->granted_rights, isolation_rights::admin)) return false;
-                break;
-            case gate_auth::owner:
-                if (caller_domain_id != gate->target_domain) return false;
-                break;
-        }
-
-        // Increment active gate count on target domain
-        ++target_domain->active_gate_count;
+        ++target_domain->gate_count;
         return true;
     }
 
@@ -117,7 +105,6 @@ namespace zxfoundation::gate::dispatch_table::_internal {
     ) noexcept -> bool {
         if (!caller) [[unlikely]] return false;
 
-        // ── DGP synchronization contract ──────────────────────
         const auto sync_state = dgp::sync_contract_snapshot(
             lock_context::thread, teardown_phase::none, caller->ko.id);
         auto sync_r = dgp::sync_contract_validate_authority_lookup(sync_state);
@@ -127,13 +114,6 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             return false;
         }
 
-        // ── DGP gate entry validation (full) ─────────────────────────
-        // Static kernel dispatch entries (registered via register_handler) do NOT
-        // have corresponding SCOMS gate_desc entries — gate_find(packed_nr) would
-        // always return nullptr, so gate validation is only performed when a gate
-        // with the matching ID actually exists (i.e. dynamic user-created gates).
-        // The capability switch below provides the authorization enforcement for
-        // static entries.
         if (ent.meta.auth != gate_auth_level::none) {
             if (auto* gate = zxfoundation::gate::gate_find(packed_nr)) {
                 if (!validate_gate_entry(caller->ko.id, gate,
@@ -145,7 +125,6 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             }
         }
 
-        // ── Capability enforcement (if required) ──────────────
         switch (ent.meta.auth) {
             case gate_auth_level::none:
             case gate_auth_level::storage_key:
@@ -183,6 +162,21 @@ namespace zxfoundation::gate::dispatch_table::_internal {
                 }
                 break;
             }
+
+            case gate_auth_level::io: {
+                auto dgp_r = zxfoundation::dgp::dgp_authorize(
+                    *caller, *caller,
+                    zxfoundation::dgp::operation_kind::none,
+                    zxfoundation::dgp::dgp_authorization_metadata{
+                        .requested_rights = isolation_rights::io,
+                    });
+                if (!dgp_r) {
+                    sys::printk::perr("dispatch: call {} — DGP io authorization failed",
+                                      packed_nr);
+                    return false;
+                }
+                break;
+            }
         }
 
         return true;
@@ -197,8 +191,6 @@ export {
         using zxfoundation::dgp::isolation_rights;
         using zxfoundation::dgp::lock_context;
         using zxfoundation::dgp::teardown_phase;
-
-        // ── Public API ───────────────────────────────────────────────────────
 
         /// @brief Register a handler at a given packed call slot.
         /// @param packed_nr  Table index: (namespace << 5) | operation.

@@ -3,11 +3,11 @@
 /// @brief Fixed-capacity CPU set primitive built on lib::static_bitmap.
 
 export module lib.cpumask;
-import zxfoundation.base.types;
-import zxfoundation.base.config;
 import lib.bitmap;
 import lib.optional;
 import lib.placementnew;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
 import arch.s390x.lib.atomic;
 
 export {

@@ -1,0 +1,103 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/dgp_authorize.cxxm
+/// @brief Unified DGP authorization chokepoint.
+///
+/// Every kernel operation that crosses a domain/gate/portal boundary MUST
+/// pass through this module.  It is the single source of truth for DGP
+/// contract enforcement, replacing the ad-hoc validation scattered across
+/// gate, portal, dispatch, and VM subsystems.
+///
+/// To avoid a circular dependency with zxfoundation.domain.domain (which
+/// itself depends on zxfoundation.dgp), the chokepoint works on *pointers*
+/// supplied by the caller rather than performing its own table lookup.
+
+export module zxfoundation.dgp.dgp_authorize;
+
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.sync_contract;
+import zxfoundation.domain.domain_types;
+import zxfoundation.scoms.scoms_types;
+import lib.error;
+import lib.expected;
+
+namespace zxfoundation::dgp {
+
+    // Internal helper: ensure the caller/target pair is structurally valid.
+    [[nodiscard]] auto validate_common(
+        const zxfoundation::domain::domain& caller,
+        const zxfoundation::domain::domain& target
+    ) noexcept -> lib::expected<void, lib::kernel_error>
+    {
+        if (caller.ko.state != zxfoundation::base::lifecycle_state::active) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (target.ko.state != zxfoundation::base::lifecycle_state::active) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        return {};
+    }
+
+} // namespace zxfoundation::dgp
+
+export {
+
+namespace zxfoundation::dgp {
+
+    /// @brief Operation kinds recognized by the unified DGP chokepoint.
+    enum class operation_kind : u8 {
+        none          = 0,
+        gate_entry    = 1,
+        portal_create = 2,
+        io_bind       = 3,
+        signal_send   = 4,
+        memory_map    = 5,
+        memory_share  = 6,
+    };
+
+    /// @brief Fine-grained metadata supplied alongside an authorization check.
+    struct dgp_authorization_metadata {
+        isolation_rights requested_rights{isolation_rights::none};
+        u64                target_va_start{0};
+        u64                target_va_end{0};
+        u32                gate_id{0};
+    };
+
+    /// @brief Unified DGP authorization chokepoint.
+    /// @param[in] caller  Domain initiating the operation.
+    /// @param[in] target  Domain being acted upon.
+    /// @param[in] op      Operation kind.
+    /// @param[in] meta    Additional metadata (rights, VAs, gate IDs).
+    /// @return Success when both domains are active and the caller holds
+    ///         the requested isolation rights.
+    /// @note This is the ONLY function that should perform cross-domain
+    ///       DGP validation.  All subsystems (gate, portal, VM, IO)
+    ///       route through it.
+    [[nodiscard]] auto dgp_authorize(
+        const zxfoundation::domain::domain& caller,
+        const zxfoundation::domain::domain& target,
+        operation_kind op,
+        const dgp_authorization_metadata& meta
+    ) noexcept -> lib::expected<void, lib::kernel_error>
+    {
+        (void)op; // reserved for later expansion
+
+        auto common_result = validate_common(caller, target);
+        if (!common_result) {
+            return lib::unexpected(common_result.error());
+        }
+
+        if (!has_all_rights(caller.granted_rights, meta.requested_rights)) {
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::not_implemented));
+        }
+
+        return {};
+    }
+
+} // namespace zxfoundation::dgp
+
+} // end export

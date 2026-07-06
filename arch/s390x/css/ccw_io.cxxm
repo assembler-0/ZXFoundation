@@ -69,7 +69,7 @@ namespace arch::s390x::css::ccw_io {
         o.set_cpa(static_cast<u32>(virt_to_phys(reinterpret_cast<u64>(ccw_chain))));
         o.set_lpm(0xFF); // Try all installed paths.
 
-        pdebug("ccw_io: SSCH sch={} schid={} cpa={} ctrl={}",
+        pverbose("ccw_io: SSCH sch={} schid={} cpa={} ctrl={}",
               ::lib::format::dec{static_cast<u64>(sch_index)},
               ::lib::format::hex{static_cast<u64>(entry->schid.to_raw()), 8, true},
               ::lib::format::hex{static_cast<u64>(o.cpa), 8, true},
@@ -224,7 +224,7 @@ namespace arch::s390x::css::ccw_io {
             return;
         }
 
-        pdebug("ccw_io: probing {} subchannel(s) with SENSE ID",
+        pverbose("ccw_io: probing {} subchannel(s) with SENSE ID",
               ::lib::format::dec{static_cast<u64>(count)});
 
         u32 identified = 0;
@@ -254,24 +254,24 @@ namespace arch::s390x::css::ccw_io {
             const auto m = dm::match(dev_type, cu_type);
 
             if (m.dev_name && m.cu_name) {
-                ptrace("ccw_io: sch[{}] devno={} -> {} ({})",
+                pverbose("ccw_io: sch[{}] devno={} -> {} ({})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       m.dev_name, m.cu_name);
             } else if (m.dev_name) {
-                ptrace("ccw_io: sch[{}] devno={} -> {} (cu={})",
+                pverbose("ccw_io: sch[{}] devno={} -> {} (cu={})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       m.dev_name,
                       ::lib::format::hex{static_cast<u64>(cu_type), 4, true});
             } else if (m.cu_name) {
-                ptrace("ccw_io: sch[{}] devno={} -> dev={} ({})",
+                pverbose("ccw_io: sch[{}] devno={} -> dev={} ({})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       ::lib::format::hex{static_cast<u64>(dev_type), 4, true},
                       m.cu_name);
             } else {
-                ptrace("ccw_io: sch[{}] devno={} -> dev={} cu={}",
+                pverbose("ccw_io: sch[{}] devno={} -> dev={} cu={}",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       ::lib::format::hex{static_cast<u64>(dev_type), 4, true},

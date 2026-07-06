@@ -42,7 +42,7 @@ namespace lib {
 
     public:
         using element_type    = T;
-        using value_type      = unqualified<T>;
+        using value_type      = remove_cvref_t<T>;
         using size_type       = usize;
         using difference_type = isize;
         using pointer         = T*;

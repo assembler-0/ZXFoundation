@@ -23,7 +23,7 @@ namespace arch::s390x::mmu {
     auto tlb_flush_asce(u64 asce_val) noexcept -> void {
         u64 opt = IDTE_PTOA;
         __asm__ volatile(
-            "   idte   0,%[asce],%[opt]"
+            "   idte   %[asce],0,%[opt]"
             :
             : [asce] "a" (asce_val),
               [opt]  "a" (opt)

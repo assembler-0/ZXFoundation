@@ -4,6 +4,8 @@
 
 export module lib.source_location;
 import zxfoundation.base.types;
+import lib.type_traits;
+import lib.format;
 
 namespace std {
 
@@ -26,25 +28,24 @@ namespace std {
             return ret;
         }
 
-        constexpr source_location() noexcept {}
+        constexpr source_location() noexcept = default;
 
-        constexpr auto line() const noexcept -> u32least {
+        [[nodiscard]] constexpr auto line() const noexcept -> u32least {
             return _M_impl ? _M_impl->_M_line : 0u;
         }
 
-        constexpr auto column() const noexcept -> u32least {
+        [[nodiscard]] constexpr auto column() const noexcept -> u32least {
             return _M_impl ? _M_impl->_M_column : 0u;
         }
 
-        constexpr auto file_name() const noexcept -> const char* {
+        [[nodiscard]] constexpr auto file_name() const noexcept -> const char* {
             return _M_impl ? _M_impl->_M_file_name : "";
         }
 
-        constexpr auto function_name() const noexcept -> const char* {
+        [[nodiscard]] constexpr auto function_name() const noexcept -> const char* {
             return _M_impl ? _M_impl->_M_function_name : "";
         }
 
-    private:
         const __impl* _M_impl = nullptr;
     };
 
@@ -57,5 +58,28 @@ namespace lib {
     using source_location = std::source_location;
 
 } // namespace lib
+
+} // end export
+
+export {
+
+    /// @brief Formatter for lib::source_location.
+    template <>
+    struct lib::format::formatter<lib::source_location> {
+        /// @brief Format the expected into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Expected to format.
+        auto format(format_context& ctx, const source_location& val) const noexcept -> void {
+            ctx.write("source_location<fn(");
+            ctx.write(val.function_name());
+            ctx.write("), file(");
+            ctx.write(val.file_name());
+            ctx.write("), location(");
+            ctx.write(val.line());
+            ctx.write(":");
+            ctx.write(val.column());
+            ctx.write(")>");
+        }
+    };
 
 } // end export

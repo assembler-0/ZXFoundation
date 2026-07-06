@@ -55,7 +55,7 @@ namespace lib {
 
         /// @brief Copy constructor.
         static_vector(const static_vector& o)
-            requires is_copy_constructible<T>
+            requires is_copy_constructible_v<T>
             : m_size(0) {
             for (usize i = 0; i < o.m_size; ++i)
                 new(slot(m_size++)) T(*o.slot(i));
@@ -63,7 +63,7 @@ namespace lib {
 
         /// @brief Move constructor.
         static_vector(static_vector&& o)
-            requires is_move_constructible<T>
+            requires is_move_constructible_v<T>
             : m_size(0) {
             for (usize i = 0; i < o.m_size; ++i)
                 new(slot(m_size++)) T(lib::move(*o.slot(i)));
@@ -71,7 +71,7 @@ namespace lib {
         }
 
         auto operator=(const static_vector& o) noexcept -> static_vector&
-            requires is_copy_constructible<T> {
+            requires is_copy_constructible_v<T> {
             if (this != &o) {
                 clear();
                 for (usize i = 0; i < o.m_size; ++i) new(slot(m_size++)) T(*o.slot(i));
@@ -80,7 +80,7 @@ namespace lib {
         }
 
         auto operator=(static_vector&& o) noexcept -> static_vector&
-            requires is_move_constructible<T> {
+            requires is_move_constructible_v<T> {
             if (this != &o) {
                 clear();
                 for (usize i = 0; i < o.m_size; ++i) new(slot(m_size++)) T(lib::move(*o.slot(i)));
@@ -188,7 +188,7 @@ export {
             ctx.write("static_vector<array([");
             for (usize i = 0; i < v.size(); ++i) {
                 if (i) ctx.write(", ");
-                formatter<unqualified<T>>{}.format(ctx, v[i]);
+                formatter<remove_cvref_t<T>>{}.format(ctx, v[i]);
             }
             ctx.write("]), size(");
             formatter<usize>{}.format(ctx, v.size());

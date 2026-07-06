@@ -5,7 +5,6 @@
     bitmap.cxxm
     charconv.cxxm
     compare.cxxm
-    concepts.cxxm
     cpumask.cxxm
     error.cxxm
     idalloc.cxxm
@@ -22,10 +21,12 @@
     static_vector.cxxm
     string_view.cxxm
     cstring.cxxm
-    type_traits.cxxm
     util.cxxm
     variant.cxxm !compile_options -> [ !compiler_id:clang(-Wno-unused-parameter) ]
     scope_guard.cxxm
     source_location.cxxm
     min_heap.cxxm
+    type_traits.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pragmas) ]
+    concepts.cxxm
+    iterator.cxxm
 }

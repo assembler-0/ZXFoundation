@@ -107,7 +107,7 @@ namespace zxfoundation::sched::rt {
         }
 
         auto dgp_result = zxfoundation::dgp::isolation_validate_scheduler_policy(
-            owner.iso_state,
+            owner.ko.state,
             policy,
             _internal::has_rt_authority(owner));
         if (!dgp_result) {

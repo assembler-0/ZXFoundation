@@ -12,6 +12,17 @@ import lib.expected;
 import lib.error;
 import lib.format;
 
+// TODO: resovle this to somewhere else/ add better alternative
+
+/// @brief Select the type at index I in a parameter pack.
+template <usize I, typename T, typename... Ts>
+struct type_at_index_impl { using type = type_at_index_impl<I - 1, Ts...>::type; };
+template <typename T, typename... Ts>
+struct type_at_index_impl<0, T, Ts...> { using type = T; };
+
+template <usize I, typename... Ts>
+using type_at_index = type_at_index_impl<I, Ts...>::type;
+
 export {
 
 namespace lib {
@@ -120,10 +131,10 @@ namespace lib {
 
         /// @brief Construct from a value of type T (must be in Ts).
         template <typename T>
-            requires (_variant_detail::index_of<unqualified<T>, Ts...>() != variant_npos)
+            requires (_variant_detail::index_of<remove_cvref_t<T>, Ts...>() != variant_npos)
         variant(T&& val) noexcept {
-            constexpr usize idx = _variant_detail::index_of<unqualified<T>, Ts...>();
-            new(m_storage) unqualified<T>(lib::forward<T>(val));
+            constexpr usize idx = _variant_detail::index_of<remove_cvref_t<T>, Ts...>();
+            new(m_storage) remove_cvref_t<T>(lib::forward<T>(val));
             m_index = idx;
         }
 
@@ -159,11 +170,11 @@ namespace lib {
 
         /// @brief Assign from a value of type T.
         template <typename T>
-            requires (_variant_detail::index_of<unqualified<T>, Ts...>() != variant_npos)
+            requires (_variant_detail::index_of<remove_cvref_t<T>, Ts...>() != variant_npos)
         auto operator=(T&& val) noexcept -> variant& {
             destroy();
-            constexpr usize idx = _variant_detail::index_of<unqualified<T>, Ts...>();
-            new(m_storage) unqualified<T>(lib::forward<T>(val));
+            constexpr usize idx = _variant_detail::index_of<remove_cvref_t<T>, Ts...>();
+            new(m_storage) remove_cvref_t<T>(lib::forward<T>(val));
             m_index = idx;
             return *this;
         }
@@ -275,7 +286,7 @@ export {
             formatter<usize>{}.format(ctx, v.index());
             ctx.write("): ");
             v.visit([&ctx]<typename T0>(const T0& val) {
-                formatter<unqualified<T0>>{}.format(ctx, val);
+                formatter<remove_cvref_t<T0>>{}.format(ctx, val);
             });
             ctx.write('>');
         }

@@ -25,12 +25,10 @@
     cputimer.cxxm
     skey.cxxm
     ar.cxxm
-    linkage.cxxm
     aste_types.cxxm
     aste.cxxm
     tx.cxxm
     uaccess.cxxm
-    pc.cxxm
     hotplug_types.cxxm
     hotplug.cxxm
     ctlreg.cxxm

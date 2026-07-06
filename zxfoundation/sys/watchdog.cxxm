@@ -8,6 +8,7 @@ import zxfoundation.base.config;
 import zxfoundation.sys.timer_types;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.printk;
+import zxfoundation.sys.watchdog_disarm;
 import zxfoundation.sys.syschk;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.cpumask;
@@ -15,7 +16,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.diag;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.psw;
-import arch.s390x.trap.trap;
+import arch.s390x.trap.fixup;
 import lib.error;
 import lib.placementnew;
 
@@ -28,14 +29,14 @@ namespace _internal {
 
     /// @brief Arm / re-ping the hypervisor watchdog.
     static auto harddog_ping() noexcept -> bool {
-        arch::s390x::trap::set_pgm_fixup(true);
+        arch::s390x::trap::fixup::set(true);
         i32 rc = diag::diag288(diag::WDT_FUNC_CHANGE, diag::WDT_DEFAULT_TIMEOUT,
                                          diag::LPARWDT_RESTART, 0);
         if (rc != 0) {
             rc = diag::diag288(diag::WDT_FUNC_INIT, diag::WDT_DEFAULT_TIMEOUT,
                               diag::LPARWDT_RESTART, 0);
         }
-        arch::s390x::trap::set_pgm_fixup(false);
+        arch::s390x::trap::fixup::set(false);
         return rc == 0;
     }
 
@@ -108,13 +109,8 @@ export {
 namespace zxfoundation::sys::watchdog {
 
     auto watchdog_disarm() noexcept -> void {
-        using namespace _internal;
-
-        arch::s390x::trap::set_pgm_fixup(true);
-        diag::diag288(diag::WDT_FUNC_CANCEL, 0, diag::LPARWDT_RESTART, 0);
-        arch::s390x::trap::set_pgm_fixup(false);
-
-        g_harddog_armed = false;
+        watchdog_disarm_raw();
+        _internal::g_harddog_armed = false;
     }
 
     auto watchdog_init() noexcept -> void {
@@ -122,10 +118,10 @@ namespace zxfoundation::sys::watchdog {
         using namespace zxfoundation::sys::timer;
         using namespace zxfoundation::sys::printk;
 
-        arch::s390x::trap::set_pgm_fixup(true);
+        arch::s390x::trap::fixup::set(true);
         i32 rc = diag::diag288(diag::WDT_FUNC_INIT, diag::WDT_DEFAULT_TIMEOUT,
                               diag::LPARWDT_RESTART, 0);
-        arch::s390x::trap::set_pgm_fixup(false);
+        arch::s390x::trap::fixup::set(false);
         if (rc != 0) {
             pnotice("watchdog: harddog not available (rc={})",
                      static_cast<i32>(rc));

@@ -4,4 +4,5 @@
     io_authority.cxxm
     sync_contract.cxxm
     isolation.cxxm
+    dgp_authorize.cxxm
 }

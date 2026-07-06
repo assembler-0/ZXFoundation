@@ -217,7 +217,7 @@ namespace zxfoundation::exec {
             if (!r) [[unlikely]]
                 return lib::unexpected(r.error());
 
-            sys::printk::pdebug("elf: loaded segment {} va={:#x} memsz={:#x} filesz={:#x} flags={}\n",
+            sys::printk::pverbose("elf: loaded segment {} va={:#x} memsz={:#x} filesz={:#x} flags={}\n",
                 loaded, ph.p_vaddr, ph.p_memsz, ph.p_filesz, ph.p_flags);
             ++loaded;
         }
@@ -234,7 +234,7 @@ namespace zxfoundation::exec {
         // Store stack pointer in user regs (r15 = stack top).
         d->primary_strand.uregs.gprs[15] = *stack_r;
 
-        sys::printk::pdebug("elf: loaded {} segments, entry={:#x}, stack_top={:#x}\n",
+        sys::printk::pverbose("elf: loaded {} segments, entry={:#x}, stack_top={:#x}\n",
             loaded, ehdr.e_entry, *stack_r);
 
         return ehdr.e_entry;

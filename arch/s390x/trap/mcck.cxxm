@@ -1,0 +1,86 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file mcck.cxxm
+/// @brief Centralized mcck dispatch.
+
+export module arch.s390x.trap.mcck;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq_frame;
+import arch.s390x.css.css;
+import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.base.types;
+import zxfoundation.sys.syschk;
+import lib.error;
+
+export {
+
+namespace arch::s390x::trap::mcck {
+
+    constexpr u64 MCIC_ADDRESS           = 0xE8UL;
+    constexpr u64 MCIC_SYSTEM_DAMAGE     = 1ULL << 63;  // bit 0
+    constexpr u64 MCIC_INSTRUCTION_PROC  = 1ULL << 62;  // bit 1
+    constexpr u64 MCIC_SYSTEM_RECOVERY   = 1ULL << 61;  // bit 2
+    constexpr u64 MCIC_TIMING_FACILITY   = 1ULL << 60;  // bit 3
+    constexpr u64 MCIC_EXT_DAMAGE        = 1ULL << 59;  // bit 4
+    constexpr u64 MCIC_FAILING_STOR_ADDR = 1ULL << 58;  // bit 5
+    constexpr u64 MCIC_BACKLOG           = 1ULL << 57;  // bit 6
+    constexpr u64 MCIC_KEY               = 1ULL << 56;  // bit 7
+
+    /// @brief Centralized mcck dispatcher.
+    auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
+        // Read and clear the MCIC from lowcore (0xE8) to prevent re-trigger.
+        const u64 mcck_code = *reinterpret_cast<const u64*>(MCIC_ADDRESS);
+
+        if (mcck_code == 0) return;
+
+        // Clear the MCIC (must write 0 to acknowledge per PoP §7-4.4).
+        *reinterpret_cast<volatile u64*>(MCIC_ADDRESS) = 0ULL;
+
+        // Decode MCIC bits (PoP Figure 7-13).
+        if (mcck_code & MCIC_SYSTEM_DAMAGE) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                ::lib::kernel_error::from_machine(::lib::machine_error::system_damage),
+                "mcck: system damage"
+            );
+        }
+        if (mcck_code & MCIC_INSTRUCTION_PROC) {
+            const u64 fail_addr = *reinterpret_cast<const u64*>(MCIC_ADDRESS);
+            zxfoundation::sys::syschk::syschk_critical(
+                ::lib::kernel_error::from_machine(::lib::machine_error::inst_process_damage),
+                "mcck: instruction-processing damage at addr{:#018x}", fail_addr
+            );
+        }
+        if (mcck_code & MCIC_SYSTEM_RECOVERY) {
+            zxfoundation::sys::syschk::syschk_notice(
+                ::lib::kernel_error::from_machine(::lib::machine_error::system_recovery),
+                "mcck: system recovery completed"
+            );
+        }
+        if (mcck_code & MCIC_TIMING_FACILITY) {
+            zxfoundation::sys::syschk::syschk_critical(
+                ::lib::kernel_error::from_machine(::lib::machine_error::timing_facility),
+                "mcck: timing facility damange - TOD may be stale"
+            );
+        }
+        if (mcck_code & MCIC_EXT_DAMAGE) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                ::lib::kernel_error::from_machine(::lib::machine_error::external_damage),
+                "mcck: external system damage"
+            );
+        }
+        if (mcck_code & MCIC_FAILING_STOR_ADDR) {
+            const u64 fail_stor = *reinterpret_cast<const u64*>(MCIC_ADDRESS);
+            zxfoundation::sys::syschk::syschk_critical(
+                ::lib::kernel_error::from_machine(::lib::machine_error::inst_process_damage),
+                "mcck: failing storage address={:#018x}", fail_stor
+            );
+        }
+
+        // Dispatch through IRQ subsystem for any registered machine-check listeners.
+        zxfoundation::sys::irq::irq_dispatch(
+            zxfoundation::sys::irq::IRQ_BASE_MCCK, frame,
+            arch::s390x::cpu::irq::ZX_IRQ_CLASS_MCCK);
+    }
+
+} // namespace arch::s390x::trap::mcck
+
+} // end export

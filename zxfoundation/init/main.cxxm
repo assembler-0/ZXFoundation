@@ -11,6 +11,7 @@ import zxfoundation.sys.watchdog;
 import zxfoundation.base.config;
 import zxfoundation.memory.pmm;
 import zxfoundation.sys.irq.irqdesc_init;
+import zxfoundation.sys.syschk_core;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.service;
 import zxfoundation.sys.io;
@@ -29,6 +30,7 @@ import zxfoundation.gate.gate;
 import zxfoundation.gate.gate_registration;
 import zxfoundation.portal.portal;
 import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.stfle_types;
 import arch.s390x.cpu.percpu;
@@ -40,7 +42,6 @@ import arch.s390x.cpu.features;
 import arch.s390x.cpu.irq;
 import arch.s390x.mmu.mmu;
 import arch.s390x.cpu.aste;
-import arch.s390x.cpu.pc;
 import arch.s390x.css.css;
 import arch.s390x.css.ccw_io;
 import crypto.sha256_types;
@@ -53,7 +54,7 @@ import lib.format;
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
 using zxfoundation::sys::printk::pnotice;
-using zxfoundation::sys::printk::pdebug;
+using zxfoundation::sys::printk::pverbose;
 
 export {
 
@@ -79,7 +80,7 @@ namespace _internal {
                 "sys: invalid protocol magic"
             );
 
-        const uint64_t expected = arch::s390x::init::zxvl::compute_token(
+        const u64 expected = arch::s390x::init::zxvl::compute_token(
             boot.stfle_fac[0], boot.ipl_schid);
         if (boot.binding_token != expected)
             syschk_fatal(
@@ -99,10 +100,10 @@ namespace _internal {
 
         if (!boot.kernel_stack_top) [[unlikely]] bad();
 
-        const auto* frame = reinterpret_cast<const uint64_t*>(boot.kernel_stack_top);
+        const auto* frame = reinterpret_cast<const u64*>(boot.kernel_stack_top);
         if (frame[0] != arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_A) bad();
 
-        const uint64_t expected_b =
+        const u64 expected_b =
             arch::s390x::init::zxvl::ZXVL_FRAME_MAGIC_B ^ boot.binding_token;
         if (frame[1] != expected_b) bad();
     }
@@ -231,6 +232,12 @@ namespace _internal {
         }
         auto* d = *dom_r;
 
+        d->granted_rights = zxfoundation::dgp::isolation_rights::enter
+                          | zxfoundation::dgp::isolation_rights::admin
+                          | zxfoundation::dgp::isolation_rights::map
+                          | zxfoundation::dgp::isolation_rights::io
+                          | zxfoundation::dgp::isolation_rights::share;
+
         d->primary_strand.cpu = 0;
         zxfoundation::sched::setup_domain_context(
             d,
@@ -240,7 +247,6 @@ namespace _internal {
     }
 
 } // namespace _internal
-
 
 /// @brief nucleus main entry point
 extern "C" [[noreturn]] auto zxfoundation_global_initialize(
@@ -294,16 +300,10 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::domain::strand_init();
     zxfoundation::sys::service::service_init();
     zxfoundation::gate::gate_init();
-    {
-        auto r = zxfoundation::gate::gate_registration::register_all_handlers();
-        if (!r) {
-            zxfoundation::sys::printk::perr("init: some PC handlers failed — {}", r.error());
-        }
-    }
+    zxfoundation::gate::gate_registration::register_all_handlers();
     zxfoundation::portal::portal_init();
 
     arch::s390x::cpu::aste::aste_subsystem_init();
-    arch::s390x::cpu::pc::init();
 
     zxfoundation::sched::sched_init();
     arch::s390x::cpu::smp::init_bsp();

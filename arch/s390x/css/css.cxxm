@@ -211,7 +211,7 @@ namespace arch::s390x::css {
     auto css_init() noexcept -> void {
         using namespace zxfoundation::sys::printk;
 
-        pdebug("css: starting subchannel probe (cssid=0, ssid=0)");
+        pverbose("css: starting subchannel probe (cssid=0, ssid=0)");
 
         u32 found = 0;
 
@@ -263,7 +263,7 @@ namespace arch::s390x::css {
                 entry.state  = subchannel_state::idle;
             }
 
-            ptrace("css: found subchannel 0.0.{} devno={}",
+            pverbose("css: found subchannel 0.0.{} devno={}",
                   ::lib::format::hex{sch_no, 4, true},
                   ::lib::format::hex{static_cast<u64>(info.pmcw_data.devno), 4, true});
 

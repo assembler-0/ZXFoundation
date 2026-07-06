@@ -1,0 +1,43 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file svc.cxxm
+/// @brief Centralized SVC dispatch.
+
+export module arch.s390x.trap.svc;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq_frame;
+import zxfoundation.gate.gate_types;
+import zxfoundation.gate.dispatch_table;
+import zxfoundation.domain.domain_types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+
+export {
+
+namespace arch::s390x::trap::svc {
+
+    using zxfoundation::gate::call_namespace;
+    using zxfoundation::gate::sys_op;
+    using zxfoundation::gate::dispatch_table::dispatch;
+    using zxfoundation::base::lifecycle_state;
+    
+    /// @brief Centralized SVC nucleus-call dispatcher.
+    [[nodiscard]] auto handle(const cpu::irq::irq_frame* frame, const u16 svc_code) noexcept -> u64 {
+        const u32 packed_nr = svc_code;
+        const u64 a0 = frame->gprs[2];
+        const u64 a1 = frame->gprs[3];
+        const u64 a2 = frame->gprs[4];
+        const u64 a3 = frame->gprs[5];
+        const u64 a4 = frame->gprs[6];
+
+        const auto* lc = cpu::lowcore::get_current();
+        if (const auto* d  = lc ? reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain) : nullptr;
+            !d || d->ko.state != lifecycle_state::active) {
+            return ~0ULL;
+        }
+
+        return dispatch(packed_nr, a0, a1, a2, a3, a4);
+    }
+
+} // namespace arch::s390x::trap::svc
+
+} // end export

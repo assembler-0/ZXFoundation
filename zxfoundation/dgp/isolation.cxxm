@@ -181,18 +181,12 @@ namespace zxfoundation::dgp {
     /// @warning This function does not modify hardware storage keys; it records the software authority transition.
     [[nodiscard]] auto isolation_begin_storage_key_revocation(
         lifecycle_state& state,
-        u32 active_gate_count,
-        u32 active_portal_count,
         storage_key_revocation_state& storage_key_state,
         u16& revocation_epoch
     ) noexcept -> lib::expected<void, lib::kernel_error> {
         if (state == lifecycle_state::destroyed
             || storage_key_state == storage_key_revocation_state::reusable) {
             return {};
-        }
-
-        if (active_gate_count != 0U || active_portal_count != 0U) {
-            return lib::unexpected(_internal::generic_invalid_arg());
         }
 
         state = lifecycle_state::dying;
@@ -235,21 +229,14 @@ namespace zxfoundation::dgp {
 
     /// @brief Record that a portal authority is leaving the active DGP set.
     /// @param[in,out] state Isolation state for the source domain that held the portal.
-    /// @param[in,out] active_portal_count Count of active portals.
     /// @param[in,out] revocation_epoch Revocation epoch counter.
     /// @return Success when one active portal reference was converted into revocation progress.
     /// @note Portal teardown must purge ALB state before the corresponding `ALE` can be reused.
     /// @warning This function only updates DGP metadata; callers still destroy hardware access-list entries.
     [[nodiscard]] auto isolation_begin_portal_teardown(
         [[maybe_unused]] lifecycle_state& state,
-        u32& active_portal_count,
         u16& revocation_epoch
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (active_portal_count == 0U) {
-            return lib::unexpected(_internal::generic_invalid_arg());
-        }
-
-        --active_portal_count;
         ++revocation_epoch;
         return {};
     }
@@ -338,8 +325,6 @@ namespace zxfoundation::dgp {
 
     /// @brief Destroy DGP isolation state for a domain.
     /// @param[in] state Domain lifecycle state.
-    /// @param[in,out] active_gate_count Count of active gates.
-    /// @param[in,out] active_portal_count Count of active portals.
     /// @param[in,out] storage_key The domain's hardware storage key.
     /// @param[in,out] storage_key_generation Storage key generation counter.
     /// @param[in,out] storage_key_state Storage key revocation state.
@@ -349,8 +334,6 @@ namespace zxfoundation::dgp {
     /// @warning Destruction with active gate or portal counts is rejected to prevent stale authority use.
     [[nodiscard]] auto isolation_destroy_domain(
         lifecycle_state& state,
-        u32& active_gate_count,
-        u32& active_portal_count,
         u8& storage_key,
         u32& storage_key_generation,
         storage_key_revocation_state& storage_key_state,
@@ -360,13 +343,8 @@ namespace zxfoundation::dgp {
             return {};
         }
 
-        if (active_gate_count != 0U || active_portal_count != 0U) {
-            return lib::unexpected(_internal::generic_invalid_arg());
-        }
-
         auto begin_revocation = isolation_begin_storage_key_revocation(
-            state, active_gate_count, active_portal_count,
-            storage_key_state, revocation_epoch
+            state, storage_key_state, revocation_epoch
         );
         if (!begin_revocation) return lib::unexpected(begin_revocation.error());
 

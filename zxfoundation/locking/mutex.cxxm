@@ -5,12 +5,12 @@
 export module zxfoundation.locking.mutex;
 import zxfoundation.base.types;
 import zxfoundation.locking.qspinlock;
-import zxfoundation.sched.context;
-import zxfoundation.sched.sched;
 import zxfoundation.sync.waitqueue_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain_types;
 import zxfoundation.locking.lock;
+import zxfoundation.sched.context;
+import zxfoundation.sched.sched;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.irq_types;

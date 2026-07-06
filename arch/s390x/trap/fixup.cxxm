@@ -1,0 +1,26 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file fixup.cxxm
+/// @brief pgm fixup implementation.
+
+export module arch.s390x.trap.fixup;
+import zxfoundation.base.types;
+
+static bool s_pgm_fixup_active = false;
+
+export {
+
+namespace arch::s390x::trap::fixup {
+
+    /// @brief Set the program check fixup active state.
+    auto set(const bool active) noexcept -> void {
+        s_pgm_fixup_active = active;
+    }
+
+    /// @brief Query if the program check fixup state is enabled.
+    auto is_active() noexcept -> bool {
+        return s_pgm_fixup_active;
+    }
+
+} // namespace arch::s390x::trap
+
+} // end export

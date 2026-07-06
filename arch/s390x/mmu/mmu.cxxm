@@ -371,6 +371,7 @@ namespace arch::s390x::mmu::_internal {
         tlb_invalidate_pte(current, virt);
         // Re-install with new protection.
         pte_table[pte_idx] = pte_make(frame, new_prot);
+        tlb_flush_local();
         return {};
     }
 

@@ -74,13 +74,13 @@ namespace arch::s390x::cpu::aste {
 
         /// @brief Return the raw 32-bit Linkage-Table Designation (bytes 24-27).
         [[nodiscard]] auto ltd_raw() const noexcept -> u32 {
-            return static_cast<u32>(words[3] >> 32);
+            return static_cast<u32>(words[3] & 0xFFFFFFFFU);
         }
 
         /// @brief Set the raw 32-bit Linkage-Table Designation (bytes 24-27).
         auto set_ltd_raw(u32 ltd) noexcept -> void {
-            words[3] = (words[3] & 0x00000000FFFFFFFFULL)
-                      | (static_cast<u64>(ltd) << 32);
+            words[3] = (words[3] & ~0xFFFFFFFFULL)
+                      | (static_cast<u64>(ltd) << 0);
         }
 
         /// @brief Test the subsystem-linkage control bit (V, LTD bit 0).

@@ -26,14 +26,14 @@ namespace __gate_detail {
     }
 
     auto nc_gate_create(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        (void)a0; // validated cap token (dispatch_table already checked it)
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
-        const auto type      = static_cast<zxfoundation::gate::gate_type>(a0);
-        const auto auth      = static_cast<zxfoundation::gate::gate_auth>(a1);
-        const auto target_id = static_cast<u32>(a2);
-        const u64  entry_va  = a3;
-        const auto key       = static_cast<u8>(a4);
+        const auto type      = static_cast<zxfoundation::gate::gate_type>(a1);
+        const auto auth      = static_cast<zxfoundation::gate::gate_auth>(a2);
+        const auto target_id = static_cast<u32>(a3);
+        const u64  entry_va  = a4;
 
         if (static_cast<u8>(type) > 1) {
             zxfoundation::sys::printk::perr("gate_create: invalid gate_type {}", static_cast<u8>(type));
@@ -44,6 +44,14 @@ namespace __gate_detail {
             return NC_ERROR;
         }
 
+        // Derive target_key from the target domain itself.  The calling
+        // convention no longer passes a dedicated key argument (a0 is now
+        // the validated admin capability token).
+        const auto key = [] (u32 tid) -> u8 {
+            auto* t = zxfoundation::domain::domain_find(tid);
+            return t ? t->storage_key : 0;
+        }(target_id);
+
         auto result = zxfoundation::gate::gate_create(type, auth, target_id, entry_va, key);
         if (!result) {
             zxfoundation::sys::printk::perr("gate_create: gate_create failed");
@@ -53,11 +61,14 @@ namespace __gate_detail {
         return *result;
     }
 
-    auto nc_gate_destroy(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+    auto nc_gate_destroy(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        (void)a0; // validated cap token (dispatch_table already checked it)
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
-        const auto gid = static_cast<u32>(a0);
+        // a0 carries the admin capability token (already validated by
+        // dispatch_table::validate_call).  Real argument starts at a1.
+        const auto gid = static_cast<u32>(a1);
 
         auto result = zxfoundation::gate::gate_destroy(gid);
         if (!result) {

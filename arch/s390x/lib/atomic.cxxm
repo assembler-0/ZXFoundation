@@ -47,11 +47,11 @@ namespace arch::s390x::lib::atomic {
     ///       Pointer types are internally represented as u64.
     /// @warning Pointer atomics are susceptible to ABA problem without external mitigation.
     template<typename T>
-        requires ((::lib::is_integral<T> || ::lib::is_pointer<T>) && sizeof(T) <= 8)
+        requires ((::lib::is_integral_v<T> || ::lib::is_pointer_v<T>) && sizeof(T) <= 8)
     class atomic {
     public:
         using value_type = T;
-        using storage_type = ::lib::conditional_t<::lib::is_pointer<T>, u64, T>;
+        using storage_type = ::lib::conditional_t<::lib::is_pointer_v<T>, u64, T>;
 
         constexpr atomic() noexcept = default;
         constexpr atomic(T desired) noexcept : value{ptr_to_int(desired)} {}
@@ -193,7 +193,7 @@ namespace arch::s390x::lib::atomic {
         /// @note Uses LAA (Load-And-Add) or emulated CAS loop for older hardware.
         ///       Only available for integral types.
         [[nodiscard]] auto fetch_add(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
-            requires ::lib::is_integral<T>
+            requires ::lib::is_integral_v<T>
         {
             T old_val = load(memory_order::relaxed);
             while (!compare_exchange_weak(old_val, old_val + arg, order, memory_order::relaxed));
@@ -206,7 +206,7 @@ namespace arch::s390x::lib::atomic {
         /// @return Previous value.
         /// @note Only available for integral types.
         [[nodiscard]] auto fetch_sub(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
-            requires ::lib::is_integral<T>
+            requires ::lib::is_integral_v<T>
         {
             return fetch_add(-arg, order);
         }
@@ -217,7 +217,7 @@ namespace arch::s390x::lib::atomic {
         /// @return Previous value.
         /// @note Only available for integral types.
         [[nodiscard]] auto fetch_and(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
-            requires ::lib::is_integral<T>
+            requires ::lib::is_integral_v<T>
         {
             T old_val = load(memory_order::relaxed);
             while (!compare_exchange_weak(old_val, old_val & arg, order, memory_order::relaxed));
@@ -230,7 +230,7 @@ namespace arch::s390x::lib::atomic {
         /// @return Previous value.
         /// @note Only available for integral types.
         [[nodiscard]] auto fetch_or(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
-            requires ::lib::is_integral<T>
+            requires ::lib::is_integral_v<T>
         {
             T old_val = load(memory_order::relaxed);
             while (!compare_exchange_weak(old_val, old_val | arg, order, memory_order::relaxed));
@@ -243,7 +243,7 @@ namespace arch::s390x::lib::atomic {
         /// @return Previous value.
         /// @note Only available for integral types.
         [[nodiscard]] auto fetch_xor(T arg, memory_order order = memory_order::seq_cst) noexcept -> T
-            requires ::lib::is_integral<T>
+            requires ::lib::is_integral_v<T>
         {
             T old_val = load(memory_order::relaxed);
             while (!compare_exchange_weak(old_val, old_val ^ arg, order, memory_order::relaxed));
@@ -262,47 +262,47 @@ namespace arch::s390x::lib::atomic {
         }
 
         /// @brief Pre-increment operator (integral types only).
-        auto operator++() noexcept -> T requires ::lib::is_integral<T> {
+        auto operator++() noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_add(1) + 1;
         }
 
         /// @brief Post-increment operator (integral types only).
-        auto operator++(int) noexcept -> T requires ::lib::is_integral<T> {
+        auto operator++(int) noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_add(1);
         }
 
         /// @brief Pre-decrement operator (integral types only).
-        auto operator--() noexcept -> T requires ::lib::is_integral<T> {
+        auto operator--() noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_sub(1) - 1;
         }
 
         /// @brief Post-decrement operator (integral types only).
-        auto operator--(int) noexcept -> T requires ::lib::is_integral<T> {
+        auto operator--(int) noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_sub(1);
         }
 
         /// @brief Compound assignment += (integral types only).
-        auto operator+=(T arg) noexcept -> T requires ::lib::is_integral<T> {
+        auto operator+=(T arg) noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_add(arg) + arg;
         }
 
         /// @brief Compound assignment -= (integral types only).
-        auto operator-=(T arg) noexcept -> T requires ::lib::is_integral<T> {
+        auto operator-=(T arg) noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_sub(arg) - arg;
         }
 
         /// @brief Compound assignment &= (integral types only).
-        auto operator&=(T arg) noexcept -> T requires ::lib::is_integral<T> {
+        auto operator&=(T arg) noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_and(arg) & arg;
         }
 
         /// @brief Compound assignment |= (integral types only).
-        auto operator|=(T arg) noexcept -> T requires ::lib::is_integral<T> {
+        auto operator|=(T arg) noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_or(arg) | arg;
         }
 
         /// @brief Compound assignment ^= (integral types only).
-        auto operator^=(T arg) noexcept -> T requires ::lib::is_integral<T> {
+        auto operator^=(T arg) noexcept -> T requires ::lib::is_integral_v<T> {
             return fetch_xor(arg) ^ arg;
         }
 
@@ -313,7 +313,7 @@ namespace arch::s390x::lib::atomic {
         /// @param ptr Pointer value (or integral value).
         /// @return Integer representation.
         static constexpr auto ptr_to_int(T ptr) noexcept -> storage_type {
-            if constexpr (::lib::is_pointer<T>) {
+            if constexpr (::lib::is_pointer_v<T>) {
                 return reinterpret_cast<u64>(ptr);
             } else {
                 return ptr;
@@ -324,7 +324,7 @@ namespace arch::s390x::lib::atomic {
         /// @param val Integer value.
         /// @return Pointer value (or integral value).
         static constexpr auto int_to_ptr(storage_type val) noexcept -> T {
-            if constexpr (::lib::is_pointer<T>) {
+            if constexpr (::lib::is_pointer_v<T>) {
                 return reinterpret_cast<T>(val);
             } else {
                 return val;
@@ -337,7 +337,7 @@ namespace arch::s390x::lib::atomic {
             T& expected, T desired,
             memory_order success,
             memory_order failure
-        ) noexcept -> bool requires ::lib::is_integral<T> {
+        ) noexcept -> bool requires ::lib::is_integral_v<T> {
             u64 addr = reinterpret_cast<u64>(&value);
             u32* aligned_ptr = reinterpret_cast<u32*>(addr & ~3ULL);
             

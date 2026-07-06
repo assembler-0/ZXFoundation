@@ -15,6 +15,7 @@ import zxfoundation.sys.syschk;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
+import zxfoundation.dgp.isolation_types;
 import zxfoundation.sched.sched;
 import zxfoundation.sched.sched_topology;
 import zxfoundation.sched.sched_topology_types;
@@ -30,7 +31,7 @@ import lib.cstring;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
-using zxfoundation::sys::printk::pdebug;
+using zxfoundation::sys::printk::pverbose;
 
 namespace _internal {
 
@@ -124,7 +125,7 @@ namespace zxfoundation::init::bootstrap {
             return;
         }
 
-        pdebug("bootstrap: found init module phys={:#x} size={}", found->phys_start, found->size_bytes);
+        pverbose("bootstrap: found init module phys={:#x} size={}", found->phys_start, found->size_bytes);
 
         const u64 data_virt = zxfoundation::memory::hhdm::phys_to_virt(found->phys_start);
 
@@ -141,6 +142,12 @@ namespace zxfoundation::init::bootstrap {
         }
         auto* d = *dom_r;
 
+        d->granted_rights = zxfoundation::dgp::isolation_rights::enter
+                          | zxfoundation::dgp::isolation_rights::admin
+                          | zxfoundation::dgp::isolation_rights::map
+                          | zxfoundation::dgp::isolation_rights::io
+                          | zxfoundation::dgp::isolation_rights::share;
+
         // ── Prepare module info and wire up the domain context ──────────
         _internal::g_init_module_info.data_virt  = data_virt;
         _internal::g_init_module_info.size_bytes = found->size_bytes;
@@ -154,7 +161,7 @@ namespace zxfoundation::init::bootstrap {
                 static_cast<u16>(d->ko.id),
                 static_cast<u16>(d->ko.generation),
                 zxfoundation::sys::cap::cap_rights::admin).raw;
-            pdebug("bootstrap: admin token {:#016x} set for domain {} gen={}",
+            pverbose("bootstrap: admin token {:#016x} set for domain {} gen={}",
                   d->admin_token, d->ko.id, static_cast<u32>(d->ko.generation));
         }
 
@@ -164,7 +171,7 @@ namespace zxfoundation::init::bootstrap {
             &_internal::g_init_module_info);
         zxfoundation::sched::enqueue_domain(d);
 
-        pdebug("bootstrap: user/init domain created (id={}), enqueued", d->ko.id);
+        pverbose("bootstrap: user/init domain created (id={}), enqueued", d->ko.id);
         }
 
     exit:

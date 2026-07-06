@@ -16,15 +16,45 @@ using u16 = __UINT16_TYPE__;
 
 using i32 = __INT32_TYPE__;
 using u32 = __UINT32_TYPE__;
+using wint   = __WINT_TYPE__;
 
 using i64 = __INT64_TYPE__;
 using u64 = __UINT64_TYPE__;
 
-using i128 = __int128;
-using u128 = unsigned __int128;
+using i128 = __int128_t;
+using u128 = __uint128_t;
+using complex = __complex__ double;
 
-using f32 = float;
-using f64 = double;
+#ifndef ZX_NO_COMP_FLOAT
+using f32  = _Float32;
+using f32x = _Float32x;
+using f64  = _Float64;
+using f64x = _Float64x;
+using f128 = _Float128;
+#else
+using f32  = float;
+using f32x = double;
+using f64  = double;
+using f64x = long double;
+using f128 = long double;
+#endif
+
+using cstr   = decltype("");
+using char8  = char8_t;
+using char16 = __CHAR16_TYPE__;
+using char32 = __CHAR32_TYPE__;
+using wchar  = __WCHAR_TYPE__;
+
+// linux/arch/s390/include/uapi/asm/types.h
+struct [[gnu::packed]] alignas(4) vector128 {
+    union {
+        struct {
+            u64 high;
+            u64 low;
+        };
+        u32 u[4];
+    };
+};
 
 using i8least = __INT_LEAST8_TYPE__;
 using i16least = __INT_LEAST16_TYPE__;
@@ -55,58 +85,44 @@ using isize  = i64;
 using uptr   = __UINTPTR_TYPE__;
 using iptr   = __INTPTR_TYPE__;
 
-    // C-compatible types
+#ifndef ZX_NO_BITINT
+template <u16 N>
+using bit_int = _BitInt(N);
 
-using int8_t    = i8;
-using uint8_t   = u8;
+template <u16 N>
+using ubit_int = unsigned _BitInt(N);
+#else
+template <u16 N>
+using bit_int = i64;
 
-using int16_t   = i16;
-using uint16_t  = u16;
+template <u16 N>
+using ubit_int = u64;
+#endif
 
-using int32_t   = i32;
-using uint32_t  = u32;
+    // unethical/fun types
 
-using int64_t   = i64;
-using uint64_t  = u64;
+using i2 = bit_int<2>;
+using u2 = ubit_int<2>;
 
-using int128_t  = i128;
-using uint128_t = u128;
+using i4 = bit_int<4>;
+using u4 = ubit_int<4>;
 
-using float32_t = f32;
-using float64_t = f64;
+using i256 = bit_int<256>;
+using u256 = ubit_int<256>;
 
-using int_least8_t = i8least;
-using int_least16_t = i16least;
-using int_least32_t = i32least;
-using int_least64_t = i64least;
+using i512 = bit_int<512>;
+using u512 = ubit_int<512>;
 
-using int_fast8_t = i8fast;
-using int_fast16_t = i16fast;
-using int_fast32_t = i32fast;
-using int_fast64_t = i64fast;
+using i1024 = bit_int<1024>;
+using u1024 = ubit_int<1024>;
 
-using uint_least8_t = u8least;
-using uint_least16_t = u16least;
-using uint_least32_t = u32least;
-using uint_least64_t = u64least;
+using i2048 = bit_int<2048>;
+using u2048 = ubit_int<2048>;
 
-using uint_fast8_t = u8fast;
-using uint_fast16_t = u16fast;
-using uint_fast32_t = u32fast;
-using uint_fast64_t = u64fast;
-
-using intmax_t = imax;
-using uintmax_t = umax;
-
-using uintptr_t = uptr;
-using intptr_t = iptr;
+using i4096 = bit_int<4096>;
+using u4096 = ubit_int<4096>;
 
     // misc.
-
-using byte   = u8;
-using word   = u16;
-using dword  = u32;
-using qword  = u64;
 
 using uuid_t = unsigned char[16];
 

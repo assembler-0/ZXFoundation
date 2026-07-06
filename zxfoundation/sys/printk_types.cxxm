@@ -11,7 +11,7 @@ export {
 namespace zxfoundation::sys::printk {
 
     /// @brief Log levels for the kernel logging system.
-    /// @note Maps to the historical ZXFoundation/Linux log levels.
+    /// @note Maps to the historical syslog log levels.
     enum class log_level : u8 {
         EMERG   = 0, ///< System unusable — imminent halt (X)
         ALERT   = 1, ///< Action required immediately (A)
@@ -20,8 +20,7 @@ namespace zxfoundation::sys::printk {
         WARN    = 4, ///< Warning (W)
         NOTICE  = 5, ///< Normal but significant (N)
         INFO    = 6, ///< Informational (default) (I)
-        DEBUG   = 7, ///< Debug detail (D)
-        TRACE   = 8  ///< High-volume trace details (T)
+        VERBOSE = 8  ///< High-volume trace details (V)
     };
 
     /// @brief Interface for a logging backend.

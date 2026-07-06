@@ -91,10 +91,10 @@ namespace zxfoundation::sys::stacktrace {
                 break;
 
             const auto info = get_stack_info(sp);
-            if (info.type != stack_type::unknown) {
-                if (sp + S390X_STACK_FRAME_SIZE > info.end)
-                    break;
-            }
+            if (info.type == stack_type::unknown)
+                break;
+            if (sp + S390X_STACK_FRAME_SIZE > info.end)
+                break;
 
             const auto* frame = reinterpret_cast<const s390x_stack_frame*>(sp);
             const u64 ret_addr = frame->gprs[8]; // r14 at ABI offset 112

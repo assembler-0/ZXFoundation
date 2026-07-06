@@ -24,6 +24,8 @@ else()
     set(RELEASE_H "h1")
 endif()
 
+set(ZXFoundation_Dasd_Boot_serial "${DASD_SERIAL}")
+
 set(ZXFoundation_Release "${RELEASE_YY}${RELEASE_H}")
 
 set(ZXFoundation_Host_Build_Platform

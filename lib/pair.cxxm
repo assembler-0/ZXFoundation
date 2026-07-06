@@ -8,6 +8,7 @@ import lib.util;
 import lib.concepts;
 import lib.compare;
 import lib.format;
+import lib.type_traits;
 
 export {
 
@@ -33,7 +34,7 @@ namespace lib {
         /// @param[in] f First value.
         /// @param[in] s Second value.
         template <typename U1, typename U2>
-        requires is_constructible_from<T1, U1&&> && is_constructible_from<T2, U2&&>
+        requires is_constructible_v<T1, U1&&> && is_constructible_v<T2, U2&&>
         constexpr pair(U1&& f, U2&& s) 
             : first(lib::forward<U1>(f)), second(lib::forward<U2>(s)) {}
 
@@ -75,8 +76,8 @@ namespace lib {
 
     /// @brief Creates a pair, deducing the types.
     template <typename T1, typename T2>
-    [[nodiscard]] constexpr auto make_pair(T1&& first, T2&& second) -> pair<unqualified<T1>, unqualified<T2>> {
-        return pair<unqualified<T1>, unqualified<T2>>(lib::forward<T1>(first), lib::forward<T2>(second));
+    [[nodiscard]] constexpr auto make_pair(T1&& first, T2&& second) -> pair<remove_cvref_t<T1>, remove_cvref_t<T2>> {
+        return pair<remove_cvref_t<T1>, remove_cvref_t<T2>>(lib::forward<T1>(first), lib::forward<T2>(second));
     }
 
     /// @brief Non-member swap for pair.
@@ -140,9 +141,9 @@ export {
         /// @param[in]     val  Pair to format.
         auto format(format_context& ctx, const pair<T1, T2>& val) const noexcept -> void {
             ctx.write("pair<first(");
-            formatter<unqualified<T1>>{}.format(ctx, val.first);
+            formatter<remove_cvref_t<T1>>{}.format(ctx, val.first);
             ctx.write("), second(");
-            formatter<unqualified<T2>>{}.format(ctx, val.second);
+            formatter<remove_cvref_t<T2>>{}.format(ctx, val.second);
             ctx.write(")>");
         }
     }; // namespace lib::format

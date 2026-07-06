@@ -5,17 +5,18 @@
     transaction.cxxm
     syschk_types.cxxm
     syschk.cxxm
+    syschk_core.cxxm
     zxallsyms_types.cxxm
     zxallsyms.cxxm
     zxallsyms_stub.cxx
     stacktrace.cxxm
     timer_types.cxxm
     timer.cxxm
+    watchdog_disarm.cxxm
     watchdog.cxxm
     cap_types.cxxm
     cap.cxxm
     service.cxxm
     io_types.cxxm
     io.cxxm
-    syscall_self.cxxm
 }

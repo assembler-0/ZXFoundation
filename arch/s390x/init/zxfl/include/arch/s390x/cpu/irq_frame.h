@@ -11,7 +11,5 @@
 #define IRQ_FRAME_SIZE      0x02D8U
 
 /// Size of the ABI save area (C++ register save + padding) between r15 and
-/// the IRQ frame data.  Increased from 160 to 2048 to ensure the C++ call
-/// chain in the handler (do_pgm_check → ... → cap_release → domain_find)
-/// cannot overflow its callee-saved register save area into the IRQ frame.
+/// the IRQ frame data.
 #define IRQ_FRAME_BIAS      2048U

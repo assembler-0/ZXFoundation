@@ -38,6 +38,17 @@ _zx_tool_exists(CMAKE_AR             "Archiver (ar)")
 _zx_tool_exists(CMAKE_RANLIB         "Ranlib")
 _zx_tool_exists(CMAKE_OBJCOPY        "Objcopy")
 
+if (
+    CMAKE_GENERATOR STREQUAL "Ninja" OR
+    CMAKE_GENERATOR STREQUAL "Ninja Multi-Config" OR
+    CMAKE_GENERATOR STREQUAL "Visual Studio 18 2026" OR
+    CMAKE_GENERATOR STREQUAL "Visual Studio 17 2022"
+)
+    message(STATUS "zxfoundation::validate: cmake generator = ${CMAKE_GENERATOR}")
+else()
+    message(WARNING "zxfoundation::validate: cmake generator = ${CMAKE_GENERATOR} may not support C++20 modules.")
+endif()
+
 # ZX_NM / ZX_CXXFILT — set by the toolchain file, verify they exist
 set(ZX_FOUND_NM      FALSE CACHE BOOL "nm binary was found" FORCE)
 set(ZX_FOUND_CXXFILT FALSE CACHE BOOL "c++filt binary was found" FORCE)

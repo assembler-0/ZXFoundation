@@ -15,6 +15,7 @@ import zxfoundation.sys.transaction;
 import zxfoundation.sys.printk;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.sync_contract;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
@@ -132,25 +133,29 @@ namespace zxfoundation::portal {
                     lib::generic_error::invalid_arg));
         }
 
-        const auto authority_state = zxfoundation::dgp::sync_contract_snapshot(
-            zxfoundation::dgp::lock_context::thread,
-            zxfoundation::dgp::teardown_phase::none,
-            source_domain_id);
-        auto authority_result = zxfoundation::dgp::sync_contract_validate_authority_lookup(
-            authority_state);
-        if (!authority_result) {
-            return lib::unexpected(authority_result.error());
+        auto* src = zxfoundation::domain::domain_find(source_domain_id);
+        if (!src) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::not_found));
         }
-
-        auto validation_result = zxfoundation::dgp::isolation_validate_portal(
-            source_domain_id,
-            target_domain_id,
-            va_start,
-            va_end,
-            zxfoundation::dgp::isolation_rights::share
-                | zxfoundation::dgp::isolation_rights::map);
-        if (!validation_result) {
-            return lib::unexpected(validation_result.error());
+        auto* tgt = zxfoundation::domain::domain_find(target_domain_id);
+        if (!tgt) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::not_found));
+        }
+        auto auth_result = zxfoundation::dgp::dgp_authorize(
+            *src, *tgt,
+            zxfoundation::dgp::operation_kind::portal_create,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::share | zxfoundation::dgp::isolation_rights::map,
+                .target_va_start = va_start,
+                .target_va_end = va_end,
+            }
+        );
+        if (!auth_result) {
+            return lib::unexpected(auth_result.error());
         }
 
         _internal::portal_create_txn txn;
@@ -166,7 +171,8 @@ namespace zxfoundation::portal {
 
         txn.record_slot(embryo_ref.id());
 
-        auto* tgt = zxfoundation::domain::domain_find(target_domain_id);
+        // Ensure the target domain still exists (may have been destroyed while we were blocked).
+        tgt = zxfoundation::domain::domain_find(target_domain_id);
         if (!tgt) {
             // txn destructor will release the slot.
             return lib::unexpected(
@@ -211,16 +217,14 @@ namespace zxfoundation::portal {
         >(embryo_ref).activate();
 
         // Increment source domain's portal_count.
-        auto* src = zxfoundation::domain::domain_find(source_domain_id);
         if (src) {
             ++src->portal_count;
-            ++src->active_portal_count;
         }
 
         // Commit the transaction — disarms the automatic rollback.
         txn.commit();
 
-        sys::printk::pdebug("portal: created id={} src={} tgt={} ar={} alet={} "
+        sys::printk::pverbose("portal: created id={} src={} tgt={} ar={} alet={} "
                    "va=[{:#x},{:#x})",
                    id, source_domain_id, target_domain_id,
                    static_cast<u32>(ar_num), alet, va_start, va_end);
@@ -242,15 +246,14 @@ namespace zxfoundation::portal {
                     lib::generic_error::not_found));
         }
 
-        sys::printk::pdebug("portal: destroying id={} src={} tgt={} alet={}",
+        sys::printk::pverbose("portal: destroying id={} src={} tgt={} alet={}",
                    desc->ko.id, desc->source_domain, desc->target_domain, desc->alet);
 
         // Convert the DGP portal authority into a draining revocation before hardware reuse.
         auto* src = zxfoundation::domain::domain_find(desc->source_domain);
         if (src) {
             auto revoke_result = zxfoundation::dgp::isolation_begin_portal_teardown(
-                src->iso_state,
-                src->active_portal_count,
+                src->ko.state,
                 src->revocation_epoch);
             if (!revoke_result) {
                 return lib::unexpected(revoke_result.error());
@@ -289,8 +292,7 @@ namespace zxfoundation::portal {
                 auto* src = zxfoundation::domain::domain_find(p.source_domain);
                 if (src) {
                     (void)zxfoundation::dgp::isolation_begin_portal_teardown(
-                        src->iso_state,
-                        src->active_portal_count,
+                        src->ko.state,
                         src->revocation_epoch);
                     if (src->portal_count > 0) --src->portal_count;
                 }

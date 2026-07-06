@@ -640,11 +640,11 @@ namespace lib::format {
         auto format(format_context& ctx, const expected<T, E>& val) const noexcept -> void {
             if (val.has_value()) {
                 ctx.write("expected<ok(");
-                formatter<unqualified<T>>{}.format(ctx, val.value());
+                formatter<remove_cvref_t<T>>{}.format(ctx, val.value());
                 ctx.write(")>");
             } else {
                 ctx.write("expected<err(");
-                formatter<unqualified<E>>{}.format(ctx, val.error());
+                formatter<remove_cvref_t<E>>{}.format(ctx, val.error());
                 ctx.write(")>");
             }
         }
@@ -660,7 +660,7 @@ namespace lib::format {
                 ctx.write("expected<ok(void)>");
             } else {
                 ctx.write("expected<err(");
-                formatter<unqualified<E>>{}.format(ctx, val.error());
+                formatter<remove_cvref_t<E>>{}.format(ctx, val.error());
                 ctx.write(")>");
             }
         }

@@ -20,9 +20,6 @@ import lib.list;
 export {
 
 namespace zxfoundation::domain {
-
-    // ── Domain ID ────────────────────────────────────────────────────────
-
     /// @brief Opaque domain identifier.
     using domain_id = u32;
 
@@ -80,7 +77,7 @@ namespace zxfoundation::domain {
     struct sched_class;
 
     /// @brief The domain struct — the central entity of the DGP kernel.
-struct domain {
+    struct domain {
         // ── offset 0 ──  SCOMS kobject header (24 bytes)
         scoms::kobject                                                  ko{};
 
@@ -107,14 +104,11 @@ struct domain {
 
         // ── DGP clean-core isolation authority state (merged from isolation_domain_state)
         //    These fields replace the separate dgp_state sub-struct.
-        zxfoundation::base::lifecycle_state                             iso_state{zxfoundation::base::lifecycle_state::embryo};
         zxfoundation::dgp::isolation_rights                             granted_rights{zxfoundation::dgp::isolation_rights::none};
         u8                                                              numa_node{0};
         u16                                                             revocation_epoch{0};
         u32                                                             storage_key_generation{0};
         zxfoundation::dgp::storage_key_revocation_state                 storage_key_state{zxfoundation::dgp::storage_key_revocation_state::none};
-        u32                                                             active_gate_count{0};
-        u32                                                             active_portal_count{0};
 
         // ── List node for global domain list
         lib::list_node                                                  domain_list{};
@@ -178,8 +172,6 @@ struct domain {
         u16                             cpu_id{0};       ///< Logical CPU ID this run_queue belongs to.
 
         /// @brief Set to 1 when this CPU's run queue is fully initialized
-        ///        (idle domain set, timer armed, ready for work-stealing).
-        ///        Written last under rq.lock; read by try_steal_domain_locked().
         arch::s390x::lib::atomic::atomic<u32> online{0};
 
         run_queue() noexcept = default;

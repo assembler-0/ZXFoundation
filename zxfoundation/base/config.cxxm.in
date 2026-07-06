@@ -28,6 +28,9 @@ namespace zxfoundation::base::config {
     /// @brief build number
     constexpr auto CONFIG_ZX_BUILD_NUMBER      = "@ZXFoundation_Build@";
 
+    /// @brief dasd serial
+    constexpr auto CONFIG_ZX_BOOT_DASD_SERIAL  = "@ZXFoundation_Dasd_Boot_Serial@";
+
 }
 
 }

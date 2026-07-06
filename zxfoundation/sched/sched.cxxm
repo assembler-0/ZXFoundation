@@ -20,6 +20,7 @@ import zxfoundation.portal.portal;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.config;
+import zxfoundation.scoms.scoms_types;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
@@ -62,7 +63,7 @@ namespace _internal {
     [[nodiscard]] auto can_admit_domain(const domain& d) noexcept -> bool {
         if (is_idle_domain(d)) return true;
         auto result = zxfoundation::dgp::isolation_validate_scheduler_admission(
-            d.iso_state, d.root_phys, d.asce.val);
+            d.ko.state, d.root_phys, d.asce.val);
         return static_cast<bool>(result);
     }
 
@@ -81,11 +82,18 @@ namespace _internal {
         }
     }
 
+    auto domain_reap(domain& d) noexcept -> void {
+        if (d.ko.id == zxfoundation::scoms::KOBJECT_ID_INVALID) return;
+        if (d.ko.state != zxfoundation::scoms::lifecycle_state::dying) return;
+
+        (void)zxfoundation::domain::domain_destroy(d.ko.id);
+    }
+
     auto record_asce_attachment(domain& d) noexcept -> void {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         pcp.attached_asce = d.asce.val;
         pcp.attached_domain_id = d.ko.id;
-        pcp.attached_dgp_state = static_cast<u8>(d.iso_state);
+        pcp.attached_dgp_state = static_cast<u8>(d.ko.state);
     }
 
     auto try_steal_strand_locked(run_queue& local_rq) noexcept -> strand* {
@@ -418,7 +426,7 @@ namespace zxfoundation::sched {
             (switched_from_owner->flags & domain_flags::idle) == domain_flags::none) {
             zxfoundation::gate::gate_destroy_for_domain(switched_from_owner->ko.id);
             zxfoundation::portal::portal_destroy_for_domain(switched_from_owner->ko.id);
-            zxfoundation::domain::domain_reap(*switched_from_owner);
+            _internal::domain_reap(*switched_from_owner);
         }
     }
 
@@ -597,8 +605,6 @@ namespace zxfoundation::sched {
     }
 
     /// @brief Notify the scheduler that a CPU has come online.
-    ///        Creates idle domain, publishes run queue, and adds the CPU
-    ///        to topology masks so it is visible to load balancers.
     [[nodiscard]] auto sched_cpu_up(u16 cpu_id) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
         using namespace _internal;
 
@@ -630,10 +636,6 @@ namespace zxfoundation::sched {
     }
 
     /// @brief Notify the scheduler that a CPU is going offline.
-    ///        Marks the run queue offline so no new tasks are enqueued.
-    ///        The caller (hotplug) is responsible for migrating remaining
-    ///        strands before invoking this function, and for calling
-    ///        cpu_clear_online() / topology_offline_cpu() afterwards.
     [[nodiscard]] auto sched_cpu_down(u16 cpu_id) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
         using namespace _internal;
 
