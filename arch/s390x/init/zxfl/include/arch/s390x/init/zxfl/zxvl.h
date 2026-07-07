@@ -44,6 +44,15 @@
 /// p_flags value that uniquely identifies the checksum PT_LOAD segment.
 #define ZXVL_PFLAGS_CKSUM       0x00200004U   ///< PF_R + custom bit 21
 
+/// @brief Expected SHA-256 digest of the authorized stage2 loader.
+///        The build system MUST override this with the actual digest of the
+///        shipped stage2 image.  A zero digest disables loader verification.
+#define ZXFL_EXPECTED_DIGEST_INIT \
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+
 #ifndef __ASSEMBLER__
 
 #include <arch/s390x/init/zxfl/zxfl.h>

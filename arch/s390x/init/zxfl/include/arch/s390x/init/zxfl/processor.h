@@ -13,7 +13,7 @@
 
 /// @brief Generic spin-loop hint.  Use inside every busy-wait loop.
 static inline void arch_cpu_relax(void) {
-    barrier();
+    cbarrier();
 }
 
 /// @brief Set the Storage Key for a 4KB physical block.

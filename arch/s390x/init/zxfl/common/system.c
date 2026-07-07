@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // arch/s390x/init/zxfl/common/system.c
 //
-/// @brief System detection: SMP CPUs, STSI branding, TOD clock.
+/// @brief System detection: SMP CPUs, STSI branding, TOD clock, hypervisor.
 
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/init/zxfl/stsi.h>
@@ -27,8 +27,8 @@ static void copy_ebcdic_field(char *dest, const char *src, uint32_t len) {
 
 static void detect_stsi(zxfl_boot_protocol_t *proto) {
     static uint8_t block[4096] __attribute__((aligned(4096)));
-    
-    // 1.1.1: Manufacturer, Type, Model
+
+    // 1.1.1: Manufacturer, Type, Model, Capacity ratings
     if (stsi(block, 1, 1, 1) == 0) {
         struct sysinfo_1_1_1 *s = (struct sysinfo_1_1_1 *)block;
         copy_ebcdic_field(proto->sysinfo.manufacturer, s->manufacturer, 16);
@@ -36,6 +36,20 @@ static void detect_stsi(zxfl_boot_protocol_t *proto) {
         copy_ebcdic_field(proto->sysinfo.model, s->model, 16);
         copy_ebcdic_field(proto->sysinfo.sequence, s->sequence, 16);
         copy_ebcdic_field(proto->sysinfo.plant, s->plant, 4);
+        copy_ebcdic_field(proto->sysinfo.model_capacity, s->model_capacity, 16);
+        copy_ebcdic_field(proto->sysinfo.model_perm_cap, s->model_perm_cap, 16);
+        copy_ebcdic_field(proto->sysinfo.model_temp_cap, s->model_temp_cap, 16);
+        copy_ebcdic_field(proto->sysinfo.model_var_cap, s->model_var_cap, 16);
+        proto->sysinfo.model_cap_rating      = s->model_cap_rating;
+        proto->sysinfo.model_perm_cap_rating = s->model_perm_cap_rating;
+        proto->sysinfo.model_temp_cap_rating = s->model_temp_cap_rating;
+        proto->sysinfo.model_var_cap_rating  = s->model_var_cap_rating;
+        proto->sysinfo.ncr = s->ncr;
+        proto->sysinfo.npr = s->npr;
+        proto->sysinfo.ntr = s->ntr;
+        proto->sysinfo.nvr = s->nvr;
+        for (uint32_t i = 0; i < 5 && i < sizeof(s->typepct); i++)
+            proto->sysinfo.typepct[i] = s->typepct[i];
         proto->flags |= ZXFL_FLAG_SYSINFO;
     }
 
@@ -45,7 +59,10 @@ static void detect_stsi(zxfl_boot_protocol_t *proto) {
         proto->sysinfo.cpus_total = s->cpus_total;
         proto->sysinfo.cpus_configured = s->cpus_configured;
         proto->sysinfo.cpus_standby = s->cpus_standby;
+        proto->sysinfo.cpus_reserved = s->cpus_reserved;
         proto->sysinfo.capability = s->capability;
+        proto->sysinfo.nominal_cap = s->nominal_cap;
+        proto->sysinfo.secondary_cap = s->secondary_cap;
     }
 
     // 2.2.2: LPAR info
@@ -53,6 +70,15 @@ static void detect_stsi(zxfl_boot_protocol_t *proto) {
         struct sysinfo_2_2_2 *s = (struct sysinfo_2_2_2 *)block;
         copy_ebcdic_field(proto->sysinfo.lpar_name, s->name, 8);
         proto->sysinfo.lpar_number = s->lpar_number;
+        proto->sysinfo.lpar_characteristics = s->characteristics;
+        proto->sysinfo.lpar_cpus_dedicated = s->cpus_dedicated;
+        proto->sysinfo.lpar_cpus_shared = s->cpus_shared;
+        proto->sysinfo.lpar_caf = s->caf;
+        proto->sysinfo.lpar_mt_installed = s->mt_installed;
+        proto->sysinfo.lpar_mt_stid = s->mt_stid;
+        proto->sysinfo.lpar_mt_gtid = s->mt_gtid;
+        proto->sysinfo.lpar_vsne = s->vsne;
+        memcpy(proto->sysinfo.lpar_uuid, s->uuid, 16);
     }
 }
 
@@ -72,19 +98,6 @@ static int sigp_sense(uint16_t cpu_addr) {
 }
 
 // PoP CPU-type TLE hw code -> ZXFL constant translation.
-//
-// The hardware CPU type is stored in byte 5 of each CPU-type TLE
-// (the 'cputype' field in struct topology_core). These values come
-// from the SCCB PTYP encoding:
-//
-//   hw 0 = CP    (Central Processor)       -> ZXFL 1
-//   hw 3 = IFL   (Integrated Fac. Linux)   -> ZXFL 2
-//   hw 4 = ICF   (Internal Coupling Fac.)  -> ZXFL 3
-//   hw 5 = zIIP  (z Integrated Info Proc.) -> ZXFL 4
-//
-// Hercules only implements STSI(15, 1, 2) which returns ALL CPU
-// types in one response (matching Linux's approach). Per-type
-// queries with different sel1 values return CC=3.
 static inline uint8_t hw_to_zxfl(uint8_t hw) {
     switch (hw) {
         case 0:  return ZXFL_CPU_TYPE_CP;
@@ -98,8 +111,8 @@ static inline uint8_t hw_to_zxfl(uint8_t hw) {
 
 // Per-CPU-address topology metadata harvested from STSI 15.1.2.
 typedef struct {
-    uint8_t known;     // 1 if STSI 15.1.2 described this CPU address.
-    uint8_t type;      // ZXFL_CPU_TYPE_* constant.
+    uint8_t known;
+    uint8_t type;
     uint8_t drawer_id;
     uint8_t book_id;
     uint8_t socket_id;
@@ -113,7 +126,6 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
     proto->bsp_cpu_addr = bsp;
     proto->cpu_count = 0;
 
-    // Topology metadata indexed by hardware CPU address.
     static cpu_topo_meta_t meta[ZXFL_CPU_MAP_MAX];
     for (uint32_t i = 0; i < ZXFL_CPU_MAP_MAX; i++)
         meta[i].known = 0;
@@ -123,8 +135,6 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
     if (stsi(stsi_buf, 15, 1, 2) == 0) {
         struct sysinfo_15_1_x *info = (struct sysinfo_15_1_x *)stsi_buf;
         if (info->length >= sizeof(struct sysinfo_15_1_x)) {
-            // Container IDs are updated as the parser descends the TLE tree.
-            // All IDs are normalized from PoP 1-based to 0-based by subtracting 1.
             uint8_t drawer_id = 0;
             uint8_t book_id   = 0;
             uint8_t socket_id = 0;
@@ -137,9 +147,6 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
                 union topology_entry *tle = (union topology_entry *)ptr;
 
                 if (tle->nl == 0) {
-                    // Core leaf (topology_core, 16 bytes).
-                    // mask is MSB-first (IBM bit 0 = MSB of 64-bit word):
-                    //   bit k set => CPU at address (origin + k) is present.
                     if (ptr + 16 > end) break;
 
                     uint64_t mask    = tle->cpu.mask;
@@ -188,7 +195,6 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
     for (uint32_t addr = 0; addr < ZXFL_CPU_MAP_MAX; addr++) {
         int is_bsp = (addr == bsp);
 
-        // CC=3 means the address is not operational (standby/reserved/absent).
         if (!is_bsp && sigp_sense((uint16_t)addr) == 3)
             continue;
 
@@ -207,8 +213,6 @@ static void detect_smp(zxfl_boot_protocol_t *proto) {
             ci->numa_node         = meta[addr].drawer_id;
             ci->topology_evidence = ZXFL_CPU_EVIDENCE_STSI | ZXFL_CPU_EVIDENCE_SIGP;
         } else {
-            // Deterministic degraded fallback: 2 CPUs per synthetic drawer;
-            // drawer_id is the NUMA affinity domain.
             uint8_t drawer = (uint8_t)((proto->cpu_count / 2U) % 4U);
             ci->type              = ZXFL_CPU_TYPE_CP;
             ci->drawer_id         = drawer;

@@ -17,6 +17,7 @@
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/mmu.h>
 #include <arch/s390x/init/zxfl/psw.h>
+#include <arch/s390x/init/zxfl/sha256.h>
 #include <zxfoundation/zxconfig.h>
 
 #define ZX_NUCLEUS_NAME         "CORE.ZXFOUNDATION.NUCLEUS"
@@ -28,6 +29,9 @@
 static zxfl_boot_protocol_t s_proto;
 static zxfl_mem_region_t s_mem_map[ZXFL_MEM_MAP_MAX];
 static char s_cmdline[512];
+
+static zxfl_sclp_info_t s_sclp_info;
+static zxfl_ecag_info_t s_ecag_info;
 
 static uint8_t s_kernel_stack[16384] __attribute__((aligned(16)));
 #define s_kernel_stack_top (s_kernel_stack + sizeof(s_kernel_stack))
@@ -71,11 +75,6 @@ static uint8_t zxfl_numa_node_for_phys(uint64_t phys, uint64_t node_chunk, uint3
 }
 
 /// @brief Probe the IPL device as ECKD or FBA and populate ipl_dev_type/model.
-///
-///        ECKD is tried first because 3390 is the dominant IPL device type.
-///        If ECKD probe fails (Sense ID returns a non-ECKD type), FBA is tried.
-///        On failure of both, the fields remain zero — the kernel must tolerate
-///        this for virtual/emulated environments that don't implement Sense ID.
 static void probe_ipl_device(uint32_t schid, zxfl_boot_protocol_t *proto) {
     dasd_eckd_geo_t eckd_geo;
     if (dasd_eckd_probe(schid, &eckd_geo) == 0) {
@@ -348,18 +347,21 @@ static void add_usable_region(zxfl_mem_region_t *map, uint32_t *count, uint32_t 
 
 static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
                               uint64_t kernel_start, uint64_t kernel_end,
-                              uint64_t mem_limit) {
+                              uint64_t mem_limit, uint8_t *detect_source) {
     uint64_t total = 0;
 
     if (arch_sclp_early_get_memsize(&total) == 0) {
         print("zxfl01: memory detected via sclp\n");
+        if (detect_source) *detect_source = ZXFL_MEMPROBE_SCLP;
     }
     else if (diag260_get_memsize(&total) == 0) {
         print("zxfl01: memory detected via diag 0x260\n");
+        if (detect_source) *detect_source = ZXFL_MEMPROBE_DIAG;
     }
     else {
         print("zxfl01: sclp/diag unavailable, probing storage via tprot\n");
         total = probe_mem_end_bytes();
+        if (detect_source) *detect_source = ZXFL_MEMPROBE_TPROT;
     }
 
     if (mem_limit != PARMFILE_SYSSIZE_INFINITE && total > mem_limit)
@@ -411,14 +413,22 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     print("zxfl01: detecting system (stsi/smp/tod)\n");
     zxfl_system_detect(&s_proto);
 
+    // DIAG 318: Set Control Program Name Code to "Linux"
+    {
+        uint64_t diag318_val = (4UL << 56); // cpnc=0x04 (Linux), cpvc=0
+        __asm__ volatile("diag %0,0,0x318" : : "d" (diag318_val) : "cc");
+    }
+
     {
         const uint64_t virt_off = CONFIG_KERNEL_VIRT_OFFSET;
         uint64_t phys_start = s_proto.kernel_phys_start;
         uint64_t phys_end = s_proto.kernel_phys_end;
         if (phys_start >= virt_off) phys_start -= virt_off;
         if (phys_end >= virt_off) phys_end -= virt_off;
+        uint8_t mem_src = 0;
         s_proto.mem_map_count = detect_memory(s_mem_map, ZXFL_MEM_MAP_MAX,
-                                              phys_start, phys_end, mem_limit);
+                                              phys_start, phys_end, mem_limit, &mem_src);
+        s_proto.mem_detect_source = mem_src;
     }
     s_proto.mem_map_addr = (uint64_t) (uintptr_t) s_mem_map;
     s_proto.mem_total_bytes = sum_usable_ram(s_mem_map, s_proto.mem_map_count);
@@ -440,6 +450,78 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
         s_proto.kernel_stack_top = (uint64_t) (uintptr_t) frame;
     }
     snapshot_control_regs(&s_proto);
+
+    // SCLP feature info
+    if (arch_sclp_early_get_memsize(nullptr) == 0) {
+        // SCLP is available; read info block for features
+        memset(&s_sclp_info, 0, sizeof(s_sclp_info));
+        s_proto.sclp_info_addr = (uint64_t)(uintptr_t)&s_sclp_info;
+        // Populate SCLP info from the existing read_info_sccb
+        static struct read_info_sccb __attribute__((aligned(4096))) ri_sccb;
+        memset(&ri_sccb, 0, sizeof(ri_sccb));
+        ri_sccb.header.length = sizeof(ri_sccb);
+        ri_sccb.header.function_code = 0x01;
+        if (arch_sclp_service_call(SCLP_CMDW_READ_SCP_INFO, &ri_sccb) == 0 &&
+            ri_sccb.header.response_code == SCLP_RC_NORMAL_COMPLETION) {
+            s_sclp_info.facilities = ri_sccb.facilities;
+            s_sclp_info.max_cores  = ri_sccb.max_cores;
+            s_sclp_info.rnmax      = ri_sccb.rnmax2 ? ri_sccb.rnmax2 : ri_sccb.rnmax;
+            s_sclp_info.rzm        = ri_sccb.rnsize2 ? (uint64_t)ri_sccb.rnsize2 << 20
+                                      : (uint64_t)ri_sccb.rnsize << 20;
+            // Feature bits derived from facilities
+            uint32_t feat = 0;
+            if (ri_sccb.facilities & (1ULL << 56)) feat |= (1U << 0); // sief2
+            if (ri_sccb.facilities & (1ULL << 40)) feat |= (1U << 1); // siif
+            if (ri_sccb.facilities & (1ULL << 48)) feat |= (1U << 2); // sigpif
+            if (ri_sccb.facilities & (1ULL << 39)) feat |= (1U << 3); // gpere
+            if (ri_sccb.facilities & (1ULL << 52)) feat |= (1U << 4); // ib
+            if (ri_sccb.facilities & (1ULL << 53)) feat |= (1U << 5); // cei
+            if (ri_sccb.facilities & (1ULL << 38)) feat |= (1U << 6); // skey
+            s_sclp_info.feature_bits = feat;
+
+            // Get CPU info for MTID / core info
+            static struct read_cpu_info_sccb __attribute__((aligned(4096))) ci_sccb;
+            memset(&ci_sccb, 0, sizeof(ci_sccb));
+            ci_sccb.header.length = sizeof(ci_sccb);
+            ci_sccb.header.function_code = 0x01;
+            if (arch_sclp_service_call(SCLP_CMDW_READ_CPU_INFO, &ci_sccb) == 0 &&
+                ci_sccb.header.response_code == SCLP_RC_NORMAL_COMPLETION) {
+                s_sclp_info.mtid = 0; // mtid not directly available, will be refined
+            }
+            s_proto.flags |= ZXFL_FLAG_SCLP;
+        }
+    }
+
+    // ECAG (Extract CPU Attributes)
+    {
+        memset(&s_ecag_info, 0, sizeof(s_ecag_info));
+        /* ECAG with asi=0, parm=0 for CPU type */
+        uint64_t ecag_val = 0;
+        register uint64_t r2 __asm__("2") = 0; /* asi=0 (cache), parm=0 */
+        __asm__ volatile(
+            "larl %%r1,0f\n"
+            "stg  %%r1,0x1d8\n"
+            "stg  %[mask],0x1d0\n"
+            "lghi %[val],0\n"
+            "ecag %[val],0,0(%[parm])\n"
+            "lghi %[val],1\n"
+            "0:\n"
+            : [val] "+d" (ecag_val)
+            : [parm] "a" (r2), [mask] "d"(PSW_MASK_KERNEL)
+            : "r1", "cc", "memory"
+        );
+        if (ecag_val) {
+            s_ecag_info.cache_line_size = (uint32_t)(ecag_val & 0xFF);
+            s_proto.ecag_info_addr = (uint64_t)(uintptr_t)&s_ecag_info;
+            s_proto.flags |= ZXFL_FLAG_ECAG;
+        }
+    }
+
+    extern const char _stage2_code_start[], _stage2_code_end[];
+    extern const char _stage2_code_start[], _stage2_code_end[];
+    zxfl_sha256(_stage2_code_start,
+                (size_t)(_stage2_code_end - _stage2_code_start),
+                s_proto.loader_digest);
 
     print("zxfl01: enabling DAT and jumping to kernel\n");
     zxfl_mmu_setup_and_jump(entry_point, (uint64_t) (uintptr_t) &s_proto);

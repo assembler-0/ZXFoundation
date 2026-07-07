@@ -1,0 +1,23 @@
+--- hyperion/diagnose.c.orig	2026-07-07 00:00:00.000000000 +0000
++++ hyperion/diagnose.c	2026-07-07 00:00:00.000000000 +0000
+@@ -757,6 +757,19 @@
+         default:
+             ARCH_DEP(program_interrupt)(regs, PGM_SPECIFICATION_EXCEPTION);
+         } /* end switch(r3) */
++        break;
++
++    case 0x318:
++    /*---------------------------------------------------------------*/
++    /* Diagnose 318: Set CP Name and Version Codes                   */
++    /*---------------------------------------------------------------*/
++        if (r3 != 0)
++        {
++            ARCH_DEP(program_interrupt)(regs, PGM_SPECIFICATION_EXCEPTION);
++            break;
++        }
++        /* CPNC = bits 56-63 of GR_P(r1), CPVC = bits 56-63 of GR_P(r1+1) */
++        /* Accept and return CC=0 (informational only on Hercules) */
++        regs->psw.cc = 0;
+         break;
+ 
+ #ifdef FEATURE_HERCULES_DIAGCALLS

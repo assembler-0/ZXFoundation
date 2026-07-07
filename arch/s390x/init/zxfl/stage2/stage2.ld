@@ -9,6 +9,8 @@ SECTIONS
 {
     . = 0x20000;
 
+    _stage2_code_start = .;
+
     .text : {
         KEEP(*(.text.stage2_entry))
         *(.text .text.*)
@@ -21,6 +23,8 @@ SECTIONS
     .data : ALIGN(8) {
         *(.data .data.*)
     }
+
+    _stage2_code_end = .;
 
     .bss : ALIGN(8) {
         __bss_start = .;

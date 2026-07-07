@@ -12,10 +12,9 @@ if (NOT DEFINED MAX_CPUS)
     set(MAX_CPUS "768" CACHE STRING "Maximum supported cpus")
 endif()
 
-# 01842095440 is "00" + "int(0xafad088)" + "0" = 12 characters
-# where afad088 is the first ever commit of the project.
+# 7a2f41726368 is "z/Arch".encode('ascii').hex()
 if (NOT DEFINED DASD_SERIAL)
-    set(DASD_SERIAL "001842095440" CACHE STRING "Dasd serial")
+    set(DASD_SERIAL "7a2f41726368" CACHE STRING "Dasd serial")
 endif()
 
 message(STATUS "zxfoundation::build: optimization level ${OPT_LEVEL} (-O${OPT_LEVEL})")

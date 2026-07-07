@@ -341,8 +341,8 @@ namespace arch::s390x::lib::atomic {
             u64 addr = reinterpret_cast<u64>(&value);
             u32* aligned_ptr = reinterpret_cast<u32*>(addr & ~3ULL);
             
-            const unsigned int start_bit = (addr & 3) * 8;
-            const unsigned int end_bit = start_bit + (sizeof(T) * 8) - 1;
+            const u32 start_bit = (addr & 3) * 8;
+            const u32 end_bit = start_bit + (sizeof(T) * 8) - 1;
 
             if (success == memory_order::release || success == memory_order::seq_cst) {
                 release_barrier();

@@ -1,0 +1,153 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/cpu_mf_types.cxxm
+/// @brief CPU Measurement Facility types and constants.
+
+export module arch.s390x.cpu.cpu_mf_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::cpu_mf {
+
+    constexpr u32 CPU_MF_INT_SF_IAE  = 1U << 31;
+    constexpr u32 CPU_MF_INT_SF_ISE  = 1U << 30;
+    constexpr u32 CPU_MF_INT_SF_PRA  = 1U << 29;
+    constexpr u32 CPU_MF_INT_SF_SACA = 1U << 23;
+    constexpr u32 CPU_MF_INT_SF_LSDA = 1U << 22;
+    constexpr u32 CPU_MF_INT_CF_MTDA = 1U << 15;
+    constexpr u32 CPU_MF_INT_CF_CACA = 1U << 7;
+    constexpr u32 CPU_MF_INT_CF_LCDA = 1U << 6;
+
+    constexpr u32 CPU_MF_INT_CF_MASK = CPU_MF_INT_CF_MTDA | CPU_MF_INT_CF_CACA | CPU_MF_INT_CF_LCDA;
+    constexpr u32 CPU_MF_INT_SF_MASK = CPU_MF_INT_SF_IAE | CPU_MF_INT_SF_ISE | CPU_MF_INT_SF_PRA | CPU_MF_INT_SF_SACA | CPU_MF_INT_SF_LSDA;
+    constexpr u32 CPU_MF_SF_RIBM_NOTAV = 0x1;
+
+
+    enum stcctm_ctr_set : u32 {
+        EXTENDED        = 0,
+        BASIC           = 1,
+        PROBLEM_STATE   = 2,
+        CRYPTO_ACTIVITY = 3,
+        MT_DIAG         = 5,
+        MT_DIAG_CLEARING = 9,
+    };
+
+    struct [[gnu::packed]] cpumf_ctr_info {
+        u16 cfvn{};
+        u16 auth_ctl{};
+        u16 enable_ctl{};
+        u16 act_ctl{};
+        u16 max_cpu{};
+        u16 csvn{};
+        u16 max_cg{};
+        u16 reserved1{};
+        u32 reserved2[12]{};
+    };
+
+    struct [[gnu::packed] ]hws_qsi_info_block {
+        u32 _b0_13:14{};
+        u32 as:1{};
+        u32 ad:1{};
+        u32 _b16_21:6{};
+        u32 es:1{};
+        u32 ed:1{};
+        u32 _b24_29:6{};
+        u32 cs:1{};
+        u32 cd:1{};
+        u16 bsdes{};
+        u16 dsdes{};
+        u64 min_sampl_rate{};
+        u64 max_sampl_rate{};
+        u64 tear{};
+        u64 dear{};
+        u32 _rsvrd0:24{};
+        u32 ribm:8{};
+        u32 cpu_speed{};
+        u64 _rsvrd1{};
+        u64 _rsvrd2{};
+    };
+
+    /* SET SAMPLING CONTROLS request block */
+	struct [[gnu::packed]] hws_lsctl_request_block {
+		u32 s:1;	    /* 0: maximum buffer indicator	 */
+		u32 h:1;	    /* 1: part. level reserved for VM use*/
+		u64 b2_53:52;/* 2-53: zeros			 */
+		u32 es:1;	    /* 54: basic-sampling enable control */
+		u32 ed:1;	    /* 55: diag-sampling enable control	 */
+		u32 b56_61:6;	    /* 56-61: - zeros			 */
+		u32 cs:1;	    /* 62: basic-sampling activation control */
+		u32 cd:1;	    /* 63: diag-sampling activation control  */
+		u64 interval;     /* 8-15: sampling interval		 */
+		u64 tear;	    /* 16-23: TEAR contents		 */
+		u64 dear;	    /* 24-31: DEAR contents		 */
+		/* 32-63:							 */
+		u64 rsvrd1;	    /* reserved				 */
+		u64 rsvrd2;	    /* reserved				 */
+		u64 rsvrd3;	    /* reserved				 */
+		u64 rsvrd4;	    /* reserved				 */
+	};
+
+	struct [[gnu::packed]] hws_basic_entry {
+		u32 def:16;	    /* 0-15  Data Entry Format		 */
+		u32 R:4;	    /* 16-19 reserved			 */
+		u32 U:4;	    /* 20-23 Number of unique instruct.  */
+		u32 z:2;	    /* zeros				 */
+		u32 T:1;	    /* 26 PSW DAT mode			 */
+		u32 W:1;	    /* 27 PSW wait state		 */
+		u32 P:1;	    /* 28 PSW Problem state		 */
+		u32 AS:2;	    /* 29-30 PSW address-space control	 */
+		u32 I:1;	    /* 31 entry valid or invalid	 */
+		u32 CL:2;	    /* 32-33 Configuration Level	 */
+		u32 H:1;	    /* 34 Host Indicator		 */
+		u32 LS:1;	    /* 35 Limited Sampling		 */
+		u32:12;
+		u32 prim_asn:16;   /* primary ASN			 */
+		u64 ia;	    /* Instruction Address		 */
+		u64 gpp;     /* Guest Program Parameter		 */
+		u64 hpp;     /* Host Program Parameter		 */
+	};
+
+	struct [[gnu::packed]] hws_diag_entry {
+		u32 def:16;	    /* 0-15  Data Entry Format		 */
+		u32 R:15;	    /* 16-19 and 20-30 reserved		 */
+		u32 I:1;	    /* 31 entry valid or invalid	 */
+		u8	     data[];	    /* Machine-dependent sample data	 */
+	};
+
+	struct [[gnu::packed]] hws_combined_entry {
+		hws_basic_entry	basic;	/* Basic-sampling data entry */
+		hws_diag_entry	diag;	/* Diagnostic-sampling data entry */
+	};
+
+	union hws_trailer_header {
+		struct {
+			u32 f:1;	/* 0 - Block Full Indicator   */
+			u32 a:1;	/* 1 - Alert request control  */
+			u32 t:1;	/* 2 - Timestamp format	      */
+			u32 :29;	/* 3 - 31: Reserved	      */
+			u32 bsdes:16;	/* 32-47: size of basic SDE   */
+			u32 dsdes:16;	/* 48-63: size of diagnostic SDE */
+			u64 overflow; /* 64 - Overflow Count   */
+		};
+		u128 val;
+	};
+
+	struct [[gnu::packed]] hws_trailer_entry {
+		hws_trailer_header header{}; /* 0 - 15 Flags + Overflow Count     */
+		uchar timestamp[16]{};	 /* 16 - 31 timestamp		      */
+		u64 reserved1{};	 /* 32 -Reserved		      */
+		u64 reserved2{};	 /*				      */
+		union {				 /* 48 - reserved for programming use */
+			struct {
+				u32 clock_base:1; /* in progusage2 */
+				u64 progusage1:63;
+				u64 progusage2;
+			};
+			u64 progusage[2];
+		};
+	};
+
+    
+} // namespace arch::s390x::cpu::cpu_mf
+
+} // end export

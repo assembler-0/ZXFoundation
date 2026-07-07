@@ -1,0 +1,38 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/sthyi.cxxm
+/// @brief STHYI (Store Hypervisor Information) kernel API.
+
+export module arch.s390x.cpu.sthyi;
+export import arch.s390x.cpu.sthyi_types;
+import arch.s390x.cpu.processor_types;
+import zxfoundation.base.types;
+import lib.expected;
+import lib.error;
+
+export {
+
+namespace arch::s390x::cpu::sthyi {
+
+    /// @brief Issue STHYI instruction.
+    /// @param[out] sctns sctns
+    /// @param[out] rc return code
+    /// @return Condition code (0 = success, 1 = partial, 3 = not supported).
+    auto issue(sctns& sctns, u64& rc) -> int {
+        u64 addr = reinterpret_cast<u64>(&sctns);
+        processor::register_pair r1{};
+        processor::register_pair r2{ .even =  addr, .odd = 0 };
+        int cc;
+
+        __asm__ volatile(
+            ".insn   rre,0xB2560000,%[r1],%[r2]\n"
+            "ipm	 %[cc]\n"
+            : [cc] "=d" (cc), [r2] "+&d" (r2.pair)
+            : [r1] "d" (r1.pair)
+            : "cc", "memory");
+        rc = r2.odd;
+        return cc >> 28;
+    }
+
+} // namespace arch::s390x::cpu::sthyi
+
+} // end export

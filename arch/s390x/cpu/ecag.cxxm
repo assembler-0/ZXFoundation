@@ -1,0 +1,38 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ecag.cxxm
+/// @brief ECAG (Extract CPU Attributes) kernel API.
+
+export module arch.s390x.cpu.ecag;
+export import arch.s390x.cpu.ecag_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::ecag {
+
+    auto invoke(u32 asi, uchar parm) -> u64 {
+        u64 val;
+        __asm__ volatile("ecag %0,0,0(%1)" : "=d" (val) : "a" (asi << 8 | parm));
+        return val;
+    }
+
+    auto invoke(int ai, int li, int ti) -> u64 {
+        return invoke(ECAG_CACHE, ai << 4 | li << 1 | ti);
+    }
+
+    /// @brief Extract CPU mhz via ECAG.
+    /// @param[out] mhz Output buffer.
+    auto query_cpu(u64& mhz) noexcept -> void{
+        mhz = invoke(ECAG_CPU, 0);
+    }
+
+    /// @brief Extract CPU cache geometry via ECAG
+    /// @param[out] out Output buffer
+    /// @param[in] parm
+    auto query_cache(u64& out, uchar parm) noexcept -> void {
+        out = invoke(ECAG_CACHE, parm);
+    }
+
+} // namespace arch::s390x::cpu::ecag
+
+} // end export

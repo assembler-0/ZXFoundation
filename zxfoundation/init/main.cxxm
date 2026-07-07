@@ -162,6 +162,30 @@ namespace _internal {
         }
     }
 
+    /// @brief Verify loader identity fingerprint against the embedded expected digest.
+    auto verify_loader_fingerprint(const arch::s390x::init::zxfl::protocol& boot) -> void {
+        const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
+            claimed_digest(boot.loader_digest, crypto::sha256::SHA256_DIGEST_SIZE);
+
+        const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
+            expected_digest(arch::s390x::init::zxvl::ZXFL_EXPECTED_DIGEST,
+                            crypto::sha256::SHA256_DIGEST_SIZE);
+
+        bool expected_zero = true;
+        for (auto b : expected_digest) {
+            if (b != 0U) { expected_zero = false; break; }
+        }
+        if (expected_zero) return;
+
+        for (u32 i = 0U; i < crypto::sha256::SHA256_DIGEST_SIZE; ++i) {
+            if (claimed_digest[i] != expected_digest[i]) [[unlikely]]
+                syschk_fatal(
+                    lib::kernel_error::from_init(lib::init_error::code::checksum_mismatch),
+                    "sys: loader identity rejected - embedded expected digest mismatch"
+                );
+        }
+    }
+
     /// @brief Print the kernel banner.
     auto banner() -> void {
         pinfo("sys: ZXFoundation (TM) {} - Copyright (c) {} assembler-0. Licensed under the Apache License, Version 2.0.\n",
@@ -173,8 +197,6 @@ namespace _internal {
             zxfoundation::base::config::CONFIG_ZX_BUILD_PLATFORM,
             zxfoundation::base::config::CONFIG_ZX_COMPILER_ID,
             zxfoundation::base::config::CONFIG_ZX_BUILD_NUMBER);
-
-        pinfo("hypervisor: {}", arch::s390x::cpu::processor::is_hypervisor() ? "true" : "false");
         pinfo("cmdline: {}", reinterpret_cast<const char*>(zxfoundation::init::boot_protocol.cmdline_addr));
     }
 
@@ -282,6 +304,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     _internal::verify_protocol_integrity(*protocol);
     _internal::validate_stack_frame(*protocol);
     _internal::verify_kernel_checksums(*protocol);
+    _internal::verify_loader_fingerprint(*protocol);
 
     zxfoundation::base::cxxrtse::cxxabi::run_global_constructor();
 

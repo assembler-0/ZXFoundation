@@ -44,6 +44,7 @@ using char8  = char8_t;
 using char16 = __CHAR16_TYPE__;
 using char32 = __CHAR32_TYPE__;
 using wchar  = __WCHAR_TYPE__;
+using uchar  = unsigned char;
 
 // linux/arch/s390/include/uapi/asm/types.h
 struct [[gnu::packed]] alignas(4) vector128 {
@@ -124,7 +125,7 @@ using u4096 = ubit_int<4096>;
 
     // misc.
 
-using uuid_t = unsigned char[16];
+using uuid_t = uchar[16];
 
 using nullptr_t = decltype(nullptr);
 

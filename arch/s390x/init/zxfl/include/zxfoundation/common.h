@@ -1,7 +1,10 @@
 #pragma once
 
 /// @brief compiler barrier
-#define barrier()     __asm__ volatile("" ::: "memory")
+#define cbarrier()     __asm__ volatile("" ::: "memory")
+
+#define __stringify(x) #x
+#define stringify(x)   __stringify(x)
 
 /// @brief concatenation
 #define __concat(a, b)    a ## b
@@ -64,10 +67,6 @@
 ///        requiring an actual instance of @T.  Equivalent to Linux's
 ///        typeof_member() and safe to use in unevaluated contexts.
 #define typeof_member(T, m) typeof(((T *)0)->m)
-
-// ---------------------------------------------------------------------------
-// container_of / container_of_const
-// ---------------------------------------------------------------------------
 
 /// @brief Cast a pointer to a struct member back to the enclosing struct.
 ///

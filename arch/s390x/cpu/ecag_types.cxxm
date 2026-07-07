@@ -1,0 +1,17 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ecag_types.cxxm
+/// @brief ECAG (Extract CPU Attributes) types and constants.
+
+export module arch.s390x.cpu.ecag_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::ecag {
+
+    constexpr u32 ECAG_CACHE    = 0U;
+    constexpr u32 ECAG_CPU      = 1U;
+
+} // namespace arch::s390x::cpu::ecag
+
+} // end export

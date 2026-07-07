@@ -39,6 +39,15 @@ namespace lib {
             stsi_failed             = 7,  ///< STSI instruction failed or returned invalid data.
             cpu_not_available       = 8,  ///< Target CPU is not available.
             invalid_cpu_id          = 9,  ///< CPU ID exceeds CONFIG_ZX_MAX_CPUS.
+            sthyi_failed            = 10, ///< STHYI instruction failed.
+            sclp_failed             = 11, ///< SCLP service call failed.
+            ecag_failed             = 12, ///< ECAG instruction failed.
+            cpu_mf_failed           = 13, ///< CPU measurement facility failed.
+            uv_failed               = 14, ///< Ultravisor call failed.
+            stp_failed              = 15, ///< STP operation failed.
+            ptff_failed             = 16, ///< PTFF instruction failed.
+            diag_failed             = 17, ///< DIAGNOSE instruction failed.
+            sigp_failed             = 18, ///< SIGP instruction failed (generic).
         };
     }
 
@@ -166,63 +175,63 @@ namespace lib {
         /// @param[in] c  arch_error::code value.
         /// @return kernel_error with category=arch.
         static constexpr auto from_arch(arch_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::arch, static_cast<u32>(c));
+            return kernel_error{error_category::arch, static_cast<u32>(c)};
         }
 
         /// @brief Construct memory error.
         /// @param[in] c  memory_error::code value.
         /// @return kernel_error with category=memory.
         static constexpr auto from_memory(memory_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::memory, static_cast<u32>(c));
+            return kernel_error{error_category::memory, static_cast<u32>(c)};
         }
 
         /// @brief Construct locking error.
         /// @param[in] c  locking_error::code value.
         /// @return kernel_error with category=locking.
         static constexpr auto from_locking(locking_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::locking, static_cast<u32>(c));
+            return kernel_error{error_category::locking, static_cast<u32>(c)};
         }
 
         /// @brief Construct cryptographic error.
         /// @param[in] c  crypto_error::code value.
         /// @return kernel_error with category=crypto.
         static constexpr auto from_crypto(crypto_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::crypto, static_cast<u32>(c));
+            return kernel_error{error_category::crypto, static_cast<u32>(c)};
         }
 
         /// @brief Construct driver error.
         /// @param[in] c  driver_error::code value.
         /// @return kernel_error with category=driver.
         static constexpr auto from_driver(driver_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::driver, static_cast<u32>(c));
+            return kernel_error{error_category::driver, static_cast<u32>(c)};
         }
 
         /// @brief Construct initialization error.
         /// @param[in] c  init_error::code value.
         /// @return kernel_error with category=init.
         static constexpr auto from_init(init_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::init, static_cast<u32>(c));
+            return kernel_error{error_category::init, static_cast<u32>(c)};
         }
 
         /// @brief Construct time error.
         /// @param[in] c  time_error::code value.
         /// @return kernel_error with category=time.
         static constexpr auto from_time(time_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::time, static_cast<u32>(c));
+            return kernel_error{error_category::time, static_cast<u32>(c)};
         }
 
         /// @brief Construct generic error.
         /// @param[in] c  generic_error::code value.
         /// @return kernel_error with category=generic.
         static constexpr auto from_generic(generic_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::generic, static_cast<u32>(c));
+            return kernel_error{error_category::generic, static_cast<u32>(c)};
         }
 
         // @brief Construct generic error.
         /// @param[in] c  generic_error::code value.
         /// @return kernel_error with category=generic.
         static constexpr auto from_machine(machine_error::code c) noexcept -> kernel_error {
-            return kernel_error(error_category::machine, static_cast<u32>(c));
+            return kernel_error{error_category::machine, static_cast<u32>(c)};
         }
 
         /// @brief Check if two errors are identical.
@@ -242,26 +251,24 @@ namespace lib {
         }
     };
 
-    // -------------------------------------------------------------------------
-    // Name-lookup helpers — used by formatter<kernel_error> below.
-    // -------------------------------------------------------------------------
-
     /// @brief Return the ASCII name of an error_category.
     /// @param[in] cat  Category to name.
     /// @return         Statically allocated string; never null.
     [[nodiscard]] constexpr auto category_name(error_category cat) noexcept -> string_view {
         switch (cat) {
-            case error_category::none:    return "none";
-            case error_category::arch:    return "arch";
-            case error_category::memory:  return "memory";
-            case error_category::locking: return "locking";
-            case error_category::crypto:  return "crypto";
-            case error_category::driver:  return "driver";
-            case error_category::init:    return "init";
-            case error_category::time:    return "time";
-            case error_category::generic: return "generic";
-            case error_category::machine: return "machine";
-            default:                      return "unknown";
+        #define expand(error) case error_category::error: return #error;
+            expand(none)
+            expand(arch)
+            expand(memory)
+            expand(locking)
+            expand(crypto)
+            expand(driver)
+            expand(init)
+            expand(time)
+            expand(generic)
+            expand(machine)
+        #undef expand
+            default: return "unknown";
         }
     }
 
@@ -273,102 +280,129 @@ namespace lib {
         switch (cat) {
             case error_category::arch:
                 switch (code) {
-                    case arch_error::none:                 return "none";
-                    case arch_error::sigp_busy:            return "sigp_busy";
-                    case arch_error::sigp_not_operational: return "sigp_not_operational";
-                    case arch_error::sigp_invalid_order:   return "sigp_invalid_order";
-                    case arch_error::psw_invalid_mask:     return "psw_invalid_mask";
-                    case arch_error::psw_invalid_address:  return "psw_invalid_address";
-                    case arch_error::stfle_failed:         return "stfle_failed";
-                    case arch_error::stsi_failed:          return "stsi_failed";
-                    case arch_error::cpu_not_available:    return "cpu_not_available";
-                    case arch_error::invalid_cpu_id:       return "invalid_cpu_id";
+                #define expand(error) case arch_error::error: return #error;
+                    expand(none)
+                    expand(sigp_busy)
+                    expand(sigp_not_operational)
+                    expand(sigp_invalid_order)
+                    expand(psw_invalid_mask)
+                    expand(psw_invalid_address)
+                    expand(stfle_failed)
+                    expand(stsi_failed)
+                    expand(cpu_not_available)
+                    expand(invalid_cpu_id)
+                    expand(sthyi_failed)
+                    expand(sclp_failed)
+                    expand(ecag_failed)
+                    expand(cpu_mf_failed)
+                    expand(uv_failed)
+                    expand(stp_failed)
+                    expand(ptff_failed)
+                    expand(diag_failed)
+                    expand(sigp_failed)
+                #undef expand
                     default: return "?";
                 }
             case error_category::memory:
                 switch (code) {
-                    case memory_error::none:                return "none";
-                    case memory_error::out_of_memory:       return "out_of_memory";
-                    case memory_error::invalid_address:     return "invalid_address";
-                    case memory_error::alignment_error:     return "alignment_error";
-                    case memory_error::region_overlap:      return "region_overlap";
-                    case memory_error::hhdm_init_failed:    return "hhdm_init_failed";
-                    case memory_error::page_fault:          return "page_fault";
-                    case memory_error::invalid_irq_contex:  return "invalid_irq_contex";
-                    case memory_error::transaction_aborted: return "transaction_aborted";
-                    case memory_error::capability_invalid:  return "capability_invalid";
-                    case memory_error::purpose_mismatch:    return "purpose_mismatch";
-                    case memory_error::zone_exhausted:      return "zone_exhausted";
-                    case memory_error::ssp_check_fail:      return "ssp_check_fail";
+                #define expand(error) case memory_error::error: return #error;
+                    expand(none)
+                    expand(out_of_memory)
+                    expand(invalid_address)
+                    expand(alignment_error)
+                    expand(region_overlap)
+                    expand(hhdm_init_failed)
+                    expand(page_fault)
+                    expand(invalid_irq_contex)
+                    expand(transaction_aborted)
+                    expand(capability_invalid)
+                    expand(purpose_mismatch)
+                    expand(zone_exhausted)
+                    expand(ssp_check_fail)
+                #undef expand
                     default: return "?";
                 }
             case error_category::locking:
                 switch (code) {
-                    case locking_error::none:               return "none";
-                    case locking_error::timeout:            return "timeout";
-                    case locking_error::deadlock_detected:  return "deadlock_detected";
-                    case locking_error::already_locked:     return "already_locked";
-                    case locking_error::not_locked:         return "not_locked";
-                    case locking_error::max_depth_exceeded: return "max_depth_exceeded";
+                #define expand(error) case locking_error::error: return #error;
+                    expand(none)
+                    expand(timeout)
+                    expand(deadlock_detected)
+                    expand(already_locked)
+                    expand(not_locked)
+                    expand(max_depth_exceeded)
+                #undef expand
                     default: return "?";
                 }
             case error_category::crypto:
                 switch (code) {
-                    case crypto_error::none:                return "none";
-                    case crypto_error::invalid_input:       return "invalid_input";
-                    case crypto_error::hash_mismatch:       return "hash_mismatch";
-                    case crypto_error::verification_failed: return "verification_failed";
+                #define expand(error) case crypto_error::error: return #error;
+                    expand(none)
+                    expand(invalid_input)
+                    expand(hash_mismatch)
+                    expand(verification_failed)
+                #undef expand
                     default: return "?";
                 }
             case error_category::driver:
                 switch (code) {
-                    case driver_error::none:      return "none";
-                    case driver_error::not_found: return "not_found";
-                    case driver_error::not_ready: return "not_ready";
-                    case driver_error::io_error:  return "io_error";
-                    case driver_error::timeout:   return "timeout";
-                    case driver_error::busy:      return "busy";
+                #define expand(error) case driver_error::error: return #error;
+                    expand(none)
+                    expand(not_found)
+                    expand(not_ready)
+                    expand(io_error)
+                    expand(timeout)
+                    expand(busy)
+                #undef expand
                     default: return "?";
                 }
             case error_category::init:
                 switch (code) {
-                    case init_error::none:               return "none";
-                    case init_error::boot_failed:        return "boot_failed";
-                    case init_error::invalid_protocol:   return "invalid_protocol";
-                    case init_error::checksum_mismatch:  return "checksum_mismatch";
+                #define expand(error) case init_error::error: return #error;
+                    expand(none)
+                    expand(boot_failed)
+                    expand(invalid_protocol)
+                    expand(checksum_mismatch)
+                #undef expand
                     default: return "?";
                 }
             case error_category::time:
                 switch (code) {
-                    case time_error::none:                return "none";
-                    case time_error::clock_not_available: return "clock_not_available";
-                    case time_error::invalid_timestamp:   return "invalid_timestamp";
-                    case time_error::adjustment_failed:   return "adjustment_failed";
+                #define expand(error) case time_error::error: return #error;
+                    expand(none)
+                    expand(clock_not_available)
+                    expand(invalid_timestamp)
+                    expand(adjustment_failed)
+                #undef expand
                     default: return "?";
                 }
             case error_category::generic:
                 switch (code) {
-                    case generic_error::none:            return "none";
-                    case generic_error::invalid_arg:     return "invalid_arg";
-                    case generic_error::not_supported:   return "not_supported";
-                    case generic_error::not_implemented: return "not_implemented";
-                    case generic_error::internal_error:  return "internal_error";
-                    case generic_error::not_found:       return "not_found";
-                    case generic_error::unknown:         return "unknown";
-                    case generic_error::out_of_range:    return "out_of_range";
-                    case generic_error::uninitialized:   return "uninitialized";
-                    case generic_error::stall:           return "stall";
+                #define expand(error) case generic_error::error: return #error;
+                    expand(none)
+                    expand(invalid_arg)
+                    expand(not_supported)
+                    expand(not_implemented)
+                    expand(internal_error)
+                    expand(not_found)
+                    expand(unknown)
+                    expand(out_of_range)
+                    expand(uninitialized)
+                    expand(stall)
+                #undef expand
                     default: return "?";
                 }
             case error_category::machine:
                 switch (code) {
-                    case machine_error::none:                return "none";
-                    case machine_error::system_damage:       return "system_damage";
-                    case machine_error::inst_process_damage: return "inst_process_damage";
-                    case machine_error::system_recovery:     return "system_recovery";
-                    case machine_error::timing_facility:     return "timing_facility";
-                    case machine_error::external_damage:     return "external_damage";
-                    case machine_error::failing_stor_addr:   return "failing_stor_addr";
+                #define expand(error) case machine_error::error: return #error;
+                    expand(none)
+                    expand(system_damage)
+                    expand(inst_process_damage)
+                    expand(system_recovery)
+                    expand(timing_facility)
+                    expand(external_damage)
+                    expand(failing_stor_addr)
+                #undef expand
                     default: return "?";
                 }
             default:

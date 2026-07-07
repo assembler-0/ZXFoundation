@@ -6,9 +6,88 @@ export module arch.s390x.cpu.clock;
 import zxfoundation.base.types;
 import arch.s390x.cpu.features;
 
+uchar ptff_function_mask[16];
+
 export {
 
 namespace arch::s390x::cpu::clock {
+
+    union tod_clock {
+        u128 val;
+        struct {
+            u128 ei	 :  8; /* epoch index */
+            u128 tod : 64; /* bits 0-63 of tod clock */
+            u128	 : 40;
+            u128 pf	 : 16; /* programmable field */
+        };
+        struct {
+            u128 eitod : 72; /* epoch index + bits 0-63 tod clock */
+            u128	   : 56;
+        };
+        struct {
+            u128 us	    : 60; /* micro-seconds */
+            u128 sus	: 12; /* sub-microseconds */
+            u128	    : 56;
+        };
+    };
+
+    constexpr u8 PTFF_QAF =	0x00;	/* query available functions */
+    constexpr u8 PTFF_QTO =	0x01;	/* query tod offset */
+    constexpr u8 PTFF_QSI	=   0x02;	/* query steering information */
+    constexpr u8 PTFF_QPT =	0x03;	/* query physical clock */
+    constexpr u8 PTFF_QUI =	0x04;	/* query UTC information */
+    constexpr u8 PTFF_ATO =	0x40;	/* adjust tod offset */
+    constexpr u8 PTFF_STO =	0x41;	/* set tod offset */
+    constexpr u8 PTFF_SFS =	0x42;	/* set fine steering rate */
+    constexpr u8 PTFF_SGS =	0x43;	/* set gross steering rate */
+
+    /* Query TOD offset result */
+    struct ptff_qto {
+        u64 physical_clock;
+        u64 tod_offset;
+        u64 logical_tod_offset;
+        u64 tod_epoch_difference;
+    };
+
+    inline auto ptff_query(const u32 nr) -> bool {
+        uchar *ptr = ptff_function_mask + (nr >> 3);
+        return (*ptr & (0x80 >> (nr & 7))) != 0;
+    }
+
+    /* Query UTC information result */
+    struct ptff_qui {
+        u32 tm : 2;
+        u32 ts : 2;
+        u32 : 28;
+        u32 pad_0x04;
+        u64 leap_event;
+        short old_leap;
+        short new_leap;
+        u32 pad_0x14;
+        u64 prt[5];
+        u64 cst[3];
+        u32 skew;
+        u32 pad_0x5c[41];
+    };
+
+    using ptff_t = uchar[16];
+
+    inline auto ptff(ptff_t ptff_block, u8 cmd) -> int {
+        struct addrtype { char _[sizeof(ptff_t)]{}; };
+        u32 r0 = cmd;
+        u64 r1 = reinterpret_cast<u64>(ptff_block);
+        int rc;
+        __asm__ volatile(
+            "   lgr  0,%[r0]\n"
+            "   lgr  1,%[r1]\n"
+            "   ptff\n"
+            "	ipm	%[rc]\n"
+            : [rc] "=d" (rc), "+m" (*reinterpret_cast<addrtype *>(r1))
+            : [r0] "d" (r0), [r1] "d" (r1)
+            : "cc", "0", "1"
+        );
+        return rc >> 28;
+    }
 
     /// @brief Store Clock (STCK) — stores the 64-bit TOD clock value.
     /// @return 64-bit TOD clock value.

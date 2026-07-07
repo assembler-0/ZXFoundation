@@ -56,7 +56,7 @@ namespace arch::s390x::cpu::sigp {
     }
 
     /// @brief Issue a SIGP (Signal Processor) instruction.
-    inline auto sigp_issue(u16 addr, u8 order, unsigned long parm,
+    inline auto sigp_issue(u16 addr, u8 order, u64 parm,
                 u32& status) -> int {
         processor::register_pair r1{ .even = 0, .odd = parm };
         int cc;

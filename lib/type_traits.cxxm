@@ -268,9 +268,9 @@ namespace lib {
 
 
     // Every integral type is either one of the character types, one of the
-    // signed integer types, one of the unsigned integer types, or bool,
+    // signed integer types, one of the u32 types, or bool,
     // or a cv-qualified version of one of those types ([basic.fundamental]).
-    // For now we only need to distinguish the signed/unsigned integer types.
+    // For now we only need to distinguish the i/u32 types.
     enum class _Integer_kind { _None, _Signed, _Unsigned };
 
     template<typename>
@@ -298,7 +298,7 @@ namespace lib {
     };
 
     template<>
-    struct __is_integral_helper<unsigned char>
+    struct __is_integral_helper<uchar>
             : public true_type {
         static constexpr auto _S_kind = _Integer_kind::_Unsigned;
     };
@@ -349,7 +349,7 @@ namespace lib {
     };
 
     template<>
-    struct __is_integral_helper<unsigned int>
+    struct __is_integral_helper<u32>
             : public true_type {
         static constexpr auto _S_kind = _Integer_kind::_Unsigned;
     };
@@ -361,7 +361,7 @@ namespace lib {
     };
 
     template<>
-    struct __is_integral_helper<unsigned long>
+    struct __is_integral_helper<u64>
             : public true_type {
         static constexpr auto _S_kind = _Integer_kind::_Unsigned;
     };
@@ -400,13 +400,13 @@ namespace lib {
     = __bool_constant<__is_integral_helper<_Tp>::_S_kind
                       == _Integer_kind::_Signed>;
 
-    // Check if a type is one of the unsigned integer types.
+    // Check if a type is one of the u32eger types.
     template<typename _Tp>
     using __is_unsigned_integer
     = __bool_constant<__is_integral_helper<_Tp>::_S_kind
                       == _Integer_kind::_Unsigned>;
 
-    // Check if a type is one of the signed or unsigned integer types.
+    // Check if a type is one of the signed or u32eger types.
     // i.e. an integral type except bool, char, wchar_t, and charN_t.
     template<typename _Tp>
     using __is_signed_or_unsigned_integer
@@ -1416,12 +1416,12 @@ namespace lib {
 
     template<>
     struct __make_unsigned<char> {
-        using __type = unsigned char;
+        using __type = uchar;
     };
 
     template<>
     struct __make_unsigned<signed char> {
-        using __type = unsigned char;
+        using __type = uchar;
     };
 
     template<>
@@ -1431,17 +1431,17 @@ namespace lib {
 
     template<>
     struct __make_unsigned<int> {
-        using __type = unsigned int;
+        using __type = u32;
     };
 
     template<>
     struct __make_unsigned<long> {
-        using __type = unsigned long;
+        using __type = u64;
     };
 
     template<>
     struct __make_unsigned<long long> {
-        using __type = unsigned long long;
+        using __type = u64;
     };
 
     __extension__
@@ -1491,14 +1491,14 @@ namespace lib {
         };
     };
 
-    // Choose unsigned integer type with the smallest rank and same size as _Tp
+    // Choose u32eger type with the smallest rank and same size as _Tp
     template<typename _Tp>
     class __make_unsigned_selector<_Tp, false, true>
             : __make_unsigned_selector_base {
         // With -fshort-enums, an enum may be as small as a char.
         __extension__
-        using _UInts = _List<unsigned char, unsigned short, unsigned int,
-            unsigned long, unsigned long long, unsigned __int128>;
+        using _UInts = _List<uchar, unsigned short, u32,
+            u64, u64, unsigned __int128>;
 
         using __unsigned_type = typename __select<sizeof(_Tp), _UInts>::__type;
 
@@ -1508,8 +1508,8 @@ namespace lib {
     };
 
     // wchar_t, char8_t, char16_t and char32_t are integral types but are
-    // neither signed integer types nor unsigned integer types, so must be
-    // transformed to the unsigned integer type with the smallest rank.
+    // neither signed integer types nor u32eger types, so must be
+    // transformed to the u32eger type with the smallest rank.
     // Use the partial specialization for enumeration types to do that.
     template<>
     struct __make_unsigned<wchar_t> {
@@ -1559,7 +1559,7 @@ namespace lib {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wkeyword-compat"
 
-    // Utility for finding the signed versions of unsigned integral types.
+    // Utility for finding the signed versions of u32egral types.
     template<typename _Tp>
     struct __make_signed {
         using __type = _Tp;
@@ -1571,7 +1571,7 @@ namespace lib {
     };
 
     template<>
-    struct __make_signed<unsigned char> {
+    struct __make_signed<uchar> {
         using __type = signed char;
     };
 
@@ -1581,12 +1581,12 @@ namespace lib {
     };
 
     template<>
-    struct __make_signed<unsigned int> {
+    struct __make_signed<u32> {
         using __type = signed int;
     };
 
     template<>
-    struct __make_signed<unsigned long> {
+    struct __make_signed<u64> {
         using __type = signed long;
     };
 
@@ -1627,7 +1627,7 @@ namespace lib {
     };
 
     // wchar_t, char16_t and char32_t are integral types but are neither
-    // signed integer types nor unsigned integer types, so must be
+    // signed integer types nor u32eger types, so must be
     // transformed to the signed integer type with the smallest rank.
     // Use the partial specialization for enumeration types to do that.
     template<>
@@ -1782,7 +1782,7 @@ namespace lib {
         usize _Align = __aligned_storage_default_alignment(_Len)>
     struct [[deprecated]] aligned_storage {
         struct type {
-            alignas(_Align) unsigned char __data[_Len];
+            alignas(_Align) uchar __data[_Len];
         };
     };
 

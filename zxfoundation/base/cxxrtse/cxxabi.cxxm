@@ -74,13 +74,13 @@ auto __cxa_finalize(void* dso) -> void {
     }
 }
 
-static constexpr unsigned long long GUARD_INITIALIZED  = 1ULL << 0;
-static constexpr unsigned long long GUARD_IN_PROGRESS  = 1ULL << 1;
+static constexpr u64 GUARD_INITIALIZED  = 1ULL << 0;
+static constexpr u64 GUARD_IN_PROGRESS  = 1ULL << 1;
 
-auto __cxa_guard_acquire(unsigned long long* g) -> int {
+auto __cxa_guard_acquire(u64* g) -> int {
     if (__atomic_load_n(g, __ATOMIC_ACQUIRE) & GUARD_INITIALIZED) return 0;
 
-    unsigned long long expected = 0;
+    u64 expected = 0;
     if (__atomic_compare_exchange_n(g, &expected,
                                     GUARD_IN_PROGRESS,
                                     false,
@@ -94,11 +94,11 @@ auto __cxa_guard_acquire(unsigned long long* g) -> int {
     return 0;
 }
 
-auto __cxa_guard_release(unsigned long long* g) -> void {
+auto __cxa_guard_release(u64* g) -> void {
     __atomic_store_n(g, GUARD_INITIALIZED, __ATOMIC_RELEASE);
 }
 
-auto __cxa_guard_abort(unsigned long long* g) -> void {
+auto __cxa_guard_abort(u64* g) -> void {
     __atomic_store_n(g, 0ULL, __ATOMIC_RELEASE);
 }
 
@@ -157,7 +157,7 @@ auto __cxa_end_catch() -> void {
     );
 }
 
-auto __cxa_allocate_exception(unsigned long) -> void* {
+auto __cxa_allocate_exception(u64) -> void* {
     zxfoundation::sys::syschk::syschk_fatal(
         lib::kernel_error::from_generic(lib::generic_error::code::internal_error),
         "cxxabi: __cxa_allocate_exception(): exception object allocation attempted "

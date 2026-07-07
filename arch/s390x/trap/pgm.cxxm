@@ -185,8 +185,7 @@ namespace arch::s390x::trap::pgm {
                 !pgm_name.empty() ? " (" : "",
                 !pgm_name.empty() ? pgm_name : "",
                 !pgm_name.empty() ? ")" : "",
-                static_cast<long unsigned int>(frame->psw_mask), static_cast<long unsigned int>(frame->psw_addr), trans_exc);
-            return;
+                static_cast<u64>(frame->psw_mask), static_cast<u64>(frame->psw_addr), trans_exc);
         }
 
         auto* lc = arch::s390x::cpu::lowcore::get_current();
@@ -242,7 +241,7 @@ namespace arch::s390x::trap::pgm {
                 !pgm_name.empty() ? " (" : "",
                 !pgm_name.empty() ? pgm_name : "",
                 !pgm_name.empty() ? ")" : "",
-                static_cast<long unsigned int>(frame->psw_mask), static_cast<long unsigned int>(frame->psw_addr));
+                static_cast<u64>(frame->psw_mask), static_cast<u64>(frame->psw_addr));
         }
     }
 

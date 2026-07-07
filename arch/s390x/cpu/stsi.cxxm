@@ -25,8 +25,8 @@ namespace arch::s390x::cpu::stsi {
         lib::bit_insert_msb(r0, 16, 31, static_cast<u64>(sel1));
 
         int cc;
-        register unsigned long reg0 __asm__("0") = r0;
-        register unsigned long reg1 __asm__("1") = static_cast<unsigned long>(sel2);
+        register u64 reg0 __asm__("0") = r0;
+        register u64 reg1 __asm__("1") = static_cast<u64>(sel2);
 
         __asm__ volatile (
             "   stsi    %[sysinfo]\n"

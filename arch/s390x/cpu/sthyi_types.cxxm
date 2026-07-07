@@ -1,0 +1,111 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/sthyi_types.cxxm
+/// @brief STHYI (Store Hypervisor Information) types and constants.
+
+export module arch.s390x.cpu.sthyi_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::sthyi {
+
+	enum class hdr_flags : u8 {
+		HDR_NOT_LPAR   = 0x10,
+		HDR_STACK_INCM = 0x20,
+		HDR_STSI_UNAV  = 0x40,
+		HDR_PERF_UNAV  = 0x80,
+	};
+
+	enum class mac_validity : u8 {
+		MAC_NAME_VLD = 0x20,
+		MAC_ID_VLD   = 0x40,
+		MAC_CNT_VLD  = 0x80,
+	};
+
+	enum class par_flag : u8 {
+		PAR_MT_EN = 0x80,
+	};
+
+	enum class par_validity : u8 {
+		PAR_GRP_VLD  = 0x08,
+		PAR_ID_VLD   = 0x10,
+		PAR_ABS_VLD  = 0x20,
+		PAR_WGHT_VLD = 0x40,
+		PAR_PCNT_VLD  = 0x80,
+	};
+
+	struct [[gnu::packed]] hdr_sctn {
+		u8 infhflg1;
+		u8 infhflg2; /* reserved */
+		u8 infhval1; /* reserved */
+		u8 infhval2; /* reserved */
+		u8 reserved[3];
+		u8 infhygct;
+		u16 infhtotl;
+		u16 infhdln;
+		u16 infmoff;
+		u16 infmlen;
+		u16 infpoff;
+		u16 infplen;
+		u16 infhoff1;
+		u16 infhlen1;
+		u16 infgoff1;
+		u16 infglen1;
+		u16 infhoff2;
+		u16 infhlen2;
+		u16 infgoff2;
+		u16 infglen2;
+		u16 infhoff3;
+		u16 infhlen3;
+		u16 infgoff3;
+		u16 infglen3;
+		u8 reserved2[4];
+	};
+
+	struct [[gnu::packed]] mac_sctn {
+		u8 infmflg1; /* reserved */
+		u8 infmflg2; /* reserved */
+		u8 infmval1;
+		u8 infmval2; /* reserved */
+		u16 infmscps;
+		u16 infmdcps;
+		u16 infmsifl;
+		u16 infmdifl;
+		char infmname[8];
+		char infmtype[4];
+		char infmmanu[16];
+		char infmseq[16];
+		char infmpman[4];
+		u8 reserved[4];
+	};
+
+	struct [[gnu::packed]] par_sctn {
+		u8 infpflg1;
+		u8 infpflg2; /* reserved */
+		u8 infpval1;
+		u8 infpval2; /* reserved */
+		u16 infppnum;
+		u16 infpscps;
+		u16 infpdcps;
+		u16 infpsifl;
+		u16 infpdifl;
+		u16 reserved;
+		char infppnam[8];
+		u32 infpwbcp;
+		u32 infpabcp;
+		u32 infpwbif;
+		u32 infpabif;
+		char infplgnm[8];
+		u32 infplgcp;
+		u32 infplgif;
+	};
+
+	struct [[gnu::packed]] sctns {
+		hdr_sctn hdr;
+		mac_sctn mac;
+		par_sctn par;
+	};
+
+} // namespace arch::s390x::cpu::sthyi
+
+} // end export

@@ -4,7 +4,10 @@
 
 #pragma once
 
-#ifdef __cplusplus
+#if !defined(__ASSMBLER__) || !defined(__ASSEMBLY__)
+
+#define __stringify(x) #x
+#define stringify(x)   __stringify(x)
 
 #define FMT_MSG(m) "zxfoundation: precpp.hxx - " m
 
@@ -42,6 +45,16 @@
 #else
 #define assert(expr) \
     do { if (!(expr)) [[unlikely]] zxfoundation::sys::syschk::syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::internal_error), #expr); } while (0)
+#endif
+
+#if 0
+
+#define CC_IPM(sym)		"	ipm	%[" __stringify(sym) "]\n"
+#define CC_OUT(sym, var)	[sym] "=d" (var)
+#define CC_TRANSFORM(cc)	({ (cc) >> 28; })
+#define CC_CLOBBER		"cc"
+#define CC_CLOBBER_LIST(...)	"cc", __VA_ARGS__
+
 #endif
 
 #endif

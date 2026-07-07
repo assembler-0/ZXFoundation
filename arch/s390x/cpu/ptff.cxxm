@@ -1,0 +1,133 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ptff.cxxm
+/// @brief z/Architecture PTFF (Perform Timing Facility Function) C++ wrappers
+
+export module arch.s390x.cpu.ptff;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::ptff {
+
+    enum class func : u64 {
+        QAF  = 0,   ///< Query Available Functions
+        QTO  = 1,   ///< Query TOD Offset
+        QSI  = 2,   ///< Query Steering Information
+        QPT  = 3,   ///< Query Physical Clock
+        QUI  = 4,   ///< Query UTC Information
+        QTOU = 5,   ///< Query TOD Offset User
+
+        ATO  = 64,  ///< Adjust TOD Offset
+        STO  = 65,  ///< Set TOD Offset
+        SFS  = 66,  ///< Set Fine-Steering Rate
+        SGS  = 67,  ///< Set Gross-Steering Rate
+        STOU = 69,  ///< Set TOD Offset User
+    };
+
+    struct qaf_result {
+        u64 functions[8]{};
+        operator u64() const { return functions[0]; }
+    };
+
+    struct qto_result {
+        u64 physical_clock{};
+        u64 tod_offset{};
+        u64 tod_epoch_difference{};
+        u64 reserved{};
+    };
+
+    struct qsi_result {
+        u64 physical_clock{};
+        u64 old_epoch_start{};
+        u64 old_epoch_base{};
+        u32 old_fine_s_rate{};
+        u32 old_gross_s_rate{};
+        u64 new_epoch_start{};
+        u64 new_epoch_base{};
+        u32 new_fine_s_rate{};
+        u32 new_gross_s_rate{};
+    };
+
+    struct qpt_result {
+        u64 physical_clock{};
+    };
+
+    struct qui_result {
+        u8 tm{}, ts{}, pad0{}, pad1[3]{};
+        u16 leap_event{};
+        i16 old_leap{};
+        i16 new_leap{};
+        u16 prt[5]{};
+        u16 cst[3]{};
+        u16 skew{};
+    };
+
+    struct qtou_result {
+        qto_result qto;
+        u64 tod_user_specified_epoch_difference{};
+    };
+
+    inline auto invoke(func fc, u64 param_block_addr) noexcept -> i32 {
+        u64 r1 = param_block_addr;
+        u64 r3 = static_cast<u64>(fc) << 48;
+        i32 cc;
+        register u64 gpr1 __asm__("1") = r1;
+        __asm__ volatile(
+            ".insn rrf,0xb9b90000,0,%[r3],0,0\n"
+            "ipm %[cc]\n"
+            "srl %[cc],28\n"
+            : [cc] "=d" (cc), "+d" (gpr1)
+            : [r3] "d" (r3)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    inline auto qaf(qaf_result& out) noexcept -> bool {
+        return invoke(func::QAF, reinterpret_cast<u64>(&out)) == 0;
+    }
+
+    inline auto qto(qto_result& out) noexcept -> bool {
+        return invoke(func::QTO, reinterpret_cast<u64>(&out)) == 0;
+    }
+
+    inline auto qsi(qsi_result& out) noexcept -> bool {
+        return invoke(func::QSI, reinterpret_cast<u64>(&out)) == 0;
+    }
+
+    inline auto qpt(qpt_result& out) noexcept -> bool {
+        return invoke(func::QPT, reinterpret_cast<u64>(&out)) == 0;
+    }
+
+    inline auto qui(qui_result& out) noexcept -> bool {
+        return invoke(func::QUI, reinterpret_cast<u64>(&out)) == 0;
+    }
+
+    inline auto qtou(qtou_result& out) noexcept -> bool {
+        return invoke(func::QTOU, reinterpret_cast<u64>(&out)) == 0;
+    }
+
+    // Control functions (privileged)
+    inline auto sto(u64 param_block_addr) noexcept -> bool {
+        return invoke(func::STO, param_block_addr) == 0;
+    }
+
+    inline auto ato(u64 param_block_addr) noexcept -> bool {
+        return invoke(func::ATO, param_block_addr) == 0;
+    }
+
+    inline auto sfs(u64 param_block_addr) noexcept -> bool {
+        return invoke(func::SFS, param_block_addr) == 0;
+    }
+
+    inline auto sgs(u64 param_block_addr) noexcept -> bool {
+        return invoke(func::SGS, param_block_addr) == 0;
+    }
+
+    inline auto stou(u64 param_block_addr) noexcept -> bool {
+        return invoke(func::STOU, param_block_addr) == 0;
+    }
+
+} // namespace arch::s390x::cpu::ptff
+
+} // end export

@@ -61,7 +61,7 @@ namespace lib {
         [[nodiscard]] auto test(usize bit, memory_order order = memory_order::relaxed) const noexcept -> bool {
             if (bit >= N) [[unlikely]] return false;
             return lib::bit_test_msb(m_storage[bit / bits_per_word].load(order), 
-                                     static_cast<unsigned int>(bit % bits_per_word));
+                                     static_cast<u32>(bit % bits_per_word));
         }
 
         /// @brief Non-atomically set a bit (use when lock is held).

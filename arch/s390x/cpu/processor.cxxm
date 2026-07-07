@@ -12,6 +12,7 @@ export module arch.s390x.cpu.processor;
 export import arch.s390x.cpu.processor_types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.diag;
 import lib.bit;
 
 namespace {
@@ -27,10 +28,10 @@ namespace arch::s390x::cpu::processor {
 
     /// @brief cpuid structure (STIDP result).
     struct alignas(8) [[gnu::packed]] cpuid {
-        unsigned int version:8;
-        unsigned int ident:24;
-        unsigned int machine:16;
-        unsigned int unused:16;
+        u32 version:8;
+        u32 ident:24;
+        u32 machine:16;
+        u32 unused:16;
     };
 
     auto get_cpuid(cpuid *id) -> void {
@@ -59,7 +60,7 @@ namespace arch::s390x::cpu::processor {
     /// @brief Spin-loop hint.
     inline auto cpu_relax() noexcept -> void {
         if (is_hypervisor()) {
-            __asm__ volatile("diag 0,0,0x44" ::: "memory");
+            diag::diag44();
         } else {
             barrier();
         }

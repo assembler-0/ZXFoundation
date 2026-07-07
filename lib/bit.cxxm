@@ -22,31 +22,31 @@ namespace lib {
 
     /// @brief Creates a mask with a single bit set (LSB0 numbering).
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_mask(unsigned int bit) noexcept -> T {
+    [[nodiscard]] constexpr auto bit_mask(u32 bit) noexcept -> T {
         return T(1) << bit;
     }
 
     /// @brief Creates a mask with a single bit set (MSB0/IBM numbering).
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_mask_msb(unsigned int bit) noexcept -> T {
+    [[nodiscard]] constexpr auto bit_mask_msb(u32 bit) noexcept -> T {
         return T(1) << (sizeof(T) * 8 - 1 - bit);
     }
 
     /// @brief Creates a mask for a range of bits [start, end] (inclusive, LSB0).
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_range_mask(unsigned int start, unsigned int end) noexcept -> T {
+    [[nodiscard]] constexpr auto bit_range_mask(u32 start, u32 end) noexcept -> T {
         if (start > end) return 0;
-        const unsigned int len = end - start + 1;
+        const u32 len = end - start + 1;
         if (len >= sizeof(T) * 8) return ~T(0);
         return ((T(1) << len) - 1) << start;
     }
 
     /// @brief Creates a mask for a range of bits [start, end] (inclusive, IBM MSB0).
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_range_mask_msb(unsigned int start, unsigned int end) noexcept -> T {
+    [[nodiscard]] constexpr auto bit_range_mask_msb(u32 start, u32 end) noexcept -> T {
         if (start > end) return 0;
-        const unsigned int len = end - start + 1;
-        const unsigned int shift = sizeof(T) * 8 - 1 - end;
+        const u32 len = end - start + 1;
+        const u32 shift = sizeof(T) * 8 - 1 - end;
         if (len >= sizeof(T) * 8) return ~T(0);
         return ((T(1) << len) - 1) << shift;
     }
@@ -54,39 +54,39 @@ namespace lib {
     // --- Bit Manipulation (LSB0) ---
 
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_test(T val, unsigned int bit) noexcept -> bool {
+    [[nodiscard]] constexpr auto bit_test(T val, u32 bit) noexcept -> bool {
         return (val & bit_mask<T>(bit)) != 0;
     }
 
     template <typename T> requires is_unsigned_v<T>
-    constexpr auto bit_set(T& val, unsigned int bit) noexcept -> void {
+    constexpr auto bit_set(T& val, u32 bit) noexcept -> void {
         val |= bit_mask<T>(bit);
     }
 
     template <typename T> requires is_unsigned_v<T>
-    constexpr auto bit_clear(T& val, unsigned int bit) noexcept -> void {
+    constexpr auto bit_clear(T& val, u32 bit) noexcept -> void {
         val &= ~bit_mask<T>(bit);
     }
 
     template <typename T> requires is_unsigned_v<T>
-    constexpr auto bit_toggle(T& val, unsigned int bit) noexcept -> void {
+    constexpr auto bit_toggle(T& val, u32 bit) noexcept -> void {
         val ^= bit_mask<T>(bit);
     }
 
     // --- Bit Manipulation (MSB0/IBM) ---
 
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_test_msb(T val, unsigned int bit) noexcept -> bool {
+    [[nodiscard]] constexpr auto bit_test_msb(T val, u32 bit) noexcept -> bool {
         return (val & bit_mask_msb<T>(bit)) != 0;
     }
 
     template <typename T> requires is_unsigned_v<T>
-    constexpr auto bit_set_msb(T& val, unsigned int bit) noexcept -> void {
+    constexpr auto bit_set_msb(T& val, u32 bit) noexcept -> void {
         val |= bit_mask_msb<T>(bit);
     }
 
     template <typename T> requires is_unsigned_v<T>
-    constexpr auto bit_clear_msb(T& val, unsigned int bit) noexcept -> void {
+    constexpr auto bit_clear_msb(T& val, u32 bit) noexcept -> void {
         val &= ~bit_mask_msb<T>(bit);
     }
 
@@ -94,35 +94,35 @@ namespace lib {
 
     /// @brief Extracts a bitfield [start, end] (inclusive, LSB0) and shifts it to LSB.
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_extract(T val, unsigned int start, unsigned int end) noexcept -> T {
+    [[nodiscard]] constexpr auto bit_extract(T val, u32 start, u32 end) noexcept -> T {
         return (val & bit_range_mask<T>(start, end)) >> start;
     }
 
     /// @brief Extracts a bitfield [start, end] (inclusive, IBM MSB0) and shifts it to LSB.
     template <typename T> requires is_unsigned_v<T>
-    [[nodiscard]] constexpr auto bit_extract_msb(T val, unsigned int start, unsigned int end) noexcept -> T {
-        const unsigned int shift = sizeof(T) * 8 - 1 - end;
+    [[nodiscard]] constexpr auto bit_extract_msb(T val, u32 start, u32 end) noexcept -> T {
+        const u32 shift = sizeof(T) * 8 - 1 - end;
         return (val & bit_range_mask_msb<T>(start, end)) >> shift;
     }
 
     /// @brief Inserts a value into a bitfield [start, end] (inclusive, LSB0).
     template <typename T> requires is_unsigned_v<T>
-    constexpr auto bit_insert(T& target, unsigned int start, unsigned int end, T val) noexcept -> void {
+    constexpr auto bit_insert(T& target, u32 start, u32 end, T val) noexcept -> void {
         const T mask = bit_range_mask<T>(start, end);
         target = (target & ~mask) | ((val << start) & mask);
     }
 
     /// @brief Inserts a value into a bitfield [start, end] (inclusive, IBM MSB0).
     template <typename T> requires is_unsigned_v<T>
-    constexpr auto bit_insert_msb(T& target, unsigned int start, unsigned int end, T val) noexcept -> void {
+    constexpr auto bit_insert_msb(T& target, u32 start, u32 end, T val) noexcept -> void {
         const T mask = bit_range_mask_msb<T>(start, end);
-        const unsigned int shift = sizeof(T) * 8 - 1 - end;
+        const u32 shift = sizeof(T) * 8 - 1 - end;
         target = (target & ~mask) | ((val << shift) & mask);
     }
 
     // --- Advanced Wrappers ---
 
-    /// @brief A non-owning wrapper around an unsigned integer for bit manipulation.
+    /// @brief A non-owning wrapper around an u32eger for bit manipulation.
     /// @tparam T Underlying integer type.
     /// @tparam Conv Default numbering convention.
     template <typename T, bit_numbering Conv = bit_numbering::lsb0>
@@ -132,29 +132,29 @@ namespace lib {
 
         constexpr explicit bit_view(T& v) noexcept : value(v) {}
 
-        [[nodiscard]] constexpr auto test(unsigned int bit) const noexcept -> bool {
+        [[nodiscard]] constexpr auto test(u32 bit) const noexcept -> bool {
             if constexpr (Conv == bit_numbering::msb0) return bit_test_msb(value, bit);
             else return bit_test(value, bit);
         }
 
-        constexpr auto set(unsigned int bit) noexcept -> bit_view& {
+        constexpr auto set(u32 bit) noexcept -> bit_view& {
             if constexpr (Conv == bit_numbering::msb0) bit_set_msb(value, bit);
             else bit_set(value, bit);
             return *this;
         }
 
-        constexpr auto clear(unsigned int bit) noexcept -> bit_view& {
+        constexpr auto clear(u32 bit) noexcept -> bit_view& {
             if constexpr (Conv == bit_numbering::msb0) bit_clear_msb(value, bit);
             else bit_clear(value, bit);
             return *this;
         }
 
-        [[nodiscard]] constexpr auto extract(unsigned int start, unsigned int end) const noexcept -> T {
+        [[nodiscard]] constexpr auto extract(u32 start, u32 end) const noexcept -> T {
             if constexpr (Conv == bit_numbering::msb0) return bit_extract_msb(value, start, end);
             else return bit_extract(value, start, end);
         }
 
-        constexpr auto insert(unsigned int start, unsigned int end, T val) noexcept -> bit_view& {
+        constexpr auto insert(u32 start, u32 end, T val) noexcept -> bit_view& {
             if constexpr (Conv == bit_numbering::msb0) bit_insert_msb(value, start, end, val);
             else bit_insert(value, start, end, val);
             return *this;
@@ -200,24 +200,24 @@ namespace lib {
     template <typename T> requires is_unsigned_v<T>
     [[nodiscard]] constexpr auto countl_zero(T value) noexcept -> int {
         if (value == 0) return sizeof(T) * 8;
-        if constexpr (sizeof(T) <= sizeof(unsigned int)) return __builtin_clz(static_cast<unsigned int>(value)) - (sizeof(unsigned int) - sizeof(T)) * 8;
-        else if constexpr (sizeof(T) == sizeof(unsigned long)) return __builtin_clzl(value);
-        else if constexpr (sizeof(T) == sizeof(unsigned long long)) return __builtin_clzll(value);
+        if constexpr (sizeof(T) <= sizeof(u32)) return __builtin_clz(static_cast<u32>(value)) - (sizeof(u32) - sizeof(T)) * 8;
+        else if constexpr (sizeof(T) == sizeof(u64)) return __builtin_clzl(value);
+        else if constexpr (sizeof(T) == sizeof(u64)) return __builtin_clzll(value);
     }
 
     template <typename T> requires is_unsigned_v<T>
     [[nodiscard]] constexpr auto countr_zero(T value) noexcept -> int {
         if (value == 0) return sizeof(T) * 8;
-        if constexpr (sizeof(T) <= sizeof(unsigned int)) return __builtin_ctz(static_cast<unsigned int>(value));
-        else if constexpr (sizeof(T) == sizeof(unsigned long)) return __builtin_ctzl(value);
-        else if constexpr (sizeof(T) == sizeof(unsigned long long)) return __builtin_ctzll(value);
+        if constexpr (sizeof(T) <= sizeof(u32)) return __builtin_ctz(static_cast<u32>(value));
+        else if constexpr (sizeof(T) == sizeof(u64)) return __builtin_ctzl(value);
+        else if constexpr (sizeof(T) == sizeof(u64)) return __builtin_ctzll(value);
     }
 
     template <typename T> requires is_unsigned_v<T>
     [[nodiscard]] constexpr auto popcount(T value) noexcept -> int {
-        if constexpr (sizeof(T) <= sizeof(unsigned int)) return __builtin_popcount(static_cast<unsigned int>(value));
-        else if constexpr (sizeof(T) == sizeof(unsigned long)) return __builtin_popcountl(value);
-        else if constexpr (sizeof(T) == sizeof(unsigned long long)) return __builtin_popcountll(value);
+        if constexpr (sizeof(T) <= sizeof(u32)) return __builtin_popcount(static_cast<u32>(value));
+        else if constexpr (sizeof(T) == sizeof(u64)) return __builtin_popcountl(value);
+        else if constexpr (sizeof(T) == sizeof(u64)) return __builtin_popcountll(value);
     }
 
     /// @brief Checks if a value is a power of two.

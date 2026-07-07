@@ -88,8 +88,8 @@ namespace lib {
     auto memset(void *s, int c, usize n) -> void* {
         if (n == 0) return s;
 
-        auto *mem = static_cast<unsigned char*>(s);
-        auto x = static_cast<unsigned char>(c);
+        auto *mem = static_cast<uchar*>(s);
+        auto x = static_cast<uchar>(c);
 
         // MVCL is good for very large blocks (e.g. > 1KB).
         // For smaller blocks, EX + XC or EX + MVC is faster.
@@ -129,7 +129,7 @@ namespace lib {
         } else {
             *mem = x;
             if (n > 1) {
-                unsigned char *dst = mem + 1;
+                uchar *dst = mem + 1;
                 usize len = n - 1;
                 while (len > 256) {
                     __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (dst - 1) : "memory", "cc");
@@ -171,8 +171,8 @@ namespace lib {
             return d;
         }
 
-        auto *dst = static_cast<unsigned char*>(d);
-        const auto *src = static_cast<const unsigned char*>(s);
+        auto *dst = static_cast<uchar*>(d);
+        const auto *src = static_cast<const uchar*>(s);
         while (n > 256) {
             __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (src) : "memory", "cc");
             dst += 256;
@@ -200,8 +200,8 @@ namespace lib {
             return memcpy(dest, src, n);
         }
 
-        auto *d = static_cast<unsigned char*>(dest) + n;
-        const auto *s = static_cast<const unsigned char*>(src) + n;
+        auto *d = static_cast<uchar*>(dest) + n;
+        const auto *s = static_cast<const uchar*>(src) + n;
 
         while (n > 0) {
             usize chunk = (n > 256) ? 256 : n;
@@ -228,8 +228,8 @@ namespace lib {
     auto memcmp(const void *s1, const void *s2, usize n) -> int {
         if (n == 0) return 0;
 
-        const auto *p1 = static_cast<const unsigned char*>(s1);
-        const auto *p2 = static_cast<const unsigned char*>(s2);
+        const auto *p1 = static_cast<const uchar*>(s1);
+        const auto *p2 = static_cast<const uchar*>(s2);
 
         while (n > 256) {
             int cc;

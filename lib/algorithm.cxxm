@@ -131,7 +131,7 @@ namespace lib {
                       && is_same_v<T, remove_pointer_t<OutputIt>>) {
             if (n > 0) {
                 lib::memset(static_cast<void*>(first),
-                            static_cast<int>(static_cast<unsigned char>(value)),
+                            static_cast<int>(static_cast<uchar>(value)),
                             static_cast<usize>(n));
             }
         } else if constexpr (is_pointer_v<OutputIt>

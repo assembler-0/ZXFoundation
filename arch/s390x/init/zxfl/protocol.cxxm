@@ -8,6 +8,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.memory.hhdm_types;
 import crypto.sha256_types;
+import lib.string_view;
 
 export {
 
@@ -27,6 +28,8 @@ namespace arch::s390x::init::zxfl {
     constexpr auto ZXFL_FLAG_STFLE    = 1U << 4;
     constexpr auto ZXFL_FLAG_SYSINFO  = 1U << 5;
     constexpr auto ZXFL_FLAG_TOD      = 1U << 6;
+    constexpr auto ZXFL_FLAG_SCLP     = 1U << 8;
+    constexpr auto ZXFL_FLAG_ECAG     = 1U << 12;
 
     constexpr auto ZXFL_MEM_MAP_MAX   = 16U;
     constexpr auto ZXFL_CPU_MAP_MAX   = zxfoundation::base::config::CONFIG_ZX_MAX_CPUS;
@@ -36,10 +39,16 @@ namespace arch::s390x::init::zxfl {
     constexpr auto ZXFL_MEM_LOADER    = 0x03U;
     constexpr auto ZXFL_MEM_KERNEL    = 0x04U;
 
+    constexpr auto ZXFL_MEMPROBE_UNKNOWN = 0;
+    constexpr auto ZXFL_MEMPROBE_SCLP    = 1;
+    constexpr auto ZXFL_MEMPROBE_DIAG    = 2;
+    constexpr auto ZXFL_MEMPROBE_TPROT   = 3;
+
     constexpr auto ZXFL_CPU_ONLINE    = 0x01U;
     constexpr auto ZXFL_CPU_STOPPED   = 0x02U;
     constexpr auto ZXFL_CPU_UNKNOWN   = 0x00U;
 
+    /// @note This is NOT z/Architecture CPU Types, this is just ZXFL variables
     constexpr auto ZXFL_CPU_TYPE_CP      = 1U;
     constexpr auto ZXFL_CPU_TYPE_IFL     = 2U;
     constexpr auto ZXFL_CPU_TYPE_ICF     = 3U;
@@ -78,20 +87,90 @@ namespace arch::s390x::init::zxfl {
         u8  capacity{};
     };
 
+    /// @brief IPL type values for ipl_info::ipl_type.
+    constexpr auto IPL_TYPE_CCW    = 0U;
+    constexpr auto IPL_TYPE_FCP    = 1U;
+    constexpr auto IPL_TYPE_ECKD   = 2U;
+    constexpr auto IPL_TYPE_NVME   = 3U;
+    constexpr auto IPL_TYPE_UNKNOWN = 0xFFU;
+
+    /// @brief SCLP feature bit indices for sclp_info::feature_bits.
+    constexpr auto SCLP_FEAT_SIEF2   = 0U;
+    constexpr auto SCLP_FEAT_SIIF    = 1U;
+    constexpr auto SCLP_FEAT_SIGPIF  = 2U;
+    constexpr auto SCLP_FEAT_GPERF   = 3U;
+    constexpr auto SCLP_FEAT_IB      = 4U;
+    constexpr auto SCLP_FEAT_CEI     = 5U;
+    constexpr auto SCLP_FEAT_SKEY    = 6U;
+
     /// @brief System identification — populated from STSI (EBCDIC converted to ASCII by loader).
     struct systeminfo {
+        // STSI 1.1.1
         char manufacturer[16]{};
         char type[4]{};
         char model[16]{};
         char sequence[16]{};
         char plant[4]{};
+        char model_capacity[16]{};
+        char model_perm_cap[16]{};
+        char model_temp_cap[16]{};
+        char model_var_cap[16]{};
+        u32 model_cap_rating{};
+        u32 model_perm_cap_rating{};
+        u32 model_temp_cap_rating{};
+        u32 model_var_cap_rating{};
+        u32 ncr{}, npr{}, ntr{}, nvr{};
+        u8  typepct[5]{};
+
+        // STSI 2.2.2
         char lpar_name[8]{};
-        u16  lpar_number{};
-        u16  cpus_total{};
-        u16  cpus_configured{};
-        u16  cpus_standby{};
-        u32  capability{};
-        u32  _pad{};
+        u16 lpar_number{};
+        u8  lpar_characteristics{};
+        u16 lpar_cpus_dedicated{};
+        u16 lpar_cpus_shared{};
+        u32 lpar_caf{};
+        u8  lpar_mt_installed{};
+        u8  lpar_mt_stid{};
+        u8  lpar_mt_gtid{};
+        u8  lpar_vsne{};
+        u8  lpar_uuid[16]{};
+
+        // STSI 1.2.2
+        u16 cpus_total{};
+        u16 cpus_configured{};
+        u16 cpus_standby{};
+        u16 cpus_reserved{};
+        u32 capability{};
+        u32 nominal_cap{};
+        u32 secondary_cap{};
+    };
+
+    /// @brief SCLP facility info detected by loader.
+    struct sclp_info {
+        u64 facilities{};
+        u32 max_cores{};
+        u32 mtid{};
+        u32 mtid_cp{};
+        u32 ibc{};
+        u64 rnmax{};
+        u64 rzm{};
+        u64 hamax{};
+        u64 hsa_size{};
+        u64 hmfai{};
+        u32 feature_bits{};
+    };
+
+    /// @brief ECAG CPU attributes.
+    struct ecag_info {
+        u32 cache_line_size{};
+        u32 cache_total_size{};
+        u32 cache_associativity{};
+        u32 _pad0{};
+        u16 numa_node{};
+        u16 socket_id{};
+        u16 core_id{};
+        u8  smt_id{};
+        u8  _pad1[9]{};
     };
 
     /// @brief System Modules - (sysmodule=N in parmfile)
@@ -128,7 +207,8 @@ namespace arch::s390x::init::zxfl {
         u64 mem_total_bytes{};
         u64 mem_map_addr{};    ///< HHDM virtual address of mem_region[]
         u32 mem_map_count{};
-        u32 _pad3{};
+        u8  mem_detect_source{}; ///< 0=none, 1=SCLP, 2=DIAG260, 3=TPROT
+        u8  _pad3[3]{};
         u64 hhdm_phys_coverage_end{}; ///< Exclusive physical end covered by initial HHDM DAT.
 
         u64 stfle_fac[cpu::stfle::STFLE_MAX_DWORDS]{};
@@ -169,10 +249,19 @@ namespace arch::s390x::init::zxfl {
 
         /// @brief HHDM virtual address of the structural lock segment (converted by mmu.c).
         u64 lock_phys{};
+
+        /// @brief SHA-256 of stage2 .text+.rodata+.data. Verified by kernel.
+        u8 loader_digest[32]{};
+
+        /// @brief HHDM virt addr of sclp_info struct
+        u64 sclp_info_addr{};
+
+        /// @brief HHDM virt addr of ecag_info struct
+        u64 ecag_info_addr{};
     };
 
     /// @brief Pretty-print a ZXFL memory region type.
-    [[nodiscard]] auto mem_type_str(u32 type) noexcept -> const char* {
+    [[nodiscard]] auto mem_type_str(u32 type) noexcept -> lib::string_view {
         switch (type) {
             case ZXFL_MEM_USABLE:   return "usable";
             case ZXFL_MEM_RESERVED: return "reserved";
@@ -183,7 +272,7 @@ namespace arch::s390x::init::zxfl {
     }
 
     /// @brief Pretty-print a ZXFL CPU state.
-    [[nodiscard]] auto cpu_state_str(u8 state) noexcept -> const char* {
+    [[nodiscard]] auto cpu_state_str(u8 state) noexcept -> lib::string_view {
         switch (state) {
             case ZXFL_CPU_ONLINE:  return "online";
             case ZXFL_CPU_STOPPED: return "stopped";
@@ -192,7 +281,7 @@ namespace arch::s390x::init::zxfl {
     }
 
     /// @brief Pretty-print a ZXFL CPU type.
-    [[nodiscard]] auto cpu_type_str(u8 type) noexcept -> const char* {
+    [[nodiscard]] auto cpu_type_str(u8 type) noexcept -> lib::string_view {
         switch (type) {
             case ZXFL_CPU_TYPE_CP:      return "CP";
             case ZXFL_CPU_TYPE_IFL:     return "IFL";
@@ -203,7 +292,7 @@ namespace arch::s390x::init::zxfl {
             default:                    return "?";
         }
     }
-    
+
 } // namespace arch::s390x::init::zxfl
 
 namespace arch::s390x::init::zxvl {
@@ -235,6 +324,13 @@ namespace arch::s390x::init::zxvl {
     constexpr auto ZXVL_CKSUM_ALGO_SHA256 = 0x00000001U;
     constexpr auto ZXVL_CKSUM_MAX_ENTRIES = 16U;
     constexpr auto ZXVL_PFLAGS_CKSUM      = 0x00200004U;
+
+    /// @brief Expected SHA-256 digest of the authorized stage2 loader.
+    ///        The build system MUST override this with the actual digest.
+    ///        Zero digest (default) disables loader fingerprint verification.
+    inline constexpr u8 ZXFL_EXPECTED_DIGEST[crypto::sha256::SHA256_DIGEST_SIZE]{};
+    static_assert(sizeof(ZXFL_EXPECTED_DIGEST) == 32U,
+        "ZXFL_EXPECTED_DIGEST must be exactly 32 bytes");
 
     [[nodiscard]] constexpr auto compute_token(u64 stfle0, u64 schid) noexcept -> u64 {
         return ZXVL_SEED ^ stfle0 ^ schid;
