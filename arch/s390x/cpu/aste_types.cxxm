@@ -5,7 +5,7 @@
 
 export module arch.s390x.cpu.aste_types;
 import zxfoundation.base.types;
-import lib.cstring;
+import lib.algorithm;
 
 export {
 
@@ -129,7 +129,7 @@ namespace arch::s390x::cpu::aste {
 
         /// @brief Zero all words.
         auto clear() noexcept -> void {
-           :: lib::memset(words, 0, sizeof(words));
+           lib::fill_n(words, sizeof(words) / sizeof(words[0]), u64{0});
         }
     };
 

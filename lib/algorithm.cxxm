@@ -7,6 +7,8 @@ import zxfoundation.base.types;
 import lib.concepts;
 import lib.util;
 import lib.iterator;
+import lib.type_traits;
+import lib.cstring;
 
 export {
 
@@ -88,6 +90,65 @@ namespace lib {
     template <input_iterator InputIt, typename UnaryPredicate>
     [[nodiscard]] constexpr auto none_of(InputIt first, InputIt last, UnaryPredicate p) -> bool {
         return find_if(first, last, p) == last;
+    }
+
+    /// @brief Copies exactly n elements from first to result.
+    /// @tparam InputIt   Input iterator type.
+    /// @tparam Size      Integral count type.
+    /// @tparam OutputIt  Output iterator type.
+    /// @note For trivially copyable contiguous types this delegates to
+    ///       MVCL-based lib::memcpy for maximum throughput.
+    template <typename InputIt, typename Size, typename OutputIt>
+    constexpr auto copy_n(InputIt first, Size n, OutputIt result) -> OutputIt {
+        if constexpr (is_pointer_v<InputIt> && is_pointer_v<OutputIt>
+                      && is_trivially_copyable_v<remove_pointer_t<InputIt>>
+                      && is_same_v<remove_pointer_t<InputIt>, remove_pointer_t<OutputIt>>) {
+            if (n > 0) {
+                lib::memcpy(static_cast<void*>(result),
+                            static_cast<const void*>(first),
+                            static_cast<usize>(n) * sizeof(remove_pointer_t<InputIt>));
+            }
+            return result + n;
+        } else {
+            for (Size i = 0; i < n; ++i) {
+                *result++ = *first++;
+            }
+            return result;
+        }
+    }
+
+    /// @brief Fills exactly n elements with value.
+    /// @tparam OutputIt  Output iterator type.
+    /// @tparam Size      Integral count type.
+    /// @tparam T         Fill value type.
+    /// @note For trivially copyable contiguous types this delegates to
+    ///       the optimized lib::memset.
+    template <typename OutputIt, typename Size, typename T>
+    constexpr auto fill_n(OutputIt first, Size n, const T& value) -> void {
+        if constexpr (is_pointer_v<OutputIt>
+                      && is_trivially_copyable_v<remove_pointer_t<OutputIt>>
+                      && sizeof(remove_pointer_t<OutputIt>) == 1
+                      && is_same_v<T, remove_pointer_t<OutputIt>>) {
+            if (n > 0) {
+                lib::memset(static_cast<void*>(first),
+                            static_cast<int>(static_cast<unsigned char>(value)),
+                            static_cast<usize>(n));
+            }
+        } else if constexpr (is_pointer_v<OutputIt>
+                             && is_trivially_copyable_v<remove_pointer_t<OutputIt>>
+                             && is_same_v<remove_pointer_t<OutputIt>, T>) {
+            // For multi-byte trivially copyable types, use copy_n with itself
+            if (n > 0) {
+                auto* out = first;
+                for (Size i = 0; i < n; ++i) {
+                    *out++ = value;
+                }
+            }
+        } else {
+            for (Size i = 0; i < n; ++i) {
+                *first++ = value;
+            }
+        }
     }
 
 } // namespace lib

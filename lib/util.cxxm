@@ -78,6 +78,14 @@ namespace lib {
         return reinterpret_cast<const Owner*>(reinterpret_cast<uptr>(ptr) - offset);
     }
 
+    /// @brief Converts an enumeration value to its underlying type.
+    /// @tparam E Enumeration type.
+    template <typename E>
+        requires is_enum_v<E>
+    [[nodiscard]] constexpr auto to_underlying(E e) noexcept -> underlying_type_t<E> {
+        return static_cast<underlying_type_t<E>>(e);
+    }
+
 } // namespace lib
 
 } // end export

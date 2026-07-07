@@ -18,7 +18,7 @@ import arch.s390x.cpu.uaccess;
 import zxfoundation.sched.sched;
 import lib.error;
 import lib.expected;
-import lib.cstring;
+import lib.algorithm;
 
 static constexpr u64 NC_ERROR = ~0ULL;
 

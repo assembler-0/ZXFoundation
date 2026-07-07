@@ -18,7 +18,7 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
 import lib.error;
 import lib.expected;
-import lib.cstring;
+import lib.algorithm;
 import lib.string_view;
 
 static constexpr u64 NC_ERROR = ~0ULL;

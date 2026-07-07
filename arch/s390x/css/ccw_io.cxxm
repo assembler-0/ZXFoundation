@@ -20,7 +20,7 @@ import lib.error;
 import lib.expected;
 import lib.placementnew;
 import lib.format;
-import lib.cstring;
+import lib.algorithm;
 import lib.util;
 
 export {
@@ -113,7 +113,7 @@ namespace arch::s390x::css::ccw_io {
         while (true) {
             if (entry->io_done.load(atomic::memory_order::seq_cst) != 0) {
                 irb result_irb{};
-                ::lib::memcpy(&result_irb, &entry->last_irb, sizeof(irb));
+                ::lib::copy_n(reinterpret_cast<const u8*>(&entry->last_irb), sizeof(irb), reinterpret_cast<u8*>(&result_irb));
 
                 if (result_irb.scsw_data.has_error()) {
                     pwarn("ccw_io: I/O error sch={} dev_status={} sch_status={} residual={}",
@@ -132,7 +132,7 @@ namespace arch::s390x::css::ccw_io {
 
                 if (entry->io_done.load(atomic::memory_order::seq_cst) != 0) {
                     irb result_irb{};
-                    ::lib::memcpy(&result_irb, &entry->last_irb, sizeof(irb));
+                    ::lib::copy_n(reinterpret_cast<const u8*>(&entry->last_irb), sizeof(irb), reinterpret_cast<u8*>(&result_irb));
                     irqctl::irq_restore(saved_irq);
                     if (result_irb.scsw_data.has_error())
                         return ::lib::unexpected(
@@ -147,7 +147,7 @@ namespace arch::s390x::css::ccw_io {
                     const u8 ac = result_irb.scsw_data.actl();
                     if ((sc & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0 &&
                         (ac & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
-                        ::lib::memcpy(&entry->last_irb, &result_irb, sizeof(irb));
+                        ::lib::copy_n(reinterpret_cast<const u8*>(&result_irb), sizeof(irb), reinterpret_cast<u8*>(&entry->last_irb));
                         entry->state = subchannel_state::idle;
                         irqctl::irq_restore(saved_irq);
                         if (result_irb.scsw_data.has_error())
@@ -202,7 +202,7 @@ namespace arch::s390x::css::ccw_io {
 
         senseid_data result{};
         if (io_r) {
-            ::lib::memcpy(&result, buf, sizeof(senseid_data));
+            ::lib::copy_n(reinterpret_cast<const u8*>(buf), sizeof(senseid_data), reinterpret_cast<u8*>(&result));
         }
 
         free(::lib::move(page).make_active());
@@ -243,7 +243,7 @@ namespace arch::s390x::css::ccw_io {
             if (!entry) continue;
 
             // Store the sense data in the subchannel table entry.
-            ::lib::memcpy(&entry->sense, &(*sense_r), sizeof(senseid_data));
+            ::lib::copy_n(reinterpret_cast<const u8*>(&(*sense_r)), sizeof(senseid_data), reinterpret_cast<u8*>(&entry->sense));
             ++identified;
 
             const u16 dev_type = sense_r->dev_type;

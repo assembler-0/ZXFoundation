@@ -9,6 +9,7 @@ import lib.expected;
 import lib.error;
 import lib.util;
 import lib.compare;
+import lib.tuple_types;
 
 export {
 
@@ -156,9 +157,6 @@ namespace lib {
 
     /// @name Structured binding support
     /// @{
-
-    template <typename T> struct tuple_size;
-    template <usize I, typename T> struct tuple_element;
 
     template <typename T, usize N>
     struct tuple_size<array<T, N>> {

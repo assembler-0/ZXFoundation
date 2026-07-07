@@ -13,6 +13,8 @@ add_custom_target(zxf_bump_buildno ALL
         -DZXFoundation_Release=${ZXFoundation_Release}
         "-DZXFoundation_Copyright_Date=${ZXFoundation_Copyright_Date}"
         "-DZXFoundation_Host_Build_Platform=${ZXFoundation_Host_Build_Platform}"
+        -DZXFoundation_Max_Cpus=${MAX_CPUS}
+        "-DZXFoundation_Dasd_Boot_Serial=${DASD_SERIAL}"
         -P ${CMAKE_SOURCE_DIR}/cmake/build_number.cmake
     BYPRODUCTS "${_zxf_config_cxxm}"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

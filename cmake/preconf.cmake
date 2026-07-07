@@ -24,7 +24,9 @@ else()
     set(RELEASE_H "h1")
 endif()
 
-set(ZXFoundation_Dasd_Boot_serial "${DASD_SERIAL}")
+set(ZXFoundation_Dasd_Boot_Serial "${DASD_SERIAL}")
+
+set(ZXFoundation_Max_Cpus "${MAX_CPUS}")
 
 set(ZXFoundation_Release "${RELEASE_YY}${RELEASE_H}")
 

@@ -9,7 +9,7 @@ import arch.s390x.mmu.mmu_types;
 import zxfoundation.base.types;
 import zxfoundation.memory.hhdm;
 import lib.algorithm;
-import lib.cstring;
+import lib.algorithm;
 
 namespace arch::s390x::cpu::uaccess::_internal {
 
@@ -54,7 +54,7 @@ namespace arch::s390x::cpu::uaccess::_internal {
             const auto* page_ptr = reinterpret_cast<const u8*>(
                 hhdm::phys_to_virt(*phys_r));
 
-            ::lib::memcpy(out + copied, page_ptr, chunk);
+            ::lib::copy_n(page_ptr, chunk, out + copied);
             copied += chunk;
         }
         return 0;
@@ -83,7 +83,7 @@ namespace arch::s390x::cpu::uaccess::_internal {
             auto* page_ptr = reinterpret_cast<u8*>(
                 hhdm::phys_to_virt(*phys_r));
 
-            ::lib::memcpy(page_ptr, in + copied, chunk);
+            ::lib::copy_n(in + copied, chunk, page_ptr);
             copied += chunk;
         }
         return 0;

@@ -21,7 +21,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.ctlreg;
 import lib.error;
 import lib.expected;
-import lib.cstring;
+import lib.algorithm;
 import lib.format;
 import lib.placementnew;
 
@@ -351,7 +351,7 @@ namespace arch::s390x::css {
         // Store a copy for interrupt-path inspection.
         {
             zxfoundation::locking::irq_lock_guard guard(_internal::g_css_lock);
-            ::lib::memcpy(&entry.last_irb, &irb_ref, sizeof(irb));
+            entry.last_irb = irb_ref;
         }
 
         return cc;
@@ -452,7 +452,7 @@ namespace arch::s390x::css {
         bool completed = false;
         {
             zxfoundation::locking::irq_lock_guard guard(_internal::g_css_lock);
-            ::lib::memcpy(&entry.last_irb, &status, sizeof(irb));
+            entry.last_irb = status;
             if (cc == 0) {
                 const auto stctl = status.scsw_data.stctl();
                 const auto actl  = status.scsw_data.actl();

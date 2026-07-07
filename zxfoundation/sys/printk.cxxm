@@ -36,14 +36,32 @@ namespace zxfoundation::sys::printk {
         locking::qspinlock::qspinlock lock;
         locking::qspinlock::qspinlock flush_lock;
         lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
-        log_level min_level{log_level::EMERG};
+        log_level min_level{log_level::VERBOSE};
         lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
     };
 
     printk_state g_state;
 
+    auto set_min_level(const log_level level) noexcept -> void {
+        g_state.min_level = level;
+    }
+
+    auto handle_min_level(lib::string_view val) noexcept -> bool {
+        if (val.empty()) [[unlikely]]
+            return false;
+        u64 level = 0;
+        for (char c : val) {
+            if (c < '0' || c > '9') [[unlikely]]
+                return false;
+            level = level * 10 + (c - '0');
+        }
+        if (level > 7) [[unlikely]]
+            return false;
+        set_min_level(static_cast<log_level>(level));
+        return true;
+    }
+
     auto init() noexcept -> void {
-        g_state.min_level = log_level::VERBOSE;
     }
 
     auto register_backend(const printk_backend& backend) noexcept -> void {
@@ -61,10 +79,6 @@ namespace zxfoundation::sys::printk {
         (void)g_state.backends.push_back(b);
         g_state.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(irq_flags);
-    }
-
-    auto set_min_level(const log_level level) noexcept -> void {
-        g_state.min_level = level;
     }
 
     auto read_logs(lib::span<u8> dest, bool consume) noexcept -> usize {
@@ -160,8 +174,8 @@ namespace zxfoundation::sys::printk {
 
                         // Emit the popped message to all snapshot backends
                         const lib::string_view msg(line_buf, popped);
-                        for (usize i = 0; i < snap.size(); ++i) {
-                            snap[i].emit(msg);
+                        for (auto & i : snap) {
+                            i.emit(msg);
                         }
                     }
 

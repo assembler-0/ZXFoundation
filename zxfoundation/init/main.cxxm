@@ -50,6 +50,8 @@ import drivers.console.diag;
 import lib.span;
 import lib.error;
 import lib.format;
+import zxfoundation.base.cmdline;
+import lib.string_view;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
@@ -173,6 +175,7 @@ namespace _internal {
             zxfoundation::base::config::CONFIG_ZX_BUILD_NUMBER);
 
         pinfo("hypervisor: {}", arch::s390x::cpu::processor::is_hypervisor() ? "true" : "false");
+        pinfo("cmdline: {}", reinterpret_cast<const char*>(zxfoundation::init::boot_protocol.cmdline_addr));
     }
 
     /// @brief Initialize the HHDM coverage contract exported by ZXFL.
@@ -246,6 +249,27 @@ namespace _internal {
         zxfoundation::sched::enqueue_domain(d);
     }
 
+    auto cmdline_init() -> void {
+        zxfoundation::base::cmdline::add({
+            .name = "printk.min_level",
+            .type = zxfoundation::base::cmdline::value_type::callback,
+            .handler = zxfoundation::sys::printk::handle_min_level,
+            .help = "Set minimum log level (0-7, 7=verbose)"
+        });
+
+        zxfoundation::base::cmdline::add({
+            .name = "smp.max_cpus",
+            .type = zxfoundation::base::cmdline::value_type::callback,
+            .handler = arch::s390x::cpu::smp::handle_max_cpus,
+            .help = "Limit number of CPUs (0=max, up to 768)"
+        });
+
+        zxfoundation::base::cmdline::parse({
+            reinterpret_cast<const char*>(zxfoundation::init::boot_protocol.cmdline_addr),
+            zxfoundation::init::boot_protocol.cmdline_len
+        });
+    }
+
 } // namespace _internal
 
 /// @brief nucleus main entry point
@@ -255,14 +279,15 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     if (!protocol) [[unlikely]]
         arch::s390x::cpu::psw::disabled_wait();
 
+    _internal::verify_protocol_integrity(*protocol);
+    _internal::validate_stack_frame(*protocol);
+    _internal::verify_kernel_checksums(*protocol);
+
     zxfoundation::base::cxxrtse::cxxabi::run_global_constructor();
 
     zxfoundation::sys::printk::init();
     zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
-
-    _internal::verify_protocol_integrity(*protocol);
-    _internal::validate_stack_frame(*protocol);
-    _internal::verify_kernel_checksums(*protocol);
+    _internal::cmdline_init();
 
     zxfoundation::base::cxxrtse::cxxabi::ssp_init();
 

@@ -1,9 +1,10 @@
 /// SPDX-License-Identifier: Apache 2.0
-/// @file string.cxxm
+/// @file cstring.cxxm
 /// @brief string operations
 
 export module lib.cstring;
 import zxfoundation.base.types;
+import lib.string_view;
 
 export {
 
@@ -274,7 +275,19 @@ namespace lib {
 
         return 0;
     }
-    
+
+    auto string_copy(char* dest, usize cap, const string_view& src) noexcept -> void {
+        if (!dest || cap == 0) return;
+        const usize n = (src.size() < cap - 1) ? src.size() : (cap - 1);
+        for (usize i = 0; i < n; ++i) dest[i] = src[i];
+        dest[n] = '\0';
+    }
+
+    template <usize N>
+    auto string_copy(char (&dest)[N], const string_view& src) noexcept -> void {
+        string_copy(dest, N, src);
+    }
+
 }
 
 }

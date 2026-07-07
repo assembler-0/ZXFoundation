@@ -31,8 +31,9 @@ import zxfoundation.base.config;
 import zxfoundation.sys.printk;
 import lib.expected;
 import lib.error;
-import lib.cstring;
+import lib.algorithm;
 import lib.util;
+import lib.string_view;
 import lib.placementnew;
 
 enum class ap_boot_state : u8 {
@@ -68,6 +69,8 @@ static constexpr u64 LOWCORE_PREFIX_ALIGNMENT = 8'192ULL;
 static constexpr u64 SIGP_PREFIX_MAX_PHYS = 1ULL << 31U;
 
 static ap_boot_record g_ap_boot_records[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
+static u64 g_max_cpus = zxfoundation::base::config::CONFIG_ZX_MAX_CPUS;
 
 static auto apply_cpu_evidence(
     arch::s390x::cpu::percpu::s390x_percpu_data& pcp,
@@ -241,6 +244,21 @@ export {
 
 namespace arch::s390x::cpu::smp {
 
+    auto handle_max_cpus(::lib::string_view val) noexcept -> bool {
+        if (val.empty()) [[unlikely]]
+            return false;
+        u64 n = 0;
+        for (char c : val) {
+            if (c < '0' || c > '9') [[unlikely]]
+                return false;
+            n = n * 10 + (c - '0');
+        }
+        if (n > 768) [[unlikely]]
+            return false;
+        g_max_cpus = (n == 0) ? zxfoundation::base::config::CONFIG_ZX_MAX_CPUS : n;
+        return true;
+    }
+
     auto init_bsp() noexcept -> void {
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, handle_ipi, nullptr, 0);
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   handle_ipi, nullptr, 0);
@@ -274,8 +292,15 @@ namespace arch::s390x::cpu::smp {
             return ::lib::unexpected(::lib::kernel_error::from_arch(::lib::arch_error::invalid_cpu_id));
         }
 
+        u32 cpu_limit = proto.cpu_count;
+        if (g_max_cpus < cpu_limit) {
+            zxfoundation::sys::printk::pinfo(
+                "smp: limiting {} CPUs to {}", cpu_limit, g_max_cpus);
+            cpu_limit = static_cast<u32>(g_max_cpus);
+        }
+
         cpumask::cpu_set_possible(0);
-        for (u32 i = 0; i < proto.cpu_count; ++i) {
+        for (u32 i = 0; i < cpu_limit; ++i) {
             if (proto.cpu_map[i].cpu_addr == proto.bsp_cpu_addr) {
                 auto& bsp_pcp = lowcore::this_cpu_percpu();
                 apply_cpu_evidence(bsp_pcp, proto.cpu_map[i]);
@@ -283,7 +308,7 @@ namespace arch::s390x::cpu::smp {
             }
         }
 
-        if (!(proto.flags & init::zxfl::ZXFL_FLAG_SMP) || proto.cpu_count <= 1)
+        if (!(proto.flags & init::zxfl::ZXFL_FLAG_SMP) || cpu_limit <= 1)
             return 0U;
 
         const u64 ap_entry_phys =
@@ -296,7 +321,7 @@ namespace arch::s390x::cpu::smp {
 
         g_sched_ready.store(1, arch::s390x::lib::atomic::memory_order::release);
 
-        for (u32 i = 0; i < proto.cpu_count; ++i) {
+        for (u32 i = 0; i < cpu_limit; ++i) {
             auto bail = [&](ap_boot_record& rec, const char* msg) -> void {
                 rec.state = ap_boot_state::failed;
                 rec.lowcore_phys = 0;

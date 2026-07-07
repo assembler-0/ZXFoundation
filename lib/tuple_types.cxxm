@@ -1,0 +1,18 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/tuple_types.cxxm
+/// @brief Primary templates for std::tuple_size and std::tuple_element.
+
+export module lib.tuple_types;
+import zxfoundation.base.types;
+
+export namespace lib {
+
+    /// @brief Primary template for tuple_size.
+    template <typename T>
+    struct tuple_size;
+
+    /// @brief Primary template for tuple_element.
+    template <usize I, typename T>
+    struct tuple_element;
+
+}

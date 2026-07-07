@@ -124,7 +124,7 @@ namespace zxfoundation::sys::syschk {
         rec->psw_addr = current_psw.addr;
 
         // Write the message — strncpy guarantees NUL termination.
-        lib::strncpy(rec->msg, msg.data(), ZX_CRASH_MSG_LEN);
+        lib::string_copy(rec->msg, msg);
 
         printk::printk(_internal::to_log_level(sev),
             "syschk: [class={} category={}]\n",

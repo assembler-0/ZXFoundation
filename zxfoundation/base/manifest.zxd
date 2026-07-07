@@ -4,4 +4,5 @@
     endian.cxxm
     linksym.cxxm
     typestate.cxxm
+    cmdline.cxxm
 }

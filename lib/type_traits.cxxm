@@ -305,7 +305,7 @@ namespace lib {
 
     // We want is_integral<wchar_t> to be true (and make_signed/unsigned to work)
     // even when libc doesn't provide working <wchar.h> and related functions,
-    // so don't check _GLIBCXX_USE_WCHAR_T here.
+    // so don't check USE_WCHAR_T here.
     template<>
     struct __is_integral_helper<wchar_t>
             : public true_type {
@@ -382,14 +382,14 @@ namespace lib {
     // uses one of these types for usize.
     __extension__
     template<>
-    struct __is_integral_helper<__GLIBCXX_TYPE_INT_N_0>
+    struct __is_integral_helper<i128>
             : public true_type {
         static constexpr auto _S_kind = _Integer_kind::_Signed;
     };
 
     __extension__
     template<>
-    struct __is_integral_helper<unsigned __GLIBCXX_TYPE_INT_N_0>
+    struct __is_integral_helper<u128>
             : public true_type {
         static constexpr auto _S_kind = _Integer_kind::_Unsigned;
     };
@@ -1446,8 +1446,8 @@ namespace lib {
 
     __extension__
     template<>
-    struct __make_unsigned<__GLIBCXX_TYPE_INT_N_0> {
-        using __type = unsigned __GLIBCXX_TYPE_INT_N_0;
+    struct __make_unsigned<i128> {
+        using __type = u128;
     };
 
     // Select between integral and enum: not possible to be both.
@@ -1597,8 +1597,8 @@ namespace lib {
 
     __extension__
     template<>
-    struct __make_signed<unsigned __GLIBCXX_TYPE_INT_N_0> {
-        using __type = __GLIBCXX_TYPE_INT_N_0;
+    struct __make_signed<u128> {
+        using __type = i128;
     };
 
     // Select between integral and enum: not possible to be both.
@@ -1734,19 +1734,15 @@ namespace lib {
 
     constexpr usize
     __aligned_storage_default_alignment([[maybe_unused]] usize __len) {
-#if _GLIBCXX_INLINE_VERSION
         using _Max_align
-          = integral_constant<size_t, alignof(__aligned_storage_max_align_t)>;
+          = integral_constant<usize, alignof(__aligned_storage_max_align_t)>;
 
         return __len > (_Max_align::value / 2)
              ? _Max_align::value
-    # if _GLIBCXX_USE_BUILTIN_TRAIT(__builtin_clzg)
+#if __has_builtin(__builtin_clzg)
              : 1 << (__SIZE_WIDTH__ - __builtin_clzg(__len - 1u));
-# else
-        : 1 << (__LLONG_WIDTH__ - __builtin_clzll(__len - 1ull));
-# endif
 #else
-        return alignof(__aligned_storage_max_align_t);
+        : 1 << (__LLONG_WIDTH__ - __builtin_clzll(__len - 1ull));
 #endif
     }
 
@@ -2156,8 +2152,7 @@ namespace lib {
         >::type;
     };
 
-    // _GLIBCXX_RESOLVE_LIB_DEFECTS
-    // 2219.  INVOKE-ing a pointer to member with a reference_wrapper
+    // LWG 2219.  INVOKE-ing a pointer to member with a reference_wrapper
     //        as the object expression
 
     // Used by result_of, invoke etc. to unwrap a reference_wrapper.
@@ -2291,20 +2286,6 @@ namespace lib {
         typename... _Args>
     using __detected_or_t
     = typename __detected_or<_Default, _Op, _Args...>::type;
-
-    /**
-     *  Use SFINAE to determine if the type _Tp has a publicly-accessible
-     *  member type _NTYPE.
-     */
-#define _GLIBCXX_HAS_NESTED_TYPE(_NTYPE)				\
-    template<typename _Tp, typename = __void_t<>>				\
-        struct __has_##_NTYPE						\
-        : false_type							\
-        { };								\
-    template<typename _Tp>						\
-        struct __has_##_NTYPE<_Tp, __void_t<typename _Tp::_NTYPE>>		\
-        : true_type								\
-        { };
 
     template<typename _Tp>
     struct __is_swappable;
@@ -2869,7 +2850,7 @@ namespace lib {
 #if __has_builtin(__is_trivially_destructible)
             = __is_trivially_destructible(_Tp);
 #else
-            = is_trivially_destructible<_Tp>::type;
+            = is_trivially_destructible<_Tp>::value;
 #endif
 
     template<typename _Tp, typename... _Args>

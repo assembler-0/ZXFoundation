@@ -16,7 +16,7 @@ import arch.s390x.mmu.mmu_const;
 import arch.s390x.cpu.skey;
 import lib.error;
 import lib.expected;
-import lib.cstring;
+import lib.algorithm;
 import lib.placementnew;
 
 namespace zxfoundation::exec::_internal {
@@ -127,7 +127,7 @@ namespace zxfoundation::exec::_internal {
                     const u64 file_offset = phdr.p_offset + (copy_start - phdr.p_vaddr);
                     const u64 page_offset = copy_start - page_virt_start;
                     const u64 copy_len = copy_end - copy_start;
-                    lib::memcpy(page_ptr + page_offset, elf_data + file_offset, copy_len);
+                    lib::copy_n(elf_data + file_offset, copy_len, page_ptr + page_offset);
                 }
             }
             auto map_r = map_and_key(d, va, phys, prot);

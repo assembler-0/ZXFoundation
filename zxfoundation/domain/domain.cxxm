@@ -32,7 +32,7 @@ import arch.s390x.mmu.mmu_types;
 import arch.s390x.cpu.lowcore;
 import lib.error;
 import lib.expected;
-import lib.cstring;
+import lib.algorithm;
 import lib.list;
 import lib.util;
 import lib.idalloc;
@@ -280,7 +280,7 @@ namespace zxfoundation::domain::_internal {
                 auto* kern_r1 = reinterpret_cast<const u64*>(hhdm::phys_to_virt(kernel_r1_phys));
 
                 // Copy the top half (1024 entries * 8 bytes = 8192 bytes)
-                lib::memcpy(&user_r1[1024], &kern_r1[1024], 1024 * sizeof(u64));
+                lib::copy_n(&kern_r1[1024], 1024, &user_r1[1024]);
             }
 
             // 4. Allocate kernel stack (order 2 = 4 pages, zeroed).

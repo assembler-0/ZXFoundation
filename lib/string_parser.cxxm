@@ -1,0 +1,257 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/string_parser.cxxm
+/// @brief Zero-allocation, high-performance string tokenizer.
+
+export module lib.string_parser;
+import zxfoundation.base.types;
+import lib.string_view;
+import lib.optional;
+import lib.pair;
+import lib.util;
+import lib.type_traits;
+import lib.placementnew;
+
+export {
+
+namespace lib {
+
+    /// @brief Zero-allocation streaming string tokenizer.
+    ///
+    /// Splits a @ref string_view into tokens separated by configurable
+    /// delimiter characters.  Supports single and double quoted strings
+    /// and backslash escape sequences.
+    ///
+    /// All returned tokens are @ref string_view slices into the original
+    /// input — no data is copied and no memory is allocated.
+    ///
+    /// @note  This class does **not** modify the underlying buffer.
+    ///        If in-place unescaping is needed the caller must copy the
+    ///        token into a writable buffer first.
+    class tokenizer {
+    public:
+        /// @brief Construct a tokenizer over @p input.
+        /// @param input      The string to tokenize.
+        /// @param delimiters Character set that separates tokens.
+        explicit tokenizer(
+            string_view input,
+            string_view delimiters = " \t\r\n"
+        ) noexcept
+            : m_input(input)
+            , m_delimiters(delimiters)
+        {}
+
+        /// @brief Extract the next token.
+        ///
+        /// Leading delimiters are skipped automatically.
+        /// Tokens may be quoted with @c ' or @c " ; matching quote
+        /// characters are stripped from the returned view.
+        /// A backslash escapes the following character and is removed
+        /// from the returned view only for quotes and backslashes
+        /// (@c \\' , @c \\" , @c \\\\).
+        ///
+        /// @return The next token, or @ref nullopt if exhausted.
+        [[nodiscard]] auto next() noexcept -> optional<string_view> {
+            skip_delimiters();
+            if (m_pos >= m_input.size()) return nullopt;
+
+            const usize start = m_pos;
+            const char first = m_input[m_pos];
+
+            if (first == '\'' || first == '"') {
+                ++m_pos;
+                return extract_quoted(first);
+            }
+
+            while (m_pos < m_input.size()) {
+                const char c = m_input[m_pos];
+                if (is_delimiter(c)) break;
+
+                if (c == '\\' && m_pos + 1 < m_input.size()) {
+                    m_pos += 2;
+                    continue;
+                }
+
+                if (c == '\'' || c == '"') {
+                    const char q = c;
+                    ++m_pos;
+                    while (m_pos < m_input.size() && m_input[m_pos] != q) {
+                        if (m_input[m_pos] == '\\' && m_pos + 1 < m_input.size()) ++m_pos;
+                        ++m_pos;
+                    }
+                    if (m_pos < m_input.size()) ++m_pos;
+                    continue;
+                }
+
+                ++m_pos;
+            }
+
+            return m_input.substr(start, m_pos - start);
+        }
+
+        /// @brief Parse the next token as a @c key=value pair.
+        ///
+        /// Reads the next token (the key).  If the next non-delimiter
+        /// character is @c '=', the value token is consumed too and
+        /// returned as the second element of the pair.  If no @c '='
+        /// follows, the value is an empty @ref string_view — the key
+        /// is still consumed.
+        ///
+        /// @return A @c (key, value) pair, or @ref nullopt if exhausted.
+        [[nodiscard]] auto next_pair() noexcept
+            -> optional<pair<string_view, string_view>>
+        {
+            auto key = next();
+            if (!key) return nullopt;
+
+            skip_delimiters();
+            if (m_pos < m_input.size() && m_input[m_pos] == '=') {
+                ++m_pos;
+                auto val = next();
+                if (!val) return pair{*key, string_view{}};
+                return pair{*key, *val};
+            }
+
+            return pair{*key, string_view{}};
+        }
+
+        /// @brief Peek at the next token without consuming it.
+        [[nodiscard]] auto peek() noexcept -> optional<string_view> {
+            const usize saved = m_pos;
+            auto tok = next();
+            m_pos = saved;
+            return tok;
+        }
+
+        /// @brief True when all input has been consumed.
+        [[nodiscard]] auto empty() const noexcept -> bool {
+            usize p = m_pos;
+            while (p < m_input.size() && is_delimiter(m_input[p])) ++p;
+            return p >= m_input.size();
+        }
+
+        /// @brief Reset with a new input string.
+        auto reset(string_view input) noexcept -> void {
+            m_input = input;
+            m_pos = 0;
+        }
+
+        /// @brief Return the current read position.
+        [[nodiscard]] auto tell() const noexcept -> usize { return m_pos; }
+
+        /// @brief Seek to a previously saved position.
+        auto seek(usize pos) noexcept -> void { m_pos = pos; }
+
+        /// @brief Return the unconsumed portion of the input.
+        [[nodiscard]] auto remaining() const noexcept -> string_view {
+            return m_input.substr(m_pos);
+        }
+
+    private:
+        auto skip_delimiters() noexcept -> void {
+            while (m_pos < m_input.size() && is_delimiter(m_input[m_pos])) ++m_pos;
+        }
+
+        [[nodiscard]] auto is_delimiter(char c) const noexcept -> bool {
+            for (char m_delimiter : m_delimiters) {
+                if (m_delimiter == c) return true;
+            }
+            return false;
+        }
+
+        /// @brief Extract content between matching quotes.
+        /// @param quote The opening quote character (m_pos is past it).
+        [[nodiscard]] auto extract_quoted(char quote) noexcept -> string_view {
+            const usize content_start = m_pos;
+            while (m_pos < m_input.size() && m_input[m_pos] != quote) {
+                if (m_input[m_pos] == '\\' && m_pos + 1 < m_input.size()) ++m_pos;
+                ++m_pos;
+            }
+            const usize end = m_pos;
+            if (m_pos < m_input.size()) ++m_pos;
+            return m_input.substr(content_start, end - content_start);
+        }
+
+        string_view m_input;
+        string_view m_delimiters;
+        usize m_pos{0};
+    };
+
+    // ── Free functions ──────────────────────────────────────────────
+
+    /// @brief Trim leading and trailing whitespace (space, tab, newline, CR).
+    [[nodiscard]] inline auto trim(string_view s) noexcept -> string_view {
+        usize start = 0;
+        while (start < s.size()
+               && (s[start] == ' ' || s[start] == '\t'
+                   || s[start] == '\n' || s[start] == '\r')) ++start;
+        if (start == s.size()) return {};
+        usize end = s.size() - 1;
+        while (end > start
+               && (s[end] == ' ' || s[end] == '\t'
+                   || s[end] == '\n' || s[end] == '\r')) --end;
+        return s.substr(start, end - start + 1);
+    }
+
+    /// @brief Split @p s at the first occurrence of @p delim.
+    /// @return Pair (before, after).  @c after is empty if @p delim not found.
+    [[nodiscard]] inline auto split(
+        string_view s, string_view delim
+    ) noexcept -> pair<string_view, string_view> {
+        for (usize i = 0; i < s.size(); ++i) {
+            bool match = true;
+            for (usize j = 0; j < delim.size(); ++j) {
+                if (i + j >= s.size() || s[i + j] != delim[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return {s.substr(0, i), s.substr(i + delim.size())};
+            }
+        }
+        return {s, {}};
+    }
+
+    /// @brief Split @p s at the last occurrence of @p delim.
+    /// @return Pair (before, after).  @c after is empty if @p delim not found.
+    [[nodiscard]] inline auto rsplit(
+        string_view s, string_view delim
+    ) noexcept -> pair<string_view, string_view> {
+        isize end = static_cast<isize>(s.size()) - static_cast<isize>(delim.size());
+        while (end >= 0) {
+            bool match = true;
+            for (usize j = 0; j < delim.size(); ++j) {
+                if (s[static_cast<usize>(end) + j] != delim[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                const auto pos = static_cast<usize>(end);
+                return {s.substr(0, pos), s.substr(pos + delim.size())};
+            }
+            --end;
+        }
+        return {s, {}};
+    }
+
+    /// @brief Remove matching surrounding quotes from @p s.
+    ///
+    /// Handles @c ' and @c " .  Returns a trimmed view without the quotes.
+    /// The returned view still points into the original buffer; escape
+    /// sequences are **not** resolved here (caller must copy and unescape).
+    ///
+    /// @return Unquoted view, or @p s unchanged if not quoted.
+    [[nodiscard]] inline auto unquote(string_view s) noexcept -> string_view {
+        if (s.size() < 2) return s;
+        const char first = s[0];
+        const char last  = s[s.size() - 1];
+        if ((first == '\'' || first == '"') && first == last) {
+            return s.substr(1, s.size() - 2);
+        }
+        return s;
+    }
+
+} // namespace lib
+
+} // end export

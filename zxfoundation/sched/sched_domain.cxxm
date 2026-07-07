@@ -14,7 +14,7 @@ import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.psw_types;
 import lib.util;
-import lib.cstring;
+import lib.algorithm;
 
 extern "C" {
     /// @brief Assembly stub: sets r15 = frame_base, loads ARs/VRs, jumps to ret_to_user.
@@ -58,7 +58,7 @@ namespace zxfoundation::sched::domain_ctx {
         const u64 sp = ksp + SWITCH_FRAME_SIZE;
         const u64 gpr_area = sp + SF_GPRS;
 
-        lib::memset(reinterpret_cast<void*>(ksp), 0, SWITCH_FRAME_SIZE);
+        lib::fill_n(reinterpret_cast<u8*>(ksp), SWITCH_FRAME_SIZE, u8{0});
 
         auto* frame = reinterpret_cast<u64*>(gpr_area);
         frame[0] = reinterpret_cast<u64>(arg);                    // r6  = arg

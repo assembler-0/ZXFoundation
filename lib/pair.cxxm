@@ -9,6 +9,7 @@ import lib.concepts;
 import lib.compare;
 import lib.format;
 import lib.type_traits;
+import lib.tuple_types;
 
 export {
 
@@ -88,9 +89,6 @@ namespace lib {
 
     /// @name Structured binding support
     /// @{
-
-    template <typename T> struct tuple_size;
-    template <usize I, typename T> struct tuple_element;
 
     template <typename T1, typename T2>
     struct tuple_size<pair<T1, T2>> {

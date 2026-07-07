@@ -1,34 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/transaction.cxxm
+/// @file transaction.cxxm
 /// @brief Generic kernel transaction base (CRTP).
-///
-/// Enforces the commit/rollback contract for all subsystem transactions.
-/// Derived types implement on_rollback() and get commit() for free.
-///
-/// ── Atomicity guarantee ──────────────────────────────────────────────────
-///
-///   m_committed is an atomic<bool> with release-store on commit() and
-///   acquire-load on committed().  This ensures that if the transaction
-///   object is published to another CPU (e.g., handed off across a lock
-///   boundary after commit), the reader on the remote CPU observes the
-///   committed state before it sees any side-effects of the committed work.
-///
-///   A plain bool would be a data race under the C++ memory model and could
-///   allow the remote CPU to observe an uncommitted transaction whose
-///   constituent allocations are already visible.
-///
-/// ── CRTP usage ───────────────────────────────────────────────────────────
-///
-///   class my_txn : public zxfoundation::transaction<my_txn> {
-///       friend class transaction<my_txn>;
-///       auto on_rollback() noexcept -> void { /* free tentative resources */ }
-///   };
-///
-///   {
-///       my_txn txn;
-///       // ... allocate resources into txn ...
-///       txn.commit();   // disarms on_rollback
-///   }   // on_rollback fires here if commit() was never called
 
 export module zxfoundation.sys.transaction;
 import arch.s390x.lib.atomic;
@@ -75,12 +47,12 @@ namespace zxfoundation {
             bool expected = false;
             if (!m_committed.compare_exchange_strong(expected, true,
                     memory_order::release, memory_order::relaxed)) {
-                sys::printk::pwarn("transaction: double commit detected for %p",
+                sys::printk::pwarn("transaction: double commit detected for {:#018x}",
                                    static_cast<const void*>(this));
                 return;
             }
             if (m_rolled_back.load(memory_order::acquire)) {
-                sys::printk::pwarn("transaction: commit after rollback for %p",
+                sys::printk::pwarn("transaction: commit after rollback for {:#018x}",
                                    static_cast<const void*>(this));
             }
         }

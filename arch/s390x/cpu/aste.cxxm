@@ -19,7 +19,7 @@ import zxfoundation.sys.printk;
 import arch.s390x.cpu.irq;
 import lib.error;
 import lib.expected;
-import lib.cstring;
+import lib.algorithm;
 import lib.placementnew;
 
 using namespace arch::s390x::cpu::aste;

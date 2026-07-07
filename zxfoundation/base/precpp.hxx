@@ -4,7 +4,7 @@
 
 #pragma once
 
-#if !defined(__ASSEMBLER__) || !defined(__ASSEMBLY__)
+#ifdef __cplusplus
 
 #define FMT_MSG(m) "zxfoundation: precpp.hxx - " m
 
@@ -40,8 +40,8 @@
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
     #define assert(expr) contract_assert(expr)
 #else
-    #define assert(expr) \
-        if (expr) [[unlikely]] zxfoundation::sys::syschk::syschk_fatal(lib::error::from_generic(lib::generic_error::internal_error), #expr);
+#define assert(expr) \
+    do { if (!(expr)) [[unlikely]] zxfoundation::sys::syschk::syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::internal_error), #expr); } while (0)
 #endif
 
 #endif

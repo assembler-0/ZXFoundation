@@ -7,7 +7,7 @@
 #         -DZXFoundation_Host_Build_Platform=<platform>
 #         -P cmake/build_number.cmake
 
-foreach(_var SOURCE_DIR ZXFoundation_Release ZXFoundation_Copyright_Date ZXFoundation_Host_Build_Platform)
+foreach(_var SOURCE_DIR ZXFoundation_Release ZXFoundation_Copyright_Date ZXFoundation_Host_Build_Platform ZXFoundation_Max_Cpus ZXFoundation_Dasd_Boot_Serial)
     if(NOT DEFINED ${_var})
         message(FATAL_ERROR "build_number.cmake: required variable -D${_var} not provided")
     endif()

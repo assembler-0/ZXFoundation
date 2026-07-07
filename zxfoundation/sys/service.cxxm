@@ -16,9 +16,9 @@ import zxfoundation.locking.lock;
 import lib.error;
 import lib.expected;
 import lib.placementnew;
-import lib.cstring;
-import lib.string_view;
 import lib.algorithm;
+import lib.string_view;
+import lib.cstring;
 
 export {
 
@@ -53,7 +53,7 @@ namespace zxfoundation::sys::service {
     auto service_init() noexcept -> void;
 
     /// @brief Register a service.
-    /// @param[in]  name       NUL-terminated service name (max 63 chars).
+    /// @param[in]  name       Service name (max 63 chars).
     /// @param[in]  token      Capability token for the service.
     /// @param[in]  owner_id   Domain ID of the registering domain.
     /// @return  service_id on success, kernel_error on failure.
@@ -61,9 +61,9 @@ namespace zxfoundation::sys::service {
     /// @note  If a service with the same name already exists, the registration
     ///        fails with generic_error::already_exists.
     [[nodiscard]] auto service_register(
-        const char* name,
-        cap_token   token,
-        u32         owner_id
+        lib::string_view name,
+        cap_token        token,
+        u32              owner_id
     ) noexcept -> lib::expected<u32, lib::kernel_error>;
 
     /// @brief Look up a service by name.
@@ -74,7 +74,7 @@ namespace zxfoundation::sys::service {
     ///        registry entry.  The caller is responsible for releasing it
     ///        via cap_release().
     [[nodiscard]] auto service_lookup(
-        const char* name
+        lib::string_view name
     ) noexcept -> lib::expected<cap_token, lib::kernel_error>;
 
     /// @brief Unregister a service.
@@ -123,19 +123,18 @@ namespace zxfoundation::sys::service {
     }
 
     [[nodiscard]] auto service_register(
-        const char* name,
-        cap_token   token,
-        u32         owner_id
+        lib::string_view name,
+        cap_token        token,
+        u32              owner_id
     ) noexcept -> lib::expected<u32, lib::kernel_error> {
         using namespace _internal;
 
-        if (!name || !token) {
+        if (name.empty() || !token) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        const usize name_len = lib::strnlen(name, SERVICE_NAME_MAX_LEN);
-        if (name_len == 0 || name_len >= SERVICE_NAME_MAX_LEN) {
+        if (name.size() >= SERVICE_NAME_MAX_LEN) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
@@ -143,7 +142,7 @@ namespace zxfoundation::sys::service {
         // Check for duplicates.
         for (u32 i = 0; i < MAX_SERVICES; ++i) {
             auto* existing = g_service_table.find_raw(i);
-            if (existing && lib::streq(existing->name, name)) {
+            if (existing && lib::string_view(existing->name) == name) {
                 return lib::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::internal_error));
             }
@@ -159,7 +158,7 @@ namespace zxfoundation::sys::service {
         >(result.value());
 
         service_entry& entry = *embryo_ref;
-        lib::strncpy(entry.name, name, SERVICE_NAME_MAX_LEN);
+        lib::string_copy(entry.name, name);
         entry.token       = token;
         entry.owner_domain = owner_id;
 
@@ -176,18 +175,18 @@ namespace zxfoundation::sys::service {
     }
 
     [[nodiscard]] auto service_lookup(
-        const char* name
+        lib::string_view name
     ) noexcept -> lib::expected<cap_token, lib::kernel_error> {
         using namespace _internal;
 
-        if (!name) {
+        if (name.empty()) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         for (u32 i = 0; i < MAX_SERVICES; ++i) {
             auto* entry = g_service_table.find_raw(i);
-            if (entry && lib::streq(entry->name, name)) {
+            if (entry && lib::string_view(entry->name) == name) {
                 // Acquire a new capability from the entry's stored token.
                 auto cap_result = cap_acquire(
                     entry->token.type(),

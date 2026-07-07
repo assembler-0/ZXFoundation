@@ -28,6 +28,7 @@ import arch.s390x.cpu.psw_types;
 import lib.error;
 import lib.expected;
 import lib.cstring;
+import lib.string_view;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
@@ -102,7 +103,7 @@ namespace zxfoundation::init::bootstrap {
 
         for (u32 i = 0; i < proto->module_count && i < 16U; ++i) {
             const auto& mod = proto->modules[i];
-            if (lib::streq(mod.name, "ZXF.INIT")) {
+            if (lib::string_view(mod.name) == "ZXF.INIT") {
                 found = &mod;
                 break;
             }
@@ -154,7 +155,6 @@ namespace zxfoundation::init::bootstrap {
 
         d->primary_strand.cpu = 0;
 
-        // ── Create an admin capability token for the init domain ────────
         {
             d->admin_token = zxfoundation::sys::cap::cap_token::make(
                 zxfoundation::sys::cap::cap_type::domain,

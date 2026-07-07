@@ -1,0 +1,138 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file cmdline.cxxm
+/// @brief Kernel command-line parameter registry and parser.
+
+export module zxfoundation.base.cmdline;
+import zxfoundation.base.types;
+import lib.string_view;
+import lib.error;
+import lib.expected;
+import lib.optional;
+import lib.util;
+import lib.string_parser;
+import lib.cstring;
+import lib.static_vector;
+import lib.placementnew;
+
+export {
+
+namespace zxfoundation::base::cmdline {
+
+    constexpr usize MAX_PARAMS = 64;
+
+    /// @brief How a parameter's value is interpreted.
+    enum class value_type : u8 {
+        flag,     ///< Presence-only boolean; sets @c *(bool*)storage = true.
+        str,      ///< String value copied into storage buffer.
+        u64,      ///< Unsigned 64-bit integer.
+        boolean,  ///< 0/1, on/off, true/false, yes/no — sets @c *(bool*)storage.
+        callback, ///< Custom handler: @c handler(value) is called.
+    };
+
+    /// @brief Signature for @ref value_type::callback handlers.
+    /// @param value  The token after '=', or empty for flags.
+    /// @return true on success, false to abort parsing.
+    using handler_fn = auto (*)(lib::string_view value) noexcept -> bool;
+
+    /// @brief Descriptor for a single cmdline parameter.
+    struct param {
+        lib::string_view name;
+        value_type  type;
+        handler_fn  handler{nullptr}; ///< null = use default dispatch for type.
+        void*       storage{nullptr}; ///< Pointer to the target variable.
+        usize       storage_size{0};  ///< For str: capacity in bytes.
+        lib::string_view help;             ///< Human-readable description.
+    };
+
+    namespace _internal {
+        lib::static_vector<param, MAX_PARAMS> g_params{};
+    }
+
+    /// @brief Look up a registered parameter by name.
+    /// @return Pointer to the param, or nullptr.
+    [[nodiscard]] auto find(lib::string_view name) noexcept -> param* {
+        using namespace _internal;
+        for (auto & g_param : g_params) {
+            if (g_param.name == name) return &g_param;
+        }
+        return nullptr;
+    }
+
+    /// @brief Register a cmdline parameter.
+    /// @return true on success, false if table is full or duplicate name.
+    auto add(const param& p) noexcept -> bool {
+        using namespace _internal;
+
+        if (find(p.name)) return false;
+        if (g_params.full()) return false;
+
+        auto result = g_params.push_back(p);
+        return result.has_value();
+    }
+
+    /// @brief Parse a complete command line against registered parameters.
+    ///
+    /// Each token is looked up in the registry.  If the token is followed by
+    /// @c '=', the remainder is treated as the value.  Bare tokens (no @c '=')
+    /// are treated as flags.
+    ///
+    /// Quotes and backslash escapes are handled by @ref tokenizer.
+    auto parse(lib::string_view cmdline) noexcept -> void {
+        lib::tokenizer tok{cmdline};
+
+        while (auto kv = tok.next_pair()) {
+            auto& [key, val] = *kv;
+            auto* p = find(key);
+            if (!p) continue; // unknown parameter, skip silently
+
+            if (p->handler) {
+                p->handler(val);
+                continue;
+            }
+
+            switch (p->type) {
+            case value_type::flag:
+                if (p->storage) *static_cast<bool*>(p->storage) = true;
+                break;
+
+            case value_type::boolean:
+                if (p->storage) {
+                    if (val.empty() || val == "1" || val == "on"
+                        || val == "true" || val == "yes" || val == "y") {
+                        *static_cast<bool*>(p->storage) = true;
+                    } else {
+                        *static_cast<bool*>(p->storage) = false;
+                    }
+                }
+                break;
+
+            case value_type::u64:
+                if (p->storage && !val.empty()) {
+                    u64 result = 0;
+                    for (char c : val) {
+                        if (c < '0' || c > '9') break;
+                        result = result * 10 + static_cast<u64>(c - '0');
+                    }
+                    *static_cast<u64*>(p->storage) = result;
+                }
+                break;
+
+            case value_type::str:
+                if (p->storage && p->storage_size > 0 && !val.empty()) {
+                    lib::string_copy(
+                        static_cast<char*>(p->storage),
+                        p->storage_size,
+                        val
+                    );
+                }
+                break;
+
+            case value_type::callback:
+                break;
+            }
+        }
+    }
+
+} // namespace zxfoundation::base::cmdline
+
+} // end export
