@@ -67,10 +67,10 @@ namespace arch::s390x::cpu::ptff {
         u64 tod_user_specified_epoch_difference{};
     };
 
-    inline auto invoke(func fc, u64 param_block_addr) noexcept -> i32 {
+    inline auto invoke(func fc, u64 param_block_addr) noexcept -> condition_code {
         u64 r1 = param_block_addr;
         u64 r3 = static_cast<u64>(fc) << 48;
-        i32 cc;
+        condition_code cc;
         register u64 gpr1 __asm__("1") = r1;
         __asm__ volatile(
             ".insn rrf,0xb9b90000,0,%[r3],0,0\n"

@@ -226,7 +226,10 @@ namespace crypto::sha256 {
         namespace feat  = arch::s390x::cpu::features;
 
         if (feat::has(feat::facility::msa_ext1)) {
-            cpacf::sha256_pb pb{};
+            struct sha256_pb {
+                u32 state[8]{};
+                u32 _pad[2]{};
+            } pb{};
             pb.state[0] = 0x6a09e667U;
             pb.state[1] = 0xbb67ae85U;
             pb.state[2] = 0x3c6ef372U;
@@ -236,11 +239,11 @@ namespace crypto::sha256 {
             pb.state[6] = 0x1f83d9abU;
             pb.state[7] = 0x5be0cd19U;
 
-            const void* ptr = data.data();
-            u64 remain = static_cast<u64>(data.size());
+            const u64 msg_bits = static_cast<u64>(data.size()) * 8U;
+            pb._pad[0] = static_cast<u32>(msg_bits >> 32U);
+            pb._pad[1] = static_cast<u32>(msg_bits);
 
-            cpacf::kimd<cpacf::kimd_fc::sha256>(pb, ptr, remain);
-            cpacf::klmd<cpacf::kimd_fc::sha256>(pb, ptr, remain);
+            cpacf::klmd<cpacf::klmd_fc::sha256, cpacf::klmd_flags::none, sha256_pb>(pb, data);
 
             for (u32 i = 0U; i < 8U; ++i) {
                 out[i * 4U + 0U] = static_cast<u8>(pb.state[i] >> 24U);

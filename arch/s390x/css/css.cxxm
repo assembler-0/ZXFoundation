@@ -33,8 +33,8 @@ namespace arch::s390x::css {
     /// @param schid Subchannel identifier (loaded into GR1).
     /// @param orb_ref Operation Request Block.
     /// @return Condition code: 0=started, 1=status pending, 2=busy, 3=not operational.
-    [[nodiscard]] auto ssch(subchannel_id schid, const orb& orb_ref) noexcept -> int {
-        int cc;
+    [[nodiscard]] auto ssch(subchannel_id schid, const orb& orb_ref) noexcept -> condition_code {
+        condition_code cc;
         register u64 r1 asm("1") = schid.to_raw();
         __asm__ volatile(
             "ssch 0(%[orb])\n\t"
@@ -52,8 +52,8 @@ namespace arch::s390x::css {
     /// @param schid Subchannel identifier (loaded into GR1).
     /// @param irb_ref Interruption Response Block (output).
     /// @return Condition code: 0=status stored, 1=no status pending, 3=not operational.
-    [[nodiscard]] auto tsch(subchannel_id schid, irb& irb_ref) noexcept -> int {
-        int cc;
+    [[nodiscard]] auto tsch(subchannel_id schid, irb& irb_ref) noexcept -> condition_code {
+        condition_code cc;
         register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
             "tsch 0(%[irb])\n\t"
@@ -71,8 +71,8 @@ namespace arch::s390x::css {
     /// @param schid Subchannel identifier (loaded into GR1).
     /// @param schib_ref Subchannel Information Block (output).
     /// @return Condition code: 0=stored, 3=not operational.
-    [[nodiscard]] auto stsch(subchannel_id schid, schib& schib_ref) noexcept -> int {
-        int cc;
+    [[nodiscard]] auto stsch(subchannel_id schid, schib& schib_ref) noexcept -> condition_code {
+        condition_code cc;
         register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
             "stsch 0(%[schib])\n\t"
@@ -90,8 +90,8 @@ namespace arch::s390x::css {
     /// @param schid Subchannel identifier (loaded into GR1).
     /// @param schib_ref Subchannel Information Block (input).
     /// @return Condition code: 0=modified, 1=status pending, 2=busy, 3=not operational.
-    [[nodiscard]] auto msch(subchannel_id schid, const schib& schib_ref) noexcept -> int {
-        int cc;
+    [[nodiscard]] auto msch(subchannel_id schid, const schib& schib_ref) noexcept -> condition_code {
+        condition_code cc;
         register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
             "msch 0(%[schib])\n\t"
@@ -108,8 +108,8 @@ namespace arch::s390x::css {
     /// @brief Issue HSCH (Halt Subchannel) instruction.
     /// @param schid Subchannel identifier (loaded into GR1).
     /// @return Condition code: 0=halted, 1=status pending, 2=busy, 3=not operational.
-    [[nodiscard]] auto hsch(subchannel_id schid) noexcept -> int {
-        int cc;
+    [[nodiscard]] auto hsch(subchannel_id schid) noexcept -> condition_code {
+        condition_code cc;
         register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
             "hsch\n\t"
@@ -125,8 +125,8 @@ namespace arch::s390x::css {
     /// @brief Issue CSCH (Clear Subchannel) instruction.
     /// @param schid Subchannel identifier (loaded into GR1).
     /// @return Condition code: 0=cleared, 3=not operational.
-    [[nodiscard]] auto csch(subchannel_id schid) noexcept -> int {
-        int cc;
+    [[nodiscard]] auto csch(subchannel_id schid) noexcept -> condition_code {
+        condition_code cc;
         register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
         __asm__ volatile(
             "csch\n\t"
@@ -329,7 +329,7 @@ namespace arch::s390x::css {
     /// @param irb_ref   Output Interruption Response Block.
     /// @return Condition code on success; driver_error on failure.
     [[nodiscard]] auto css_test_io(u32 sch_index, irb& irb_ref) noexcept
-        -> ::lib::expected<int, ::lib::kernel_error>
+        -> ::lib::expected<condition_code, ::lib::kernel_error>
     {
         if (!_internal::g_css_initialized) {
             return ::lib::unexpected(
@@ -342,7 +342,7 @@ namespace arch::s390x::css {
 
         auto& entry = _internal::g_subchannel_table[sch_index];
 
-        const int cc = tsch(entry.schid, irb_ref);
+        const condition_code cc = tsch(entry.schid, irb_ref);
         if (cc == 3) {
             return ::lib::unexpected(
                 ::lib::kernel_error::from_driver(::lib::driver_error::not_found));

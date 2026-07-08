@@ -45,8 +45,8 @@ namespace arch::s390x::cpu::cpu_mf {
     /// @brief Load CPU Counter-Set Controls (LCCTL).
     /// @param ctl Control value.
     /// @return Condition code (0 = success).
-    inline auto lcctl(u64 ctl) noexcept -> i32 {
-        i32 cc;
+    inline auto lcctl(u64 ctl) noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             "    lcctl  %[ctl]\n"
             "    ipm    %[cc]\n"
@@ -62,8 +62,8 @@ namespace arch::s390x::cpu::cpu_mf {
     /// @param ctr Counter number.
     /// @param val Output value.
     /// @return Condition code (0 = success).
-    inline auto ecctr(u64 ctr, u64& val) noexcept -> i32 {
-        i32 cc;
+    inline auto ecctr(u64 ctr, u64& val) noexcept -> condition_code {
+        condition_code cc;
         u64 out;
         __asm__ volatile(
             "    ecctr  %[out],%[ctr]\n"
@@ -84,8 +84,8 @@ namespace arch::s390x::cpu::cpu_mf {
     /// @param range Number of counters.
     /// @param dest Output buffer.
     /// @return Condition code.
-    inline auto stcctm(stcctm_ctr_set set, u64 range, u64& dest) noexcept -> i32 {
-        i32 cc;
+    inline auto stcctm(stcctm_ctr_set set, u64 range, u64& dest) noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             ".macro	STCCTM	r1 m3 db2\n"
             "   .insn	rsy,0xeb0000000017,\\r1,\\m3 & 0xf,\\db2\n"
@@ -109,10 +109,11 @@ namespace arch::s390x::cpu::cpu_mf {
             "1:	lhi	%[exc],0\n"
             "2:\n"
             "ipm	%[cc]\n"
+            "srl  %[cc],28\n"
             : [cc] "=d" (cc), [exc] "+d" (exception)
             : [req] "Q" (req)
             : "cc");
-        if (exception || cc >> 28)
+        if (exception || cc)
             return -1;
         return 0;
     }

@@ -125,6 +125,15 @@ using u4096 = ubit_int<4096>;
 
     // misc.
 
+using condition_code = i32;
+
+template <usize Size>
+struct FixedSizeBase {
+    virtual ~FixedSizeBase() {
+        static_assert(sizeof(*this) == Size, "FixedSizeBase: size does not match");
+    }
+};
+
 using uuid_t = uchar[16];
 
 using nullptr_t = decltype(nullptr);

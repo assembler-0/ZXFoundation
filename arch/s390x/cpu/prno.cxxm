@@ -1,12 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/prno.cxxm
 /// @brief PRNO (Perform Random Number Operation, 0xB93C) instruction wrappers.
-///        Function codes per IBM z/Architecture PoP:
-///          0x00 — PRNO Query (16-byte PB at GR1)
-///          0x03 — PRNO-SHA-512-DRNG Generate (240-byte PB at GR1)
-///          0x83 — PRNO-SHA-512-DRNG Seed      (bit 56 set)
-///          0x70 — PRNO-TRNG-Query-Raw-to-Conditioned-Ratio (8-byte PB at GR1)
-///          0x72 — PRNO-TRNG Generate (no PB, GR1 ignored)
 
 export module arch.s390x.cpu.prno;
 import zxfoundation.base.types;
@@ -47,17 +41,17 @@ namespace arch::s390x::cpu::prno {
     template <prno_fc FC, typename PB>
     inline auto prno(PB& pb,
                      const void*& op1, u64& op1_len,
-                     const void*& op2, u64& op2_len) noexcept -> i32 {
+                     const void*& op2, u64& op2_len) noexcept -> condition_code {
         register u64 r2 asm("2") = reinterpret_cast<u64>(op1);
         register u64 r3 asm("3") = op1_len;
         register u64 r4 asm("4") = reinterpret_cast<u64>(op2);
         register u64 r5 asm("5") = op2_len;
-        i32 cc;
+        condition_code cc;
 
         __asm__ volatile(
             "   lgr 0,%[fc]\n"
             "   lgr 1,%[pba]\n"
-            "0: .insn rre,0xb93c0000,%[op1],%[op2]\n"
+            "0: prno %[op1],%[op2]\n"
             "   brc 1,0b\n"
             "   ipm %[cc]\n"
             "   srl %[cc],28\n"

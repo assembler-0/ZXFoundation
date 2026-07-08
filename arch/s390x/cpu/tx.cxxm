@@ -50,8 +50,8 @@ namespace arch::s390x::cpu::tx {
     /// @tparam Ctrl  I2 control field (GRSM | A | F | PIFC).
     /// @return CC: 0=started, 1=indeterminate abort, 2=transient abort.
     template <u16 Ctrl = TBEGIN_GRSM_DEFAULT>
-    [[nodiscard]] inline auto tbegin() noexcept -> i32 {
-        i32 cc;
+    [[nodiscard]] inline auto tbegin() noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             "   .insn   sil,0xe56000000000,0,%[ctrl]\n"
             "   ipm     %[cc]\n"
@@ -66,8 +66,8 @@ namespace arch::s390x::cpu::tx {
     /// @brief Begin a non-constrained transaction with TDB diagnostic block.
     /// @param tdb_ref  Reference to a 256-byte-aligned TDB.
     template <u16 Ctrl = TBEGIN_GRSM_DEFAULT>
-    [[nodiscard]] inline auto tbegin(tdb& tdb_ref) noexcept -> i32 {
-        i32 cc;
+    [[nodiscard]] inline auto tbegin(tdb& tdb_ref) noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             "   .insn   sil,0xe56000000000,0(%[tdb]),%[ctrl]\n"
             "   ipm     %[cc]\n"

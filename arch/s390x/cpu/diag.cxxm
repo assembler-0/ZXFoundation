@@ -18,8 +18,8 @@ namespace arch::s390x::cpu::diag {
     /// @param  r2    Value placed in R2 (and R2+1).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] inline auto diagnose(u64& r1, u64& r2) noexcept -> i32 {
-        i32 cc;
+    [[gnu::always_inline]] inline auto diagnose(u64& r1, u64& r2) noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             "diag    %[r1],%[r2],%[code]\n"
             "ipm     %[cc]\n"
@@ -423,6 +423,9 @@ namespace arch::s390x::cpu::diag {
     /// DIAG 0x500 subcodes.
     constexpr u64 DIAG500_SC_KVM_VIRTIO  = 0;  ///< KVM virtio-ccw notification.
     constexpr u64 DIAG500_SC_STOR_LIMIT  = 4;  ///< Query storage limit (boot).
+
+
+
 
     /// @brief KVM virtio-ccw hypercall or boot-time storage limit query.
     /// @param subcode  0 (virtio notify) or 4 (storage limit).

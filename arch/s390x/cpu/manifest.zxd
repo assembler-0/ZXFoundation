@@ -31,7 +31,7 @@
     uaccess.cxxm
     hotplug_types.cxxm
     hotplug.cxxm
-    ctlreg.cxxm
+    ctlreg.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-gnu-anonymous-struct) ]
     clock.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-gnu-anonymous-struct) ]
     diag.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
     storage.cxxm

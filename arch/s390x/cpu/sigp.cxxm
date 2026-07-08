@@ -59,16 +59,17 @@ namespace arch::s390x::cpu::sigp {
     inline auto sigp_issue(u16 addr, u8 order, u64 parm,
                 u32& status) -> int {
         processor::register_pair r1{ .even = 0, .odd = parm };
-        int cc;
+        condition_code cc;
         __asm__ volatile(
             "	sigp	%[r1],%[addr],0(%[order])\n"
             "	ipm	    %[cc]\n"
+            "	srl	    %[cc],28\n"
             : [cc] "=d" (cc), [r1] "+d" (r1.pair)
             : [addr] "d" (addr), [order] "a" (order)
             : "cc"
         );
         status = r1.even;
-        return cc >> 28;
+        return cc;
     }
 
 
@@ -87,7 +88,7 @@ namespace arch::s390x::cpu::sigp {
         sigp_backoff& backoff,
         u32& status
     ) noexcept -> int {
-        int cc;
+        condition_code cc;
         do {
             status = 0;
             cc = sigp_issue(cpu_addr, order, parm, status);
@@ -138,7 +139,7 @@ namespace arch::s390x::cpu::sigp {
 
         if (status & SIGP_STATUS_CHECK_STOP) {
             u32 reset_status{0};
-            int cc = sigp_issue(cpu_addr, SIGP_INITIAL_CPU_RESET, 0, reset_status);
+            condition_code cc = sigp_issue(cpu_addr, SIGP_INITIAL_CPU_RESET, 0, reset_status);
             if (cc != SIGP_CC_ORDER_CODE_ACCEPTED)
                 return cc;
 

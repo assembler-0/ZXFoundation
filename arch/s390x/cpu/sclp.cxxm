@@ -14,8 +14,8 @@ namespace arch::s390x::cpu::sclp {
     /// @param cmd Command word.
     /// @param sccb 4KB-aligned SCCB.
     /// @return Condition code (0 = success).
-    inline auto service_call(u32 cmd, void* sccb) noexcept -> i32 {
-        i32 cc;
+    inline auto service_call(u32 cmd, void* sccb) noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             "    .insn   rre,0xb2200000,%[cmd],%[sccb]\n"
             "    ipm     %[cc]\n"
@@ -33,7 +33,7 @@ namespace arch::s390x::cpu::sclp {
     inline auto read_info(read_info_sccb& info) noexcept -> i32 {
         info.header.length = sizeof(read_info_sccb);
         info.header.function_code = 0x01;
-        const i32 cc = service_call(SCLP_CMDW_READ_SCP_INFO, &info);
+        const condition_code cc = service_call(SCLP_CMDW_READ_SCP_INFO, &info);
         if (cc != 0)
             return cc;
         return (info.header.response_code == SCLP_RC_NORMAL_COMPLETION) ? 0 : -1;

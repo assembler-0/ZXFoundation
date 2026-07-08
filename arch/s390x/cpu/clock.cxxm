@@ -82,11 +82,12 @@ namespace arch::s390x::cpu::clock {
             "   lgr  1,%[r1]\n"
             "   ptff\n"
             "	ipm	%[rc]\n"
+            "   srl  %[rc],28\n\t"
             : [rc] "=d" (rc), "+m" (*reinterpret_cast<addrtype *>(r1))
             : [r0] "d" (r0), [r1] "d" (r1)
             : "cc", "0", "1"
         );
-        return rc >> 28;
+        return rc;
     }
 
     /// @brief Store Clock (STCK) — stores the 64-bit TOD clock value.

@@ -104,8 +104,8 @@ namespace arch::s390x::cpu::uaccess {
     /// @param oac   OAC pair to load into GR0 (low 32 bits used).
     /// @return CC value: 0 = done, 3 = partial (len updated with remainder).
     [[nodiscard]] auto mvcos(void* dst, const void* src,
-                               u64& len, u64 oac) noexcept -> i32 {
-        i32 cc;
+                               u64& len, u64 oac) noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             "   lgr   0,%[oac]\n"
             "   .insn ssf,0xc80000000000,%[dst],%[src],%[len]\n"
@@ -132,7 +132,7 @@ namespace arch::s390x::cpu::uaccess {
 
         while (len > 0) {
             u64 chunk = len;
-            i32 cc = mvcos(d, s, chunk, oac);
+            condition_code cc = mvcos(d, s, chunk, oac);
 
             if (cc == 0) {
                 break;

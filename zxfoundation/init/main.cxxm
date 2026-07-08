@@ -279,13 +279,6 @@ namespace _internal {
             .help = "Set minimum log level (0-7, 7=verbose)"
         });
 
-        zxfoundation::base::cmdline::add({
-            .name = "smp.max_cpus",
-            .type = zxfoundation::base::cmdline::value_type::callback,
-            .handler = arch::s390x::cpu::smp::handle_max_cpus,
-            .help = "Limit number of CPUs (0=max, up to 768)"
-        });
-
         zxfoundation::base::cmdline::parse({
             reinterpret_cast<const char*>(zxfoundation::init::boot_protocol.cmdline_addr),
             zxfoundation::init::boot_protocol.cmdline_len
@@ -308,13 +301,13 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::base::cxxrtse::cxxabi::run_global_constructor();
 
+    zxfoundation::init::boot_protocol = *protocol;
+
     zxfoundation::sys::printk::init();
     zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
     _internal::cmdline_init();
 
     zxfoundation::base::cxxrtse::cxxabi::ssp_init();
-
-    zxfoundation::init::boot_protocol = *protocol;
 
     arch::s390x::cpu::features::init(zxfoundation::init::boot_protocol.stfle_fac);
 

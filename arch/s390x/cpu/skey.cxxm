@@ -69,8 +69,8 @@ namespace arch::s390x::cpu::skey {
     /// @brief Reset Reference Bit Extended (RRBE).
     /// @param phys_addr  Real (absolute) address within the target frame.
     /// @return Condition code (0-3).
-    [[nodiscard]] inline auto rrbe(u64 phys_addr) noexcept -> int {
-        int cc;
+    [[nodiscard]] inline auto rrbe(u64 phys_addr) noexcept -> condition_code {
+        condition_code cc;
         __asm__ volatile(
             "rrbe 0,%[addr]\n\t"
             "ipm  %[cc]\n\t"

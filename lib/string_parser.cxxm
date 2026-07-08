@@ -100,18 +100,42 @@ namespace lib {
         [[nodiscard]] auto next_pair() noexcept
             -> optional<pair<string_view, string_view>>
         {
-            auto key = next();
-            if (!key) return nullopt;
+            skip_delimiters();
+            if (m_pos >= m_input.size()) return nullopt;
+
+            const usize key_start = m_pos;
+            while (m_pos < m_input.size()) {
+                const char c = m_input[m_pos];
+                if (is_delimiter(c) || c == '=') break;
+                if (c == '\\' && m_pos + 1 < m_input.size()) {
+                    m_pos += 2;
+                    continue;
+                }
+                if (c == '\'' || c == '"') {
+                    const char q = c;
+                    ++m_pos;
+                    while (m_pos < m_input.size() && m_input[m_pos] != q) {
+                        if (m_input[m_pos] == '\\' && m_pos + 1 < m_input.size()) ++m_pos;
+                        ++m_pos;
+                    }
+                    if (m_pos < m_input.size()) ++m_pos;
+                    continue;
+                }
+                ++m_pos;
+            }
+
+            if (m_pos <= key_start) return nullopt;
+            const string_view key = m_input.substr(key_start, m_pos - key_start);
 
             skip_delimiters();
             if (m_pos < m_input.size() && m_input[m_pos] == '=') {
                 ++m_pos;
                 auto val = next();
-                if (!val) return pair{*key, string_view{}};
-                return pair{*key, *val};
+                if (!val) return pair{key, string_view{}};
+                return pair{key, *val};
             }
 
-            return pair{*key, string_view{}};
+            return pair{key, string_view{}};
         }
 
         /// @brief Peek at the next token without consuming it.

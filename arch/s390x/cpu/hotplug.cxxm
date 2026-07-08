@@ -54,7 +54,7 @@ namespace _internal {
 
     [[nodiscard]] auto sigp_stop_cpu(u16 cpu_addr) noexcept -> bool {
         u32 status{0};
-        int cc = arch::s390x::cpu::sigp::sigp_issue(cpu_addr,
+        condition_code cc = arch::s390x::cpu::sigp::sigp_issue(cpu_addr,
                     arch::s390x::cpu::sigp::SIGP_STOP, 0, status);
         if (cc == arch::s390x::cpu::sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
             return true;

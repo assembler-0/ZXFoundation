@@ -10,6 +10,73 @@ export {
 
 namespace arch::s390x::cpu::ctlreg {
 
+    struct ctlreg {
+        u64 val;
+    };
+    
+    union cr0 {
+        u64 val;
+        ctlreg reg;
+        struct {
+            u64	   : 8;
+            u64 tcx  : 1; /* Transactional-Execution control */
+            u64 pifo : 1; /* Transactional-Execution Program-
+                           Interruption-Filtering Override */
+            u64	   : 3;
+            u64 ccc  : 1; /* Cryptography counter control */
+            u64 pec  : 1; /* PAI extension control */
+            u64	   : 15;
+            u64 wti  : 1; /* Warning-track */
+            u64	   : 4;
+            u64 lap  : 1; /* Low-address-protection control */
+            u64	   : 4;
+            u64 edat : 1; /* Enhanced-DAT-enablement control */
+            u64	   : 2;
+            u64 iep  : 1; /* Instruction-Execution-Protection */
+            u64	   : 1;
+            u64 afp  : 1; /* AFP-register control */
+            u64 vx   : 1; /* Vector enablement control */
+            u64	   : 7;
+            u64 sssm : 1; /* Service signal subclass mask */
+            u64	   : 9;
+        };
+    };
+
+    union cr2 {
+        u64 val;
+        ctlreg reg;
+        struct {
+            u64	    : 33;
+            u64 ducto : 25;
+            u64	    : 1;
+            u64 gse   : 1;
+            u64	    : 1;
+            u64 tds   : 1;
+            u64 tdc   : 2;
+        };
+    };
+
+    union cr5 {
+        u64 val;
+        ctlreg reg;
+        struct {
+            u64	    : 33;
+            u64 pasteo: 25;
+            u64	    : 6;
+        };
+    };
+
+    union cr15 {
+        u64 val;
+        ctlreg reg;
+        struct {
+            u64 lsea  : 61;
+            u64	    : 3;
+        };
+    };
+
+
+
     /// @brief Store control registers [Low..High] into a storage area (STCTG).
     /// @tparam Low   Starting control register index (0–15).
     /// @tparam High  Ending control register index (0–15), must be ≥ Low.
