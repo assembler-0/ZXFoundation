@@ -58,6 +58,13 @@ set(ZXFL_COMMON_LINK_FLAGS
     --no-dynamic-linker
 )
 
+if(ENABLE_LTO)
+    if(COMPILER_ID STREQUAL "clang")
+        list(APPEND ZXFL_COMMON_FLAGS -flto=full -funified-lto)
+        list(APPEND ZXFL_COMMON_LINK_FLAGS ${ZX_GC_SECTIONS} --lto=full --plugin=${ZX_LLVM_LTO_PLUGIN} -plugin-opt=O3 -plugin-opt=lto-partitions=1 --lto-whole-program-visibility)
+    endif()
+endif()
+
 # Stage 1 loader - core.zxfoundationloader00.sys
 set(ZXFL_STAGE1_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/head.S

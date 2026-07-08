@@ -17,6 +17,11 @@ if (NOT DEFINED DASD_SERIAL)
     set(DASD_SERIAL "7a2f41726368" CACHE STRING "Dasd serial")
 endif()
 
+# LTO (Link-Time Optimization)
+if (NOT DEFINED ENABLE_LTO)
+    set(ENABLE_LTO OFF CACHE BOOL "Enable LTO")
+endif()
+
 message(STATUS "zxfoundation::build: optimization level ${OPT_LEVEL} (-O${OPT_LEVEL})")
 message(STATUS "zxfoundation::build: debug symbol level ${DSYM_LEVEL} (-g${DSYM_LEVEL})")
 message(STATUS "zxfoundation::build: default target triple: ${COMMON_TARGET_TRIPLE}")

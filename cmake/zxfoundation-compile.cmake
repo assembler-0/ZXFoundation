@@ -56,6 +56,11 @@ macro(_zx_kernel_flags _tgt)
             -static-libgcc -mzarch
         )
     endif()
+    if(ENABLE_LTO)
+        if(COMPILER_ID STREQUAL "clang")
+            target_compile_options(${_tgt} PRIVATE -flto=full -funified-lto)
+        endif()
+    endif()
     target_compile_definitions(${_tgt} PUBLIC
         __zxfoundation__
     )
@@ -70,6 +75,11 @@ macro(_zx_kernel_flags _tgt)
         target_link_options(${_tgt} PRIVATE
             --no-warn-rwx-segments
         )
+    endif()
+    if(ENABLE_LTO)
+        if(COMPILER_ID STREQUAL "clang")
+            target_link_options(${_tgt} PRIVATE ${ZX_GC_SECTIONS} --lto=full --plugin=${ZX_LLVM_LTO_PLUGIN} -plugin-opt=O3 -plugin-opt=lto-partitions=1 --lto-whole-program-visibility)
+        endif()
     endif()
 endmacro()
 

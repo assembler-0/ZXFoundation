@@ -49,6 +49,26 @@ else()
     message(WARNING "zxfoundation::validate: cmake generator = ${CMAKE_GENERATOR} may not support C++20 modules.")
 endif()
 
+# --- LTO plugin detection ---
+if(ENABLE_LTO AND COMPILER_ID STREQUAL "gcc")
+    message(WARNING "zxfoundation::build: gcc LTO is not supported")
+    set(ENABLE_LTO OFF)
+elseif(ENABLE_LTO AND COMPILER_ID STREQUAL "clang")
+    execute_process(
+        COMMAND ${CMAKE_C_COMPILER} -print-file-name=LLVMgold.so
+        OUTPUT_VARIABLE _zx_llvm_lto_plugin
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_zx_llvm_lto_plugin AND EXISTS "${_zx_llvm_lto_plugin}")
+        set(ZX_LLVM_LTO_PLUGIN "${_zx_llvm_lto_plugin}" CACHE INTERNAL "GCC liblto_plugin path")
+        message(STATUS "zxfoundation::build: llvm LTO plugin: ${ZX_LLVM_LTO_PLUGIN}")
+    else()
+        message(WARNING "zxfoundation::build: llvm LTO plugin not found at '${_zx_llvm_lto_plugin}' — forcing ENABLE_LTO=OFF")
+        set(ENABLE_LTO OFF)
+    endif()
+endif()
+
 # ZX_NM / ZX_CXXFILT — set by the toolchain file, verify they exist
 set(ZX_FOUND_NM      FALSE CACHE BOOL "nm binary was found" FORCE)
 set(ZX_FOUND_CXXFILT FALSE CACHE BOOL "c++filt binary was found" FORCE)

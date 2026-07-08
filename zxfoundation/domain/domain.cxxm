@@ -478,7 +478,7 @@ namespace zxfoundation::domain {
             return lib::unexpected(teardown_result.error());
         }
 
-        sys::printk::pverbose("domain: destroying id={} name=\"{}\"\n", id, d->name);
+        sys::printk::pverbose("domain: destroying id={} name='{}'\n", id, d->name);
 
         // Signal storage key revocation to the domain before teardown.
         zxfoundation::domain::signal::signal_enqueue(

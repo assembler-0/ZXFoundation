@@ -246,7 +246,7 @@ namespace zxfoundation::portal {
                     lib::generic_error::not_found));
         }
 
-        sys::printk::pverbose("portal: destroying id={} src={} tgt={} alet={}",
+        sys::printk::pverbose("portal: destroying id={} src={} tgt={} alet={}\n",
                    desc->ko.id, desc->source_domain, desc->target_domain, desc->alet);
 
         // Convert the DGP portal authority into a draining revocation before hardware reuse.

@@ -1,1 +1,1 @@
-syssize=0 sysmodule=ZXF.INIT printk.min_level=4 smp.max_cpus=16
+syssize=0 sysmodule=ZXF.INIT
