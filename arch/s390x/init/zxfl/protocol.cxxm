@@ -6,7 +6,6 @@ export module arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.stfle_types;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import zxfoundation.memory.hhdm_types;
 import crypto.sha256_types;
 import lib.string_view;
 

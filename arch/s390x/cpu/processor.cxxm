@@ -59,11 +59,7 @@ namespace arch::s390x::cpu::processor {
 
     /// @brief Spin-loop hint.
     inline auto cpu_relax() noexcept -> void {
-        if (is_hypervisor()) {
-            diag::diag44();
-        } else {
-            barrier();
-        }
+        diag::diag44();
     }
 
     /// @brief Yield the virtual CPU timeslice to the hypervisor (if running under one).

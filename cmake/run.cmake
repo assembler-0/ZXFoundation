@@ -58,7 +58,6 @@ add_custom_target(releaseinfo
         "Copyright (C) ${ZXFoundation_Copyright_Date} assembler-0. Licensed under the Apache License, Version 2.0."
     COMMAND ${CMAKE_COMMAND} -E echo
         "Built on ${ZXFoundation_Host_Build_Platform} ${CURRENT_MONTH}/${CURRENT_YEAR}"
-    VERBATIM
 )
 
 add_custom_target(docs
@@ -68,5 +67,4 @@ add_custom_target(docs
         "The procedure is highly straight-forward. You can build and view documents using the following command(s) in the project's root:"
     COMMAND ${CMAKE_COMMAND} -E echo "doxygen && python -m http.server -d doxygen-build/html"
     COMMAND ${CMAKE_COMMAND} -E echo "Sorry for your inconvenience"
-    VERBATIM
 )

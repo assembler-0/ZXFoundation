@@ -97,7 +97,7 @@ namespace zxfoundation::memory::slub {
     template<typename T>
     class slab_ptr {
         T*          obj_{nullptr};
-        kmem_cache* cache_{nullptr};   // stable: lives in g_cache_table[]
+        kmem_cache* cache_{nullptr};
 
         auto destroy() noexcept -> void {
             if (obj_) {

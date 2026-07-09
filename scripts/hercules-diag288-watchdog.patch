@@ -5,7 +5,7 @@ index 2bf0c21..efa17d8 100644
 @@ -183,6 +183,64 @@ struct ipl_parameter_block {
  #define DIAG308_RC_OK        0x0001
  #define DIAG308_RC_NOCONFIG  0x0102
- 
+
 +/*-------------------------------------------------------------------*/
 +/* DIAG X'288' watchdog state and helper thread.                     */
 +/*-------------------------------------------------------------------*/
@@ -81,15 +81,16 @@ index 2bf0c21..efa17d8 100644
 +    /* to set/change/cancel a watchdog timer.  On expiry the system  */
 +    /* is restarted (IPL from the boot device).                      */
 +    /*                                                               */
-+    /* R1 even = function code (0=INIT, 1=CHANGE, 2=CANCEL)         */
-+    /* R1 odd  = timeout in seconds                                  */
-+    /* R3 even = action (0=LPAR restart, or CP cmd addr for VM)      */
-+    /* R3 odd  = CP cmd length for VM, 0 for LPAR                    */
++    /* R1 high 32 = function code (0=INIT, 1=CHANGE, 2=CANCEL)      */
++    /* R1 low  32 = timeout in seconds                               */
++    /* R3 high 32 = action (0=LPAR restart, or CP cmd addr for VM)   */
++    /* R3 low  32 = CP cmd length for VM, 0 for LPAR                 */
      /*---------------------------------------------------------------*/
 -        regs->psw.cc = ARCH_DEP(vm_timebomb) (r1, r3, regs);
 +    {
-+        U64 func    = regs->GR(r1);
-+        U64 timeout = regs->GR(r1 + 1);
++        U64 r1_val  = regs->GR(r1);
++        U32 func    = (U32)(r1_val >> 32);
++        U32 timeout = (U32)(r1_val);
 +
 +        switch (func) {
 +        case 0:  /* WDT_FUNC_INIT  */

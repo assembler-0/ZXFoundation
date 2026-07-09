@@ -19,6 +19,7 @@ import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import arch.s390x.lib.atomic;
+import zxfoundation.sys.syschk;
 import lib.error;
 import lib.expected;
 import lib.util;
@@ -29,11 +30,11 @@ namespace zxfoundation::memory::slub::_internal {
 
     using namespace pmm;
 
-    /// @brief Static pool of kmem_cache objects.
-    static kmem_cache  g_cache_table[SLUB_MAX_CACHES]{};
-    static u32               g_cache_count{0};
+    /// @brief Dynamically allocated pool of kmem_cache objects
+    static kmem_cache* g_cache_table_ptr{nullptr};
+    static u32         g_cache_count{0};
     static locking::qspinlock::qspinlock g_cache_table_lock{};
-    static bool              g_initialized{false};
+    static bool        g_initialized{false};
 
 
 
@@ -141,7 +142,7 @@ namespace zxfoundation::memory::slub::_internal {
         sh->prev             = nullptr;
         sh->cpu_partial_next = nullptr;
         sh->phys             = phys;
-        sh->cache            = &cache;   // back-pointer: stable (lives in g_cache_table[])
+        sh->cache            = &cache;   // back-pointer: stable (lives in g_cache_table_ptr[])
         sh->slab_order       = cache.order; // set once at alloc, used by kmem_free_raw fast path
         sh->frozen           = 1;
         sh->node_id          = 0;
@@ -337,9 +338,36 @@ namespace zxfoundation::memory::slub {
 
     /// @brief Initialise the SLUB allocator.
     /// Must be called before any kmem_cache_create().
+    /// Allocates the cache table from PMM (PMM must be initialized).
     auto slub_init() noexcept -> void {
         using namespace _internal;
+
         if (g_initialized) return;
+
+        // Allocate the kmem_cache table from PMM to avoid 3MB static array.
+        constexpr u64 table_bytes = static_cast<u64>(sizeof(kmem_cache) * SLUB_MAX_CACHES);
+        constexpr u32 total_pages = static_cast<u32>(
+            (table_bytes + PAGE_SIZE - 1U) >> PAGE_SHIFT);
+        u32 order = 0;
+        while (order <= MAX_ORDER && (static_cast<u64>(1U) << order) < total_pages) {
+            ++order;
+        }
+        if (order > MAX_ORDER) [[unlikely]] {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
+                "slub: cache table too large for a single PMM allocation");
+        }
+
+        auto folio_r = pmm::alloc(order, zone::normal, purpose::slab, page_init::zeroed);
+        if (!folio_r) [[unlikely]] {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
+                "slub: cannot allocate cache table from PMM");
+        }
+
+        g_cache_table_ptr = reinterpret_cast<kmem_cache*>(
+            zxfoundation::memory::hhdm::phys_to_virt(folio_r->phys_base));
+
         g_cache_count = 0;
         g_initialized = true;
     }
@@ -402,7 +430,7 @@ namespace zxfoundation::memory::slub {
                        ^ static_cast<u64>(object_size)
                        ^ static_cast<u64>(g_cache_count);
 
-        kmem_cache& slot = g_cache_table[g_cache_count];
+        kmem_cache& slot = g_cache_table_ptr[g_cache_count];
         slot.name             = name;
         slot.object_size      = object_size;
         slot.size             = eff_size;
@@ -592,7 +620,7 @@ namespace zxfoundation::memory::slub {
     [[nodiscard]] auto kmem_get_cache(u32 idx) noexcept -> kmem_cache* {
         using namespace _internal;
         if (!g_initialized || idx >= g_cache_count) return nullptr;
-        return &g_cache_table[idx];
+        return &g_cache_table_ptr[idx];
     }
 
     /// @brief Return the total number of registered caches.
