@@ -1,7 +1,7 @@
 # Project Metadata
 
 PROJECT_NAME           = "ZXFoundation™"
-PROJECT_NUMBER         = "26h1"
+PROJECT_NUMBER         = "26h2"
 OUTPUT_DIRECTORY       = "doxygen-build"
 OPTIMIZE_OUTPUT_FOR_C  = YES
 INPUT                  = arch/ docs/ drivers/ lib/ zxfoundation/

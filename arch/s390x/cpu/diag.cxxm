@@ -18,7 +18,7 @@ namespace arch::s390x::cpu::diag {
     /// @param  r2    Value placed in R2 (and R2+1).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] inline auto diagnose(u64& r1, u64& r2) noexcept -> condition_code {
+    [[gnu::always_inline]] inline auto diagnose12(u64& r1, u64& r2) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
             "diag    %[r1],%[r2],%[code]\n"
@@ -43,7 +43,7 @@ namespace arch::s390x::cpu::diag {
             "diag    %[r2],%[r3],%[code]\n"
             "ipm     %[cc]\n"
             "srl     %[cc],28\n"
-            : [r1] "+d" (r2), [r2] "+d" (r3), [cc] "=d" (cc)
+            : [r2] "+d" (r2), [r3] "+d" (r3), [cc] "=d" (cc)
             : [code] "K" (Code)
             : "cc", "memory"
         );
@@ -59,10 +59,10 @@ namespace arch::s390x::cpu::diag {
     [[gnu::always_inline]] inline auto diagnose13(u64& r1, u64& r3) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
-            "diag    %[r2],%[r3],%[code]\n"
+            "diag    %[r1],%[r3],%[code]\n"
             "ipm     %[cc]\n"
             "srl     %[cc],28\n"
-            : [r1] "+d" (r1), [r2] "+d" (r3), [cc] "=d" (cc)
+            : [r1] "+d" (r1), [r3] "+d" (r3), [cc] "=d" (cc)
             : [code] "K" (Code)
             : "cc", "memory"
         );
@@ -129,7 +129,7 @@ namespace arch::s390x::cpu::diag {
         u64 r1v = r1.pair;
         u64 r2v = r2.pair;
 
-        if (diagnose<DIAG_CONSOLE_FN>(r1v, r2v) != 0) {
+        if (diagnose12<DIAG_CONSOLE_FN>(r1v, r2v) != 0) {
             return 0;
         }
         // R2.odd returns response length on success
@@ -143,7 +143,9 @@ namespace arch::s390x::cpu::diag {
     auto diag8(const char* addr, const u64 len) noexcept -> void {
         register u64 r2 __asm__("2") = reinterpret_cast<uptr>(addr);
         register u64 r3 __asm__("3") = len;
-        diagnose23<DIAG_CONSOLE_FN>(r2, r3);
+        u64 r2v = r2;
+        u64 r3v = r3;
+        diagnose23<DIAG_CONSOLE_FN>(r2v, r3v);
     }
 
     /// @brief Query CPU timing data via Pseudo Timer.
@@ -154,7 +156,7 @@ namespace arch::s390x::cpu::diag {
     auto diag0c(u16 cpu, void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(cpu) << 32) | len;
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_PSEUDO_TIMER>(r1, r2);
+        return diagnose12<DIAG_PSEUDO_TIMER>(r1, r2);
     }
 
     /// @brief Inform the hypervisor that a range of pages is no longer needed.
@@ -165,7 +167,7 @@ namespace arch::s390x::cpu::diag {
         processor::register_pair r1{ .even = start, .odd = end };
         u64 r1v = r1.pair;
         u64 r2v = 0;
-        return diagnose<DIAG_RELEASE_PAGES>(r1v, r2v);
+        return diagnose12<DIAG_RELEASE_PAGES>(r1v, r2v);
     }
 
     /// Spool file subcodes.
@@ -183,7 +185,7 @@ namespace arch::s390x::cpu::diag {
     auto diag14(diag14_fn fn, void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(fn) << 32) | len;
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_SPOOL_FILE>(r1, r2);
+        return diagnose12<DIAG_SPOOL_FILE>(r1, r2);
     }
 
     /// @brief Yield the current virtual CPU's timeslice (z/VM / KVM).
@@ -191,7 +193,7 @@ namespace arch::s390x::cpu::diag {
     auto diag44() noexcept -> void {
         u64 r1 = 0;
         u64 r2 = 0;
-        diagnose<DIAG_TIMESLICE_END>(r1, r2);
+        diagnose12<DIAG_TIMESLICE_END>(r1, r2);
     }
 
     /// NSS subcodes.
@@ -212,7 +214,7 @@ namespace arch::s390x::cpu::diag {
     auto diag64(diag64_fn fn, const void* name, void* buf) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(fn) << 32) | reinterpret_cast<uptr>(name);
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_NSS_MANIP>(r1, r2);
+        return diagnose12<DIAG_NSS_MANIP>(r1, r2);
     }
 
     /// @brief Query 3270 terminal device attributes from z/VM.
@@ -222,7 +224,7 @@ namespace arch::s390x::cpu::diag {
     auto diag8c(u16 devno, void* buf) noexcept -> condition_code {
         u64 r1 = static_cast<u64>(devno) << 32;
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_3270_DISPLAY>(r1, r2);
+        return diagnose12<DIAG_3270_DISPLAY>(r1, r2);
     }
 
     /// @brief Yield to a specific virtual CPU.
@@ -230,7 +232,7 @@ namespace arch::s390x::cpu::diag {
     auto diag9c(u16 cpu_addr) noexcept -> void {
         u64 r1 = static_cast<u64>(cpu_addr) << 32;
         u64 r2 = 0;
-        diagnose<DIAG_RELINQUISH_DIR>(r1, r2);
+        diagnose12<DIAG_RELINQUISH_DIR>(r1, r2);
     }
 
     /// @brief Interface with the z/VM Application Data Service.
@@ -241,7 +243,7 @@ namespace arch::s390x::cpu::diag {
     auto diag0dc(u32 subcode, void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(subcode) << 32) | len;
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_APPLDATA>(r1, r2);
+        return diagnose12<DIAG_APPLDATA>(r1, r2);
     }
 
     /// @brief Query LPAR CPU utilization data.
@@ -252,7 +254,7 @@ namespace arch::s390x::cpu::diag {
     auto diag204(u32 subcode, void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(subcode) << 32) | len;
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_CPU_UTIL>(r1, r2);
+        return diagnose12<DIAG_CPU_UTIL>(r1, r2);
     }
 
     /// Parameter block for DIAG 0x210.
@@ -273,7 +275,7 @@ namespace arch::s390x::cpu::diag {
     auto diag210(diag210_t& blk) noexcept -> condition_code {
         u64 r1 = reinterpret_cast<uptr>(&blk);
         u64 r2 = 0;
-        return diagnose<DIAG_DEVICE_INFO>(r1, r2);
+        return diagnose12<DIAG_DEVICE_INFO>(r1, r2);
     }
 
     /// @brief Retrieve the CPU type name table from z/VM.
@@ -283,7 +285,7 @@ namespace arch::s390x::cpu::diag {
     auto diag224(void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = reinterpret_cast<uptr>(buf);
         u64 r2 = len;
-        return diagnose<DIAG_EBCDIC_NAME>(r1, r2);
+        return diagnose12<DIAG_EBCDIC_NAME>(r1, r2);
     }
 
     /// @brief Perform DASD block I/O through z/VM (DIAG250).
@@ -293,7 +295,7 @@ namespace arch::s390x::cpu::diag {
     auto diag250(u32 fn, void* blk) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(fn) << 32) | reinterpret_cast<uptr>(blk);
         u64 r2 = 0;
-        return diagnose<DIAG_BLOCK_IO>(r1, r2);
+        return diagnose12<DIAG_BLOCK_IO>(r1, r2);
     }
 
     /// @brief Establish or cancel page-reference token (collaborative memory mgmt).
@@ -311,7 +313,7 @@ namespace arch::s390x::cpu::diag {
         }
         u64 r1v = r1.pair;
         u64 r2v = 0;
-        return diagnose<DIAG_PAGE_REF>(r1v, r2v);
+        return diagnose12<DIAG_PAGE_REF>(r1v, r2v);
     }
 
     /// @brief Query machine memory layout.
@@ -321,7 +323,7 @@ namespace arch::s390x::cpu::diag {
     auto diag260(void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = reinterpret_cast<uptr>(buf);
         u64 r2 = len;
-        return diagnose<DIAG_STORAGE_CFG>(r1, r2);
+        return diagnose12<DIAG_STORAGE_CFG>(r1, r2);
     }
 
     /// @brief Query VNIC / MAC information from z/VM.
@@ -331,7 +333,7 @@ namespace arch::s390x::cpu::diag {
     auto diag26c(u32 subcode, void* buf) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(subcode) << 32) | reinterpret_cast<uptr>(buf);
         u64 r2 = 0;
-        return diagnose<DIAG_CERTAIN_SYSINFO>(r1, r2);
+        return diagnose12<DIAG_CERTAIN_SYSINFO>(r1, r2);
     }
 
     /// Watchdog function codes.
@@ -356,7 +358,7 @@ namespace arch::s390x::cpu::diag {
                  u64 action, u32 len) noexcept -> condition_code {
         u64 r1v = (static_cast<u64>(func) << 32) | timeout;
         u64 r3v = (action << 32) | len;
-        return diagnose<DIAG_WATCHDOG>(r1v, r3v);
+        return diagnose12<DIAG_WATCHDOG>(r1v, r3v);
     }
 
     /// @brief Interface with z/VM FTP server.
@@ -366,7 +368,7 @@ namespace arch::s390x::cpu::diag {
     auto diag2c4(void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = reinterpret_cast<uptr>(buf);
         u64 r2 = len;
-        return diagnose<DIAG_FTP>(r1, r2);
+        return diagnose12<DIAG_FTP>(r1, r2);
     }
 
     /// @brief Retrieve z/VM guest performance data (hypfs).
@@ -376,7 +378,7 @@ namespace arch::s390x::cpu::diag {
     auto diag2fc(void* buf, u32 len) noexcept -> condition_code {
         u64 r1 = reinterpret_cast<uptr>(buf);
         u64 r2 = len;
-        return diagnose<DIAG_GUEST_PERF>(r1, r2);
+        return diagnose12<DIAG_GUEST_PERF>(r1, r2);
     }
 
     /// @brief Set or query LPAR partition resource parameters.
@@ -386,7 +388,7 @@ namespace arch::s390x::cpu::diag {
     auto diag304(u32 subcode, void* buf) noexcept -> condition_code {
         u64 r1 = (static_cast<u64>(subcode) << 32) | reinterpret_cast<uptr>(buf);
         u64 r2 = 0;
-        return diagnose<DIAG_PART_RESOURCE>(r1, r2);
+        return diagnose12<DIAG_PART_RESOURCE>(r1, r2);
     }
 
     /// List-directed IPL subcodes.
@@ -405,7 +407,7 @@ namespace arch::s390x::cpu::diag {
     auto diag308(diag308_fn subcode, void* addr) noexcept -> condition_code {
         u64 r1 = static_cast<u64>(subcode);
         u64 r2 = reinterpret_cast<uptr>(addr);
-        return diagnose<DIAG_IPL>(r1, r2);
+        return diagnose12<DIAG_IPL>(r1, r2);
     }
 
     /// @brief Query memory topology map.
@@ -415,7 +417,7 @@ namespace arch::s390x::cpu::diag {
     auto diag310(u32 subcode, void* buf) noexcept -> condition_code {
         u64 r1 = static_cast<u64>(subcode);
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_MEM_TOPOLOGY>(r1, r2);
+        return diagnose12<DIAG_MEM_TOPOLOGY>(r1, r2);
     }
 
     /// Predefined CPNC values.
@@ -430,7 +432,7 @@ namespace arch::s390x::cpu::diag {
         processor::register_pair r1{ .even = cpnc, .odd = cpvc };
         u64 r1v = r1.pair;
         u64 r2v = 0;
-        return diagnose<DIAG_CP_NAME_VER>(r1v, r2v);
+        return diagnose12<DIAG_CP_NAME_VER>(r1v, r2v);
     }
 
     /// @brief Manage hardware certificate store.
@@ -440,7 +442,7 @@ namespace arch::s390x::cpu::diag {
     auto diag320(u32 subcode, void* buf) noexcept -> condition_code {
         u64 r1 = static_cast<u64>(subcode);
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_CERT_STORE>(r1, r2);
+        return diagnose12<DIAG_CERT_STORE>(r1, r2);
     }
 
 
@@ -451,7 +453,7 @@ namespace arch::s390x::cpu::diag {
     auto diag324(u32 subcode, void* buf) noexcept -> condition_code {
         u64 r1 = static_cast<u64>(subcode);
         u64 r2 = reinterpret_cast<uptr>(buf);
-        return diagnose<DIAG_POWER_INFO>(r1, r2);
+        return diagnose12<DIAG_POWER_INFO>(r1, r2);
     }
 
     /// @brief Register for or acknowledge a Warning-Track Interruption.
@@ -460,7 +462,7 @@ namespace arch::s390x::cpu::diag {
     auto diag49c(u32 subcode) noexcept -> condition_code {
         u64 r1 = static_cast<u64>(subcode);
         u64 r2 = 0;
-        return diagnose<DIAG_WARN_TRACK>(r1, r2);
+        return diagnose12<DIAG_WARN_TRACK>(r1, r2);
     }
 
     /// DIAG 0x500 subcodes.
@@ -475,7 +477,7 @@ namespace arch::s390x::cpu::diag {
         processor::register_pair r1{ .even = subcode, .odd = param2 };
         u64 r1v = r1.pair;
         u64 r2v = 0;
-        return diagnose<DIAG_VIRTIO>(r1v, r2v);
+        return diagnose12<DIAG_VIRTIO>(r1v, r2v);
     }
 
 } // namespace arch::s390x::cpu::diag
