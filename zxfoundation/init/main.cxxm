@@ -146,13 +146,13 @@ namespace _internal {
             );
 
         for (u32 i = 0U; i < tbl->count; ++i) {
-            const auto& e = tbl->entries[i];
-            if (e.size == 0U) continue;
+            const auto& [phys_start, size, digest] = tbl->entries[i];
+            if (size == 0U) continue;
 
-            const u64 virt_seg = phys_to_virt(e.phys_start);
-            const lib::span data(reinterpret_cast<const u8*>(virt_seg), e.size);
+            const u64 virt_seg = phys_to_virt(phys_start);
+            const lib::span data{reinterpret_cast<const u8*>(virt_seg), size};
             const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
-                expected(e.digest, crypto::sha256::SHA256_DIGEST_SIZE);
+                expected{digest, crypto::sha256::SHA256_DIGEST_SIZE};
 
             if (const auto r = crypto::sha256::sha256_verify(data, expected); !r)
                 syschk_fatal(
@@ -167,12 +167,12 @@ namespace _internal {
         const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
             claimed_digest(boot.loader_digest, crypto::sha256::SHA256_DIGEST_SIZE);
 
-        const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
+        constexpr lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
             expected_digest(arch::s390x::init::zxvl::ZXFL_EXPECTED_DIGEST,
                             crypto::sha256::SHA256_DIGEST_SIZE);
 
         bool expected_zero = true;
-        for (auto b : expected_digest) {
+        for (const auto b : expected_digest) {
             if (b != 0U) { expected_zero = false; break; }
         }
         if (expected_zero) return;
@@ -218,8 +218,8 @@ namespace _internal {
             boot.mem_map_addr);
         u64 highest_ram_end = 0U;
         for (u32 i = 0U; i < boot.mem_map_count; ++i) {
-            const u64 region_end = map[i].base + map[i].length;
-            if (region_end > highest_ram_end) highest_ram_end = region_end;
+            if (const u64 region_end = map[i].base + map[i].length;
+                region_end > highest_ram_end) highest_ram_end = region_end;
         }
         if (highest_ram_end > boot.hhdm_phys_coverage_end) [[unlikely]] {
             syschk_fatal(
@@ -227,13 +227,12 @@ namespace _internal {
                 "sys: installed RAM exceeds ZXFL HHDM direct-map coverage");
         }
 
-        zxfoundation::memory::hhdm::set_phys_coverage_end(boot.hhdm_phys_coverage_end);
+        set_phys_coverage_end(boot.hhdm_phys_coverage_end);
     }
 
     /// @brief Initialize optional NUMA topology without making topology evidence a boot blocker.
     auto initialize_numa_topology(const arch::s390x::init::zxfl::protocol& boot) -> void {
-        auto numa_result = zxfoundation::memory::numa::init(boot);
-        if (!numa_result) {
+        if (!zxfoundation::memory::numa::init(boot)) {
             pnotice("sys: NUMA topology unavailable; continuing with allocator bootstrap fallback\n");
             return;
         }
@@ -257,11 +256,7 @@ namespace _internal {
         }
         auto* d = *dom_r;
 
-        d->granted_rights = zxfoundation::dgp::isolation_rights::enter
-                          | zxfoundation::dgp::isolation_rights::admin
-                          | zxfoundation::dgp::isolation_rights::map
-                          | zxfoundation::dgp::isolation_rights::io
-                          | zxfoundation::dgp::isolation_rights::share;
+        d->granted_rights = zxfoundation::dgp::isolation_rights::all;
 
         d->primary_strand.cpu = 0;
         zxfoundation::sched::setup_domain_context(
@@ -305,6 +300,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::sys::printk::init();
     zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
+    zxfoundation::sys::syschk::syschk_init(*protocol);
     _internal::cmdline_init();
 
     zxfoundation::base::cxxrtse::cxxabi::ssp_init();
@@ -315,8 +311,6 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     arch::s390x::cpu::lowcore::init_bsp(zxfoundation::init::boot_protocol);
     arch::s390x::cpu::percpu::init_bsp();
-
-    zxfoundation::sys::syschk::syschk_init(*protocol);
     zxfoundation::sys::time::initialize(protocol->tod_boot);
 
     _internal::banner();

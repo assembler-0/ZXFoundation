@@ -95,14 +95,6 @@ export {
 
 namespace zxfoundation::portal {
 
-    /// @brief Initialize the portal subsystem.
-    auto portal_init() noexcept -> void {
-        _internal::g_portal_table.init(scoms::kobject_type::portal);
-
-        sys::printk::pinfo("portal: subsystem initialized (max {} portals)",
-                   MAX_PORTALS);
-    }
-
     /// @brief Create a new portal from @p source_domain_id to @p target_domain_id.
     /// @param source_domain_id  Domain that will hold the portal (owns the AR).
     /// @param target_domain_id  Domain whose address space is accessed.
@@ -303,6 +295,15 @@ namespace zxfoundation::portal {
                     (void)arch::s390x::cpu::aste::ale_destroy(p.alet);
                 }
             });
+    }
+
+
+    /// @brief Initialize the portal subsystem.
+    auto portal_init() noexcept -> void {
+        _internal::g_portal_table.init(scoms::kobject_type::portal);
+        zxfoundation::domain::register_portal_drain_cb(portal_destroy_for_domain);
+        sys::printk::pinfo("portal: subsystem initialized (max {} portals)",
+                   MAX_PORTALS);
     }
 
     /// @brief Look up a portal descriptor by its id.

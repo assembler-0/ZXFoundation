@@ -1,3 +1,4 @@
 !files : !compile_group -> [auto] {
     atomic.cxxm
+    cstring.cxx
 }

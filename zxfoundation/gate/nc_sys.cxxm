@@ -13,6 +13,8 @@ import zxfoundation.sys.timer_types;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.service;
+import zxfoundation.dgp.dgp_authorize;
+import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
@@ -82,6 +84,17 @@ namespace __sys_detail {
             return NC_ERROR;
         }
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::console_write,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::console,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("console_write: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         char kbuf[256]{};
         if (copy_from_user(kbuf, user_buf, user_len, d) != 0) {
             zxfoundation::sys::printk::perr(
@@ -101,6 +114,17 @@ namespace __sys_detail {
 
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::service_register,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::service,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("service_register: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         const zxfoundation::sys::cap::cap_token token{a0};
         const u64 name_user_ptr = a1;
@@ -132,6 +156,17 @@ namespace __sys_detail {
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::service_lookup,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::service,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("service_lookup: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         const u64 name_user_ptr = a0;
 
         if (name_user_ptr == 0) {
@@ -160,6 +195,18 @@ namespace __sys_detail {
 
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::service_unregister,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::service
+                                  | zxfoundation::dgp::isolation_rights::lifecycle,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("service_unregister: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         const auto service_id = static_cast<u32>(a0);
 

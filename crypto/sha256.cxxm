@@ -14,7 +14,7 @@ import lib.placementnew;
 
 namespace crypto::sha256 {
 
-    static constexpr u32 K[64] = {
+    static constexpr u32 K[64] {
         0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
         0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
         0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,

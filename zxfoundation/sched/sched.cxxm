@@ -38,11 +38,12 @@ import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
+import arch.s390x.lib.atomic;
 import lib.error;
 import lib.expected;
 import lib.placementnew;
 import lib.format;
-import arch.s390x.lib.atomic;
+import lib.rbtree;
 
 namespace _internal {
 
@@ -96,6 +97,13 @@ namespace _internal {
         pcp.attached_dgp_state = static_cast<u8>(d.ko.state);
     }
 
+    /// @brief Topology-aware work stealing across four tiers.
+    /// @param[in,out] local_rq  The idle CPU's run queue (lock held on
+    ///                          entry by the caller via schedule()).
+    /// @return A stolen strand for the local run queue, or nullptr.
+    /// @note The stolen strand's vruntime is normalized to the local
+    ///       run queue's min_vruntime.  Weighted vruntime delta from
+    ///       the source CPU is preserved through the normalization.
     auto try_steal_strand_locked(run_queue& local_rq) noexcept -> strand* {
         namespace fair = zxfoundation::sched::fair;
         namespace balance = zxfoundation::sched::balance;
@@ -111,7 +119,7 @@ namespace _internal {
             local_rq.nr_running,
             cpumask::cpu_online(local_rq.cpu_id));
 
-        constexpr topology::cpu_relation tiers[] = {
+        constexpr topology::cpu_relation tiers[] {
             topology::cpu_relation::same_smt_core,
             topology::cpu_relation::same_core_group,
             topology::cpu_relation::same_numa_node,
@@ -143,41 +151,50 @@ namespace _internal {
             if (busiest) break;
         }
 
-        if (!busiest) return nullptr;   // local_rq.lock still held by caller
-
-        local_rq.lock.unlock();
+        if (!busiest) return nullptr;   // local_rq.lock still held
 
         run_queue& first  = (local_rq.cpu_id < busiest->cpu_id) ? local_rq : *busiest;
         run_queue& second = (local_rq.cpu_id < busiest->cpu_id) ? *busiest : local_rq;
 
-        first.lock.lock();
         second.lock.lock();
 
+        if (!cpumask::cpu_online(busiest->cpu_id) || busiest->nr_running <= 1) {
+            first.lock.unlock();
+            if (&second != &first) second.lock.unlock();
+            return nullptr;
+        }
+
         strand* stolen = nullptr;
-        if (busiest->nr_running > 1) {
-            auto* last = busiest->fair_tree.root.node;
-            if (last) {
-                while (last->right) last = last->right;
 
-                stolen = fair::rb_node_to_strand(last);
+        auto* last = busiest->fair_tree.root.node;
+        if (last) {
+            while (last->right) last = last->right;
 
-                const auto* stolen_domain = static_cast<const domain*>(stolen->owner);
-                auto placement_result = balance::validate_cpu_for_strand(*stolen, local_rq.cpu_id);
-                if (stolen->cpu != busiest->cpu_id || !stolen->on_rq
-                    || !can_admit_domain(*stolen_domain) || !placement_result) [[unlikely]] {
-                    stolen = nullptr;
-                } else {
-                    fair::dequeue(*busiest, *stolen);
-                    stolen->cpu = local_rq.cpu_id;
+            stolen = fair::rb_node_to_strand(last);
 
-                    stolen->sched.vruntime = local_rq.min_vruntime;
-                    stolen->sched.deadline = stolen->sched.vruntime +
-                        (stolen->sched.slice * 1024 / stolen->sched.weight);
-                }
+            const auto* stolen_domain = static_cast<const domain*>(stolen->owner);
+            auto placement_result = balance::validate_cpu_for_strand(*stolen, local_rq.cpu_id);
+            if (stolen->cpu != busiest->cpu_id || !stolen->on_rq
+                || !can_admit_domain(*stolen_domain) || !placement_result) [[unlikely]] {
+                stolen = nullptr;
+            } else {
+                const u64 source_min_vruntime = busiest->min_vruntime;
+
+                fair::dequeue(*busiest, *stolen);
+                stolen->cpu = local_rq.cpu_id;
+
+                stolen->sched.vruntime = local_rq.min_vruntime +
+                    (stolen->sched.vruntime > source_min_vruntime
+                     ? stolen->sched.vruntime - source_min_vruntime
+                     : 0U);
+                stolen->sched.deadline = stolen->sched.vruntime +
+                    (stolen->sched.slice * 1024 / stolen->sched.weight);
             }
         }
 
-        busiest->lock.unlock();
+        first.lock.unlock();
+        if (&second != &first) second.lock.unlock();
+
 
         return stolen;
     }
@@ -192,7 +209,7 @@ namespace zxfoundation::sched {
     using zxfoundation::domain::domain_id;
     using zxfoundation::domain::domain_flags;
     using zxfoundation::domain::strand;
-    using zxfoundation::domain::strand_state;
+    using zxfoundation::domain::sched_substate;
     using zxfoundation::base::lifecycle_state;
     using zxfoundation::domain::run_queue;
 
@@ -335,9 +352,9 @@ namespace zxfoundation::sched {
             prev_dom->flags &= ~domain_flags::need_resched;
 
             if (prev_dom->ko.state == lifecycle_state::active && _internal::can_admit_domain(*prev_dom)
-                && (prev->state == strand_state::running || prev->state == strand_state::runnable) && !prev->on_rq
+                && (prev->substate == sched_substate::running || prev->substate == sched_substate::runnable) && !prev->on_rq
                 && prev != rq.idle_strand) {
-                prev->state = strand_state::runnable;
+                prev->substate = sched_substate::runnable;
                 auto enqueue_result = classed::enqueue(rq, *prev);
                 if (!enqueue_result) [[unlikely]] {
                     rq.lock.unlock();
@@ -389,7 +406,7 @@ namespace zxfoundation::sched {
         }
 
         if (next != rq.idle_strand) {
-            next->state = strand_state::running;
+            next->substate = sched_substate::running;
         }
 
         rq.curr = next;
@@ -435,7 +452,7 @@ namespace zxfoundation::sched {
         auto* current = reinterpret_cast<strand*>(pcp.current_strand);
         if (current) {
             current->on_rq = false;
-            current->state = strand_state::dead;
+            current->ko.state = lifecycle_state::destroyed;
             if (auto* owner = static_cast<domain*>(current->owner)) {
                 owner->flags = owner->flags | domain_flags::need_resched;
             }
@@ -636,6 +653,8 @@ namespace zxfoundation::sched {
     }
 
     /// @brief Notify the scheduler that a CPU is going offline.
+    /// @param[in] cpu_id Logical CPU ID going offline.
+    /// @return Success or kernel_error.
     [[nodiscard]] auto sched_cpu_down(u16 cpu_id) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
         using namespace _internal;
 
@@ -644,15 +663,37 @@ namespace zxfoundation::sched {
                 ::lib::arch_error::invalid_cpu_id));
 
         auto& rq = g_rqs[cpu_id];
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        validate_scheduler_irq_context();
+        rq.lock.lock();
+
         {
-            const auto flags = arch::s390x::cpu::irq::irq_save_disable();
-            rq.lock.lock();
-            rq.online.store(0, arch::s390x::lib::atomic::memory_order::release);
-            rq.curr = nullptr;
-            rq.idle_strand = nullptr;
-            rq.lock.unlock();
-            arch::s390x::cpu::irq::irq_restore(flags);
+            for (strand& s : rq.fair_tree.iter<strand, &strand::sched_rb>()) {
+                classed::dequeue(rq, s);
+                u16 dest_cpu = 0;
+                for (u16 i = 0; i < base::config::CONFIG_ZX_MAX_CPUS; ++i) {
+                    if (i != cpu_id && arch::s390x::cpu::cpumask::cpu_online(i)) {
+                        dest_cpu = i;
+                        break;
+                    }
+                }
+                s.cpu = dest_cpu;
+                s.on_rq = false;
+                s.substate = sched_substate::runnable;
+                auto& dest_rq = g_rqs[dest_cpu];
+                (void)classed::enqueue(dest_rq, s);
+            }
         }
+
+        rq.idle_strand = nullptr;
+        rq.curr = nullptr;
+        rq.online.store(0, arch::s390x::lib::atomic::memory_order::release);
+
+        rq.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(flags);
+
+        arch::s390x::cpu::cpumask::cpu_clear_online(cpu_id);
+        topology::topology_offline_cpu(cpu_id);
         return {};
     }
 

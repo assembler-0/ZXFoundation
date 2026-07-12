@@ -33,7 +33,7 @@ namespace zxfoundation::sched::balance {
         policy.allow_remote_node = true;
         policy.allow_smt_sibling = !zxfoundation::dgp::has_all_rights(
             owner->granted_rights,
-            zxfoundation::dgp::isolation_rights::admin);
+            zxfoundation::dgp::isolation_rights::sched);
         policy.isolation_sensitive = !policy.allow_smt_sibling;
         return policy;
     }

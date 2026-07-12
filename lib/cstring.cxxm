@@ -1,16 +1,42 @@
 /// SPDX-License-Identifier: Apache 2.0
-/// @file cstring.cxxm
-/// @brief string operations
+/// @file lib/cstring.cxxm
+/// @brief String and memory operations
 
 export module lib.cstring;
-import zxfoundation.base.types;
 import lib.string_view;
+import zxfoundation.base.types;
+
+extern "C" {
+    auto __zx_memcpy(void* dest, const void* src, usize n) -> void*;
+    auto __zx_memset(void* s, int c, usize n) -> void*;
+    auto __zx_memmove(void* dest, const void* src, usize n) -> void*;
+    auto __zx_memcmp(const void* s1, const void* s2, usize n) -> int;
+    auto __zx_strcmp(const char* s1, const char* s2) -> int;
+    auto __zx_strend(const char* s) -> char*;
+    auto __zx_strnend(const char* s, usize n) -> char*;
+    auto __zx_strcat(char* dest, const char* src) -> char*;
+    auto __zx_clcle(const char* s1, usize l1,
+                    const char* s2, usize l2) -> condition_code;
+}
 
 export {
 
 namespace lib {
 
-    auto strncpy(char *dest, const char *src, usize max_len) -> void {
+    inline auto memcpy(void* dest, const void* src, usize n) -> void* { return __zx_memcpy(dest, src, n); }
+    inline auto memset(void* s, int c, usize n) -> void*             { return __zx_memset(s, c, n); }
+    inline auto memmove(void* dest, const void* src, usize n) -> void* { return __zx_memmove(dest, src, n); }
+    inline auto memcmp(const void* s1, const void* s2, usize n) -> int { return __zx_memcmp(s1, s2, n); }
+
+    inline auto strcmp(const char* s1, const char* s2) -> int       { return __zx_strcmp(s1, s2); }
+    inline auto streq(const char* a, const char* b) noexcept -> bool { return strcmp(a, b) == 0; }
+    inline auto strend(const char* s) -> char*                      { return __zx_strend(s); }
+    inline auto strnend(const char* s, usize n) -> char*            { return __zx_strnend(s, n); }
+    inline auto strcat(char* dest, const char* src) -> char*        { return __zx_strcat(dest, src); }
+    inline auto clcle(const char* s1, usize l1,
+                      const char* s2, usize l2) -> condition_code   { return __zx_clcle(s1, l1, s2, l2); }
+
+    auto strncpy(char* dest, const char* src, usize max_len) -> void {
         if (!dest || !src)
             return;
         usize i = 0;
@@ -19,17 +45,14 @@ namespace lib {
         dest[i] = '\0';
     }
 
-    auto strcpy(char *dest, const char *src) -> void{
+    auto strcpy(char* dest, const char* src) -> void {
         if (!dest || !src)
             return;
-        // Optimize for 64-bit aligned copies when possible
         if ((reinterpret_cast<uptr>(dest) & 7) == 0 && (reinterpret_cast<uptr>(src) & 7) == 0) {
-            auto *d64 = reinterpret_cast<u64*>(dest);
-            auto *s64 = reinterpret_cast<const u64*>(src);
-
+            auto* d64 = reinterpret_cast<u64*>(dest);
+            auto* s64 = reinterpret_cast<const u64*>(src);
             u64 val;
             while ((val = *s64++) != 0) {
-                // Check if any byte in the 64-bit value is zero
                 if ((val & 0xFF00000000000000ULL) == 0 ||
                     (val & 0x00FF000000000000ULL) == 0 ||
                     (val & 0x0000FF0000000000ULL) == 0 ||
@@ -38,242 +61,42 @@ namespace lib {
                     (val & 0x0000000000FF0000ULL) == 0 ||
                     (val & 0x000000000000FF00ULL) == 0 ||
                     (val & 0x00000000000000FFULL) == 0) {
-                    // Found null terminator, fall back to byte copy
-                    auto *d = reinterpret_cast<char*>(d64);
-                    const auto *s = reinterpret_cast<const char*>(s64 - 1);
+                    auto* d = reinterpret_cast<char*>(d64);
+                    const auto* s = reinterpret_cast<const char*>(s64 - 1);
                     while ((*d++ = *s++));
                     return;
-                    }
+                }
                 *d64++ = val;
             }
             *reinterpret_cast<char*>(d64) = '\0';
         } else {
-            // Original byte-by-byte copy for unaligned data
             while ((*dest++ = *src++));
         }
     }
 
-    auto strcat(char *dest, const char *src) -> void {
-        if (!dest || !src)
-            return;
-        while (*dest)
-            dest++;
-        strcpy(dest, src); // Reuse optimized strcpy
+    auto strlen(const char* s) -> usize {
+        usize len = 0;
+        while (s[len]) ++len;
+        return len;
     }
 
-    auto strlen(const char *s) -> usize {
-        usize n = 0;
-        while (s[n])
-            n++;
-        return n;
+    auto strnlen(const char* str, usize max) noexcept -> usize {
+        usize len = 0;
+        while (len < max && str[len]) ++len;
+        return len;
     }
 
-    int strnlen(const char* str, usize max) {
-        if (!str || max == 0) return 0;
-        const char *s;
-        for (s = str; max-- && *s; ++s) {}
-        return static_cast<int>(s - str);
-    }
-
-    auto streq(const char* a, const char* b) noexcept -> bool {
-        if (!a || !b) return false;
-        while (*a && *b) {
-            if (*a != *b) return false;
-            ++a;
-            ++b;
+    auto strstr(const char* s1, const char* s2) -> char* {
+        const usize l2 = strlen(s2);
+        usize l1 = strlen(s1);
+        if (!l2)
+            return const_cast<char*>(s1);
+        while (l1-- >= l2) {
+            if (!clcle(s1, l2, s2, l2))
+                return const_cast<char*>(s1);
+            s1++;
         }
-        return *a == *b;
-    }
-
-    auto memset(void *s, int c, usize n) -> void* {
-        if (n == 0) return s;
-
-        auto *mem = static_cast<uchar*>(s);
-        auto x = static_cast<uchar>(c);
-
-        // MVCL is good for very large blocks (e.g. > 1KB).
-        // For smaller blocks, EX + XC or EX + MVC is faster.
-        if (n > 1024) {
-            register void *r0 __asm__("r0") = mem;
-            register usize r1 __asm__("r1") = n;
-            register void *r2 __asm__("r2") = nullptr;
-            register usize r3 __asm__("r3") = static_cast<usize>(x) << 56;
-
-            __asm__ volatile(
-                "0: mvcl %%r0,%%r2\n"
-                "   jo   0b"
-                : "+d" (r0), "+d" (r1), "+d" (r2), "+d" (r3)
-                :
-                : "memory", "cc"
-            );
-            return s;
-        }
-
-        if (x == 0) {
-            while (n > 256) {
-                __asm__ volatile("xc 0(256,%[dst]),0(%[dst])" : : [dst] "a" (mem) : "memory", "cc");
-                mem += 256;
-                n -= 256;
-            }
-            usize l = n - 1;
-            __asm__ volatile(
-                "   larl    1, 1f\n"
-                "   ex      %[l], 0(1)\n"
-                "   j       2f\n"
-                "1: xc      0(1,%[dst]), 0(%[dst])\n"
-                "2:\n"
-                : [l] "+r" (l)
-                : [dst] "a" (mem)
-                : "r1", "memory", "cc"
-            );
-        } else {
-            *mem = x;
-            if (n > 1) {
-                uchar *dst = mem + 1;
-                usize len = n - 1;
-                while (len > 256) {
-                    __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (dst - 1) : "memory", "cc");
-                    dst += 256;
-                    len -= 256;
-                }
-                usize l = len - 1;
-                __asm__ volatile(
-                    "   larl    1, 1f\n"
-                    "   ex      %[l], 0(1)\n"
-                    "   j       2f\n"
-                    "1: mvc     0(1,%[dst]), 0(%[src])\n"
-                    "2:\n"
-                    : [l] "+r" (l)
-                    : [dst] "a" (dst), [src] "a" (dst - 1)
-                    : "r1", "memory", "cc"
-                );
-            }
-        }
-        return s;
-    }
-
-    auto memcpy(void *d, const void *s, usize n) -> void* {
-        if (n == 0 || d == s) return d;
-
-        if (n > 1024) {
-            register void *r0 __asm__("r0") = d;
-            register usize r1 __asm__("r1") = n;
-            register const void *r2 __asm__("r2") = s;
-            register usize r3 __asm__("r3") = n;
-
-            __asm__ volatile(
-                "0: mvcl %%r0,%%r2\n"
-                "   jo   0b"
-                : "+d" (r0), "+d" (r1), "+d" (r2), "+d" (r3)
-                :
-                : "memory", "cc"
-            );
-            return d;
-        }
-
-        auto *dst = static_cast<uchar*>(d);
-        const auto *src = static_cast<const uchar*>(s);
-        while (n > 256) {
-            __asm__ volatile("mvc 0(256,%[dst]),0(%[src])" : : [dst] "a" (dst), [src] "a" (src) : "memory", "cc");
-            dst += 256;
-            src += 256;
-            n -= 256;
-        }
-        usize l = n - 1;
-        __asm__ volatile(
-            "   larl    1, 1f\n"
-            "   ex      %[l], 0(1)\n"
-            "   j       2f\n"
-            "1: mvc     0(1,%[dst]), 0(%[src])\n"
-            "2:\n"
-            : [l] "+r" (l)
-            : [dst] "a" (dst), [src] "a" (src)
-            : "r1", "memory", "cc"
-        );
-        return d;
-    }
-
-    auto memmove(void *dest, const void *src, usize n) -> void* {
-        if (n == 0 || dest == src) return dest;
-
-        if (dest < src || reinterpret_cast<uptr>(dest) >= reinterpret_cast<uptr>(src) + n) {
-            return memcpy(dest, src, n);
-        }
-
-        auto *d = static_cast<uchar*>(dest) + n;
-        const auto *s = static_cast<const uchar*>(src) + n;
-
-        while (n > 0) {
-            usize chunk = (n > 256) ? 256 : n;
-            d -= chunk;
-            s -= chunk;
-            n -= chunk;
-
-            usize l = chunk - 1;
-            __asm__ volatile(
-                "   larl    1, 1f\n"
-                "   ex      %[l], 0(1)\n"
-                "   j       2f\n"
-                "1: mvc     0(1,%[dst]), 0(%[src])\n"
-                "2:\n"
-                : [l] "+r" (l)
-                : [dst] "a" (d), [src] "a" (s)
-                : "r1", "memory", "cc"
-            );
-        }
-
-        return dest;
-    }
-    
-    auto memcmp(const void *s1, const void *s2, usize n) -> int {
-        if (n == 0) return 0;
-
-        const auto *p1 = static_cast<const uchar*>(s1);
-        const auto *p2 = static_cast<const uchar*>(s2);
-
-        while (n > 256) {
-            int cc;
-            __asm__ volatile(
-                "   clc     0(256,%[p1]), 0(%[p2])\n"
-                "   ipm     %[cc]\n"
-                "   srl     %[cc], 28\n"
-                : [cc] "=d" (cc)
-                : [p1] "a" (p1), [p2] "a" (p2)
-                : "cc"
-            );
-            if (cc != 0) {
-                for (int i = 0; i < 256; i++) {
-                    if (p1[i] != p2[i]) return static_cast<int>(p1[i]) - static_cast<int>(p2[i]);
-                }
-            }
-            p1 += 256;
-            p2 += 256;
-            n -= 256;
-        }
-
-        if (n > 0) {
-            usize l = n - 1;
-            int cc;
-            __asm__ volatile(
-                "   larl    1, 1f\n"
-                "   ex      %[l], 0(1)\n"
-                "   ipm     %[cc]\n"
-                "   srl     %[cc], 28\n"
-                "   j       2f\n"
-                "1: clc     0(1,%[p1]), 0(%[p2])\n"
-                "2:\n"
-                : [cc] "=d" (cc), [l] "+r" (l)
-                : [p1] "a" (p1), [p2] "a" (p2)
-                : "r1", "cc"
-            );
-            if (cc != 0) {
-                for (usize i = 0; i < n; i++) {
-                    if (p1[i] != p2[i]) return (int) p1[i] - (int) p2[i];
-                }
-            }
-        }
-
-        return 0;
+        return nullptr;
     }
 
     auto string_copy(char* dest, usize cap, const string_view& src) noexcept -> void {
@@ -288,6 +111,6 @@ namespace lib {
         string_copy(dest, N, src);
     }
 
-}
+} // namespace lib
 
 }

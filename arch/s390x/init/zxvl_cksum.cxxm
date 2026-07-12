@@ -7,5 +7,5 @@ import arch.s390x.init.zxfl.protocol;
 
 extern "C" {
 [[gnu::section(".zxvl_checksums"), gnu::used]]
-arch::s390x::init::zxvl::checksum_table zxvl_kernel_checksum_table = {};
+arch::s390x::init::zxvl::checksum_table zxvl_kernel_checksum_table{};
 }

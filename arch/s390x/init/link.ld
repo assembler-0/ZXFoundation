@@ -39,6 +39,12 @@ SECTIONS {
         __rodata_end = .;
     } :nucleus_ro
 
+    .ex_table : ALIGN(8) {
+        __ex_table_start = .;
+        KEEP(*(.ex_table))
+        __ex_table_end = .;
+    } :nucleus_ro
+
     .ctors ALIGN(BYTE) :
     {
         __ctors_start = .;

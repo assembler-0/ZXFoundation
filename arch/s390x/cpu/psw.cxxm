@@ -13,7 +13,7 @@ namespace arch::s390x::cpu::psw {
 
     /// @brief Extract the current PSW mask via EPSW. addr is unavailable; set to 0.
     [[nodiscard]] auto extract_psw() noexcept -> zx_psw {
-        epsw_words w;
+        epsw_words w{};
         __asm__ volatile ("epsw %[hi], %[lo]"
             : [hi] "=d"(w.hi), [lo] "=d"(w.lo) :: "cc");
         return zx_psw{.mask = lib::bit_cast<u64>(w), .addr = 0ULL};
@@ -25,7 +25,7 @@ namespace arch::s390x::cpu::psw {
     }
 
     [[noreturn]] auto disabled_wait() noexcept -> void {
-        alignas(8) static constexpr zx_psw halt = {
+        alignas(8) static constexpr zx_psw halt {
             .mask = PSW_MASK_DISABLED_WAIT, .addr = PSW_STD_HALT_ADDR
         };
         load_psw(halt);
@@ -33,7 +33,7 @@ namespace arch::s390x::cpu::psw {
 
     /// @brief Enter enabled-wait state — the z/Architecture idle primitive.
     auto enabled_wait() noexcept -> void {
-        alignas(8) zx_psw wait_psw = {
+        alignas(8) static constexpr  zx_psw wait_psw {
             .mask = PSW_MASK_ENABLED_WAIT, .addr = 0
         };
         __asm__ volatile(

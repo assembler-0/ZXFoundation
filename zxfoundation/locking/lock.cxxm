@@ -87,6 +87,6 @@ namespace zxfoundation::locking {
 
     /// @}
 
-} // namespace lib
+} // namespace zxfoundation::locking
 
 } // end export

@@ -41,6 +41,7 @@ macro(_zx_kernel_flags _tgt)
         -mno-packed-stack -mhard-float -mvx
         -fno-exceptions -fno-rtti
         -nostdlib
+        -Wno-variadic-macros
         -include ${ZX_VALIDATE_HEADER}
         -march=${MARCH_MODE} -mtune=${MARCH_MODE} -m64
         ${EXTRA_KERNEL_FLAGS}

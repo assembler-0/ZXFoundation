@@ -112,7 +112,7 @@ namespace drivers::console::diag {
 
     /// @brief Global printk backend for the DIAG 8 console.
     constexpr zxfoundation::sys::printk::printk_backend
-    diag_hv_con_printk_backend = {
+    diag_hv_con_printk_backend {
         .name   = "diag_hv_con",
         .emit   = write,
         .init   = init,

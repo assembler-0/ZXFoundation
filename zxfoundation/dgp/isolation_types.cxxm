@@ -11,7 +11,7 @@ export {
 
 namespace zxfoundation::dgp {
 
-    using zxfoundation::base::lifecycle_state;
+    
 
     /// @brief Storage key value requesting automatic allocation by DGP policy.
     inline constexpr u8 STORAGE_KEY_AUTO = 0xFFU;
@@ -48,14 +48,30 @@ namespace zxfoundation::dgp {
     };
 
     /// @brief Authority bits interpreted by the DGP policy plane.
+    ///
+    /// These are coarse-grained, static rights assigned at domain creation
+    /// that determine what *category* of operation a domain class may
+    /// perform at all.  Fine-grained, per-object authorization is handled
+    /// separately by the capability system (cap_token / cap_rights).
+    ///
+    /// The old single `admin` god-bit has been decomposed into specific
+    /// authorities.  A domain may hold `lifecycle` without holding `io`,
+    /// for example.
     enum class isolation_rights : u32 {
-        none   = 0U,
-        enter  = 1U << 0,
-        map    = 1U << 1,
-        share  = 1U << 2,
-        signal = 1U << 3,
-        io     = 1U << 4,
-        admin  = 1U << 31,
+        none      = 0U,
+        enter     = 1U << 0,   ///< Cross-domain gate entry.
+        map       = 1U << 1,   ///< Map physical memory into own address space.
+        share     = 1U << 2,   ///< Share memory across domain boundaries.
+        signal    = 1U << 3,   ///< Send/receive cross-domain signals.
+        io        = 1U << 4,   ///< Bind and operate I/O devices.
+        lifecycle = 1U << 5,   ///< Create/destroy sub-domains, gates, portals.
+        delegate  = 1U << 6,   ///< Delegate capabilities to other domains.
+        quota     = 1U << 7,   ///< Allocate physical pages, DMA pools, I/O slots.
+        debug     = 1U << 8,   ///< Inspect other domains' state (query, info).
+        sched     = 1U << 9,   ///< Create strands, set scheduling parameters.
+        console   = 1U << 10,  ///< Write to system console.
+        service   = 1U << 11,  ///< Register/lookup/unregister named services.
+        all       = 0x0000'FFFFU,  ///< All rights (nucleus only).
     };
 
     /// @brief Combine two feature masks.
@@ -142,7 +158,6 @@ namespace zxfoundation::dgp {
     /// @brief Hardware-backed state recorded for one DGP isolation domain.
     struct isolation_domain_state {
         u32 domain_id{0};
-        lifecycle_state state{lifecycle_state::embryo};
         arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce{};
         u64 root_phys{0};
         u8 storage_key{0};
@@ -155,11 +170,11 @@ namespace zxfoundation::dgp {
 
     static_assert(sizeof(isolation_feature) == sizeof(u64), "DGP feature mask must remain 64-bit");
     static_assert(sizeof(isolation_rights) == sizeof(u32), "DGP rights mask must remain 32-bit");
-    static_assert(sizeof(lifecycle_state) == sizeof(u8), "DGP lifecycle state must remain byte-sized");
+    static_assert(sizeof(zxfoundation::base::lifecycle_state) == sizeof(u8), "DGP lifecycle state must remain byte-sized");
     static_assert(sizeof(storage_key_revocation_state) == sizeof(u8), "DGP storage-key revocation state must remain byte-sized");
-    static_assert(static_cast<u8>(lifecycle_state::embryo) == 0U, "Embryo must be the zero state");
+    static_assert(static_cast<u8>(zxfoundation::base::lifecycle_state::embryo) == 0U, "Embryo must be the zero state");
     static_assert(static_cast<u8>(storage_key_revocation_state::none) == 0U, "Storage-key revocation none state must be zero");
-    static_assert(static_cast<u32>(isolation_rights::admin) == (1U << 31), "Admin right must remain the high-order bit");
+    static_assert(static_cast<u32>(isolation_rights::all) == 0x0000'FFFFU, "all rights must be the low 16 bits");
     static_assert(STORAGE_KEY_USER_MAX < STORAGE_KEY_COUNT, "User storage-key range exceeds architected key count");
 
 } // namespace zxfoundation::dgp

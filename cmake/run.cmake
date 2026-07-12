@@ -48,6 +48,24 @@ if (ZX_CAN_BUILD_DASD AND ZX_CAN_SERIAL_DASD AND DASD_SERIAL)
     add_custom_target(dasdserial ALL DEPENDS sysres.3390.serial sysres.3390)
 endif()
 
+if (ZX_CAN_DUMP_ARTIFACTS)
+    add_custom_target(artifact-dump
+        COMMAND ${ZX_NM} core.zxfoundation.nucleus > core.zxfoundation.nucleus.sym
+        COMMAND ${ZX_NM} core.zxfoundation.nucleus.pass1 > core.zxfoundation.nucleus.pass1.sym
+        COMMAND ${ZX_NM} zxfl_stage1.elf > zxfl_stage1.elf.sym
+        COMMAND ${ZX_NM} zxfl_stage2.elf > zxfl_stage2.elf.sym
+        COMMAND ${ZX_NM} zxf.init > zxf.init.sym
+        COMMAND ${CMAKE_OBJDUMP} -d core.zxfoundation.nucleus > core.zxfoundation.nucleus.dism
+        COMMAND ${CMAKE_OBJDUMP} -d core.zxfoundation.nucleus.pass1 > core.zxfoundation.nucleus.pass1.dism
+        COMMAND ${CMAKE_OBJDUMP} -d zxfl_stage1.elf > zxfl_stage1.elf.dism
+        COMMAND ${CMAKE_OBJDUMP} -d zxfl_stage2.elf > zxfl_stage2.elf.dism
+        COMMAND ${CMAKE_OBJDUMP} -d zxf.init > zxf.init.dism
+        VERBATIM
+        DEPENDS core.zxfoundation.nucleus zxfl_stage1.elf zxfl_stage2.elf zxf.init
+        COMMENT "zxfoundation::build: disassembling and extracting symbols from artifacts"
+    )
+endif()
+
 file(READ ${CMAKE_SOURCE_DIR}/BUILD_NUMBER BUILD_VERSION)
 string(STRIP "${BUILD_VERSION}" BUILD_VERSION_CLEAN)
 

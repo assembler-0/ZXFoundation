@@ -5,14 +5,13 @@
 export module zxfoundation.base.cxxrtse.cxxabi;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
+import zxfoundation.sys.printk;
 import zxfoundation.locking.qspinlock;
 import lib.error;
 import lib.placementnew;
 import lib.static_vector;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
-import arch.s390x.cpu.psw;
-import zxfoundation.sys.printk;
 
 using zxfoundation::sys::printk::pinfo;
 
@@ -55,7 +54,8 @@ auto __cxa_atexit(void (*destructor)(void*), void* obj, void* dso) -> int {
     atexit_lock();
     const bool ok = g_atexit_table.push_back({ destructor, obj, dso }).has_value();
     atexit_unlock();
-    if (!ok) [[unlikely]] arch::s390x::cpu::psw::disabled_wait();
+    if (!ok) [[unlikely]] zxfoundation::sys::syschk::syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::internal_error),
+        "cxxrtse: __cxa_atexit: oom trying to handle atexit.");
     return 0;
 }
 
@@ -233,13 +233,13 @@ namespace zxfoundation::base::cxxrtse::cxxabi {
     }
 
     void run_fini_array() noexcept {
-        if (&__fini_array_end == nullptr) [[unlikely]] {
+        if (!&__fini_array_end) [[unlikely]] {
             pinfo("cxxabi: __fini_array_start or __fini_array_end "
                 "symbols are missing. No fini_array functions will be called.");
             return;
         }
 
-        const usize count = static_cast<usize>(
+        const auto count = static_cast<usize>(
             __fini_array_end - __fini_array_start);
 
         pinfo("cxxabi: running {} fini_array entries (reverse order).", count);

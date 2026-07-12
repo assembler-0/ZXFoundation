@@ -37,7 +37,7 @@ namespace zxfoundation::sched::idle {
 
     using zxfoundation::domain::domain;
     using zxfoundation::domain::domain_flags;
-    using zxfoundation::domain::strand_state;
+    using zxfoundation::domain::sched_substate;
     using zxfoundation::base::lifecycle_state;
     using zxfoundation::domain::run_queue;
     using zxfoundation::domain::sched_class;
@@ -65,7 +65,7 @@ namespace zxfoundation::sched::idle {
         d->storage_key = SKEY_NUCLEUS;
         d->primary_strand.cpu         = cpu_id;
         d->primary_strand.owner       = d;
-        d->primary_strand.state       = strand_state::runnable;
+        d->primary_strand.substate    = sched_substate::runnable;
 
         auto stack_r = alloc(_internal::IDLE_STACK_ORDER,
                              zone::dma31,

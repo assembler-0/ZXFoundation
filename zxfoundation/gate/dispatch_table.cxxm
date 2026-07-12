@@ -57,7 +57,7 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             case gate_auth_level::capability:
                 return isolation_rights::enter;
             case gate_auth_level::admin:
-                return isolation_rights::enter | isolation_rights::admin;
+                return isolation_rights::enter | isolation_rights::lifecycle;
             case gate_auth_level::domain_map:
                 return isolation_rights::enter | isolation_rights::map;
             case gate_auth_level::storage_key:
@@ -166,7 +166,7 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             case gate_auth_level::io: {
                 auto dgp_r = zxfoundation::dgp::dgp_authorize(
                     *caller, *caller,
-                    zxfoundation::dgp::operation_kind::none,
+                    zxfoundation::dgp::operation_kind::io_bind,
                     zxfoundation::dgp::dgp_authorization_metadata{
                         .requested_rights = isolation_rights::io,
                     });

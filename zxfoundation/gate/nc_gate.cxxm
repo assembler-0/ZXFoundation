@@ -8,6 +8,8 @@ import zxfoundation.gate.gate;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.domain;
 import zxfoundation.base.types;
+import zxfoundation.dgp.dgp_authorize;
+import zxfoundation.dgp.isolation_types;
 import zxfoundation.sys.printk;
 import arch.s390x.cpu.lowcore;
 import lib.error;
@@ -29,6 +31,17 @@ namespace __gate_detail {
         (void)a0; // validated cap token (dispatch_table already checked it)
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::gate_create,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("gate_create: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         const auto type      = static_cast<zxfoundation::gate::gate_type>(a1);
         const auto auth      = static_cast<zxfoundation::gate::gate_auth>(a2);
@@ -65,6 +78,17 @@ namespace __gate_detail {
         (void)a0; // validated cap token (dispatch_table already checked it)
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::gate_destroy,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("gate_destroy: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         // a0 carries the admin capability token (already validated by
         // dispatch_table::validate_call).  Real argument starts at a1.

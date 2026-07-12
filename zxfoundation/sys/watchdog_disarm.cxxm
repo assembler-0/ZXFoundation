@@ -21,11 +21,7 @@ namespace zxfoundation::sys::watchdog {
     ///           already maintained by the hardware fixup mechanism).
     auto watchdog_disarm_raw() noexcept -> void {
         using namespace arch::s390x::cpu::diag;
-        using namespace arch::s390x::trap::fixup;
-
-        set(true);
         (void)diag288(WDT_FUNC_CANCEL, 0, LPARWDT_RESTART, 0);
-        set(false);
     }
 
 } // namespace zxfoundation::sys::watchdog

@@ -1,26 +1,140 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file fixup.cxxm
-/// @brief pgm fixup implementation.
+/// @brief Program-check fixup table — enables safe user-space memory access
+///        and hypervisor diagnose calls with exception recovery.
 
 export module arch.s390x.trap.fixup;
 import zxfoundation.base.types;
-
-static bool s_pgm_fixup_active = false;
+import zxfoundation.base.linksym;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
+import arch.s390x.cpu.irq_frame;
+import arch.s390x.cpu.processor;
+import lib.algorithm;
 
 export {
 
 namespace arch::s390x::trap::fixup {
 
-    /// @brief Set the program check fixup active state.
-    auto set(const bool active) noexcept -> void {
-        s_pgm_fixup_active = active;
+    struct fixup_entry {
+        u64 fault_addr;
+        u32 fixup_addr;
+        u16 type;
+        u16 data;
+    };
+
+    namespace _internal {
+
+    [[nodiscard]] auto base() noexcept -> const fixup_entry* {
+        return reinterpret_cast<const fixup_entry*>(
+            zxfoundation::base::linksym::__ex_table_start);
     }
 
-    /// @brief Query if the program check fixup state is enabled.
-    auto is_active() noexcept -> bool {
-        return s_pgm_fixup_active;
+    [[nodiscard]] auto end_ptr() noexcept -> const fixup_entry* {
+        return reinterpret_cast<const fixup_entry*>(
+            zxfoundation::base::linksym::__ex_table_end);
     }
 
-} // namespace arch::s390x::trap
+    [[nodiscard]] auto count() noexcept -> usize {
+        const auto* b = base();
+        const auto* e = end_ptr();
+        return (!b || !e || b >= e) ? 0 : static_cast<usize>(e - b);
+    }
+
+    [[nodiscard]] auto extract_reg(u16 data) noexcept -> u8 {
+        return static_cast<u8>((data >> 12) & 0xF);
+    }
+
+    } // namespace _internal
+
+    /// @brief Search exception table and apply entry-type-specific recovery.
+    /// @param faulting_addr  PSW instruction address at fault.
+    /// @param frame          Current interrupt frame (to patch saved GPRs).
+    /// @return true if a fixup was applied, false otherwise.
+    [[nodiscard]] auto try_applying_fixup(
+        u64 faulting_addr,
+        arch::s390x::cpu::irq::irq_frame* frame
+    ) noexcept -> bool {
+        const usize n = _internal::count();
+        if (n == 0) return false;
+
+        const auto* entries = _internal::base();
+        usize lo = 0, hi = n - 1;
+
+        while (lo <= hi) {
+            const usize mid = lo + (hi - lo) / 2;
+            const u64 mid_addr = entries[mid].fault_addr;
+
+            if (mid_addr < faulting_addr) {
+                lo = mid + 1;
+            } else if (mid_addr > faulting_addr) {
+                if (mid == 0) break;
+                hi = mid - 1;
+            } else {
+                const fixup_entry& e = entries[mid];
+                auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+                pcp.pgm_fixup_applied = 1U;
+                pcp.pgm_fixup_addr    = e.fixup_addr;
+
+                switch (e.type) {
+                case EX_TYPE_FIXUP:
+                    break;
+
+                case EX_TYPE_UA_LOAD_REG: {
+                    const u8 reg = _internal::extract_reg(e.data);
+                    auto* lc = arch::s390x::cpu::lowcore::get_current();
+                    const u64 fsa = lc->failing_storage_address;
+                    if (frame) {
+                        frame->gprs[reg] = fsa;
+                    }
+                    break;
+                }
+
+                case EX_TYPE_UA_LOAD_RP: {
+                    const u8 reg = _internal::extract_reg(e.data);
+                    if (frame) {
+                        frame->gprs[reg]     = 0ULL;
+                        frame->gprs[reg + 1] = 0ULL;
+                    }
+                    break;
+                }
+
+                case EX_TYPE_UA_STORE: {
+                    const u8 reg = _internal::extract_reg(e.data);
+                    if (frame) {
+                        frame->gprs[reg] = 0ULL;
+                    }
+                    break;
+                }
+
+                case EX_TYPE_UA_MVCOS_TO:
+                case EX_TYPE_UA_MVCOS_FROM: {
+                    const u8 reg = _internal::extract_reg(e.data);
+                    if (frame) {
+                        frame->gprs[reg] = 0ULL;
+                    }
+                    break;
+                }
+
+                default:
+                    break;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    auto clear() noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        pcp.pgm_fixup_applied = 0U;
+        pcp.pgm_fixup_addr    = 0U;
+    }
+
+    [[nodiscard]] auto was_applied() noexcept -> bool {
+        return arch::s390x::cpu::lowcore::this_cpu_percpu().pgm_fixup_applied != 0U;
+    }
+
+} // namespace arch::s390x::trap::fixup
 
 } // end export

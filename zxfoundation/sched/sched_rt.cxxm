@@ -35,7 +35,7 @@ namespace _internal {
         if (d.rt_capability_token != 0U && d.rt_capability_token == d.admin_token) return true;
         return zxfoundation::dgp::has_all_rights(
             d.granted_rights,
-            zxfoundation::dgp::isolation_rights::admin);
+            zxfoundation::dgp::isolation_rights::sched);
     }
 
     [[nodiscard]] auto policy_matches_domain_masks(

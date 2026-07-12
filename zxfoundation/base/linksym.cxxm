@@ -19,6 +19,8 @@ namespace zxfoundation::base::linksym {
     extern u8 __bss_end[];
     extern u8 __zx_vma_start[];
     extern u8 __zx_vma_end[];
+    extern u8 __ex_table_start[];
+    extern u8 __ex_table_end[];
     
     }
 

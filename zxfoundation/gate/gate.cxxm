@@ -43,12 +43,6 @@ export {
 
 namespace zxfoundation::gate {
 
-    /// @brief Initialize the gate subsystem.
-    auto gate_init() noexcept -> void {
-        _internal::g_gate_table.init(scoms::kobject_type::gate);
-        pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
-    }
-
     /// @brief Create a new gate descriptor.
     /// @param type             Gate type (nucleus or domain).
     /// @param auth             Authorization policy.
@@ -76,9 +70,9 @@ namespace zxfoundation::gate {
         }
         auto auth_result = zxfoundation::dgp::dgp_authorize(
             *caller, *target,
-            zxfoundation::dgp::operation_kind::gate_entry,
+            zxfoundation::dgp::operation_kind::gate_create,
             zxfoundation::dgp::dgp_authorization_metadata{
-                .requested_rights = zxfoundation::dgp::isolation_rights::enter,
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle,
             }
         );
         if (!auth_result) {
@@ -148,6 +142,13 @@ namespace zxfoundation::gate {
             [domain_id](const gate_desc& g) noexcept -> bool {
                 return g.target_domain == domain_id;
             });
+    }
+
+    /// @brief Initialize the gate subsystem.
+    auto gate_init() noexcept -> void {
+        _internal::g_gate_table.init(scoms::kobject_type::gate);
+        zxfoundation::domain::register_gate_drain_cb(gate_destroy_for_domain);
+        pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
     }
 
     /// @brief Look up a gate descriptor by id.

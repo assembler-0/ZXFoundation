@@ -12,6 +12,7 @@
 export module zxfoundation.domain.strand_types;
 import zxfoundation.sched.sched_policy_types;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
 import arch.s390x.lib.atomic;
 import lib.rbtree;
@@ -45,14 +46,15 @@ namespace zxfoundation::domain {
         bool enqueue{true};             ///< True when the scheduler should admit the strand immediately.
     };
 
-    /// @brief Strand state — tracks the execution lifecycle.
-    enum class strand_state : u8 {
-        embryo   = 0,   ///< Allocated but not yet runnable.
+    /// @brief Scheduler substate within the active lifecycle.
+    ///
+    /// The SCOMS lifecycle state (ko.state) is authoritative.
+    /// This per-scheduler-state enum encodes scheduler-internal state
+    /// only while ko.state == lifecycle_state::active.
+    enum class sched_substate : u8 {
+        idle     = 0,   ///< Active but not on any run queue.
         runnable = 1,   ///< On the run queue, waiting for CPU time.
         running  = 2,   ///< Currently executing on a CPU.
-        blocked  = 3,   ///< Blocked on a gate/portal/event.
-        dying    = 4,   ///< Marked for destruction.
-        dead     = 5,   ///< Resources released, awaiting collection.
     };
 
     // ── Forward declarations ─────────────────────────────────────────────
@@ -101,8 +103,8 @@ namespace zxfoundation::domain {
         // ── offset 24 ── Back-pointer to owning domain (8 bytes)
         void*                           owner{nullptr};
 
-        // ── offset 32 ── Strand state + CPU affinity (16 bytes)
-        strand_state                    state{strand_state::embryo};
+        // ── offset 32 ── Scheduler substate + CPU affinity (16 bytes)
+        sched_substate                  substate{sched_substate::idle};
         u8                              _pad0[3]{};
         u16                             cpu{0};         ///< CPU this strand is pinned/running on.
         bool                            on_rq{false};   ///< Currently on a run queue.

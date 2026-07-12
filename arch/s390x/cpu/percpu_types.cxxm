@@ -85,6 +85,10 @@ namespace arch::s390x::cpu::percpu {
         u8      _pad_asce[3]{};
 
         u64     watchdog_heartbeat{0}; ///< Monotonic counter bumped by scheduler_tick().
+
+        u32     pgm_fixup_applied{0};     ///< Non-zero if last PGM applied a fixup (set by pgm handler).
+        u64     pgm_fixup_addr{0};        ///< Fixup recovery label address set by try_applying_fixup.
+        u8      _pad_fixup[2]{};
     };
 
     static_assert(__builtin_offsetof(s390x_percpu_data, cpu_id) == 8,

@@ -11,6 +11,7 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.locking.lock;
 import zxfoundation.sched.context;
 import zxfoundation.sched.sched;
+import zxfoundation.base.typestate;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.irq_types;
@@ -37,7 +38,8 @@ namespace zxfoundation::locking::mutex {
     using arch::s390x::lib::atomic::atomic;
     using arch::s390x::lib::atomic::memory_order;
     using zxfoundation::domain::strand;
-    using zxfoundation::domain::strand_state;
+    using zxfoundation::domain::sched_substate;
+    using zxfoundation::base::lifecycle_state;
     using zxfoundation::domain::domain;
     using zxfoundation::domain::domain_flags;
     using zxfoundation::sync::wait_queue_head;
@@ -127,7 +129,7 @@ namespace zxfoundation::locking::mutex {
             }
 
             if (to_wake) {
-                to_wake->state = strand_state::runnable;
+                to_wake->substate = sched_substate::runnable;
                 zxfoundation::sched::enqueue_strand(to_wake);
 
                 auto* owner_dom = static_cast<domain*>(to_wake->owner);
@@ -197,7 +199,7 @@ namespace zxfoundation::locking::mutex {
                 }
 
                 // Block and yield the CPU.
-                current->state = strand_state::blocked;
+                current->ko.state = lifecycle_state::suspended;
                 zxfoundation::sched::schedule();
 
                 // Woken: schedule() returned.  state is now runnable.

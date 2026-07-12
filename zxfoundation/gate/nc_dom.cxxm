@@ -13,6 +13,8 @@ import zxfoundation.base.typestate;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
+import zxfoundation.dgp.dgp_authorize;
+import zxfoundation.dgp.isolation_types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
 import zxfoundation.sched.sched;
@@ -74,6 +76,17 @@ namespace __dom_detail {
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::domain_create,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("domain_create: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         const u64 user_name_ptr = a1;
         if (user_name_ptr == 0) {
             zxfoundation::sys::printk::perr("domain_create: null name pointer");
@@ -106,6 +119,17 @@ namespace __dom_detail {
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::domain_destroy,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("domain_destroy: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         const auto target_id = static_cast<domain_id>(a1);
 
         if (target_id == d->ko.id) {
@@ -126,6 +150,15 @@ namespace __dom_detail {
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::domain_exit,
+            zxfoundation::dgp::dgp_authorization_metadata{});
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("domain_exit: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         d->ko.state = zxfoundation::base::lifecycle_state::dying;
         d->flags = d->flags | domain_flags::need_resched;
 
@@ -136,18 +169,39 @@ namespace __dom_detail {
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::domain_info,
+            zxfoundation::dgp::dgp_authorization_metadata{});
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("domain_info: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         return static_cast<u64>(d->ko.id) |
                (static_cast<u64>(d->primary_strand.cpu) << 32);
     }
 
     auto nc_domain_strand_create(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
-        // a0 = admin capability token, a1 = cpu affinity (0 for BSP/current default), a2 = owner domain ID (0 for self)
+        // a0 = admin capability token, a1 = cpu affinity, a2 = owner domain ID
         if (!validate_admin(cap_token{a0})) {
             return NC_ERROR;
         }
 
         auto* self = current_domain();
         if (!self) [[unlikely]] return NC_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *self, *self,
+            zxfoundation::dgp::operation_kind::strand_create,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle
+                                  | zxfoundation::dgp::isolation_rights::sched,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("domain_strand_create: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         const auto cpu_affinity = static_cast<u16>(a1 & 0xFFFFU);
         if (cpu_affinity >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
@@ -183,6 +237,17 @@ namespace __dom_detail {
     auto nc_domain_query(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto* self = current_domain();
         if (!self) [[unlikely]] return NC_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *self, *self,
+            zxfoundation::dgp::operation_kind::domain_query,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::debug,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("domain_query: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         const auto query_id = static_cast<u32>(a0);
 

@@ -4,6 +4,7 @@
 
 export module arch.s390x.trap.pgm;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.css.css;
 import arch.s390x.cpu.psw_types;
@@ -18,6 +19,7 @@ import zxfoundation.domain.signal_types;
 import zxfoundation.base.typestate;
 import zxfoundation.domain.signal;
 import zxfoundation.sys.stacktrace;
+import arch.s390x.trap.fixup;
 import lib.error;
 import lib.string_view;
 
@@ -41,20 +43,12 @@ namespace _internal {
                 0xFFFFFFFFU);
     }
 
-    /// @brief Extract the execution-access bit from the TEID (translation-exception
-    ///        identification) at lowcore 0xA8.  PoP Table 6-10: TEID bit 61 (IBM
-    ///        bit 3 of the second word) is 1 when the access was for instruction
-    ///        fetch.
-    static bool is_exec_from_teid(u64 teid) noexcept {
-        return (teid & (1ULL << 60)) != 0;
-    }
-
     struct pgm_name_entry {
-        u16       code;
-        lib::string_view name;
+        u16       code{};
+        lib::string_view name{};
     };
 
-    constexpr pgm_name_entry pgm_names[] = {
+    constexpr pgm_name_entry pgm_names[] {
         { 0x0001, "operation" },
         { 0x0002, "privileged-operation" },
         { 0x0003, "execute" },
@@ -62,14 +56,17 @@ namespace _internal {
         { 0x0005, "addressing" },
         { 0x0006, "specification" },
         { 0x0007, "data" },
+        { 0x0008, "fixed-point-overflow" },
         { 0x0009, "fixed-point-divide" },
         { 0x000A, "decimal-divide" },
         { 0x000B, "hfp-exponent-underflow" },
         { 0x000C, "hfp-exponent-overflow" },
         { 0x000D, "hfp-significance" },
         { 0x000E, "hfp-divide" },
+        { 0x000F, "hfp-sign-bit" },
         { 0x0010, "segment-translation" },
         { 0x0011, "page-translation" },
+        { 0x0012, "translation-specification" },
         { 0x0013, "special-operation" },
         { 0x0015, "operand" },
         { 0x0016, "trace-table" },
@@ -79,12 +76,17 @@ namespace _internal {
         { 0x001D, "vector-exception-max" },
         { 0x001E, "vector-exception-nr" },
         { 0x001F, "vector-exception-erte" },
+        { 0x0020, "afx-translation" },
+        { 0x0021, "asx-translation" },
         { 0x0022, "lx-translation" },
         { 0x0023, "ex-translation" },
         { 0x0024, "lfx-translation" },
         { 0x0025, "lsx-translation" },
+        { 0x0026, "alt-translation" },
+        { 0x0027, "alfx-translation" },
         { 0x0028, "lfx-unmapped" },
         { 0x0029, "lsx-unmapped" },
+        { 0x002A, "alfx-unmapped" },
         { 0x002B, "aste-validity" },
         { 0x002C, "aste-sequence" },
         { 0x002D, "aste-instance" },
@@ -94,6 +96,7 @@ namespace _internal {
         { 0x0032, "stack-specification" },
         { 0x0033, "stack-type" },
         { 0x0034, "stack-operation" },
+        { 0x0035, "stack-overflow" },
         { 0x0038, "asce-type" },
         { 0x0039, "region-first-translation" },
         { 0x003A, "region-second-translation" },
@@ -146,17 +149,40 @@ namespace arch::s390x::trap::pgm {
     constexpr u16 PGM_REGION_THIRD_TRANS = 0x003B;
     constexpr u16 PGM_ASCE_TYPE          = 0x0038;
     constexpr u16 PGM_MONITOR            = 0x0040;
+    constexpr u16 PGM_TRANSLATION_SPEC  = 0x0012;
+    constexpr u16 PGM_FIXED_PT_OVERFLOW = 0x0008;
+    constexpr u16 PGM_HFP_SIGN_BIT      = 0x000F;
+    constexpr u16 PGM_ALT_TRANSLATION   = 0x0026;
+    constexpr u16 PGM_ALFX_TRANSLATION  = 0x0027;
+    constexpr u16 PGM_ALFX_SUPER        = 0x002A;
+    constexpr u16 PGM_STACK_OVERFLOW    = 0x0035;
+    constexpr u16 PGM_AFX_TRANSLATION   = 0x0020;
+    constexpr u16 PGM_ASX_TRANSLATION   = 0x0021;
+    constexpr u16 PGM_EX_TRANSLATION_V  = 0x0023;
     constexpr u16 PGM_VECTOR_OP          = 0x001C;
     constexpr u16 PGM_VECTOR_EMAX        = 0x001D;
     constexpr u16 PGM_VECTOR_ENR         = 0x001E;
     constexpr u16 PGM_VECTOR_ERTE        = 0x001F;
 
-    /// @brief Centralized io dispatcher.
+    /// @brief Determine whether the access was for instruction fetch from
+    ///        the TEID stored at lowcore+0xA8.
+    [[nodiscard]] inline auto is_exec_from_teid(u64 teid) noexcept -> bool {
+        return (teid & (1ULL << 60)) != 0;
+    }
+
+    /// @brief Determine whether the access was a write from TEID bit 62.
+    ///        PoP Table 6-10: bit 62 (IBM bit 2 of the second word) = 1
+    ///        for store-type access.
+    [[nodiscard]] inline auto is_write_from_teid(u64 teid) noexcept -> bool {
+        return (teid & (1ULL << 61)) != 0;
+    }
+
+    /// @brief Centralized program-check dispatcher.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
-        const u16 pgm_code = *reinterpret_cast<const u16*>(0x8EUL);
-        const u64 trans_exc = *reinterpret_cast<const u64*>(0xA8UL);
-        const u32 data_exc_code = pgm_code == PGM_DATA
-            ? *reinterpret_cast<const u32*>(0x90UL) : 0U;
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        const u16 pgm_code     = lc->pgm_code;
+        const u64 trans_exc    = lc->trans_exc_code;
+        const u32 data_exc_code = (pgm_code == PGM_DATA) ? lc->data_exc_code : 0U;
 
         const bool in_problem_state =
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
@@ -164,14 +190,22 @@ namespace arch::s390x::trap::pgm {
         ::lib::string_view pgm_name = _internal::pgm_name_for(pgm_code);
 
         if (!in_problem_state) {
+            // TX abort/constraint: silently ignored in supervisor state.
             if (pgm_code == PGM_TRANSACTION_CONSTRAINT ||
                 pgm_code == PGM_TRANSACTION_ABORT) {
                 return;
             }
 
-            if (pgm_code == PGM_SPECIFICATION) {
-                const u16* instr = reinterpret_cast<const u16*>(frame->psw_addr - 4);
-                if ((instr[0] & 0xFF00U) == 0x8300U && instr[1] == 0x0288U) {
+
+            if (pgm_code == PGM_ADDRESSING || pgm_code == PGM_PROTECTION ||
+                pgm_code == PGM_PAGE_TRANS    || pgm_code == PGM_SEGMENT_TRANS ||
+                pgm_code == PGM_SPECIFICATION || pgm_code == PGM_OPERATION ||
+                pgm_code == PGM_REGION_FIRST_TRANS  ||
+                pgm_code == PGM_REGION_SECOND_TRANS ||
+                pgm_code == PGM_REGION_THIRD_TRANS  ||
+                pgm_code == PGM_TRANSLATION_SPEC) {
+                if (arch::s390x::trap::fixup::try_applying_fixup(
+                    frame->psw_addr, frame)) {
                     return;
                 }
             }
@@ -180,30 +214,33 @@ namespace arch::s390x::trap::pgm {
             zxfoundation::sys::stacktrace::dump_stack_from_irq(frame);
             zxfoundation::sys::syschk::syschk_fatal(
                 ::lib::kernel_error::from_generic(::lib::generic_error::internal_error),
-                "program check {:#06x}{} at PSW {:#018x}:{:#018x} tex={:#018x}",
+                "pgm check {:#06x}{}{}{} at PSW {:#018x}:{:#018x} tex={:#018x}",
                 pgm_code,
-                !pgm_name.empty() ? " (" : "",
-                !pgm_name.empty() ? pgm_name : "",
-                !pgm_name.empty() ? ")" : "",
-                static_cast<u64>(frame->psw_mask), static_cast<u64>(frame->psw_addr), trans_exc);
+                pgm_name.empty() ? "" : " (", pgm_name, pgm_name.empty() ? "" : ")",
+                static_cast<u64>(frame->psw_mask),
+                static_cast<u64>(frame->psw_addr), trans_exc);
         }
 
-        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        // ── Problem-state (domain / user) program checks ──────────────
+
         auto* d = reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
 
+        // Translation exceptions → page-fault handler.
         const bool is_translation_exception =
-            pgm_code == PGM_SEGMENT_TRANS      ||
-            pgm_code == PGM_PAGE_TRANS         ||
-            pgm_code == PGM_PROTECTION         ||
-            pgm_code == PGM_REGION_FIRST_TRANS ||
-            pgm_code == PGM_REGION_SECOND_TRANS||
-            pgm_code == PGM_REGION_THIRD_TRANS ||
+            pgm_code == PGM_SEGMENT_TRANS       ||
+            pgm_code == PGM_PAGE_TRANS          ||
+            pgm_code == PGM_TRANSLATION_SPEC    ||
+            pgm_code == PGM_PROTECTION          ||
+            pgm_code == PGM_REGION_FIRST_TRANS  ||
+            pgm_code == PGM_REGION_SECOND_TRANS ||
+            pgm_code == PGM_REGION_THIRD_TRANS  ||
             pgm_code == PGM_ASCE_TYPE;
 
         if (is_translation_exception && d) {
             const u64 fault_va = trans_exc & ~0xFFFULL;
-            const bool is_write = (pgm_code == PGM_PROTECTION);
-            const bool is_exec  = _internal::is_exec_from_teid(trans_exc);
+            const bool is_write = (pgm_code == PGM_PROTECTION)
+                ? is_write_from_teid(trans_exc) : true;
+            const bool is_exec  = is_exec_from_teid(trans_exc);
 
             auto action = zxfoundation::memory::vm::handle_page_fault(
                 d->vm_space, d->root_phys, d->storage_key,
@@ -216,7 +253,6 @@ namespace arch::s390x::trap::pgm {
         }
 
         if (d) {
-            // Enqueue signal before marking dying — gives handler a chance.
             zxfoundation::domain::signal::signal_enqueue(
                 *d, zxfoundation::domain::signal::signal_kind::fault,
                 trans_exc & ~0xFFFULL);
@@ -234,14 +270,14 @@ namespace arch::s390x::trap::pgm {
             frame->psw_mask = arch::s390x::cpu::psw::PSW_MASK_KERNEL_DAT;
             frame->psw_addr = reinterpret_cast<u64>(&sched_strand_trampoline_exit);
         } else {
-            zxfoundation::sys::syschk::syschk_fatal(::lib::kernel_error::from_generic(::lib::generic_error::internal_error),
-                "domain program check {:#06x}{} at PSW {:#018x}:{:#018x} "
-                "(no current domain)\n",
+            zxfoundation::sys::syschk::syschk_fatal(
+                ::lib::kernel_error::from_generic(::lib::generic_error::internal_error),
+                "domain pgm check {:#06x}{}{}{} at PSW {:#018x}:{:#018x} "
+                "(no current domain)",
                 pgm_code,
-                !pgm_name.empty() ? " (" : "",
-                !pgm_name.empty() ? pgm_name : "",
-                !pgm_name.empty() ? ")" : "",
-                static_cast<u64>(frame->psw_mask), static_cast<u64>(frame->psw_addr));
+                pgm_name.empty() ? "" : " (", pgm_name, pgm_name.empty() ? "" : ")",
+                static_cast<u64>(frame->psw_mask),
+                static_cast<u64>(frame->psw_addr));
         }
     }
 

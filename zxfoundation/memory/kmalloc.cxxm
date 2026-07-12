@@ -20,7 +20,7 @@ namespace zxfoundation::memory::kmalloc::_internal {
     inline constexpr u64 KMALLOC_MAX_SIZE  = 32768ULL;
 
     /// @brief Size of each bucket (powers of two, starting at 8).
-    inline constexpr u64 g_sizes[KMALLOC_NUM_SIZES] = {
+    inline constexpr u64 g_sizes[KMALLOC_NUM_SIZES] {
         8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
     };
 
@@ -28,7 +28,7 @@ namespace zxfoundation::memory::kmalloc::_internal {
     static bool g_initialized{false};
 
     /// @brief Names for each size-class cache (diagnostic use only).
-    inline constexpr const char* g_names[KMALLOC_NUM_SIZES] = {
+    inline constexpr const char* g_names[KMALLOC_NUM_SIZES] {
         "kmalloc-8",     "kmalloc-16",    "kmalloc-32",
         "kmalloc-64",    "kmalloc-128",   "kmalloc-256",
         "kmalloc-512",   "kmalloc-1024",  "kmalloc-2048",

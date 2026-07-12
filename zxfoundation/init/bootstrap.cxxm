@@ -143,11 +143,7 @@ namespace zxfoundation::init::bootstrap {
         }
         auto* d = *dom_r;
 
-        d->granted_rights = zxfoundation::dgp::isolation_rights::enter
-                          | zxfoundation::dgp::isolation_rights::admin
-                          | zxfoundation::dgp::isolation_rights::map
-                          | zxfoundation::dgp::isolation_rights::io
-                          | zxfoundation::dgp::isolation_rights::share;
+        d->granted_rights = zxfoundation::dgp::isolation_rights::all;
 
         // ── Prepare module info and wire up the domain context ──────────
         _internal::g_init_module_info.data_virt  = data_virt;

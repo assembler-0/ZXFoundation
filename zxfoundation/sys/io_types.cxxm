@@ -17,12 +17,14 @@ namespace zxfoundation::sys::io {
     /// @brief Maximum number of segments in a DMA scatter-gather list.
     constexpr u32 IO_DMA_MAX_SEGMENTS = 32;
 
-    /// @brief State of an I/O device binding.
-    enum class io_binding_state : u8 {
-        free    = 0, ///< Slot unused.
-        bound   = 1, ///< Device bound to a domain.
-        pending = 2, ///< I/O operation in progress.
-        error   = 3, ///< Device error state.
+    /// @brief Operational substate for I/O bindings.
+    ///
+    /// The SCOMS lifecycle (ko.state) is authoritative.
+    /// This encodes operational state only while ko.state == lifecycle_state::active.
+    enum class io_substate : u8 {
+        bound   = 0, ///< Device bound, idle.
+        pending = 1, ///< Channel program submitted, awaiting completion.
+        error   = 2, ///< Device in error state (recoverable).
     };
 
     /// @brief Describes the binding of a CSS device to a user domain.
@@ -32,7 +34,7 @@ namespace zxfoundation::sys::io {
         scoms::kobject    ko{};                    ///< SCOMS identity (offset 0).
         u16               dev_no{};                ///< Device number (opaque handle, CSS-IO boundary).
         u16               sch_index{0xFFFF};       ///< Subchannel table index.
-        io_binding_state  state{io_binding_state::free};
+        io_substate       op_state{io_substate::bound};
         u32               owner_domain{~0U};       ///< Domain that owns this binding.
         u64               dma_base{0};             ///< DMA-able memory base (physical).
         u64               dma_size{0};             ///< DMA memory size.

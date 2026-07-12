@@ -150,6 +150,8 @@ namespace lib {
             timing_facility     = 4,
             external_damage     = 5,
             failing_stor_addr   = 6,
+            backlog             = 7,
+            key                 = 8,
         };
     }
 
@@ -402,6 +404,8 @@ namespace lib {
                     expand(timing_facility)
                     expand(external_damage)
                     expand(failing_stor_addr)
+                    expand(backlog)
+                    expand(key)
                 #undef expand
                     default: return "?";
                 }

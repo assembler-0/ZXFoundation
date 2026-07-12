@@ -37,6 +37,7 @@ _zx_tool_exists(CMAKE_LINKER         "Linker")
 _zx_tool_exists(CMAKE_AR             "Archiver (ar)")
 _zx_tool_exists(CMAKE_RANLIB         "Ranlib")
 _zx_tool_exists(CMAKE_OBJCOPY        "Objcopy")
+_zx_tool_exists(CMAKE_OBJDUMP        "Objdump")
 
 if (
     CMAKE_GENERATOR STREQUAL "Ninja" OR
@@ -157,10 +158,12 @@ if(ZX_CCACHE_PROGRAM)
     message(STATUS "zxfoundation::validate: ccache max size: 12G")
 endif()
 
-set(ZX_CAN_BUILD_KERNEL TRUE
-    CACHE BOOL "Build the kernel nucleus" FORCE)
-set(ZX_CAN_BUILD_LOADER TRUE
-    CACHE BOOL "Build the ZXFL loader stages" FORCE)
+if(ZX_FOUND_NM AND CMAKE_OBJDUMP)
+    set(ZX_CAN_DUMP_ARTIFACTS TRUE CACHE BOOL "Dump artifacts" FORCE)
+    message(STATUS "zxfoundation::validate: artifact-dump target available")
+else()
+    set(ZX_CAN_DUMP_ARTIFACTS FALSE CACHE BOOL "Dump artifacts" FORCE)
+endif()
 
 if(ZX_FOUND_NM AND ZX_FOUND_CXXFILT AND ZX_FOUND_HOST_CC)
     set(ZX_CAN_BUILD_SYMRES TRUE

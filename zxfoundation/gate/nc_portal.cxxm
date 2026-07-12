@@ -9,6 +9,8 @@ import zxfoundation.domain.domain;
 import zxfoundation.portal.portal;
 import zxfoundation.portal.portal_types;
 import zxfoundation.base.types;
+import zxfoundation.dgp.dgp_authorize;
+import zxfoundation.dgp.isolation_types;
 import zxfoundation.sys.printk;
 import arch.s390x.cpu.lowcore;
 import lib.error;
@@ -37,9 +39,24 @@ namespace __portal_detail {
         const auto prot      = static_cast<zxfoundation::portal::portal_prot>(a4);
         const u8   ar_num    = 0;
 
-        if (va_end <= va_start) {
-            zxfoundation::sys::printk::perr("portal_create: invalid range [{:#x},{:#x})",
-                                           va_start, va_end);
+        // Look up target domain for cross-domain DGP check.
+        auto* target = zxfoundation::domain::domain_find(target_id);
+        if (!target) {
+            zxfoundation::sys::printk::perr("portal_create: target domain {} not found", target_id);
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *target,
+            zxfoundation::dgp::operation_kind::portal_create,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle
+                                  | zxfoundation::dgp::isolation_rights::share,
+                .target_va_start = va_start,
+                .target_va_end = va_end,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("portal_create: DGP authorization denied");
             return NC_ERROR;
         }
 
@@ -57,6 +74,17 @@ namespace __portal_detail {
         (void)a0; // validated admin cap token
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::portal_destroy,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::lifecycle,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("portal_destroy: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         const auto pid = static_cast<u32>(a1);
 

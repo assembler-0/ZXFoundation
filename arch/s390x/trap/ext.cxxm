@@ -4,20 +4,28 @@
 
 export module arch.s390x.trap.ext;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.irq_frame;
+import arch.s390x.cpu.irq_types;
+import arch.s390x.cpu.clkcomp;
+import arch.s390x.cpu.cputimer;
 import arch.s390x.css.css;
 import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sched.sched;
+import zxfoundation.sched.context;
+import zxfoundation.domain.domain_types;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.printk;
+import zxfoundation.sys.timer_types;
+import zxfoundation.domain.domain_types;
 import lib.error;
 
 export {
 
 namespace arch::s390x::trap::ext {
 
-    constexpr u16 EXT_CODE_ADDRESS       = 0x86;
     constexpr u16 EXT_CLOCK_COMPARATOR   = 0x1004;
     constexpr u16 EXT_CPU_TIMER          = 0x1005;
     constexpr u16 EXT_EMERGENCY_SIGNAL   = 0x1201;
@@ -25,9 +33,10 @@ namespace arch::s390x::trap::ext {
     constexpr u16 EXT_TIMING_ALERT       = 0x1406;
     constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;
 
-    /// @brief Centralized io dispatcher.
+    /// @brief Centralized external-interruption dispatcher.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
-        const u16 ext_code = *reinterpret_cast<const u16*>(EXT_CODE_ADDRESS);
+        auto* lc = cpu::lowcore::get_current();
+        const u16 ext_code = lc->ext_int_code;
 
         if (ext_code == EXT_CLOCK_COMPARATOR) {
             zxfoundation::sys::timer::timer_interrupt();
@@ -35,10 +44,13 @@ namespace arch::s390x::trap::ext {
         }
 
         if (ext_code == EXT_CPU_TIMER) {
-            static bool once = false;
-            if (!once) {
-                once = true;
-                zxfoundation::sys::printk::pnotice("ext: CPU timer interrupt (ignored)\n");
+            arch::s390x::cpu::cputimer::timer_set(0ULL);
+
+            auto* d = reinterpret_cast<zxfoundation::domain::domain*>(
+                lc->current_domain);
+            if (d && (d->flags & zxfoundation::domain::domain_flags::idle) ==
+                     zxfoundation::domain::domain_flags::none) {
+                d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
             }
             return;
         }

@@ -1,15 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/dgp/dgp_authorize.cxxm
-/// @brief Unified DGP authorization chokepoint.
-///
-/// Every kernel operation that crosses a domain/gate/portal boundary MUST
-/// pass through this module.  It is the single source of truth for DGP
-/// contract enforcement, replacing the ad-hoc validation scattered across
-/// gate, portal, dispatch, and VM subsystems.
-///
-/// To avoid a circular dependency with zxfoundation.domain.domain (which
-/// itself depends on zxfoundation.dgp), the chokepoint works on *pointers*
-/// supplied by the caller rather than performing its own table lookup.
+/// @brief Unified DGP authorization.
 
 export module zxfoundation.dgp.dgp_authorize;
 
@@ -21,6 +12,87 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.scoms.scoms_types;
 import lib.error;
 import lib.expected;
+
+export {
+
+namespace zxfoundation::dgp {
+
+    /// @brief Operation kinds recognized by the unified DGP chokepoint.
+    ///
+    /// Every nucleus call handler must route through dgp_authorize with the
+    /// appropriate operation_kind.  The chokepoint checks:
+    ///   1. Both caller and target domains are active (lifecycle gate).
+    ///   2. Sync contract is not in teardown (concurrency gate).
+    ///   3. Caller holds the isolation_rights required for this operation class.
+    ///   4. Operation-specific metadata is valid (e.g. VA ranges, IDs).
+    ///
+    /// After dgp_authorize passes, the handler should still perform
+    /// capability-level validation (cap_validate) for the specific object.
+    enum class operation_kind : u8 {
+        none              = 0,
+
+        // ── Domain lifecycle ──────────────────────────────────────────
+        domain_create     = 1,   ///< Create a new sub-domain.
+        domain_destroy    = 2,   ///< Destroy a domain.
+        domain_exit       = 3,   ///< Self-terminate current domain.
+        domain_info       = 4,   ///< Query own domain metadata.
+        domain_query      = 5,   ///< Query another domain's metadata.
+        strand_create     = 6,   ///< Create a strand in a domain.
+
+        // ── Gate management ───────────────────────────────────────────
+        gate_create       = 7,   ///< Create a gate descriptor.
+        gate_destroy      = 8,   ///< Destroy a gate descriptor.
+        gate_entry        = 9,   ///< Cross-domain gate entry (dispatch-level).
+
+        // ── Portal management ────────────────────────────────────────
+        portal_create     = 10,  ///< Create a portal between domains.
+        portal_destroy    = 11,  ///< Destroy a portal.
+
+        // ── I/O operations ───────────────────────────────────────────
+        io_bind           = 12,  ///< Bind a device to a domain.
+        io_unbind         = 13,  ///< Unbind a device.
+        io_submit         = 14,  ///< Submit a channel program.
+        io_irq_bind       = 15,  ///< Route I/O IRQs to a gate.
+
+        // ── Signal operations ─────────────────────────────────────────
+        signal_register   = 16,  ///< Register a signal handler.
+        signal_poll       = 17,  ///< Poll for pending signals.
+        signal_ack        = 18,  ///< Acknowledge signals.
+
+        // ── Memory operations ────────────────────────────────────────
+        mem_alloc         = 19,  ///< Allocate anonymous memory.
+        mem_free          = 20,  ///< Free anonymous memory.
+        mem_map           = 21,  ///< Map physical memory.
+        mem_unmap         = 22,  ///< Unmap a memory range.
+        mem_protect       = 23,  ///< Change memory protection.
+        mem_share         = 24,  ///< Share memory across domains.
+
+        // ── Capability operations ────────────────────────────────────
+        cap_acquire       = 25,  ///< Acquire a capability token.
+        cap_release       = 26,  ///< Release a capability token.
+        cap_validate      = 27,  ///< Validate a capability token.
+
+        // ── System operations ────────────────────────────────────────
+        time_yield        = 28,  ///< Yield CPU.
+        time_deadline     = 29,  ///< Compute a deadline.
+        time_now          = 30,  ///< Get monotonic time.
+        console_write     = 31,  ///< Write to console.
+        service_register  = 32,  ///< Register a named service.
+        service_lookup    = 33,  ///< Look up a named service.
+        service_unregister = 34,  ///< Unregister a service.
+    };
+
+    /// @brief Fine-grained metadata supplied alongside an authorization check.
+    struct dgp_authorization_metadata {
+        isolation_rights requested_rights{isolation_rights::none};
+        u64                target_va_start{0};
+        u64                target_va_end{0};
+        u32                gate_id{0};
+    };
+
+} // namespace zxfoundation::dgp
+
+} // end export
 
 namespace zxfoundation::dgp {
 
@@ -38,6 +110,138 @@ namespace zxfoundation::dgp {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
+
+        auto sync_state = sync_contract_snapshot(
+            lock_context::thread,
+            teardown_phase::none,
+            caller.ko.id);
+        auto sync_result = sync_contract_validate_authority_lookup(sync_state);
+        if (!sync_result) {
+            return lib::unexpected(sync_result.error());
+        }
+
+        return {};
+    }
+
+    // Map an operation_kind to the minimum isolation_rights the caller must hold.
+    [[nodiscard]] constexpr auto required_rights_for_op(operation_kind op) noexcept
+        -> isolation_rights
+    {
+        switch (op) {
+            // ── Lifecycle operations require lifecycle authority ──────
+            case operation_kind::domain_create:    return isolation_rights::lifecycle;
+            case operation_kind::domain_destroy:   return isolation_rights::lifecycle;
+            case operation_kind::gate_create:      return isolation_rights::lifecycle;
+            case operation_kind::gate_destroy:     return isolation_rights::lifecycle;
+            case operation_kind::portal_create:    return isolation_rights::lifecycle | isolation_rights::share;
+            case operation_kind::portal_destroy:   return isolation_rights::lifecycle;
+            case operation_kind::strand_create:    return isolation_rights::lifecycle | isolation_rights::sched;
+
+            // ── I/O operations require io authority ──────────────────
+            case operation_kind::io_bind:          return isolation_rights::io;
+            case operation_kind::io_unbind:        return isolation_rights::io;
+            case operation_kind::io_submit:        return isolation_rights::io;
+            case operation_kind::io_irq_bind:      return isolation_rights::io;
+
+            // ── Signal operations require signal authority ────────────
+            case operation_kind::signal_register:  return isolation_rights::signal;
+            case operation_kind::signal_poll:      return isolation_rights::signal;
+            case operation_kind::signal_ack:       return isolation_rights::signal;
+
+            // ── Memory operations require map authority ───────────────
+            case operation_kind::mem_alloc:        return isolation_rights::map;
+            case operation_kind::mem_free:         return isolation_rights::map;
+            case operation_kind::mem_map:          return isolation_rights::map;
+            case operation_kind::mem_unmap:        return isolation_rights::map;
+            case operation_kind::mem_protect:      return isolation_rights::map;
+            case operation_kind::mem_share:        return isolation_rights::share;
+
+            // ── Gate entry requires enter authority ──────────────────
+            case operation_kind::gate_entry:       return isolation_rights::enter;
+
+            // ── Capability operations — intra-domain, no special right ─
+            case operation_kind::cap_acquire:      return isolation_rights::none;
+            case operation_kind::cap_release:     return isolation_rights::none;
+            case operation_kind::cap_validate:     return isolation_rights::none;
+
+            // ── System operations — most need specific rights ─────────
+            case operation_kind::time_yield:       return isolation_rights::none;
+            case operation_kind::time_deadline:    return isolation_rights::none;
+            case operation_kind::time_now:         return isolation_rights::none;
+            case operation_kind::console_write:    return isolation_rights::console;
+            case operation_kind::service_register: return isolation_rights::service;
+            case operation_kind::service_lookup:   return isolation_rights::service;
+            case operation_kind::service_unregister:return isolation_rights::service | isolation_rights::lifecycle;
+
+            // ── Self-management ────────────────────────────────────────
+            case operation_kind::domain_exit:     return isolation_rights::none;
+            case operation_kind::domain_info:      return isolation_rights::none;
+            case operation_kind::domain_query:     return isolation_rights::debug;
+
+            case operation_kind::none:            return isolation_rights::none;
+        }
+        return isolation_rights::none;
+    }
+
+    // Validate operation-specific metadata beyond the common caller/target check.
+    [[nodiscard]] auto validate_op_metadata(
+        operation_kind op,
+        const dgp_authorization_metadata& meta
+    ) noexcept -> lib::expected<void, lib::kernel_error>
+    {
+        switch (op) {
+            // Operations that require a valid VA range:
+            case operation_kind::portal_create:
+            case operation_kind::mem_map:
+            case operation_kind::mem_share:
+            case operation_kind::mem_unmap:
+            case operation_kind::mem_protect:
+            case operation_kind::mem_free:
+                if (meta.target_va_start >= meta.target_va_end) {
+                    return lib::unexpected(
+                        lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                }
+                break;
+
+            // Operations that require a non-zero gate_id:
+            case operation_kind::gate_entry:
+            case operation_kind::io_irq_bind:
+                if (meta.gate_id == 0U) {
+                    return lib::unexpected(
+                        lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                }
+                break;
+
+            // Operations with no extra metadata to validate:
+            case operation_kind::domain_create:
+            case operation_kind::domain_destroy:
+            case operation_kind::domain_exit:
+            case operation_kind::domain_info:
+            case operation_kind::domain_query:
+            case operation_kind::strand_create:
+            case operation_kind::gate_create:
+            case operation_kind::gate_destroy:
+            case operation_kind::portal_destroy:
+            case operation_kind::io_bind:
+            case operation_kind::io_unbind:
+            case operation_kind::io_submit:
+            case operation_kind::signal_register:
+            case operation_kind::signal_poll:
+            case operation_kind::signal_ack:
+            case operation_kind::mem_alloc:
+            case operation_kind::cap_acquire:
+            case operation_kind::cap_release:
+            case operation_kind::cap_validate:
+            case operation_kind::time_yield:
+            case operation_kind::time_deadline:
+            case operation_kind::time_now:
+            case operation_kind::console_write:
+            case operation_kind::service_register:
+            case operation_kind::service_lookup:
+            case operation_kind::service_unregister:
+            case operation_kind::none:
+                break;
+        }
         return {};
     }
 
@@ -46,25 +250,6 @@ namespace zxfoundation::dgp {
 export {
 
 namespace zxfoundation::dgp {
-
-    /// @brief Operation kinds recognized by the unified DGP chokepoint.
-    enum class operation_kind : u8 {
-        none          = 0,
-        gate_entry    = 1,
-        portal_create = 2,
-        io_bind       = 3,
-        signal_send   = 4,
-        memory_map    = 5,
-        memory_share  = 6,
-    };
-
-    /// @brief Fine-grained metadata supplied alongside an authorization check.
-    struct dgp_authorization_metadata {
-        isolation_rights requested_rights{isolation_rights::none};
-        u64                target_va_start{0};
-        u64                target_va_end{0};
-        u32                gate_id{0};
-    };
 
     /// @brief Unified DGP authorization chokepoint.
     /// @param[in] caller  Domain initiating the operation.
@@ -83,16 +268,23 @@ namespace zxfoundation::dgp {
         const dgp_authorization_metadata& meta
     ) noexcept -> lib::expected<void, lib::kernel_error>
     {
-        (void)op; // reserved for later expansion
-
         auto common_result = validate_common(caller, target);
         if (!common_result) {
             return lib::unexpected(common_result.error());
         }
 
-        if (!has_all_rights(caller.granted_rights, meta.requested_rights)) {
+        auto op_metadata_result = validate_op_metadata(op, meta);
+        if (!op_metadata_result) {
+            return lib::unexpected(op_metadata_result.error());
+        }
+
+        const isolation_rights required = required_rights_for_op(op);
+        if (required != isolation_rights::none) {
+            const isolation_rights effective = meta.requested_rights | required;
+            if (!has_all_rights(caller.granted_rights, effective)) {
                 return lib::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::not_implemented));
+            }
         }
 
         return {};

@@ -16,6 +16,7 @@ import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.base.typestate;
+import zxfoundation.sys.transaction;
 import arch.s390x.css.css;
 import arch.s390x.css.css_types;
 import lib.error;
@@ -127,6 +128,62 @@ namespace zxfoundation::sys::io {
         pinfo("io: binding subsystem initialized ({} slots)", MAX_IO_BINDINGS);
     }
 
+    class io_bind_txn : public zxfoundation::transaction<io_bind_txn> {
+        memory::pmm::folio_embryo   m_dma{};
+        bool                          m_dma_valid{false};
+        kobject_ref<io_binding, lifecycle_state::embryo> m_ref{};
+        bool                          m_ref_valid{false};
+
+    public:
+        io_bind_txn() noexcept = default;
+
+        auto take_dma(memory::pmm::folio_embryo&& folio) noexcept -> void {
+            m_dma = static_cast<memory::pmm::folio_embryo&&>(folio);
+            m_dma_valid = true;
+        }
+
+        auto take_ref(
+            kobject_ref<io_binding, lifecycle_state::embryo>&& ref
+        ) noexcept -> void {
+            m_ref = static_cast<
+                kobject_ref<io_binding, lifecycle_state::embryo>&&
+            >(ref);
+            m_ref_valid = true;
+        }
+
+        [[nodiscard]] auto dma_phys() const noexcept -> u64 {
+            return m_dma.phys_base;
+        }
+
+        [[nodiscard]] auto dma_size() const noexcept -> u64 {
+            return m_dma.size_bytes();
+        }
+
+        [[nodiscard]] auto binding() noexcept -> io_binding& {
+            return *m_ref;
+        }
+
+        auto finalize() noexcept -> void {
+            auto active = static_cast<
+                kobject_ref<io_binding, lifecycle_state::embryo>&&
+            >(m_ref).activate();
+            (void)active;
+            m_ref_valid = false;
+        }
+
+        auto on_rollback() noexcept -> void {
+            using namespace memory;
+            if (m_ref_valid) {
+                m_ref_valid = false;
+            }
+            if (m_dma_valid) {
+                auto active_folio = static_cast<memory::pmm::folio_embryo&&>(m_dma).make_active();
+                pmm::free(static_cast<memory::pmm::folio_active&&>(active_folio));
+                m_dma_valid = false;
+            }
+        }
+    };
+
     [[nodiscard]] auto io_bind(
         u16           dev_no,
         u32           domain_id,
@@ -154,33 +211,38 @@ namespace zxfoundation::sys::io {
                 lib::kernel_error::from_driver(lib::driver_error::not_found));
         }
 
-        auto result = g_io_table.alloc();
-        if (!result) {
-            return lib::unexpected(result.error());
-        }
+        // RAII transaction — if we return early without commit(),
+        // the destructor rolls back DMA + SCOMS slot automatically.
+        io_bind_txn txn{};
 
-        auto embryo_ref = static_cast<
-            kobject_ref<io_binding, lifecycle_state::embryo>&&
-        >(result.value());
-
-        io_binding& binding = *embryo_ref;
-        binding.dev_no       = dev_no;
-        binding.sch_index    = found_index;
-        binding.owner_domain = domain_id;
-        binding.state        = io_binding_state::bound;
-
-        // Allocate DMA memory (4 pages = 16 KiB for CCW chains).
+        // Allocate DMA memory first (2 pages = 8 KiB).
         auto dma_result = pmm::alloc(
             2, pmm::zone::dma31, pmm::purpose::device_dma, pmm::page_init::zeroed);
         if (!dma_result) {
             return lib::unexpected(dma_result.error());
         }
-        binding.dma_base = dma_result->phys_base;
-        binding.dma_size = dma_result->size_bytes();
+        txn.take_dma(static_cast<pmm::folio_embryo&&>(*dma_result));
 
-        const auto active_ref = static_cast<
+        // Allocate SCOMS slot — if this fails, the transaction destructor
+        // frees the DMA folio.
+        auto result = g_io_table.alloc();
+        if (!result) {
+            return lib::unexpected(result.error());
+        }
+        txn.take_ref(static_cast<
             kobject_ref<io_binding, lifecycle_state::embryo>&&
-        >(embryo_ref).activate();
+        >(result.value()));
+
+        io_binding& binding = txn.binding();
+        binding.dev_no       = dev_no;
+        binding.sch_index    = found_index;
+        binding.owner_domain = domain_id;
+        binding.op_state = io_substate::bound;
+        binding.dma_base     = txn.dma_phys();
+        binding.dma_size     = txn.dma_size();
+
+        // Activate the binding — promotes embryo → active.
+        txn.finalize();
 
         // Create a capability token for the binding.
         const u16 obj_id = static_cast<u16>(binding.ko.id);
@@ -188,6 +250,8 @@ namespace zxfoundation::sys::io {
         out_token = cap_token::make(
             cap_type::io_device, obj_id, gen,
             cap_rights::read | cap_rights::write | cap_rights::exec | cap_rights::destroy);
+
+        txn.commit();
 
         pinfo("io: bound device dev_no={:#06x} to domain {} id={} dma={:#x}",
               dev_no, domain_id, binding.ko.id, binding.dma_base);
@@ -300,12 +364,12 @@ namespace zxfoundation::sys::io {
         }
 
         io_binding* binding = *result;
-        if (binding->state == io_binding_state::error) {
+        if (binding->op_state == io_substate::error) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::internal_error));
         }
 
-        binding->state = io_binding_state::pending;
+        binding->op_state = io_substate::pending;
 
         // Build the hardware ORB from the user-provided ORB data.
         orb hw_orb{};
@@ -317,11 +381,11 @@ namespace zxfoundation::sys::io {
 
         auto css_result = css_start_io(binding->sch_index, hw_orb);
         if (!css_result) {
-            binding->state = io_binding_state::error;
+            binding->op_state = io_substate::error;
             return lib::unexpected(css_result.error());
         }
 
-        binding->state = io_binding_state::bound;
+        binding->op_state = io_substate::bound;
 
         return {};
     }

@@ -99,6 +99,8 @@ drwxr-xr-x. 1 assembler-0 assembler-0       8 Jun 23 08:06 user
   - prints all versioning info at the time of configuration
 - `docs`
   - when the target is run, it will only display a message a exists as the kernel focus on minimal dependencies. You can, of course build and view the document manually, for example from project root: `doxygen && python -m http.server -d doxygen-build/html`
+- `artifact-dump`
+  - disassemble and extract all symbols from (ELF) artifacts files.
 
 ## Running
 

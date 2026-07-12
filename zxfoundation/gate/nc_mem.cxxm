@@ -25,6 +25,7 @@ import lib.expected;
 import lib.placementnew;
 import zxfoundation.dgp.memory_contract;
 import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.dgp_authorize;
 
 static constexpr u64 NC_ERROR = ~0ULL;
 
@@ -87,6 +88,17 @@ namespace __mem_detail {
 
         const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_alloc,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::map,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_alloc: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         auto result = vm::vm_map(
             d->vm_space, aligned_size,
             vm::vm_prot::rw,
@@ -113,6 +125,19 @@ namespace __mem_detail {
         }
 
         const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_free,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + aligned_size,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_free: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
         if (!result) {
@@ -158,6 +183,20 @@ namespace __mem_detail {
         req.storage_key = d->storage_key;
         req.access = zxfoundation::dgp::memory_access::read | zxfoundation::dgp::memory_access::write;
         req.scope = zxfoundation::dgp::memory_scope::private_domain;
+
+        // ── DGP cross-domain authorization chokepoint ────────────────
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_map,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + aligned_size,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_map: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         auto contract_result = zxfoundation::dgp::memory_contract_authorize_mapping(req);
         if (!contract_result) {
@@ -209,6 +248,19 @@ namespace __mem_detail {
 
         const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_unmap,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + aligned_size,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_unmap: DGP authorization denied");
+            return NC_ERROR;
+        }
+
         auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
         if (!result) {
             zxfoundation::sys::printk::perr("mem_unmap: vm_unmap failed va={:#x}", va);
@@ -232,6 +284,19 @@ namespace __mem_detail {
         }
 
         const u64 aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_protect,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + aligned_size,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_protect: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         vm::vm_prot new_prot = vm::vm_prot::none;
         if (prot_bits & 0x1) new_prot = new_prot | vm::vm_prot::read;
@@ -298,6 +363,18 @@ namespace __mem_detail {
         req.storage_key = self->storage_key;
         req.access = zxfoundation::dgp::memory_access::share;
         req.scope = zxfoundation::dgp::memory_scope::portal_shared;
+
+        // ── DGP cross-domain authorization chokepoint ────────────────
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *self, *target,
+            zxfoundation::dgp::operation_kind::mem_share,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::share,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_share: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         auto contract_result = zxfoundation::dgp::memory_contract_authorize_mapping(req);
         if (!contract_result) {

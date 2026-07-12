@@ -34,7 +34,7 @@ namespace arch::s390x::mmu::_internal {
             .mem_zone = pmm::zone::normal,
             .use = pmm::purpose::page_table,
             .init = pmm::page_init::uninitialized,
-            .placement = {},
+            .placement{},
         };
     }
 

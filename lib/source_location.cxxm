@@ -73,7 +73,7 @@ export {
             ctx.write("source_location<fn(");
             ctx.write(val.function_name());
             ctx.write("), file(");
-            ctx.write(val.file_name());
+            ctx.write(val.file_name() ? val.file_name() : "?" );
             ctx.write("), location(");
             ctx.write(val.line());
             ctx.write(":");

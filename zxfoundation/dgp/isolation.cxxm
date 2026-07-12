@@ -82,6 +82,8 @@ export {
 
 namespace zxfoundation::dgp {
 
+    using zxfoundation::base::lifecycle_state;
+
     /// @brief Initialize the DGP isolation clean core.
     /// @note The initial implementation resets the bootstrap storage-key registry before domain-visible DGP objects exist.
     /// @warning This function must run before domain, gate, or portal policy is exposed to user-visible objects.
@@ -117,7 +119,6 @@ namespace zxfoundation::dgp {
 
         isolation_domain_state state{};
         state.domain_id = domain_id;
-        state.state = lifecycle_state::sealed;
         state.storage_key = *key_result;
         state.storage_key_generation = _internal::storage_key_generation(*key_result);
         state.storage_key_state = storage_key_revocation_state::active;
@@ -125,14 +126,22 @@ namespace zxfoundation::dgp {
         state.granted_rights = policy.default_rights;
 
         if (policy.bootstrap_admin) {
-            state.granted_rights = state.granted_rights | isolation_rights::admin;
+            state.granted_rights = state.granted_rights
+                | isolation_rights::lifecycle
+                | isolation_rights::delegate
+                | isolation_rights::quota
+                | isolation_rights::debug
+                | isolation_rights::sched
+                | isolation_rights::console
+                | isolation_rights::service;
         }
 
         return state;
     }
 
     /// @brief Attach committed DAT root state to a DGP isolation domain.
-    /// @param[in,out] state Isolation state to update.
+    /// @param[in] state Isolation state to update.
+    /// @param[in] current_ls Current lifecycle state (from ko.state) — must be sealed.
     /// @param[in] asce Typed region-first ASCE constructed from the committed DAT root.
     /// @param[in] root_phys Physical address of the committed region-first root table.
     /// @return Success when the state can accept the ASCE root metadata.
@@ -140,10 +149,11 @@ namespace zxfoundation::dgp {
     /// @warning The caller remains responsible for allocating and freeing the DAT table through the MMU transaction path.
     [[nodiscard]] auto isolation_bind_asce_root(
         isolation_domain_state& state,
+        lifecycle_state current_ls,
         arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
         u64 root_phys
     ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (state.state != lifecycle_state::sealed || root_phys == 0ULL || asce.raw() == 0ULL) {
+        if (current_ls != lifecycle_state::sealed || root_phys == 0ULL || asce.raw() == 0ULL) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 

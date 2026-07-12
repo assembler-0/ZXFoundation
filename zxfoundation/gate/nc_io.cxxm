@@ -10,7 +10,7 @@ import zxfoundation.sys.io_types;
 import zxfoundation.sys.io;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
-import zxfoundation.dgp.io_authority;
+import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk;
@@ -42,20 +42,23 @@ namespace __io_detail {
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_ERROR;
 
-        // a0 carries the opaque device number (CSS-IO boundary).
-        const u16 dev_no = static_cast<u16>(a0 & 0xFFFFU);
+        if (d->ko.id == 0U) {
+            zxfoundation::sys::printk::perr("io_bind: nucleus cannot bind I/O");
+            return NC_ERROR;
+        }
 
-        auto authority = zxfoundation::dgp::io_authority_authorize({
-            .caller_domain_id = d->ko.id,
-            .device_number = dev_no,
-            .operation = zxfoundation::dgp::io_authority_operation::bind,
-            .token = {},
-            .required_rights = zxfoundation::sys::cap::cap_rights::admin,
-            .granted_rights = d->granted_rights,
-            .bootstrap_admin = (d->granted_rights & zxfoundation::dgp::isolation_rights::admin)
-                == zxfoundation::dgp::isolation_rights::admin,
-        });
-        if (!authority) return NC_ERROR;
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::io_bind,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::io,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("io_bind: DGP authorization denied");
+            return NC_ERROR;
+        }
+
+        const u16 dev_no = static_cast<u16>(a0 & 0xFFFFU);
 
         zxfoundation::sys::cap::cap_token token{};
         auto result = io_bind(dev_no, d->ko.id, token);
@@ -76,16 +79,26 @@ namespace __io_detail {
 
         const zxfoundation::sys::cap::cap_token token{a0};
 
-        auto authority = zxfoundation::dgp::io_authority_authorize({
-            .caller_domain_id = d->ko.id,
-            .device_number = 0U,
-            .operation = zxfoundation::dgp::io_authority_operation::unbind,
-            .token = token,
-            .required_rights = zxfoundation::sys::cap::cap_rights::destroy,
-            .granted_rights = d->granted_rights,
-            .bootstrap_admin = false,
-        });
-        if (!authority) return NC_ERROR;
+        if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
+            zxfoundation::sys::printk::perr("io_unbind: invalid token");
+            return NC_ERROR;
+        }
+        if ((token.rights() & zxfoundation::sys::cap::cap_rights::destroy)
+                == zxfoundation::sys::cap::cap_rights::none) {
+            zxfoundation::sys::printk::perr("io_unbind: token lacks destroy right");
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::io_unbind,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::io,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("io_unbind: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         auto result = io_unbind(token);
         if (!result) {
@@ -105,16 +118,26 @@ namespace __io_detail {
         const zxfoundation::sys::cap::cap_token token{a0};
         const u64 orb_user_ptr = a1;
 
-        auto authority = zxfoundation::dgp::io_authority_authorize({
-            .caller_domain_id = d->ko.id,
-            .device_number = 0U,
-            .operation = zxfoundation::dgp::io_authority_operation::submit,
-            .token = token,
-            .required_rights = zxfoundation::sys::cap::cap_rights::exec,
-            .granted_rights = d->granted_rights,
-            .bootstrap_admin = false,
-        });
-        if (!authority) return NC_ERROR;
+        if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
+            zxfoundation::sys::printk::perr("io_submit: invalid token");
+            return NC_ERROR;
+        }
+        if ((token.rights() & zxfoundation::sys::cap::cap_rights::exec)
+                == zxfoundation::sys::cap::cap_rights::none) {
+            zxfoundation::sys::printk::perr("io_submit: token lacks exec right");
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::io_submit,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::io,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("io_submit: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         if (orb_user_ptr == 0) {
             zxfoundation::sys::printk::perr("io_submit: null orb pointer");
@@ -145,16 +168,27 @@ namespace __io_detail {
         const zxfoundation::sys::cap::cap_token token{a0};
         const auto gate_id = static_cast<u32>(a1);
 
-        auto authority = zxfoundation::dgp::io_authority_authorize({
-            .caller_domain_id = d->ko.id,
-            .device_number = 0U,
-            .operation = zxfoundation::dgp::io_authority_operation::irq_bind,
-            .token = token,
-            .required_rights = zxfoundation::sys::cap::cap_rights::write,
-            .granted_rights = d->granted_rights,
-            .bootstrap_admin = false,
-        });
-        if (!authority) return NC_ERROR;
+        if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
+            zxfoundation::sys::printk::perr("io_irq_bind: invalid token");
+            return NC_ERROR;
+        }
+        if ((token.rights() & zxfoundation::sys::cap::cap_rights::write)
+                == zxfoundation::sys::cap::cap_rights::none) {
+            zxfoundation::sys::printk::perr("io_irq_bind: token lacks write right");
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::io_irq_bind,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::io,
+                .gate_id = gate_id,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("io_irq_bind: DGP authorization denied");
+            return NC_ERROR;
+        }
 
         auto result = io_irq_bind(token, gate_id);
         if (!result) {

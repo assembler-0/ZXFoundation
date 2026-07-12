@@ -21,9 +21,10 @@ namespace arch::s390x::cpu::diag {
     [[gnu::always_inline]] inline auto diagnose12(u64& r1, u64& r2) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
-            "diag    %[r1],%[r2],%[code]\n"
-            "ipm     %[cc]\n"
-            "srl     %[cc],28\n"
+            EX_TABLE(%=, %=, EX_TYPE_FIXUP, 0)
+            "%=0: diag    %[r1],%[r2],%[code]\n"
+            "%=1: ipm     %[cc]\n"
+            "     srl     %[cc],28\n"
             : [r1] "+d" (r1), [r2] "+d" (r2), [cc] "=d" (cc)
             : [code] "K" (Code)
             : "cc", "memory"
@@ -33,16 +34,17 @@ namespace arch::s390x::cpu::diag {
 
     /// Generic diagnose23 — issue any code with arbitrary R2/R3 register values.
     /// @tparam Code  The 16-bit diagnose code (e.g. 0x044, 0x308).
-    /// @param  r2    Value placed in R1 (and R1+1 for processor::register_pair codes).
+    /// @param  r2    Value placed in R2 (and R1+1 for processor::register_pair codes).
     /// @param  r3    Value placed in R2 (and R2+1).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
     [[gnu::always_inline]] inline auto diagnose23(u64& r2, u64& r3) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
-            "diag    %[r2],%[r3],%[code]\n"
-            "ipm     %[cc]\n"
-            "srl     %[cc],28\n"
+            EX_TABLE(%=, %=, EX_TYPE_FIXUP, 0)
+            "%=0: diag    %[r2],%[r3],%[code]\n"
+            "%=1: ipm     %[cc]\n"
+            "     srl     %[cc],28\n"
             : [r2] "+d" (r2), [r3] "+d" (r3), [cc] "=d" (cc)
             : [code] "K" (Code)
             : "cc", "memory"
@@ -53,15 +55,16 @@ namespace arch::s390x::cpu::diag {
     /// Generic diagnose13 — issue any code with arbitrary R2/R3 register values.
     /// @tparam Code  The 16-bit diagnose code (e.g. 0x044, 0x308).
     /// @param  r1    Value placed in R1 (and R1+1 for processor::register_pair codes).
-    /// @param  r3    Value placed in R2 (and R2+1).
+    /// @param  r3    Value placed in R3 (and R2+1).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
     [[gnu::always_inline]] inline auto diagnose13(u64& r1, u64& r3) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
-            "diag    %[r1],%[r3],%[code]\n"
-            "ipm     %[cc]\n"
-            "srl     %[cc],28\n"
+            EX_TABLE(%=, %=, EX_TYPE_FIXUP, 0)
+            "%=0: diag    %[r1],%[r3],%[code]\n"
+            "%=1: ipm     %[cc]\n"
+            "     srl     %[cc],28\n"
             : [r1] "+d" (r1), [r3] "+d" (r3), [cc] "=d" (cc)
             : [code] "K" (Code)
             : "cc", "memory"
@@ -356,9 +359,11 @@ namespace arch::s390x::cpu::diag {
     /// @return 0 on success, nonzero condition code on failure.
     auto diag288(u32 func, u32 timeout,
                  u64 action, u32 len) noexcept -> condition_code {
-        u64 r1v = (static_cast<u64>(func) << 32) | timeout;
-        u64 r3v = (action << 32) | len;
-        return diagnose12<DIAG_WATCHDOG>(r1v, r3v);
+        processor::register_pair r1 { .even = func, .odd = timeout };
+        processor::register_pair r3 { .even = action, .odd = len };
+        u64 r1v = r1.pair;
+        u64 r3v = r3.pair;
+        return diagnose13<DIAG_WATCHDOG>(r1v, r3v);
     }
 
     /// @brief Interface with z/VM FTP server.
