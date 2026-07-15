@@ -181,6 +181,14 @@ namespace zxfoundation::domain {
         auto operator=(run_queue&&)            = delete;
     };
 
+    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
+        return (d.flags & domain_flags::idle) != domain_flags::none;
+    }
+
+    [[nodiscard]] auto is_active_domain(const domain& d) noexcept -> bool {
+        return d.ko.state == zxfoundation::base::lifecycle_state::active;
+    }
+
     /// @brief Scheduler class — vtable of typed function pointers.
     struct sched_class {
         void    (*enqueue_strand)(run_queue& rq, strand& s){};    ///< Add strand to the run queue.

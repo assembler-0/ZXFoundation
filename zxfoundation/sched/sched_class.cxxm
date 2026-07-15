@@ -25,10 +25,6 @@ namespace _internal {
     using zxfoundation::domain::is_idle_strand;
     using zxfoundation::sched::sched_class_id;
 
-    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
-        return (d.flags & domain_flags::idle) != domain_flags::none;
-    }
-
     [[nodiscard]] auto owner_of(const strand& s) noexcept -> const domain* {
         return static_cast<const domain*>(s.owner);
     }
@@ -91,19 +87,19 @@ namespace zxfoundation::sched::classed {
 
         switch (policy.class_id) {
             case sched_class_id::idle:
-                if (!_internal::is_idle_domain(owner) || policy.user_visible) {
+                if (!is_idle_domain(owner) || policy.user_visible) {
                     return lib::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 return result;
             case sched_class_id::fair:
-                if (_internal::is_idle_domain(owner)) {
+                if (is_idle_domain(owner)) {
                     return lib::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 return result;
             case sched_class_id::rt:
-                if (_internal::is_idle_domain(owner)) {
+                if (is_idle_domain(owner)) {
                     return lib::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
@@ -116,7 +112,7 @@ namespace zxfoundation::sched::classed {
                 result.admitted_period_ns = policy.period_ns;
                 return result;
             case sched_class_id::deadline:
-                if (_internal::is_idle_domain(owner)) {
+                if (is_idle_domain(owner)) {
                     return lib::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }

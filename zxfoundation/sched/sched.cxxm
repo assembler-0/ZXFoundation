@@ -61,10 +61,6 @@ namespace _internal {
 
     static zxfoundation::sys::timer::kernel_timer g_ap_tick_timers[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
-    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
-        return (d.flags & domain_flags::idle) != domain_flags::none;
-    }
-
     [[nodiscard]] auto can_admit_domain(const domain* d) noexcept -> bool {
         if (!d) return true;
         if (is_idle_domain(*d)) return true;

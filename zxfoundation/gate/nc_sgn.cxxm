@@ -15,7 +15,7 @@ import arch.s390x.cpu.lowcore;
 import lib.error;
 import lib.expected;
 
-static constexpr u64 NC_ERROR = ~0ULL;
+static constexpr u64 NC_SGN_ERROR = ~0ULL;
 
 using zxfoundation::domain::domain;
 
@@ -31,7 +31,7 @@ namespace __sgn_detail {
         using namespace zxfoundation::domain::signal;
 
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_SGN_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
@@ -41,7 +41,7 @@ namespace __sgn_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("signal_register: DGP authorization denied");
-            return NC_ERROR;
+            return NC_SGN_ERROR;
         }
 
         const auto kind = static_cast<signal_kind>(a0 & 0xFFU);
@@ -57,7 +57,7 @@ namespace __sgn_detail {
         if (!result) {
             zxfoundation::sys::printk::perr("signal_register: kind={} failed",
                                            static_cast<u32>(kind));
-            return NC_ERROR;
+            return NC_SGN_ERROR;
         }
 
         return 0;
@@ -65,7 +65,7 @@ namespace __sgn_detail {
 
     auto nc_signal_poll(u64, u64, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_SGN_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
@@ -75,7 +75,7 @@ namespace __sgn_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("signal_poll: DGP authorization denied");
-            return NC_ERROR;
+            return NC_SGN_ERROR;
         }
 
         return static_cast<u64>(d->signal_queue.pending_mask);
@@ -83,7 +83,7 @@ namespace __sgn_detail {
 
     auto nc_signal_ack(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_SGN_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
@@ -93,7 +93,7 @@ namespace __sgn_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("signal_ack: DGP authorization denied");
-            return NC_ERROR;
+            return NC_SGN_ERROR;
         }
 
         const u32 ack_mask = static_cast<u32>(a0 & 0xFFFFFFFFU);
@@ -120,7 +120,7 @@ namespace zxfoundation::gate::nc_sgn {
             return __sgn_detail::nc_signal_ack(a0, a1, a2, a3, a4);
         default:
             zxfoundation::sys::printk::perr("sgn_dispatch: unknown op {}", op);
-            return NC_ERROR;
+            return NC_SGN_ERROR;
         }
     }
 

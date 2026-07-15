@@ -23,7 +23,7 @@ import lib.error;
 import lib.expected;
 import lib.algorithm;
 
-static constexpr u64 NC_ERROR = ~0ULL;
+static constexpr u64 NC_DOM_ERROR = ~0ULL;
 
 using zxfoundation::domain::domain;
 using zxfoundation::domain::domain_id;
@@ -71,11 +71,11 @@ namespace __dom_detail {
     auto nc_domain_create(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         // a0 = admin capability token, a1 = user-space name pointer
         if (!validate_admin(cap_token{a0})) {
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
@@ -85,26 +85,26 @@ namespace __dom_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("domain_create: DGP authorization denied");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         const u64 user_name_ptr = a1;
         if (user_name_ptr == 0) {
             zxfoundation::sys::printk::perr("domain_create: null name pointer");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         char name_buf[64]{};
         if (copy_from_user(name_buf, user_name_ptr, 63, d) != 0) {
             zxfoundation::sys::printk::perr("domain_create: copy_from_user failed");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
         name_buf[63] = '\0';
 
         auto result = zxfoundation::domain::domain_create(name_buf);
         if (!result) {
             zxfoundation::sys::printk::perr("domain_create: domain_create failed");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         const u32 new_id = (*result)->ko.id;
@@ -114,11 +114,11 @@ namespace __dom_detail {
     auto nc_domain_destroy(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         // a0 = admin capability token, a1 = target domain ID
         if (!validate_admin(cap_token{a0})) {
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
@@ -128,20 +128,20 @@ namespace __dom_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("domain_destroy: DGP authorization denied");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         const auto target_id = static_cast<domain_id>(a1);
 
         if (target_id == d->ko.id) {
             zxfoundation::sys::printk::perr("domain_destroy: cannot destroy self");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         auto result = zxfoundation::domain::domain_destroy(target_id);
         if (!result) {
             zxfoundation::sys::printk::perr("domain_destroy: domain_destroy({}) failed", target_id);
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         return 0;
@@ -149,7 +149,7 @@ namespace __dom_detail {
 
     auto nc_domain_exit(u64, u64, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
@@ -157,7 +157,7 @@ namespace __dom_detail {
             zxfoundation::dgp::dgp_authorization_metadata{});
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("domain_exit: DGP authorization denied");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         (void)zxfoundation::scoms::mark_dying(d);
@@ -168,7 +168,7 @@ namespace __dom_detail {
 
     auto nc_domain_info(u64, u64, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
@@ -176,7 +176,7 @@ namespace __dom_detail {
             zxfoundation::dgp::dgp_authorization_metadata{});
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("domain_info: DGP authorization denied");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         return static_cast<u64>(d->ko.id) |
@@ -186,11 +186,11 @@ namespace __dom_detail {
     auto nc_domain_strand_create(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
         // a0 = admin capability token, a1 = cpu affinity, a2 = owner domain ID
         if (!validate_admin(cap_token{a0})) {
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         auto* self = current_domain();
-        if (!self) [[unlikely]] return NC_ERROR;
+        if (!self) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *self, *self,
@@ -201,20 +201,20 @@ namespace __dom_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("domain_strand_create: DGP authorization denied");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         const auto cpu_affinity = static_cast<u16>(a1 & 0xFFFFU);
         if (cpu_affinity >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
             zxfoundation::sys::printk::perr("domain_strand_create: invalid CPU affinity {}", static_cast<u32>(cpu_affinity));
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         domain* owner = self;
         const auto owner_id = static_cast<domain_id>(a2);
         if (owner_id != 0U && owner_id != self->ko.id) {
             zxfoundation::sys::printk::perr("domain_strand_create: cross-domain spawn denied for {}", owner_id);
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         zxfoundation::domain::strand_create_request request{};
@@ -228,7 +228,7 @@ namespace __dom_detail {
         auto result = zxfoundation::sched::strand_spawn(request);
         if (!result) {
             zxfoundation::sys::printk::perr("domain_strand_create: failed");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         strand* s = *result;
@@ -237,7 +237,7 @@ namespace __dom_detail {
 
     auto nc_domain_query(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto* self = current_domain();
-        if (!self) [[unlikely]] return NC_ERROR;
+        if (!self) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *self, *self,
@@ -247,7 +247,7 @@ namespace __dom_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("domain_query: DGP authorization denied");
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
 
         const auto query_id = static_cast<u32>(a0);
@@ -257,7 +257,7 @@ namespace __dom_detail {
             target = zxfoundation::domain::domain_find(query_id);
             if (!target) {
                 zxfoundation::sys::printk::perr("domain_query: domain {} not found", query_id);
-                return NC_ERROR;
+                return NC_DOM_ERROR;
             }
         }
 
@@ -295,7 +295,7 @@ namespace zxfoundation::gate::nc_dom {
             return __dom_detail::nc_domain_strand_create(a0, a1, a2, a3, a4);
         default:
             zxfoundation::sys::printk::perr("dom_dispatch: unknown op {}", op);
-            return NC_ERROR;
+            return NC_DOM_ERROR;
         }
     }
 

@@ -1,66 +1,13 @@
-# phase 2 implementation
+build: added flag checking and LLVM 19/20/21 support/tested
 
-dgp,gate,sched,arch/s390x,lib,irq,build,docs: comprehensive authorization, fixup table, SCOMS migration, scheduler overhaul and QoL factors
+build: added new flag checking system for C/C++ flags.
+	   added build id
 
-sys/dgp: unified authorization chokepoint (dgp_authorize) with 34 operation kinds
-         and per-operation rights mapping; deleted io_authority.cxxm (subsumed);
-         decomposed admin god-bit into specific rights (lifecycle, delegate,
-         quota, debug, sched, console, service); bootstrap_admin grants full
-         rights set; lifecycle state removed from isolation_domain_state.
+docs: updated build guide to reference minimum compiler to use (for LLVM)
 
-sys/gate: all nucleus call handlers (cap, dom, gate, io, mem, portal, sgn, sys)
-          now route through dgp_authorize; cap_token validation added to I/O
-          operations; gate_init/portal_init register domain teardown callbacks.
+arch/s390x/link: changed linker scripts to include note section
 
-sys/domain: strand allocation via SCOMS table (not slab); strand_body for
-        cold fields; idle_strand_create/destroy API; teardown callbacks
-        for gate/portal drain; io_bind_txn RAII transaction.
-
-sys/sched: cpu_timer_tick() hardware preemption via CPU timer interrupt;
-           idle strands replace idle domains (SCOMS kobject_table);
-           work stealing with proper lock ordering and vruntime normalization;
-           sched_cpu_down properly drains fair tree and migrates strands;
-           per-class admin rights use isolation_rights::sched.
-
-sys/syschk: syschk_core updated to reference URL link for bug reports
-
-arch/s390x/trap: exception/fixup table (EX_TABLE) with binary search in
-                 trap/fixup.cxxm, link.ld .ex_table section, and precpp.hxx
-                 macros; diagnose inline asm blocks EX_TABLE-protected with
-                 register-pair overloads; lowcore struct access replaces
-                 hardcoded addresses in ext/mcck/pgm handlers; pgm handler
-                 now calls try_applying_fixup for supervisor-mode faults;
-                 s390x_stack_frame renamed to stack_frame.
-
-arch/s390x/lib: new arch-optimized cstring.cxx (MVC/XC/CLCLE/SRST/MVST/EXRL).
-
-arch/s390x/cpu/diag: discrepancy between register_pair and u64 addressed using overloads.
-
-sys/irqdesc: IRQ descriptor table migrated from pointer-table+slab to
-             SCOMS kobject_table; irqdesc_init.cxxm deleted.
-
-sys/mm/vm: vm_region allocation migrated from slab cache to SCOMS kobject_table.
-
-sys/base/types: FixedSizeBase<Derived, Size>; std::byte emulation; usize/isize
-                use __SIZE_TYPE__/__PTRDIFF_TYPE__; cxxabi disabled_wait→syschk_fatal.
-
-scripts/patches: Update Hercules DIAG X'288' patch to address register handling, now mirroring
-                 Linux expectations
-
-sys/lib: cstring.cxxm rewritten to delegate to arch-specific __zx_* symbols;
-         string_view uses __zx_memcmp; machine error codes extended (backlog, key);
-         source_location returns "?" for unknown; Updated source_location formatter
-         to format column and line as unsigned integer instead of char (bug).
-
-build: ZX_TOOLCHAIN_FILE/ZX_CONFIG_FILE replace CMAKE_TOOLCHAIN_FILE;
-       artifact-dump target (disassemble + symbols); cmake/configs/base.cmake
-       for default config; C/C++ extensions disabled; -fmacro-prefix-map.
-
-misc/docs: BUG_LIST.{xml/xsd} for bug history management added; Doxyfile updated to reference
-          crypto/ folder and standard C++ files.
-
-misc/legal: CODE_OF_CONDUCT.md added;
-
-misc/ci: updated workflows to use a newer version of Doxygen (requesting 1.15.0, was 1.9.x)
+codefmt: added missing newline at EOF, renamed NC_ERROR variables for each
+		 handler module
 
 Signed-off-by: assembler-0 <diaviekone13@gmail.com>

@@ -21,6 +21,3 @@ set(ZX_CXXFILT llvm-cxxfilt)
 set(ZX_HOST_CC clang)
 
 set(COMPILER_ID "clang")
-
-set(EXTRA_KERNEL_FLAGS "")
-set(EXTRA_LOADER_FLAGS "")

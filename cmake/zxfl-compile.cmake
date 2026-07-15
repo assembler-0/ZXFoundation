@@ -27,44 +27,6 @@ set(ZXFL_STAGE2_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/common/sha256.c
 )
 
-set(ZXFL_COMMON_FLAGS
-    -ffreestanding
-    -nostdlib
-    -fno-builtin
-    -Wall -Wextra -Wpedantic -Werror
-    -fno-strict-aliasing
-    -fno-common
-    -fwrapv
-    -ftrivial-auto-var-init=pattern
-    -fno-stack-protector
-    -fno-omit-frame-pointer
-    -m64
-    -msoft-float
-    -mno-vx
-    -march=${MARCH_MODE}
-    -mtune=${MARCH_MODE}
-    -O${OPT_LEVEL}
-    -g${DSYM_LEVEL}
-    ${EXTRA_LOADER_FLAGS}
-)
-
-set(ZXFL_COMMON_LINK_FLAGS
-    -nostdlib
-    -static
-    -ztext
-    -zmax-page-size=0x1000
-    -m ${TARGET_EMULATION_MODE}
-    --no-pie
-    --no-dynamic-linker
-)
-
-if(ENABLE_LTO)
-    if(COMPILER_ID STREQUAL "clang")
-        list(APPEND ZXFL_COMMON_FLAGS -flto=full -funified-lto)
-        list(APPEND ZXFL_COMMON_LINK_FLAGS ${ZX_GC_SECTIONS} --lto=full --plugin=${ZX_LLVM_LTO_PLUGIN} -plugin-opt=O3 -plugin-opt=lto-partitions=1 --lto-whole-program-visibility)
-    endif()
-endif()
-
 # Stage 1 loader - core.zxfoundationloader00.sys
 set(ZXFL_STAGE1_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/head.S
@@ -79,28 +41,15 @@ target_include_directories(zxfl_stage1.elf SYSTEM PRIVATE
 target_include_directories(zxfl_stage1.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_compile_options(zxfl_stage1.elf PRIVATE ${ZXFL_COMMON_FLAGS})
+target_compile_options(zxfl_stage1.elf PRIVATE ${ZX_C_FLAGS})
 target_compile_definitions(zxfl_stage1.elf PUBLIC __zxfoundation__)
-
-if(COMPILER_ID STREQUAL "clang")
-    target_compile_options(zxfl_stage1.elf PRIVATE
-        --target=${COMMON_TARGET_TRIPLE}
-        -Wno-gnu-statement-expression-from-macro-expansion
-    )
-endif()
 
 set(STAGE1_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/stage1.ld")
 set_target_properties(zxfl_stage1.elf PROPERTIES LINK_DEPENDS "${STAGE1_LINKER_SCRIPT}")
 target_link_options(zxfl_stage1.elf PRIVATE
     -T ${STAGE1_LINKER_SCRIPT}
-    ${ZXFL_COMMON_LINK_FLAGS}
+    ${ZX_C_LINK_FLAGS}
 )
-
-if (COMPILER_ID STREQUAL "gcc")
-    target_link_options(zxfl_stage1.elf PRIVATE
-        --no-warn-rwx-segments
-    )
-endif()
 
 # Stage 2 loader - core.zxfoundationloader01.sys
 set(ZXFL_STAGE2_SOURCES
@@ -117,28 +66,15 @@ target_include_directories(zxfl_stage2.elf SYSTEM PRIVATE
 target_include_directories(zxfl_stage2.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_compile_options(zxfl_stage2.elf PRIVATE ${ZXFL_COMMON_FLAGS})
+target_compile_options(zxfl_stage2.elf PRIVATE ${ZX_C_FLAGS})
 target_compile_definitions(zxfl_stage2.elf PUBLIC __zxfoundation__)
-
-if(COMPILER_ID STREQUAL "clang")
-    target_compile_options(zxfl_stage2.elf PRIVATE
-        --target=${COMMON_TARGET_TRIPLE}
-        -Wno-gnu-statement-expression-from-macro-expansion
-    )
-endif()
 
 set(STAGE2_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/stage2.ld")
 set_target_properties(zxfl_stage2.elf PROPERTIES LINK_DEPENDS "${STAGE2_LINKER_SCRIPT}")
 target_link_options(zxfl_stage2.elf PRIVATE
     -T ${STAGE2_LINKER_SCRIPT}
-    ${ZXFL_COMMON_LINK_FLAGS}
+    ${ZX_C_LINK_FLAGS}
 )
-
-if (COMPILER_ID STREQUAL "gcc")
-    target_link_options(zxfl_stage2.elf PRIVATE
-        --no-warn-rwx-segments
-    )
-endif()
 
 # Post-build: convert stage 1 to binary record, stage 2 to raw binary
 if(ZX_CAN_PACK_LOADER)

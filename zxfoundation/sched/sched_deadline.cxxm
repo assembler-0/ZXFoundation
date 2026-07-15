@@ -23,14 +23,6 @@ namespace _internal {
     using zxfoundation::domain::strand;
     using zxfoundation::sched::sched_class_id;
 
-    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
-        return (d.flags & domain_flags::idle) != domain_flags::none;
-    }
-
-    [[nodiscard]] auto is_active_domain(const domain& d) noexcept -> bool {
-        return d.ko.state == zxfoundation::base::lifecycle_state::active;
-    }
-
     [[nodiscard]] auto has_deadline_authority(const domain& d) noexcept -> bool {
         if (d.rt_capability_token != 0U && d.rt_capability_token == d.admin_token) return true;
         return zxfoundation::dgp::has_all_rights(
@@ -80,7 +72,7 @@ namespace zxfoundation::sched::deadline {
         strand& s,
         const sched_policy& policy
     ) noexcept -> lib::expected<sched_admission_result, lib::kernel_error> {
-        if (!_internal::is_active_domain(owner) || _internal::is_idle_domain(owner)
+        if (!is_active_domain(owner) || is_idle_domain(owner)
             || policy.class_id != sched_class_id::deadline) {
             return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }

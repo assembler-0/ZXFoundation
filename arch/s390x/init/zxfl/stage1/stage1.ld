@@ -33,8 +33,7 @@ SECTIONS
     ASSERT(LOADADDR(.bss) <= 0x3000, "stage1: code+data exceeds 12K")
 
     /DISCARD/ : {
-        *(.comment)
-        *(.note*)
         *(.eh_frame)
+        *(.eh_frame_hdr)
     }
 }

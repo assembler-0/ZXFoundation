@@ -102,5 +102,8 @@ SECTIONS {
 
     __zx_vma_end = .;
 
-    /DISCARD/ : { *(.comment) *(.eh_frame) *(.note.GNU-stack) }
+   /DISCARD/ : {
+       *(.eh_frame)
+       *(.eh_frame_hdr)
+   }
 }

@@ -19,7 +19,7 @@ import arch.s390x.cpu.uaccess;
 import lib.error;
 import lib.expected;
 
-static constexpr u64 NC_ERROR = ~0ULL;
+static constexpr u64 NC_IO_ERROR = ~0ULL; 
 
 using zxfoundation::domain::domain;
 
@@ -40,11 +40,11 @@ namespace __io_detail {
         using namespace zxfoundation::sys::io;
 
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_IO_ERROR;
 
         if (d->ko.id == 0U) {
             zxfoundation::sys::printk::perr("io_bind: nucleus cannot bind I/O");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -55,7 +55,7 @@ namespace __io_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("io_bind: DGP authorization denied");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         const u16 dev_no = static_cast<u16>(a0 & 0xFFFFU);
@@ -65,7 +65,7 @@ namespace __io_detail {
         if (!result) {
             zxfoundation::sys::printk::perr("io_bind: failed for dev_no={:#06x}",
                                            dev_no);
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         return token.raw;
@@ -75,18 +75,18 @@ namespace __io_detail {
         using namespace zxfoundation::sys::io;
 
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_IO_ERROR;
 
         const zxfoundation::sys::cap::cap_token token{a0};
 
         if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
             zxfoundation::sys::printk::perr("io_unbind: invalid token");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
         if ((token.rights() & zxfoundation::sys::cap::cap_rights::destroy)
                 == zxfoundation::sys::cap::cap_rights::none) {
             zxfoundation::sys::printk::perr("io_unbind: token lacks destroy right");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -97,13 +97,13 @@ namespace __io_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("io_unbind: DGP authorization denied");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         auto result = io_unbind(token);
         if (!result) {
             zxfoundation::sys::printk::perr("io_unbind: unbind failed");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         return 0;
@@ -113,19 +113,19 @@ namespace __io_detail {
         using namespace zxfoundation::sys::io;
 
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_IO_ERROR;
 
         const zxfoundation::sys::cap::cap_token token{a0};
         const u64 orb_user_ptr = a1;
 
         if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
             zxfoundation::sys::printk::perr("io_submit: invalid token");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
         if ((token.rights() & zxfoundation::sys::cap::cap_rights::exec)
                 == zxfoundation::sys::cap::cap_rights::none) {
             zxfoundation::sys::printk::perr("io_submit: token lacks exec right");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -136,24 +136,24 @@ namespace __io_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("io_submit: DGP authorization denied");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         if (orb_user_ptr == 0) {
             zxfoundation::sys::printk::perr("io_submit: null orb pointer");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         zxfoundation::sys::io::user_orb orb_kern{};
         if (copy_from_user(&orb_kern, orb_user_ptr, sizeof(orb_kern), d) != 0) {
             zxfoundation::sys::printk::perr("io_submit: copy_from_user failed");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         auto result = io_submit(token, &orb_kern);
         if (!result) {
             zxfoundation::sys::printk::perr("io_submit: io_submit failed");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         return 0;
@@ -163,19 +163,19 @@ namespace __io_detail {
         using namespace zxfoundation::sys::io;
 
         auto* d = current_domain();
-        if (!d) [[unlikely]] return NC_ERROR;
+        if (!d) [[unlikely]] return NC_IO_ERROR;
 
         const zxfoundation::sys::cap::cap_token token{a0};
         const auto gate_id = static_cast<u32>(a1);
 
         if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
             zxfoundation::sys::printk::perr("io_irq_bind: invalid token");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
         if ((token.rights() & zxfoundation::sys::cap::cap_rights::write)
                 == zxfoundation::sys::cap::cap_rights::none) {
             zxfoundation::sys::printk::perr("io_irq_bind: token lacks write right");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -187,13 +187,13 @@ namespace __io_detail {
             });
         if (!dgp_r) {
             zxfoundation::sys::printk::perr("io_irq_bind: DGP authorization denied");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         auto result = io_irq_bind(token, gate_id);
         if (!result) {
             zxfoundation::sys::printk::perr("io_irq_bind: irq bind failed");
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
 
         return 0;
@@ -219,7 +219,7 @@ namespace zxfoundation::gate::nc_io {
             return __io_detail::nc_io_irq_bind(a0, a1, a2, a3, a4);
         default:
             zxfoundation::sys::printk::perr("io_dispatch: unknown op {}", op);
-            return NC_ERROR;
+            return NC_IO_ERROR;
         }
     }
 

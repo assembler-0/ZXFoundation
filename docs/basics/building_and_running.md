@@ -11,7 +11,7 @@ Throughout its development ZXFoundation utilize CMake as its main build system o
 | Tool           | (Suggested) Version        | Required | Note                                  |
 |----------------|----------------------------|----------|---------------------------------------|
 | CMake          | 3.30+                      | Yes      | v3.28 could be used                   |
-| Cross Compiler | clang 18+ w/LLD or gcc 15+ | Yes      | C++23-compatible compiler             |
+| Cross Compiler | clang 19+ w/LLD or gcc 15+ | Yes      | C++23-compatible compiler             |
 | Host Compiler  | n/a                        | No       | Need for making post-build artifacts  |
 | Compiler tools | n/a (llvm/binutils)        | No       | C++23-compatible compiler tools       |
 | Build tool     | n/a                        | Yes      | Ninja or Visual Studio 22+            |
@@ -40,9 +40,6 @@ set(ZX_CXXFILT llvm-cxxfilt)
 set(ZX_HOST_CC clang)
 
 set(COMPILER_ID "clang") # supported values are "clang", "gcc" and "unknown"-behaves different depending on the value
-
-set(EXTRA_KERNEL_FLAGS "") # extra flags added to kernel compilation
-set(EXTRA_LOADER_FLAGS "") # same as above but for ZXFL
 ```
 
 ### Configuration (optional)

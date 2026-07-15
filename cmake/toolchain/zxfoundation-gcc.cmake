@@ -27,6 +27,3 @@ endif()
 
 set(ZX_HOST_CC gcc)
 set(COMPILER_ID "gcc")
-
-set(EXTRA_KERNEL_FLAGS "")
-set(EXTRA_LOADER_FLAGS "")

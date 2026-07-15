@@ -27,7 +27,7 @@ import zxfoundation.dgp.memory_contract;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.dgp_authorize;
 
-static constexpr u64 NC_ERROR = ~0ULL;
+#define NC_ERROR ~0ULL
 
 using zxfoundation::domain::domain;
 using zxfoundation::sys::cap::cap_token;

@@ -22,46 +22,18 @@ add_custom_target(zxf_bump_buildno ALL
     VERBATIM
 )
 
+include(cmake/flags.cmake)
 include(cmake/zxfl-compile.cmake)
 
 macro(_zx_kernel_flags _tgt)
     target_include_directories(${_tgt} SYSTEM PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
-    )
-    target_include_directories(${_tgt} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_compile_options(${_tgt} PRIVATE
-        -ffreestanding -fno-builtin
-        -Wall -Wextra -Wpedantic -Werror
-        -fno-strict-aliasing -fno-common -fwrapv
-        -ftrivial-auto-var-init=pattern
-        -fno-omit-frame-pointer -mbackchain
-        -fstack-protector-strong -pipe
-        -mno-packed-stack -mhard-float -mvx
-        -fno-exceptions -fno-rtti
-        -nostdlib
-        -fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=
         -include ${ZX_VALIDATE_HEADER}
-        -march=${MARCH_MODE} -mtune=${MARCH_MODE} -m64
-        ${EXTRA_KERNEL_FLAGS}
-        -O${OPT_LEVEL} -g${DSYM_LEVEL}
+        ${ZX_CXX_FLAGS}
     )
-    if(COMPILER_ID STREQUAL "clang")
-        target_compile_options(${_tgt} PRIVATE
-            -nostdlib++ --target=${COMMON_TARGET_TRIPLE}
-        )
-    endif()
-    if(COMPILER_ID STREQUAL "gcc")
-        target_compile_options(${_tgt} PRIVATE
-            -static-libgcc -mzarch
-        )
-    endif()
-    if(ENABLE_LTO)
-        if(COMPILER_ID STREQUAL "clang")
-            target_compile_options(${_tgt} PRIVATE -flto=full -funified-lto)
-        endif()
-    endif()
     target_compile_definitions(${_tgt} PUBLIC
         __zxfoundation__
     )
@@ -69,19 +41,8 @@ macro(_zx_kernel_flags _tgt)
         LINK_DEPENDS "${zxfoundation_LINKER_SCRIPT}")
     target_link_options(${_tgt} PRIVATE
         -T ${zxfoundation_LINKER_SCRIPT}
-        -static --no-dynamic-linker -ztext
-        --no-pie -g -m${TARGET_EMULATION_MODE}
+        ${ZX_CXX_LINK_FLAGS}
     )
-    if (COMPILER_ID STREQUAL "gcc")
-        target_link_options(${_tgt} PRIVATE
-            --no-warn-rwx-segments
-        )
-    endif()
-    if(ENABLE_LTO)
-        if(COMPILER_ID STREQUAL "clang")
-            target_link_options(${_tgt} PRIVATE ${ZX_GC_SECTIONS} --lto=full --plugin=${ZX_LLVM_LTO_PLUGIN} -plugin-opt=O3 -plugin-opt=lto-partitions=1 --lto-whole-program-visibility)
-        endif()
-    endif()
 endmacro()
 
 if(ZX_CAN_BUILD_SYMRES)
