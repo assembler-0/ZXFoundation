@@ -97,6 +97,10 @@ namespace zxfoundation::memory::vm {
     };
 
 
+    /// @brief Maximum number of VM regions system-wide (SCOMS kobject_table capacity).
+    inline constexpr u32 MAX_VM_REGIONS = 4096U;
+
+
     /// @brief A contiguous virtual address region within a domain's address space.
     struct vm_region {
         scoms::kobject  ko{};                           ///< SCOMS identity object (offset 0).

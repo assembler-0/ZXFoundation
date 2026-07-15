@@ -10,6 +10,8 @@ import zxfoundation.scoms.scoms_ref;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import lib.error;
@@ -144,13 +146,6 @@ namespace zxfoundation::gate {
             });
     }
 
-    /// @brief Initialize the gate subsystem.
-    auto gate_init() noexcept -> void {
-        _internal::g_gate_table.init(scoms::kobject_type::gate);
-        zxfoundation::domain::register_gate_drain_cb(gate_destroy_for_domain);
-        pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
-    }
-
     /// @brief Look up a gate descriptor by id.
     ///
     /// @param id  The gate slot ID to look up.
@@ -158,6 +153,25 @@ namespace zxfoundation::gate {
     ///            or the slot is unused.
     auto gate_find(u32 id) noexcept -> gate_desc* {
         return _internal::g_gate_table.find_raw(id);
+    }
+
+    auto register_gate_cap_lookup() noexcept -> void {
+        (void)zxfoundation::sys::cap::register_lookup(
+            zxfoundation::sys::cap::cap_type::gate,
+            [](u16 obj_id) noexcept -> scoms::kobject* {
+                auto* g = gate_find(static_cast<u32>(obj_id));
+                return g ? &g->ko : nullptr;
+            });
+    }
+
+    /// @brief Initialize the gate subsystem.
+    auto gate_init() noexcept -> void {
+        _internal::g_gate_table.init(scoms::kobject_type::gate);
+        zxfoundation::domain::register_gate_drain_cb(gate_destroy_for_domain);
+
+        register_gate_cap_lookup();
+
+        pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
     }
 
     /// @brief Return the current number of active gates.

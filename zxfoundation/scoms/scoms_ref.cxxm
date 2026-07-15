@@ -82,6 +82,28 @@ namespace zxfoundation::scoms {
             return result;
         }
 
+        /// @brief embryo → sealed.
+        [[nodiscard]] auto seal() && noexcept
+            -> kobject_ref<T, lifecycle_state::sealed>
+            requires (State == lifecycle_state::embryo)
+        {
+            ptr_->ko.state = lifecycle_state::sealed;
+            auto result = kobject_ref<T, lifecycle_state::sealed>::from_raw_noref(ptr_);
+            ptr_ = nullptr;
+            return result;
+        }
+
+        /// @brief sealed → active.
+        [[nodiscard]] auto activate() && noexcept
+            -> kobject_ref<T, lifecycle_state::active>
+            requires (State == lifecycle_state::sealed)
+        {
+            ptr_->ko.state = lifecycle_state::active;
+            auto result = kobject_ref<T, lifecycle_state::active>::from_raw_noref(ptr_);
+            ptr_ = nullptr;
+            return result;
+        }
+
         /// @brief active → suspended.
         [[nodiscard]] auto suspend() && noexcept
             -> kobject_ref<T, lifecycle_state::suspended>
@@ -167,6 +189,62 @@ namespace zxfoundation::scoms {
             return kobject_ref<T, State>{p};
         }
     };
+
+    // ── Free-function runtime state transition utilities ─────────────
+
+    /// @brief Runtime-validated state transition for raw pointers.
+    /// @tparam TargetState  Desired lifecycle_state.
+    /// @param[in,out] obj  Raw pointer to a kobject-bearing struct.
+    ///                     state is written only if the current state
+    ///                     is a legal source for the target.
+    /// @return true if the transition was valid and performed.
+    template <typename T>
+    [[nodiscard]] auto swap_state_to(::zxfoundation::base::lifecycle_state target, T* obj) noexcept -> bool {
+        using s = ::zxfoundation::base::lifecycle_state;
+        const auto current = obj->ko.state;
+        switch (target) {
+            case s::embryo:    // only allowed from destroyed (table reset)
+                if (current == s::destroyed) { obj->ko.state = s::embryo; return true; }
+                return false;
+            case s::sealed:    // only from embryo
+                if (current == s::embryo)    { obj->ko.state = s::sealed; return true; }
+                return false;
+            case s::active:    // from embryo, sealed, or suspended
+                if (current == s::embryo || current == s::sealed || current == s::suspended)
+                    { obj->ko.state = s::active; return true; }
+                return false;
+            case s::suspended: // only from active
+                if (current == s::active)    { obj->ko.state = s::suspended; return true; }
+                return false;
+            case s::dying:     // from active, suspended, or embryo
+                if (current == s::active || current == s::suspended || current == s::embryo)
+                    { obj->ko.state = s::dying; return true; }
+                return false;
+            case s::destroyed: // from dying only
+                if (current == s::dying)     { obj->ko.state = s::destroyed; return true; }
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    /// @brief Convenience: write dying with validation.
+    template <typename T>
+    auto mark_dying(T* obj) noexcept -> bool {
+        return swap_state_to(::zxfoundation::base::lifecycle_state::dying, obj);
+    }
+
+    /// @brief Convenience: write destroyed with validation.
+    template <typename T>
+    auto mark_destroyed(T* obj) noexcept -> bool {
+        return swap_state_to(::zxfoundation::base::lifecycle_state::destroyed, obj);
+    }
+
+    /// @brief Convenience: write suspended with validation.
+    template <typename T>
+    auto mark_suspended(T* obj) noexcept -> bool {
+        return swap_state_to(::zxfoundation::base::lifecycle_state::suspended, obj);
+    }
 
     static_assert(sizeof(kobject_ref<kobject, lifecycle_state::embryo>) == 8,
         "kobject_ref must be a single pointer");

@@ -1,19 +1,10 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/base/typestate.cxxm
 /// @brief Typestate carrier — compile-time lifecycle enforcement.
-///
-/// Unified lifecycle states used by ALL kernel subsystems through SCOMS.
-/// The same state machine applies to domains, gates, portals, vm_regions,
-/// folios, and slab caches.
-///
-/// State transitions:
-///
-///   embryo → sealed → active ↔ suspended
-///                    │       │
-///                    └───► dying ──► destroyed
 
 export module zxfoundation.base.typestate;
 import zxfoundation.base.types;
+import lib.string_view;
 
 export {
 
@@ -74,8 +65,8 @@ namespace zxfoundation::base {
         (static_cast<u8>(T::state) >= static_cast<u8>(S));
 
     /// @brief Return the ASCII name of a lifecycle_state value.
-    [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept
-        -> const char* {
+    [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept -> lib::string_view
+    {
         switch (s) {
             case lifecycle_state::embryo:    return "embryo";
             case lifecycle_state::sealed:    return "sealed";

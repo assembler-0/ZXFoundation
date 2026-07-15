@@ -7,6 +7,10 @@ import zxfoundation.base.types;
 import lib.concepts;
 import lib.compare;
 
+extern "C" {
+    auto __zx_memcmp(const void* s1, const void* s2, usize n) -> int;
+}
+
 export {
 
 namespace lib {
@@ -65,22 +69,11 @@ namespace lib {
 
         /// @brief Comparison.
         [[nodiscard]] constexpr auto compare(string_view other) const noexcept -> int {
-            const size_type len = m_size < other.m_size ? m_size : other.m_size;
-            for (size_type i = 0; i < len; ++i) {
-                if (m_data[i] < other.m_data[i]) return -1;
-                if (m_data[i] > other.m_data[i]) return 1;
-            }
-            if (m_size < other.m_size) return -1;
-            if (m_size > other.m_size) return 1;
-            return 0;
+            return __zx_memcmp(m_data, other.m_data, m_size < other.m_size ? m_size : other.m_size);
         }
 
         [[nodiscard]] constexpr auto operator==(string_view other) const noexcept -> bool {
-            if (m_size != other.m_size) return false;
-            for (size_type i = 0; i < m_size; ++i) {
-                if (m_data[i] != other.m_data[i]) return false;
-            }
-            return true;
+            return compare(other) == 0;
         }
 
         [[nodiscard]] constexpr auto operator<=>(string_view other) const noexcept {

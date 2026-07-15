@@ -21,6 +21,8 @@ namespace _internal {
     using zxfoundation::domain::domain_flags;
     using zxfoundation::domain::run_queue;
     using zxfoundation::domain::strand;
+    using zxfoundation::domain::strand_flags;
+    using zxfoundation::domain::is_idle_strand;
     using zxfoundation::sched::sched_class_id;
 
     [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
@@ -36,8 +38,7 @@ namespace _internal {
     }
 
     [[nodiscard]] auto class_of(const strand& s) noexcept -> sched_class_id {
-        const auto* owner = owner_of(s);
-        if (owner && is_idle_domain(*owner)) return sched_class_id::idle;
+        if (is_idle_strand(s)) return sched_class_id::idle;
         if (s.sched_policy.class_id == sched_class_id::rt
             && s.sched_admission.class_id == sched_class_id::rt) return sched_class_id::rt;
         if (s.sched_policy.class_id == sched_class_id::deadline

@@ -1,4 +1,3 @@
 !files : !compile_group -> [auto] {
     irqdesc.cxxm
-    irqdesc_init.cxxm
 }

@@ -13,6 +13,8 @@ import zxfoundation.scoms.scoms_ref;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.sys.transaction;
 import zxfoundation.sys.printk;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.dgp_authorize;
@@ -297,15 +299,6 @@ namespace zxfoundation::portal {
             });
     }
 
-
-    /// @brief Initialize the portal subsystem.
-    auto portal_init() noexcept -> void {
-        _internal::g_portal_table.init(scoms::kobject_type::portal);
-        zxfoundation::domain::register_portal_drain_cb(portal_destroy_for_domain);
-        sys::printk::pinfo("portal: subsystem initialized (max {} portals)",
-                   MAX_PORTALS);
-    }
-
     /// @brief Look up a portal descriptor by its id.
     /// @param id  Portal slot ID.
     /// @return    Pointer to the portal_desc, or nullptr if not found.
@@ -313,6 +306,26 @@ namespace zxfoundation::portal {
     ///       mutate the returned descriptor.
     [[nodiscard]] auto portal_find(u32 id) noexcept -> portal_desc* {
         return _internal::g_portal_table.find_raw(id);
+    }
+
+    auto register_portal_cap_lookup() noexcept -> void {
+        (void)zxfoundation::sys::cap::register_lookup(
+            zxfoundation::sys::cap::cap_type::portal,
+            [](u16 obj_id) noexcept -> scoms::kobject* {
+                auto* p = portal_find(static_cast<u32>(obj_id));
+                return p ? &p->ko : nullptr;
+            });
+    }
+
+    /// @brief Initialize the portal subsystem.
+    auto portal_init() noexcept -> void {
+        _internal::g_portal_table.init(scoms::kobject_type::portal);
+        zxfoundation::domain::register_portal_drain_cb(portal_destroy_for_domain);
+
+        register_portal_cap_lookup();
+
+        sys::printk::pinfo("portal: subsystem initialized (max {} portals)",
+                   MAX_PORTALS);
     }
 
     /// @brief Return the number of currently active portals in the system.

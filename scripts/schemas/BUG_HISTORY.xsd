@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+    <!-- Pattern constraint for XXh1 or XXh2 (e.g., 24H2, 25h1) -->
+    <xs:simpleType name="BranchType">
+        <xs:restriction base="xs:string">
+            <xs:pattern value="[0-9]{2}[hH][1-2]"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <!-- Structure for a single build: Branch + Build Number -->
+    <xs:complexType name="BuildType">
+        <xs:sequence>
+            <xs:element name="Branch" type="BranchType"/>
+            <xs:element name="Number" type="xs:unsignedInt"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <!-- Structure for a range of builds -->
+    <xs:complexType name="BuildRangeType">
+        <xs:sequence>
+            <xs:element name="From" type="BuildType"/>
+            <!-- 'To' is optional to allow for 'and later' scenarios -->
+            <xs:element name="To" type="BuildType" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <!-- The container for affected builds (can be discrete builds or ranges) -->
+    <xs:complexType name="AffectedBuildsType">
+        <xs:choice maxOccurs="unbounded">
+            <xs:element name="Build" type="BuildType"/>
+            <xs:element name="Range" type="BuildRangeType"/>
+        </xs:choice>
+    </xs:complexType>
+
+    <!-- Definition of the Bug Entry -->
+    <xs:complexType name="BugEntryType">
+        <xs:sequence>
+            <xs:element name="FoundDate" type="xs:date"/>
+            <xs:element name="Severity" type="xs:string" minOccurs="0"/>
+            <xs:element name="Description" type="xs:string"/>
+            <xs:element name="Behavior" type="xs:string"/>
+            <xs:element name="Solution" type="xs:string"/>
+            <xs:element name="AffectedBuilds" type="AffectedBuildsType"/>
+            <xs:element name="Status" type="xs:string" minOccurs="0"/>
+            <xs:element name="FixedIn" type="BuildType" minOccurs="0"/>
+            <xs:element name="Notes" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:ID" use="required"/>
+    </xs:complexType>
+
+    <!-- Definition of the Bug List -->
+    <xs:complexType name="BugListType">
+        <xs:sequence>
+            <xs:element name="Bug" type="BugEntryType" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <!-- Root Element -->
+    <xs:element name="BugHistory">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="Title" type="xs:string"/>
+                <xs:element name="LastUpdated" type="xs:date" minOccurs="0"/>
+                <xs:element name="BugList" type="BugListType"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+
+</xs:schema>

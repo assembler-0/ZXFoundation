@@ -13,30 +13,23 @@ Throughout its development ZXFoundation utilize CMake as its main build system o
 | CMake          | 3.30+                      | Yes      | v3.28 could be used                   |
 | Cross Compiler | clang 18+ w/LLD or gcc 15+ | Yes      | C++23-compatible compiler             |
 | Host Compiler  | n/a                        | No       | Need for making post-build artifacts  |
-| Compiler tools | llvm 18+ or gcc 15+        | No       | C++23-compatible compiler tools       |
+| Compiler tools | n/a (llvm/binutils)        | No       | C++23-compatible compiler tools       |
 | Build tool     | n/a                        | Yes      | Ninja or Visual Studio 22+            |
 | Hercules       | n/a                        | No       | Needed for emulation                  |
 | Hercules Tools | n/a                        | No       | Needed for 3390 disk creation         |
 | Doxygen        | n/a                        | No       | Needed for documentation              |
 
-### Toolchain
+### Toolchain (optional)
 
-A sample toolchain would look like (cmake/toolchain/zxfoundation-clang.cmake):
+A sample toolchain would look like (`cmake/toolchain/zxfoundation-clang.cmake` - **default when none is specified**):
 
 ```cmake
 # ZXFoundation clang toolchain for s390x
 
-# Choose your flavors
-if (NOT DEFINED ENV{CLANG_VERSION})
-    set(CMAKE_C_COMPILER clang)
-    set(CMAKE_CXX_COMPILER clang++)
-    set(CMAKE_ASM_COMPILER clang)
-else()
-    set(CMAKE_ENV_CLANG_VERSION "$ENV{CLANG_VERSION}")
-    set(CMAKE_C_COMPILER clang-${CMAKE_ENV_CLANG_VERSION})
-    set(CMAKE_CXX_COMPILER clang++-${CMAKE_ENV_CLANG_VERSION})
-    set(CMAKE_ASM_COMPILER clang-${CMAKE_ENV_CLANG_VERSION})
-endif()
+# Choose your flavors of tools
+set(CMAKE_C_COMPILER clang)
+set(CMAKE_CXX_COMPILER clang++)
+set(CMAKE_ASM_COMPILER clang)
 
 set(CMAKE_LINKER ld.lld)
 set(CMAKE_AR llvm-ar)
@@ -50,7 +43,13 @@ set(COMPILER_ID "clang") # supported values are "clang", "gcc" and "unknown"-beh
 
 set(EXTRA_KERNEL_FLAGS "") # extra flags added to kernel compilation
 set(EXTRA_LOADER_FLAGS "") # same as above but for ZXFL
+```
 
+### Configuration (optional)
+
+A sample configuration would look like (`cmake/configs/base.cmake` - **default when none is specified**):
+
+```cmake
 # Default is the recommended value, change if needed
 set(OPT_LEVEL "2" CACHE STRING "Optimization level (0, 1, 2, 3, s, z)") # Select your optimization level
 set(DSYM_LEVEL "0" CACHE STRING "Debug symbol level (0, 1, 2, 3)")      # Select your debug symbol level
@@ -58,12 +57,16 @@ set(MARCH_MODE "z13" CACHE STRING "Architecture mode, for -march and -mtune") # 
 set(DASD_SERIAL "001842095440" CACHE STRING "Dasd serial")              # Select your DASD serial (unused if dependencies not met)
 ```
 
+Default values can be seen at `cmake/configuration.cmake`
+
 ### Configuring and build
 
 You may now you cmake to configure the build directory and build it, for example:
 
 ```shell
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=<path_to_your_toolchain> -GNinja # or "Visual Studio 22"
+# note: DO NOT USE CMAKE_TOOLCHAIN_FILE, use ZX_TOOLCHAIN_FILE instead
+#       omitting toolchain and config will make the system use default scripts (see cmake/meta.cmake)
+cmake -B build -DZX_TOOLCHAIN_FILE=<path_to_your_toolchain> -DZX_CONFIG_FILE=<path_to_your_config> -GNinja # or "Visual Studio 22"
 cmake --build build --parallel <cpus> # "nproc" on linux or "sysctl -n hw.logicalcpu"
 ```
 

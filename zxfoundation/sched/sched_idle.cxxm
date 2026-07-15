@@ -1,6 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sched/sched_idle.cxxm
-/// @brief Idle scheduling class and idle domain initialization.
+/// @brief Idle scheduling class and idle strand initialization.
 
 export module zxfoundation.sched.sched_idle;
 import zxfoundation.domain.domain_types;
@@ -8,20 +8,13 @@ import zxfoundation.domain.strand_types;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.types;
-import zxfoundation.base.config;
-import zxfoundation.memory.pmm;
-import zxfoundation.memory.pmm_types;
-import zxfoundation.memory.hhdm;
+import zxfoundation.domain.domain;
 
 namespace _internal {
 
     using namespace zxfoundation::domain;
-    using namespace zxfoundation::memory::pmm;
-    using zxfoundation::memory::hhdm::phys_to_virt;
-
-    domain g_idle_domains[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS];
-
-    static constexpr u32 IDLE_STACK_ORDER = 2;
+    using zxfoundation::domain::strand_flags;
+    using zxfoundation::domain::is_idle_strand;
 
     inline auto idle_enqueue(run_queue&, strand&) noexcept -> void {}
     inline auto idle_dequeue(run_queue&, strand&) noexcept -> void {}
@@ -37,7 +30,10 @@ namespace zxfoundation::sched::idle {
 
     using zxfoundation::domain::domain;
     using zxfoundation::domain::domain_flags;
+    using zxfoundation::domain::strand;
+    using zxfoundation::domain::strand_flags;
     using zxfoundation::domain::sched_substate;
+    using zxfoundation::domain::is_idle_strand;
     using zxfoundation::base::lifecycle_state;
     using zxfoundation::domain::run_queue;
     using zxfoundation::domain::sched_class;
@@ -52,36 +48,23 @@ namespace zxfoundation::sched::idle {
         _internal::idle_preempt
     };
 
-    [[nodiscard]] inline auto init_idle_domain(u16 cpu_id) noexcept -> domain* {
-        using namespace zxfoundation::memory::pmm;
+    /// @brief Initialize the per-CPU idle strand.
+    /// @param cpu_id  Logical CPU this idle strand serves.
+    /// @return Pointer to the idle strand, or nullptr on allocation failure.
+    /// @note The idle strand is allocated from the SCOMS strand table.
+    ///       Its owner is nullptr and its flags carry strand_flags::idle.
+    [[nodiscard]] inline auto init_idle_strand(u16 cpu_id) noexcept -> strand* {
+        auto result = zxfoundation::domain::idle_strand_create(cpu_id);
+        if (!result) return nullptr;
+        return *result;
+    }
 
-        auto* d = &_internal::g_idle_domains[cpu_id];
-
-        d->ko.id       = DOMAIN_ID_NUCLEUS;
-        d->ko.type     = zxfoundation::scoms::kobject_type::domain;
-        d->ko.state    = lifecycle_state::active;
-        d->name        = "idle/0";
-        d->flags       = domain_flags::idle;
-        d->storage_key = SKEY_NUCLEUS;
-        d->primary_strand.cpu         = cpu_id;
-        d->primary_strand.owner       = d;
-        d->primary_strand.substate    = sched_substate::runnable;
-
-        auto stack_r = alloc(_internal::IDLE_STACK_ORDER,
-                             zone::dma31,
-                             purpose::stack,
-                             page_init::zeroed);
-        if (!stack_r) return nullptr;
-
-        const u64 stack_phys = stack_r->phys_base;
-        const u64 stack_virt = _internal::phys_to_virt(stack_phys);
-        const u64 stack_size = static_cast<u64>(PAGE_SIZE) << _internal::IDLE_STACK_ORDER;
-
-        d->primary_strand.kstack_base = stack_virt;
-        d->primary_strand.kstack_top  = stack_virt + stack_size;
-        d->primary_strand.ksp         = d->primary_strand.kstack_top;
-
-        return d;
+    /// @brief Destroy a per-CPU idle strand, releasing its SCOMS slot and stack.
+    /// @param s Idle strand to destroy (must not be on_rq or running).
+    /// @return True on success, false on error.
+    [[nodiscard]] inline auto deinit_idle_strand(strand& s) noexcept -> bool {
+        auto result = zxfoundation::domain::idle_strand_destroy(s);
+        return static_cast<bool>(result);
     }
 
 } // namespace zxfoundation::sched::idle

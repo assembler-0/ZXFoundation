@@ -11,6 +11,7 @@ import lib.span;
 import lib.string_view;
 
 export {
+
 namespace zxfoundation::sys::syschk {
 
     /// @brief Issue a fatal system check with a formatted message.

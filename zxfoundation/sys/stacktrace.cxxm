@@ -18,7 +18,7 @@ export {
 
 namespace zxfoundation::sys::stacktrace {
 
-    using arch::s390x::cpu::processor::s390x_stack_frame;
+    using arch::s390x::cpu::processor::stack_frame;
     using arch::s390x::cpu::processor::S390X_STACK_SIZE;
     using arch::s390x::cpu::processor::S390X_ASYNC_STACK_SIZE;
     using arch::s390x::cpu::processor::S390X_MCCK_STACK_SIZE;
@@ -96,7 +96,7 @@ namespace zxfoundation::sys::stacktrace {
             if (sp + S390X_STACK_FRAME_SIZE > info.end)
                 break;
 
-            const auto* frame = reinterpret_cast<const s390x_stack_frame*>(sp);
+            const auto* frame = reinterpret_cast<const stack_frame*>(sp);
             const u64 ret_addr = frame->gprs[8]; // r14 at ABI offset 112
 
             if (ret_addr != 0) {
@@ -126,23 +126,23 @@ namespace zxfoundation::sys::stacktrace {
 
     /// @brief Print a backtrace starting from a given SP.
     auto dump_stack_at(u64 sp) noexcept -> void {
-        using zxfoundation::sys::printk::pemerg;
+        using zxfoundation::sys::printk::pinfo;
 
         trace_entry entries[MAX_TRACE_DEPTH];
         const u32 count = save_stack_trace_at(sp, entries, MAX_TRACE_DEPTH);
 
-        pemerg("trace: call Trace:");
+        pinfo("trace: call Trace:");
         for (u32 i = 0; i < count; ++i) {
             const auto& e = entries[i];
             if (e.sym_name != nullptr) {
-                pemerg("   [{:#018x}] {}+{:#x}", e.addr, e.sym_name, e.addr - e.sym_addr);
+                pinfo("   [{:#018x}] {}+{:#x}", e.addr, e.sym_name, e.addr - e.sym_addr);
             } else {
-                pemerg("   [{:#018x}] <unknown>", e.addr);
+                pinfo("   [{:#018x}] <unknown>", e.addr);
             }
         }
 
         if (count == 0) {
-            pemerg("   <no backtrace available>");
+            printk::pnotice("   <no backtrace available>");
         }
     }
 
@@ -150,7 +150,7 @@ namespace zxfoundation::sys::stacktrace {
     auto dump_stack_from_irq(
         const arch::s390x::cpu::irq::irq_frame* frame
     ) noexcept -> void {
-        using zxfoundation::sys::printk::pemerg;
+        using zxfoundation::sys::printk::pinfo;
 
         trace_entry entries[MAX_TRACE_DEPTH];
         u32 depth = 0;
@@ -174,18 +174,18 @@ namespace zxfoundation::sys::stacktrace {
         // Walk the backchain from the interrupted SP.
         depth += save_stack_trace_at(sp, entries + depth, MAX_TRACE_DEPTH - depth);
 
-        pemerg("trace: call trace");
+        pinfo("trace: call trace");
         for (u32 i = 0; i < depth; ++i) {
             const auto& e = entries[i];
             if (e.sym_name != nullptr) {
-                pemerg("   [{:#018x}] {}+{:#x}", e.addr, e.sym_name, e.addr - e.sym_addr);
+                pinfo("   [{:#018x}] {}+{:#x}", e.addr, e.sym_name, e.addr - e.sym_addr);
             } else {
-                pemerg("   [{:#018x}] <unknown>", e.addr);
+                pinfo("   [{:#018x}] <unknown>", e.addr);
             }
         }
 
         if (depth == 0) {
-            pemerg("   <no backtrace available>");
+            printk::pnotice("   <no backtrace available>");
         }
     }
 

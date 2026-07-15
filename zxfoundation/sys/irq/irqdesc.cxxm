@@ -1,9 +1,13 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/irq/irqdesc.cxxm
-/// @brief Generic IRQ descriptor table — dynamically allocated, pointer-sparse.
+/// @brief Generic IRQ descriptor table — SCOMS-managed kobject_table.
 
 export module zxfoundation.sys.irq.irqdesc;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_table;
+import zxfoundation.scoms.scoms_ref;
 import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.lowcore_types;
@@ -32,14 +36,16 @@ namespace zxfoundation::sys::irq {
         arch::s390x::cpu::irq::irq_frame* frame,
         void*                                         data) noexcept;
 
-    /// @brief IRQ descriptor — dynamically allocated per active vector.
+    /// @brief IRQ descriptor — SCOMS-managed kobject, one per active vector.
     struct irq_desc {
-        handler_fn   handler{nullptr};  ///< Dispatch target; nullptr = unregistered.
-        void*        data{nullptr};     ///< Handler-private context.
-        u32          flags{0};          ///< IRQF_* bitmask.
-        u16          irq_nr{0};         ///< Vector number (mirrors g_ptrs index).
+        scoms::kobject                          ko{};           ///< SCOMS identity (offset 0).
 
-        arch::s390x::lib::atomic::atomic<u32>    count{0}; ///< Dispatch count (relaxed).
+        handler_fn                              handler{nullptr};  ///< Dispatch target.
+        void*                                   data{nullptr};     ///< Handler-private context.
+        u32                                     flags{0};          ///< IRQF_* bitmask.
+        u16                                      irq_nr{0};         ///< Vector number.
+
+        arch::s390x::lib::atomic::atomic<u32>    count{0};          ///< Dispatch count (relaxed).
         locking::qspinlock::qspinlock            lock{};
 
         irq_desc() noexcept = default;
@@ -57,16 +63,8 @@ namespace zxfoundation::sys::irq {
         auto operator=(irq_desc&&)           = delete;
     };
 
-    /// @brief Slab allocator interface — injected at irq_subsystem_init().
-    struct irq_slab_ops {
-        void*  cache{nullptr};                          ///< Opaque kmem_cache*.
-        void* (*alloc)(void* cache) noexcept = nullptr; ///< Allocate one slot.
-        void  (*free)(void* cache, void* p) noexcept = nullptr; ///< Free a slot.
-
-        [[nodiscard]] auto valid() const noexcept -> bool {
-            return cache != nullptr && alloc != nullptr && free != nullptr;
-        }
-    };
+    static_assert(__builtin_offsetof(irq_desc, ko) == 0,
+        "irq_desc::ko must be at offset 0 for SCOMS kobject_table");
 
 } // namespace zxfoundation::sys::irq
 
@@ -74,34 +72,9 @@ namespace zxfoundation::sys::irq {
 
 namespace zxfoundation::sys::irq::_internal {
 
-    /// Sparse pointer table — 8 KB in BSS, nullptr = unallocated slot.
-    static irq_desc* g_ptrs[IRQ_NR_MAX]{};
-
-    /// Injected allocator (set by irq_subsystem_init).
-    static irq_slab_ops g_ops{};
-
-    /// Global table lock — protects g_ptrs[] pointer mutations.
-    static locking::qspinlock::qspinlock g_table_lock{};
+    static scoms::kobject_table<irq_desc, IRQ_NR_MAX> g_irq_table{};
 
     static bool g_initialized{false};
-
-    /// Allocate + placement-new an irq_desc for slot @p irq.
-    /// @pre g_table_lock held, g_ptrs[irq] == nullptr.
-    [[nodiscard]] static auto irq_desc_alloc(u16 irq) noexcept -> irq_desc* {
-        void* slot = g_ops.alloc(g_ops.cache);
-        if (!slot) [[unlikely]] return nullptr;
-        auto* d = ::new(slot) irq_desc(irq);
-        return d;
-    }
-
-    /// Explicit destructor + slab free.
-    /// @pre g_table_lock held.
-    static auto irq_desc_free(irq_desc* d) noexcept -> void {
-        if (!d) [[unlikely]] return;
-
-        d->~irq_desc();
-        g_ops.free(g_ops.cache, static_cast<void*>(d));
-    }
 
 } // namespace zxfoundation::sys::irq::_internal
 
@@ -126,7 +99,7 @@ namespace zxfoundation::sys::irq {
         handler_fn h = nullptr;
         void*      d = nullptr;
 
-        irq_desc* desc = g_ptrs[irq];
+        irq_desc* desc = g_irq_table.find_raw(irq);
         if (desc) [[likely]] {
             const locking::irq_lock_guard guard{desc->lock};
             h = desc->handler;
@@ -143,12 +116,12 @@ namespace zxfoundation::sys::irq {
     [[nodiscard]] auto irq_get_desc(u16 irq) noexcept -> irq_desc* {
         using namespace _internal;
         if (!g_initialized || irq >= IRQ_NR_MAX) return nullptr;
-        return g_ptrs[irq];
+        return g_irq_table.find_raw(irq);
     }
 
     /// @brief Register a handler for a vector.
     ///
-    /// Allocates an irq_desc on first registration of a slot.
+    /// Allocates an irq_desc from the SCOMS table on first registration.
     /// Subsequent registrations require IRQF_SHARED.
     [[nodiscard]] auto irq_register(
         u16        irq,
@@ -165,19 +138,23 @@ namespace zxfoundation::sys::irq {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        const locking::irq_lock_guard table_guard{g_table_lock};
-
-        irq_desc* d = g_ptrs[irq];
+        irq_desc* d = g_irq_table.find_raw(irq);
         if (!d) {
-            d = irq_desc_alloc(irq);
-            if (!d) [[unlikely]]
+            auto result = g_irq_table.alloc();
+            if (!result) [[unlikely]]
                 return lib::unexpected(
                     lib::kernel_error::from_memory(
                         lib::memory_error::out_of_memory));
-            g_ptrs[irq] = d;
+            auto embryo_ref = static_cast<
+                scoms::kobject_ref<irq_desc, base::lifecycle_state::embryo>&&
+            >(result.value());
+            d = &(*embryo_ref);
+            d->irq_nr = irq;
+            (void)static_cast<
+                scoms::kobject_ref<irq_desc, base::lifecycle_state::embryo>&&
+            >(embryo_ref).activate();
         }
 
-        // Per-desc lock nested under table lock — consistent order everywhere.
         const locking::irq_lock_guard desc_guard{d->lock};
 
         if (d->registered() && !(flags & IRQF_SHARED))
@@ -188,17 +165,15 @@ namespace zxfoundation::sys::irq {
         d->handler = handler;
         d->data    = data;
         d->flags   = flags;
-        d->irq_nr  = irq;
         return {};
     }
 
-    /// @brief Unregister the handler for a vector and free the descriptor.
+    /// @brief Unregister the handler for a vector and release the SCOMS slot.
     auto irq_unregister(u16 irq) noexcept -> void {
         using namespace _internal;
         if (!g_initialized || irq >= IRQ_NR_MAX) return;
 
-        const locking::irq_lock_guard table_guard{g_table_lock};
-        irq_desc* d = g_ptrs[irq];
+        irq_desc* d = g_irq_table.find_raw(irq);
         if (!d) return;
 
         {
@@ -208,20 +183,14 @@ namespace zxfoundation::sys::irq {
             d->flags   = 0;
         }
 
-        // Now unreachable from dispatch: handler == nullptr.
-        g_ptrs[irq] = nullptr;
-        irq_desc_free(d);
+        (void)g_irq_table.release(irq);
     }
 
-    /// @brief Initialize the IRQ subsystem with an injected slab allocator.
-    /// @param ops  Filled irq_slab_ops with cache pointer + alloc/free fns.
-    auto irq_subsystem_init_with_ops(const irq_slab_ops& ops) noexcept -> void {
+    /// @brief Initialize the IRQ subsystem with the SCOMS kobject_table.
+    auto irq_subsystem_init() noexcept -> void {
         using namespace _internal;
         if (g_initialized) return;
-        if (!ops.valid()) [[unlikely]] {
-            __builtin_trap();  // TCB: missing allocator = hard fault
-        }
-        g_ops         = ops;
+        g_irq_table.init(scoms::kobject_type::irq_desc);
         g_initialized = true;
     }
 

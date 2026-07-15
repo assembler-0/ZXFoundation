@@ -242,15 +242,12 @@ export {
 
 namespace arch::s390x::cpu::smp {
 
-    auto init_bsp() noexcept -> void {
+    auto setup_bsp() noexcept -> void {
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, handle_ipi, nullptr, 0);
         (void)zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   handle_ipi, nullptr, 0);
-        // CR0 bit 37 (IBM 64-bit MSB-0) = Secondary-space control (0x04000000)
-        // This MUST be set or SAC raises a Special-operation exception.
         ctlreg::ctl_set_bit<0>(37);
         ctlreg::ctl_set_bit<0>(52);
 
-        // Initialize hotplug subsystem and mark BSP online.
         hotplug::hotplug_init();
         hotplug::hotplug_mark_present(0U);
         hotplug::hotplug_mark_possible(0U);
@@ -465,6 +462,13 @@ namespace arch::s390x::cpu::smp {
     auto wait_aps_initialized() noexcept -> void {
         while (g_aps_initialized.load(lib::atomic::memory_order::seq_cst) < g_total_aps)
             processor::cpu_relax();
+    }
+
+    auto launch(const init::zxfl::protocol& protocol) noexcept -> void {
+        setup_bsp();
+        init_aps(protocol);
+        ap_release_all();
+        wait_aps_initialized();
     }
 
 } // namespace arch::s390x::cpu::smp

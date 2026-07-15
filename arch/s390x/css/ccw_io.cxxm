@@ -253,18 +253,18 @@ namespace arch::s390x::css::ccw_io {
             namespace dm = arch::s390x::css::devmatch;
             const auto m = dm::match(dev_type, cu_type);
 
-            if (m.dev_name && m.cu_name) {
+            if (!m.dev_name.empty() && !m.cu_name.empty()) {
                 pverbose("ccw_io: sch[{}] devno={} -> {} ({})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       m.dev_name, m.cu_name);
-            } else if (m.dev_name) {
+            } else if (!m.dev_name.empty()) {
                 pverbose("ccw_io: sch[{}] devno={} -> {} (cu={})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},
                       m.dev_name,
                       ::lib::format::hex{static_cast<u64>(cu_type), 4, true});
-            } else if (m.cu_name) {
+            } else if (!m.cu_name.empty()) {
                 pverbose("ccw_io: sch[{}] devno={} -> dev={} ({})",
                       ::lib::format::dec{static_cast<u64>(i)},
                       ::lib::format::hex{static_cast<u64>(entry->devno), 4, true},

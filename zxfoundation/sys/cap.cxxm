@@ -6,16 +6,15 @@
 export module zxfoundation.sys.cap;
 import zxfoundation.sys.cap_types;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.scoms.scoms_ref;
 import zxfoundation.domain.domain_types;
-import zxfoundation.domain.domain;
 import zxfoundation.gate.gate_types;
-import zxfoundation.gate.gate;
 import zxfoundation.portal.portal_types;
-import zxfoundation.portal.portal;
 import zxfoundation.memory.vm_types;
+import zxfoundation.sys.io_types;
 import zxfoundation.sys.printk;
 import lib.error;
 import lib.expected;
@@ -89,6 +88,28 @@ namespace zxfoundation::sys::cap {
         cap_rights  needed
     ) noexcept -> lib::expected<void, lib::kernel_error>;
 
+    // ── Lookup registry (callback-based to avoid import cycles) ───────────
+
+    /// @brief Callback signature for looking up a kobject by object ID.
+    /// @param[in] obj_id  Object ID (u16 from capability token).
+    /// @return Pointer to the kobject, or nullptr if not found.
+    using lookup_fn = auto (*)(u16 obj_id) noexcept -> scoms::kobject*;
+
+    /// @brief Register a lookup callback for a resource type.
+    /// @param[in] type  The resource type to associate with the callback.
+    /// @param[in] fn    The callback.  The function is called during
+    ///                  cap_acquire/cap_release/cap_validate to find the
+    ///                  underlying resource object.
+    /// @return Success, or kernel_error if the type is out of range.
+    ///
+    /// @note  This mechanism breaks the import cycles between the
+    ///        capability module and the per-resource-type modules
+    ///        (domain, gate, portal, I/O, service, VM).
+    [[nodiscard]] auto register_lookup(
+        cap_type   type,
+        lookup_fn  fn
+    ) noexcept -> lib::expected<void, lib::kernel_error>;
+
 } // namespace zxfoundation::sys::cap
 
 } // end export
@@ -97,11 +118,13 @@ namespace zxfoundation::sys::cap {
 
 namespace zxfoundation::sys::cap::_internal {
 
-    using namespace zxfoundation::domain;
-    using namespace zxfoundation::gate;
-    using namespace zxfoundation::portal;
+    /// @brief Maximum number of lookup table entries (must exceed largest cap_type).
+    static constexpr u32 LOOKUP_TABLE_SIZE = 16;
 
-    /// @brief Retrieve a kobject* and its generation from any SCOMS table.
+    /// @brief Callback table indexed by cap_type.
+    static lookup_fn s_lookup_table[LOOKUP_TABLE_SIZE]{};
+
+    /// @brief Retrieve a kobject* and its generation via the callback table.
     /// @param[in]  type    cap_type discriminator.
     /// @param[in]  obj_id  Object ID.
     /// @return  Pair of (kobject*, generation) or error.
@@ -109,34 +132,18 @@ namespace zxfoundation::sys::cap::_internal {
         cap_type type, u16 obj_id
     ) noexcept -> lib::expected<lib::pair<kobject*, u32>, lib::kernel_error> {
 
-        const u32 id = static_cast<u32>(obj_id);
-
-        switch (type) {
-            case cap_type::domain: {
-                auto* d = zxfoundation::domain::domain_find(id);
-                if (!d) return lib::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::not_found));
-                return lib::pair<kobject*, u32>{&d->ko, d->ko.generation};
-            }
-
-            case cap_type::gate: {
-                auto* g = zxfoundation::gate::gate_find(id);
-                if (!g) return lib::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::not_found));
-                return lib::pair<kobject*, u32>{&g->ko, g->ko.generation};
-            }
-
-            case cap_type::portal: {
-                auto* p = zxfoundation::portal::portal_find(id);
-                if (!p) return lib::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::not_found));
-                return lib::pair<kobject*, u32>{&p->ko, p->ko.generation};
-            }
-
-            default:
-                return lib::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        const auto idx = static_cast<u32>(type);
+        if (idx >= LOOKUP_TABLE_SIZE || !s_lookup_table[idx]) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
         }
+
+        auto* ko = s_lookup_table[idx](obj_id);
+        if (!ko) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        return lib::pair<kobject*, u32>{ko, ko->generation};
     }
 
     /// @brief Validate that the token's type has sufficient rights for an operation.
@@ -252,6 +259,19 @@ namespace zxfoundation::sys::cap {
         return {};
     }
 
+    [[nodiscard]] auto register_lookup(
+        cap_type   type,
+        lookup_fn  fn
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        const auto idx = static_cast<u32>(type);
+        if (idx >= _internal::LOOKUP_TABLE_SIZE) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+        _internal::s_lookup_table[idx] = fn;
+        return {};
+    }
+
     // Template specialization for each supported concrete type.
 
     template <>
@@ -271,11 +291,13 @@ namespace zxfoundation::sys::cap {
         auto rights_check = _internal::check_rights(token, needed);
         if (!rights_check) return lib::unexpected(rights_check.error());
 
-        auto* d = zxfoundation::domain::domain_find(static_cast<u32>(token.object_id()));
-        if (!d) {
+        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::domain)](
+            token.object_id());
+        if (!ko) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
+        auto* d = reinterpret_cast<zxfoundation::domain::domain*>(ko);
         if (d->ko.generation != static_cast<u32>(token.generation())) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
@@ -304,11 +326,13 @@ namespace zxfoundation::sys::cap {
         auto rights_check = _internal::check_rights(token, needed);
         if (!rights_check) return lib::unexpected(rights_check.error());
 
-        auto* g = zxfoundation::gate::gate_find(static_cast<u32>(token.object_id()));
-        if (!g) {
+        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::gate)](
+            token.object_id());
+        if (!ko) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
+        auto* g = reinterpret_cast<zxfoundation::gate::gate_desc*>(ko);
         if (g->ko.generation != static_cast<u32>(token.generation())) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
@@ -337,11 +361,13 @@ namespace zxfoundation::sys::cap {
         auto rights_check = _internal::check_rights(token, needed);
         if (!rights_check) return lib::unexpected(rights_check.error());
 
-        auto* p = zxfoundation::portal::portal_find(static_cast<u32>(token.object_id()));
-        if (!p) {
+        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::portal)](
+            token.object_id());
+        if (!ko) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
+        auto* p = reinterpret_cast<zxfoundation::portal::portal_desc*>(ko);
         if (p->ko.generation != static_cast<u32>(token.generation())) {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
@@ -352,6 +378,45 @@ namespace zxfoundation::sys::cap {
         }
         return p;
     }
+
+
+
+    template <>
+    [[nodiscard]] auto cap_validate<zxfoundation::memory::vm::vm_region>(
+        cap_token token, cap_rights needed
+    ) noexcept -> lib::expected<zxfoundation::memory::vm::vm_region*, lib::kernel_error> {
+
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (token.type() != cap_type::memory) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto rights_check = _internal::check_rights(token, needed);
+        if (!rights_check) return lib::unexpected(rights_check.error());
+
+        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::memory)](
+            token.object_id());
+        if (!ko) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        auto* r = reinterpret_cast<zxfoundation::memory::vm::vm_region*>(ko);
+        if (r->ko.generation != static_cast<u32>(token.generation())) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (r->ko.state == lifecycle_state::dying) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+        return r;
+    }
+
+
 
 } // namespace zxfoundation::sys::cap
 

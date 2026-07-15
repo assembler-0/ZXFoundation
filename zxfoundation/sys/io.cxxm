@@ -125,6 +125,13 @@ namespace zxfoundation::sys::io {
         g_io_table.init(scoms::kobject_type::io_binding);
         g_io_initialized = true;
 
+        (void)register_lookup(
+            cap_type::io_device,
+            [](u16 obj_id) noexcept -> scoms::kobject* {
+                auto* b = io_binding_find(static_cast<u32>(obj_id));
+                return b ? &b->ko : nullptr;
+            });
+
         pinfo("io: binding subsystem initialized ({} slots)", MAX_IO_BINDINGS);
     }
 

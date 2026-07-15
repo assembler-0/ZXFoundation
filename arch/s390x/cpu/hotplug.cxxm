@@ -24,6 +24,7 @@ import zxfoundation.sched.sched_topology;
 import zxfoundation.sys.printk;
 import lib.error;
 import lib.expected;
+import lib.string_view;
 
 namespace _internal {
 
@@ -231,7 +232,9 @@ namespace arch::s390x::cpu::hotplug {
     }
 
     /// @brief Resolve hotplug notify reason to a human-readable string.
-    [[nodiscard]] auto hotplug_notify_str(cpu_hotplug_notify r) noexcept -> const char* {
+    [[nodiscard]] auto hotplug_notify_str(cpu_hotplug_notify r) noexcept
+        -> ::lib::string_view
+    {
         switch (r) {
             case cpu_hotplug_notify::pre_up:          return "pre_up";
             case cpu_hotplug_notify::post_up:         return "post_up";

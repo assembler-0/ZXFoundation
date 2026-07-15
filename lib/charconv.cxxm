@@ -90,7 +90,7 @@ namespace lib::charconv {
         return ascii_to_ebcdic_table[ascii];
     }
 
-    auto ebcdic_to_ascii(const span<char>& buff) -> void{
+    auto ebcdic_to_ascii(const span<char>& buff) -> void {
         for (char& c : buff)
             c = ebcdic_to_ascii(c);
     }
@@ -100,16 +100,12 @@ namespace lib::charconv {
             c = ascii_to_ebcdic(c);
     }
 
-    auto ebcdic_to_ascii(char* buff, const usize sz) -> void{
-        if (!buff) return;
-        for (usize i = 0; i < sz; ++i)
-            buff[i] = ebcdic_to_ascii(buff[i]);
+    auto ebcdic_to_ascii(char* buff, const usize sz) -> void {
+        ebcdic_to_ascii({buff, sz});
     }
 
     auto ascii_to_ebcdic(char* buff, const usize sz) -> void {
-        if (!buff) return;
-        for (usize i = 0; i < sz; ++i)
-            buff[i] = ascii_to_ebcdic(buff[i]);
+        ascii_to_ebcdic({buff, sz});
     }
 
 } // namespace lib

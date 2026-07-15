@@ -84,7 +84,7 @@ namespace zxfoundation::sched::domain_ctx {
         auto* d = static_cast<domain*>(s->owner);
         auto* lc = arch::s390x::cpu::lowcore::get_current();
 
-        if ((d->flags & zxfoundation::domain::domain_flags::idle) == zxfoundation::domain::domain_flags::none) {
+        if (d && (d->flags & zxfoundation::domain::domain_flags::idle) == zxfoundation::domain::domain_flags::none) {
             auto admission = zxfoundation::dgp::isolation_validate_scheduler_admission(
                 d->ko.state, d->root_phys, d->asce.val);
             if (!admission) {
@@ -92,12 +92,14 @@ namespace zxfoundation::sched::domain_ctx {
             }
         }
 
-        lc->user_asce = d->asce.val;
-        const u64 user_asce = d->asce.val;
+        lc->user_asce = d ? d->asce.val : 0;
+        const u64 user_asce = d ? d->asce.val : 0;
         arch::s390x::cpu::ctlreg::ctl_load<1, 1>(user_asce);
 
-        s->uregs.psw_mask |=
-            (static_cast<u64>(d->storage_key) << arch::s390x::cpu::psw::PSW_KEY_SHIFT);
+        if (d) {
+            s->body->uregs.psw_mask |=
+                (static_cast<u64>(d->storage_key) << arch::s390x::cpu::psw::PSW_KEY_SHIFT);
+        }
 
         static constexpr u64 RET_FRAME_SIZE = 0x90;
         const u64 frame_base = s->kstack_top - RET_FRAME_SIZE;
@@ -105,19 +107,19 @@ namespace zxfoundation::sched::domain_ctx {
         auto* psw  = reinterpret_cast<u64*>(frame_base + 0x80);
 
         for (u32 i = 0; i < 16; ++i)
-            gprs[i] = s->uregs.gprs[i];
+            gprs[i] = s->body->uregs.gprs[i];
 
-        psw[0] = s->uregs.psw_mask;
-        psw[1] = s->uregs.psw_addr;
+        psw[0] = s->body->uregs.psw_mask;
+        psw[1] = s->body->uregs.psw_addr;
 
         lc->current_domain = reinterpret_cast<u64>(d);
         lc->kernel_stack   = s->kstack_top;
         lc->percpu.current_strand = reinterpret_cast<u64>(s);
         lc->percpu.attached_asce = user_asce;
-        lc->percpu.attached_domain_id = d->ko.id;
-        lc->percpu.attached_dgp_state = static_cast<u8>(d->ko.state);
+        lc->percpu.attached_domain_id = d ? d->ko.id : 0;
+        lc->percpu.attached_dgp_state = d ? static_cast<u8>(d->ko.state) : static_cast<u8>(0);
 
-        __domain_enter_user_asm(frame_base, &s->uregs);
+        __domain_enter_user_asm(frame_base, &s->body->uregs);
     }
 
     /// @brief Overload taking domain* for backward compatibility.

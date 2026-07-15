@@ -7,6 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.locking.qspinlock;
 import arch.s390x.lib.atomic;
+import lib.string_view;
 
 export {
 
@@ -26,11 +27,12 @@ namespace zxfoundation::scoms {
         io_binding = 5,
         capability = 6,
         strand     = 7,
+        irq_desc   = 8,
     };
 
     /// @brief ASCII name for each kobject type (debug/printk).
     [[nodiscard]] constexpr auto kobject_type_name(kobject_type t) noexcept
-        -> const char*
+        -> lib::string_view
     {
         switch (t) {
             case kobject_type::none:       return "none";
@@ -41,6 +43,7 @@ namespace zxfoundation::scoms {
             case kobject_type::io_binding: return "io_binding";
             case kobject_type::capability: return "capability";
             case kobject_type::strand:     return "strand";
+            case kobject_type::irq_desc:   return "irq_desc";
             default:                       return "unknown";
         }
     }

@@ -99,8 +99,8 @@ namespace zxfoundation::sched::deadline {
 
         s.sched_policy = policy;
         s.sched_admission = *dgp_result;
-        s.deadline_runtime_used_ns = 0U;
-        s.absolute_deadline_ns = policy.deadline_ns;
+        s.body->deadline_runtime_used_ns = 0U;
+        s.body->absolute_deadline_ns = policy.deadline_ns;
         s.sched.deadline = policy.deadline_ns;
         return *dgp_result;
     }
@@ -113,8 +113,8 @@ namespace zxfoundation::sched::deadline {
         _internal::release_domain_runtime(owner, s.sched_admission.admitted_runtime_ns);
         s.sched_policy = sched_policy{};
         s.sched_admission = sched_admission_result{};
-        s.deadline_runtime_used_ns = 0U;
-        s.absolute_deadline_ns = 0U;
+        s.body->deadline_runtime_used_ns = 0U;
+        s.body->absolute_deadline_ns = 0U;
     }
 
     /// @brief Enqueue an admitted deadline strand on a per-CPU run queue.
@@ -153,7 +153,7 @@ namespace zxfoundation::sched::deadline {
     [[nodiscard]] auto pick_next(run_queue& rq) noexcept -> strand* {
         strand* best = nullptr;
         for (auto& candidate : rq.deadline_queue.iter<strand, &strand::sched_link>()) {
-            if (!best || candidate.absolute_deadline_ns < best->absolute_deadline_ns) best = &candidate;
+            if (!best || candidate.body->absolute_deadline_ns < best->body->absolute_deadline_ns) best = &candidate;
         }
         return best;
     }
@@ -164,8 +164,8 @@ namespace zxfoundation::sched::deadline {
     auto tick(run_queue& rq, strand& s) noexcept -> void {
         constexpr u64 DEADLINE_ACCOUNTING_TICK_NS = 1'000'000ULL;
         if (s.sched_policy.class_id != sched_class_id::deadline) return;
-        s.deadline_runtime_used_ns += DEADLINE_ACCOUNTING_TICK_NS;
-        if (s.deadline_runtime_used_ns >= s.sched_admission.admitted_runtime_ns) {
+        s.body->deadline_runtime_used_ns += DEADLINE_ACCOUNTING_TICK_NS;
+        if (s.body->deadline_runtime_used_ns >= s.sched_admission.admitted_runtime_ns) {
             auto* owner = static_cast<domain*>(s.owner);
             if (owner) owner->flags |= zxfoundation::domain::domain_flags::need_resched;
             dequeue(rq, s);

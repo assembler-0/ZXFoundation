@@ -10,6 +10,7 @@ import zxfoundation.domain.domain;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.base.typestate;
+import zxfoundation.scoms.scoms_ref;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
@@ -159,7 +160,7 @@ namespace __dom_detail {
             return NC_ERROR;
         }
 
-        d->ko.state = zxfoundation::base::lifecycle_state::dying;
+        (void)zxfoundation::scoms::mark_dying(d);
         d->flags = d->flags | domain_flags::need_resched;
 
         return 0;

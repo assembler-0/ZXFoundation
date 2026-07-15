@@ -1,13 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/domain/strand_types.cxxm
 /// @brief Strand — the schedulable execution context within a Domain.
-///
-/// A strand is the DGP kernel's unit of execution (analogous to a thread
-/// in Unix terminology, but we don't use that word here). Each domain
-/// has at least one strand; multiple strands within a domain share the
-/// domain's address space, gates, and portals.
-///
-/// The scheduler dispatches strands, not domains.
 
 export module zxfoundation.domain.strand_types;
 import zxfoundation.sched.sched_policy_types;
@@ -21,8 +14,6 @@ import lib.list;
 export {
 
 namespace zxfoundation::domain {
-
-    // ── Strand ID ────────────────────────────────────────────────────────
 
     /// @brief Opaque strand identifier.
     using strand_id = u32;
@@ -47,19 +38,28 @@ namespace zxfoundation::domain {
     };
 
     /// @brief Scheduler substate within the active lifecycle.
-    ///
-    /// The SCOMS lifecycle state (ko.state) is authoritative.
-    /// This per-scheduler-state enum encodes scheduler-internal state
-    /// only while ko.state == lifecycle_state::active.
     enum class sched_substate : u8 {
         idle     = 0,   ///< Active but not on any run queue.
         runnable = 1,   ///< On the run queue, waiting for CPU time.
         running  = 2,   ///< Currently executing on a CPU.
     };
 
-    // ── Forward declarations ─────────────────────────────────────────────
+    /// @brief Per-strand flags (bitfield, stored in strand::flags).
+    enum class strand_flags : u8 {
+        none = 0,
+        idle = 1U << 0,   ///< Idle strand (per-CPU, owner is nullptr).
+    };
 
-    // ── User-mode register save area ─────────────────────────────────────
+    [[nodiscard]] constexpr auto operator|(strand_flags a, strand_flags b) noexcept -> strand_flags {
+        return static_cast<strand_flags>(static_cast<u8>(a) | static_cast<u8>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(strand_flags a, strand_flags b) noexcept -> strand_flags {
+        return static_cast<strand_flags>(static_cast<u8>(a) & static_cast<u8>(b));
+    }
+    constexpr auto operator|=(strand_flags& a, strand_flags b) noexcept -> strand_flags& {
+        a = a | b;
+        return a;
+    }
 
     /// @brief User-mode register save area for strand entry/exit.
     struct user_regs {
@@ -71,8 +71,6 @@ namespace zxfoundation::domain {
         u32 pad{0};               // Padding to 8-byte boundary
         alignas(8) u64 vector_regs[32][2]{}; // Vector registers v0-v31 (128-bit each)
     };
-
-    // ── Scheduling params ────────────────────────────────────────────────
 
     /// @brief Per-strand EEVDF scheduling entity parameters.
     struct sched_params {
@@ -86,55 +84,32 @@ namespace zxfoundation::domain {
 
     static_assert(sizeof(sched_params) == 40);
 
-    // ── Strand struct ────────────────────────────────────────────────────
+    struct strand_body;
 
     /// @brief Strand — the DGP kernel's unit of schedulable execution.
-    ///
-    /// Layout is assembly-critical. The scheduler and context switch code
-    /// depend on specific field offsets within this struct. See static_asserts
-    /// below.
-    ///
-    /// When embedded as `domain::primary_strand`, the domain pointer
-    /// arithmetic is: `domain* = strand_ptr - offsetof(domain, primary_strand)`.
     struct strand {
-        // ── offset 0 ── SCOMS kobject header (24 bytes)
         scoms::kobject                  ko{};
 
-        // ── offset 24 ── Back-pointer to owning domain (8 bytes)
         void*                           owner{nullptr};
 
-        // ── offset 32 ── Scheduler substate + CPU affinity (16 bytes)
         sched_substate                  substate{sched_substate::idle};
         u8                              _pad0[3]{};
-        u16                             cpu{0};         ///< CPU this strand is pinned/running on.
-        bool                            on_rq{false};   ///< Currently on a run queue.
-        u8                              _pad1{0};
+        u16                             cpu{0};
+        bool                            on_rq{false};
+        strand_flags                    flags{strand_flags::none};
 
-        // ── offset 40 ── Scheduling params (40 bytes)
         sched_params                    sched{};
 
-        // ── offset 80 ── RB tree node for scheduler (24 bytes)
         lib::rb_node                    sched_rb{};
 
-        // ── offset 104 ── Kernel stack pointers [ASSEMBLY CRITICAL]
-        u64                             kstack_base{0};
-        u64                             kstack_top{0};
-        u64                             ksp{0};
+        strand_body*                    body{nullptr};  ///< Slab-allocated cold-fields body.
+        u64                             kstack_top{0};  ///< Kernel stack top (offset 112).
+        u64                             ksp{0};          ///< Current kernel stack pointer (offset 120).
 
-        // ── offset 128 ── List nodes
-        lib::list_node                  strand_list{};  ///< Link into domain's strand list.
-        lib::list_node                  sched_link{};   ///< Link into scheduler queues.
+        lib::list_node                  sched_link{};
 
-        // ── Scheduler class policy metadata
-        zxfoundation::sched::sched_policy sched_policy{}; ///< Requested/admitted scheduler policy.
-        zxfoundation::sched::sched_admission_result sched_admission{}; ///< Class admission record.
-        u64                             rt_runtime_used_ns{0}; ///< Runtime consumed during current RT period.
-        u64                             rt_period_start_ns{0}; ///< RT accounting period start.
-        u64                             deadline_runtime_used_ns{0}; ///< Runtime consumed during current deadline period.
-        u64                             absolute_deadline_ns{0}; ///< Conservative absolute deadline key.
-
-        // ── User-mode register save area
-        user_regs                       uregs{};
+        zxfoundation::sched::sched_policy sched_policy{};
+        zxfoundation::sched::sched_admission_result sched_admission{};
 
         strand() noexcept = default;
         strand(const strand&)            = delete;
@@ -143,7 +118,6 @@ namespace zxfoundation::domain {
         auto operator=(strand&&)         = delete;
     };
 
-    // ── Assembly-critical offset verification ────────────────────────────
 
     static_assert(__builtin_offsetof(strand, ko) == 0,
         "strand::ko must be at offset 0");
@@ -151,14 +125,36 @@ namespace zxfoundation::domain {
     static_assert(__builtin_offsetof(strand, sched) == 40,
         "strand::sched must be at offset 40");
 
-    static_assert(__builtin_offsetof(strand, kstack_base) == 104,
-        "strand::kstack_base must be at offset 104");
-
     static_assert(__builtin_offsetof(strand, kstack_top) == 112,
         "strand::kstack_top must be at offset 112");
 
     static_assert(__builtin_offsetof(strand, ksp) == 120,
         "strand::ksp must be at offset 120 — __switch_to_asm depends on this");
+
+
+    /// @brief Cold-field body for a strand
+    struct strand_body {
+        u64             kstack_base{0};           ///< Base VA of the kernel stack.
+        lib::list_node  strand_list{};            ///< Link into domain's strand list.
+
+        u64             rt_runtime_used_ns{0};     ///< Runtime consumed during current RT period.
+        u64             rt_period_start_ns{0};     ///< RT accounting period start.
+        u64             deadline_runtime_used_ns{0}; ///< Runtime consumed during current deadline period.
+        u64             absolute_deadline_ns{0};   ///< Conservative absolute deadline key.
+
+        user_regs       uregs{};                   ///< User-mode register save area.
+
+        strand_body() noexcept = default;
+        strand_body(const strand_body&)            = delete;
+        auto operator=(const strand_body&)         = delete;
+        strand_body(strand_body&&)                 = delete;
+        auto operator=(strand_body&&)              = delete;
+    };
+
+    /// @brief Check whether a strand is an idle (per-CPU) strand.
+    [[nodiscard]] inline auto is_idle_strand(const strand& s) noexcept -> bool {
+        return (s.flags & strand_flags::idle) != strand_flags::none;
+    }
 
 } // namespace zxfoundation::domain
 

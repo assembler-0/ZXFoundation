@@ -9,6 +9,7 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk;
 import zxfoundation.base.typestate;
+import zxfoundation.scoms.scoms_ref;
 import lib.error;
 import lib.expected;
 
@@ -95,7 +96,7 @@ namespace zxfoundation::domain::signal {
                 case signal_default::terminate:
                     pinfo("signal: domain {} — unhandled {} (default: terminate)",
                           d.ko.id, signal_kind_name(entry.kind));
-                    d.ko.state = base::lifecycle_state::dying;
+                    (void)scoms::mark_dying(&d);
                     d.flags = d.flags | domain_flags::need_resched;
                     break;
 

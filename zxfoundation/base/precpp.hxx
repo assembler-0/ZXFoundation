@@ -21,6 +21,8 @@
 #error FMT_MSG("not compiling for LP64")
 #endif
 
+#undef FMT_MSG
+
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
     #define ZX_HAS_PRE 1
     #define comply(expr) pre(expr)
@@ -67,6 +69,8 @@
     do { if (!(expr)) [[unlikely]] zxfoundation::sys::syschk::syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::internal_error), stringify(expr)); } while (0)
 #endif
 
+#if 0
+
 #define CC_IPM(sym)		                \
     "	ipm	%[" stringify(sym) "]\n"    \
     "	srl %[" stringify(sym) "],28\n"
@@ -75,3 +79,4 @@
 #define CC_CLOBBER		"cc"
 #define CC_CLOBBER_LIST(...)	CC_CLOBBER, __VA_ARGS__
 
+#endif

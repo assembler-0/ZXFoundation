@@ -29,11 +29,12 @@ import lib.format;
 import lib.span;
 import lib.placementnew;
 
-using zxfoundation::sys::printk::pemerg;
-
 namespace _internal {
+
     using namespace zxfoundation::sys::syschk;
     using namespace arch::s390x::lib::atomic;
+
+    constexpr auto ZXF_BUG_REPORT_URL_HTTPS = "https://github.com/assembler-0/ZXFoundation/issues";
 
     /// @brief Atomic flag: set to 1 by the first CPU to call system_check.
     ///        All subsequent callers see it set and go directly to disabled-wait
@@ -107,8 +108,6 @@ namespace zxfoundation::sys::syschk {
             arch::s390x::cpu::psw::disabled_wait();
         }
 
-        // The physical lowcore IS at address 0x0 — that is architecturally correct.
-        // Using nullptr + offset is UB in C++; compute via uptr arithmetic instead.
         auto* rec = reinterpret_cast<zx_crash_record*>(
             static_cast<uptr>(ZX_CRASH_RECORD_OFFSET));
 
@@ -132,11 +131,16 @@ namespace zxfoundation::sys::syschk {
             err
         );
 
-        printk::printk(_internal::to_log_level(sev), "syschk: {}: {}\n", location, msg);
-
+        printk::printk(_internal::to_log_level(sev), "syschk: from {}\n", location);
+        printk::printk(_internal::to_log_level(sev), "syschk: {}\n",msg);
         stacktrace::dump_stack();
 
         if (sev < syschk_severity::critical) return;
+        printk::printk(_internal::to_log_level(sev), "syschk: abnormal end state. nucleus will not continue.");
+        printk::printk(_internal::to_log_level(sev),
+            "syschk: if you believe this is a nucleus fault, please report a bug to <{}>",
+            _internal::ZXF_BUG_REPORT_URL_HTTPS
+        );
 
         const u16 self_cpu_id = arch::s390x::cpu::percpu::cpu_id();
         arch::s390x::cpu::cpumask::for_each_online_cpu(

@@ -124,8 +124,8 @@ namespace zxfoundation::sched::rt {
 
         s.sched_policy = policy;
         s.sched_admission = *dgp_result;
-        s.rt_runtime_used_ns = 0U;
-        s.rt_period_start_ns = 0U;
+        s.body->rt_runtime_used_ns = 0U;
+        s.body->rt_period_start_ns = 0U;
         return *dgp_result;
     }
 
@@ -138,8 +138,8 @@ namespace zxfoundation::sched::rt {
         _internal::release_domain_runtime(owner, s.sched_admission.admitted_runtime_ns);
         s.sched_policy = sched_policy{};
         s.sched_admission = sched_admission_result{};
-        s.rt_runtime_used_ns = 0U;
-        s.rt_period_start_ns = 0U;
+        s.body->rt_runtime_used_ns = 0U;
+        s.body->rt_period_start_ns = 0U;
     }
 
     /// @brief Enqueue an admitted RT strand on a per-CPU run queue.
@@ -191,8 +191,8 @@ namespace zxfoundation::sched::rt {
     auto tick(run_queue& rq, strand& s) noexcept -> void {
         constexpr u64 RT_ACCOUNTING_TICK_NS = 1'000'000ULL;
         if (s.sched_policy.class_id != sched_class_id::rt) return;
-        s.rt_runtime_used_ns += RT_ACCOUNTING_TICK_NS;
-        if (s.rt_runtime_used_ns >= s.sched_admission.admitted_runtime_ns) {
+        s.body->rt_runtime_used_ns += RT_ACCOUNTING_TICK_NS;
+        if (s.body->rt_runtime_used_ns >= s.sched_admission.admitted_runtime_ns) {
             auto* owner = static_cast<domain*>(s.owner);
             if (owner) owner->flags |= zxfoundation::domain::domain_flags::need_resched;
             dequeue(rq, s);

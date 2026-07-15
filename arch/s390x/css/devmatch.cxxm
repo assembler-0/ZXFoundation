@@ -4,6 +4,7 @@
 
 export module arch.s390x.css.devmatch;
 import zxfoundation.base.types;
+import lib.string_view;
 
 namespace arch::s390x::css::devmatch::_internal {
 
@@ -28,7 +29,7 @@ namespace arch::s390x::css::devmatch::_internal {
     struct dev_entry {
         u16         type;       ///< 4-digit IBM type number.
         dev_class   cls;        ///< Broad class.
-        const char* name;       ///< Human-readable short name.
+        lib::string_view name;       ///< Human-readable short name.
     };
 
     inline constexpr dev_entry device_types[] {
@@ -105,7 +106,7 @@ namespace arch::s390x::css::devmatch::_internal {
     [[maybe_unused]] inline constexpr u32 NUM_CU_TYPES =
         sizeof(cu_types) / sizeof(cu_types[0]);
 
-    inline constexpr const char* class_names[] {
+    inline constexpr lib::string_view class_names[] {
         "console",       // console
         "display",       // display
         "dasd-eckd",     // dasd_eckd
@@ -131,14 +132,14 @@ namespace arch::s390x::css::devmatch {
 
     /// @brief Result of a device lookup.
     struct match_result {
-        const char* dev_name;   ///< Human-readable device name, or nullptr.
-        const char* cu_name;    ///< Human-readable control-unit name, or nullptr.
+        lib::string_view dev_name;   ///< Human-readable device name, or nullptr.
+        lib::string_view cu_name;    ///< Human-readable control-unit name, or nullptr.
         dev_class   cls;        ///< Best-guess device class (from dev or cu).
     };
 
     /// @brief Look up a device type by its IBM 4-digit code.
     /// @return Device name string, or nullptr if unknown.
-    [[nodiscard]] constexpr auto lookup_device(u16 dev_type) noexcept -> const char* {
+    [[nodiscard]] constexpr auto lookup_device(u16 dev_type) noexcept -> lib::string_view {
         for (const auto device_type : device_types) {
             if (device_type.type == dev_type)
                 return device_type.name;
@@ -148,7 +149,7 @@ namespace arch::s390x::css::devmatch {
 
     /// @brief Look up a control-unit type by its IBM 4-digit code.
     /// @return CU name string, or nullptr if unknown.
-    [[nodiscard]] constexpr auto lookup_cu(u16 cu_type) noexcept -> const char* {
+    [[nodiscard]] constexpr auto lookup_cu(u16 cu_type) noexcept -> lib::string_view {
         for (auto i : cu_types) {
             if (i.type == cu_type)
                 return i.name;
@@ -175,7 +176,7 @@ namespace arch::s390x::css::devmatch {
     }
 
     /// @brief Get a human-readable name for a device class.
-    [[nodiscard]] constexpr auto class_name(dev_class cls) noexcept -> const char* {
+    [[nodiscard]] constexpr auto class_name(dev_class cls) noexcept -> lib::string_view {
         const auto idx = static_cast<u8>(cls);
         if (idx < sizeof(class_names) / sizeof(class_names[0]))
             return class_names[idx];

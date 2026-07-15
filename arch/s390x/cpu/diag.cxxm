@@ -32,6 +32,30 @@ namespace arch::s390x::cpu::diag {
         return cc;
     }
 
+    /// @brief Generic diagnose12 (register-pair variant) — issue any code with full
+    ///        128-bit R1:R1+1 and R3:R3+1 register pairs.
+    /// @tparam Code  The 16-bit diagnose code (e.g. 0x288).
+    /// @param  r1    128-bit register pair (even=high, odd=low).
+    /// @param  r2    128-bit register pair (even=high, odd=low).
+    /// @return       Condition code (0–3) set by the hypervisor/hardware.
+    template <u16 Code>
+    [[gnu::always_inline]] inline auto diagnose12(
+        processor::register_pair& r1,
+        processor::register_pair& r2
+    ) noexcept -> condition_code {
+        condition_code cc;
+        __asm__ volatile(
+            EX_TABLE(%=, %=, EX_TYPE_FIXUP, 0)
+            "%=0: diag    %[r1],%[r2],%[code]\n"
+            "%=1: ipm     %[cc]\n"
+            "     srl     %[cc],28\n"
+            : [r1] "+d" (r1.pair), [r2] "+d" (r2.pair), [cc] "=d" (cc)
+            : [code] "K" (Code)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
     /// Generic diagnose23 — issue any code with arbitrary R2/R3 register values.
     /// @tparam Code  The 16-bit diagnose code (e.g. 0x044, 0x308).
     /// @param  r2    Value placed in R2 (and R1+1 for processor::register_pair codes).
@@ -46,6 +70,30 @@ namespace arch::s390x::cpu::diag {
             "%=1: ipm     %[cc]\n"
             "     srl     %[cc],28\n"
             : [r2] "+d" (r2), [r3] "+d" (r3), [cc] "=d" (cc)
+            : [code] "K" (Code)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Generic diagnose23 (register-pair variant) — issue any code with full
+    ///        128-bit R1:R1+1 and R3:R3+1 register pairs.
+    /// @tparam Code  The 16-bit diagnose code (e.g. 0x288).
+    /// @param  r2    128-bit register pair (even=high, odd=low).
+    /// @param  r3    128-bit register pair (even=high, odd=low).
+    /// @return       Condition code (0–3) set by the hypervisor/hardware.
+    template <u16 Code>
+    [[gnu::always_inline]] inline auto diagnose23(
+        processor::register_pair& r2,
+        processor::register_pair& r3
+    ) noexcept -> condition_code {
+        condition_code cc;
+        __asm__ volatile(
+            EX_TABLE(%=, %=, EX_TYPE_FIXUP, 0)
+            "%=0: diag    %[r2],%[r3],%[code]\n"
+            "%=1: ipm     %[cc]\n"
+            "     srl     %[cc],28\n"
+            : [r2] "+d" (r2.pair), [r3] "+d" (r3.pair), [cc] "=d" (cc)
             : [code] "K" (Code)
             : "cc", "memory"
         );
@@ -71,6 +119,31 @@ namespace arch::s390x::cpu::diag {
         );
         return cc;
     }
+
+    /// @brief Generic diagnose13 (register-pair variant) — issue any code with full
+    ///        128-bit R1:R1+1 and R3:R3+1 register pairs.
+    /// @tparam Code  The 16-bit diagnose code (e.g. 0x288).
+    /// @param  r1    128-bit register pair (even=high, odd=low).
+    /// @param  r3    128-bit register pair (even=high, odd=low).
+    /// @return       Condition code (0–3) set by the hypervisor/hardware.
+    template <u16 Code>
+    [[gnu::always_inline]] inline auto diagnose13(
+        processor::register_pair& r1,
+        processor::register_pair& r3
+    ) noexcept -> condition_code {
+        condition_code cc;
+        __asm__ volatile(
+            EX_TABLE(%=, %=, EX_TYPE_FIXUP, 0)
+            "%=0: diag    %[r1],%[r3],%[code]\n"
+            "%=1: ipm     %[cc]\n"
+            "     srl     %[cc],28\n"
+            : [r1] "+d" (r1.pair), [r3] "+d" (r3.pair), [cc] "=d" (cc)
+            : [code] "K" (Code)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
 
     /// @name Standard diagnose instruction codes
     /// @{
@@ -129,14 +202,11 @@ namespace arch::s390x::cpu::diag {
         u64 r2_even = reinterpret_cast<uptr>(resp);
         processor::register_pair r1{ .even = r1_even, .odd = cmd_len };
         processor::register_pair r2{ .even = r2_even, .odd = resp_len };
-        u64 r1v = r1.pair;
-        u64 r2v = r2.pair;
-
-        if (diagnose12<DIAG_CONSOLE_FN>(r1v, r2v) != 0) {
+        if (diagnose12<DIAG_CONSOLE_FN>(r1, r2) != 0) {
             return 0;
         }
         // R2.odd returns response length on success
-        return processor::register_pair{ .pair = r2v }.odd;
+        return processor::register_pair{ .pair = r2.pair }.odd;
     }
 
     /// @brief Issue DIAG 8 with a simple message (no response).
@@ -168,9 +238,8 @@ namespace arch::s390x::cpu::diag {
     /// @return      Condition code.
     auto diag10(u64 start, u64 end) noexcept -> condition_code {
         processor::register_pair r1{ .even = start, .odd = end };
-        u64 r1v = r1.pair;
-        u64 r2v = 0;
-        return diagnose12<DIAG_RELEASE_PAGES>(r1v, r2v);
+        processor::register_pair r2{};
+        return diagnose12<DIAG_RELEASE_PAGES>(r1, r2);
     }
 
     /// Spool file subcodes.
@@ -306,7 +375,8 @@ namespace arch::s390x::cpu::diag {
     /// @param token      Page-reference token (R1.odd on establish; unused on cancel).
     /// @return           Condition code.
     auto diag258(bool establish, u64 token) noexcept -> condition_code {
-        processor::register_pair r1;
+        processor::register_pair r1{};
+        processor::register_pair r2{};
         if (establish) {
             r1.even = 0;       // establish subcode
             r1.odd  = token;
@@ -314,9 +384,7 @@ namespace arch::s390x::cpu::diag {
             r1.even = 1;       // cancel subcode
             r1.odd  = 0;
         }
-        u64 r1v = r1.pair;
-        u64 r2v = 0;
-        return diagnose12<DIAG_PAGE_REF>(r1v, r2v);
+        return diagnose12<DIAG_PAGE_REF>(r1, r2);
     }
 
     /// @brief Query machine memory layout.
@@ -340,30 +408,32 @@ namespace arch::s390x::cpu::diag {
     }
 
     /// Watchdog function codes.
-    constexpr u32 WDT_FUNC_INIT           = 0;
-    constexpr u32 WDT_FUNC_CHANGE         = 1;
-    constexpr u32 WDT_FUNC_CANCEL         = 2;
-    constexpr u32 WDT_FUNC_CONCEAL        = 0x80000000U;
-    constexpr u32 LPARWDT_RESTART         = 0;
+    enum class diag288_fn : u32 {
+        init    = 0,
+        change  = 1,
+        cancel  = 2,
+        conceal = 0x80000000,
+    };
 
+    constexpr u32 WDT_RESTART         = 0;
     constexpr u32 WDT_MIN_TIMEOUT         = 15;
     constexpr u32 WDT_MAX_TIMEOUT         = 3600;
     constexpr u32 WDT_DEFAULT_TIMEOUT     = 30;
 
     /// @brief Issue DIAGNOSE 0x288 (LPAR/hypervisor watchdog).
-    /// @param func    Watchdog function.
-    /// @param timeout Timeout in seconds (15–3600).
-    /// @param action  LPAR: LPARWDT_RESTART (0); z/VM: physical address of an
-    ///                EBCDIC CP command string.
-    /// @param len     Length of the z/VM command string (LPAR: 0).
+    /// @tparam func    Watchdog function.
+    /// @param  timeout Timeout in seconds (15–3600).
+    /// @param  action  LPAR: LPARWDT_RESTART (0); z/VM: physical address of an
+    ///                 EBCDIC CP command string.
+    /// @param  len     Length of the z/VM command string (LPAR: 0).
     /// @return 0 on success, nonzero condition code on failure.
-    auto diag288(u32 func, u32 timeout,
-                 u64 action, u32 len) noexcept -> condition_code {
-        processor::register_pair r1 { .even = func, .odd = timeout };
+    template <diag288_fn func>
+    auto diag288(u64 action, u32 timeout = WDT_DEFAULT_TIMEOUT, u32 len = 0) noexcept
+        -> condition_code
+    {
+        processor::register_pair r1 { .even = static_cast<u32>(func), .odd = timeout };
         processor::register_pair r3 { .even = action, .odd = len };
-        u64 r1v = r1.pair;
-        u64 r3v = r3.pair;
-        return diagnose13<DIAG_WATCHDOG>(r1v, r3v);
+        return diagnose13<DIAG_WATCHDOG>(r1, r3);
     }
 
     /// @brief Interface with z/VM FTP server.
@@ -435,9 +505,8 @@ namespace arch::s390x::cpu::diag {
     /// @return      Condition code.
     auto diag318(u64 cpnc, u64 cpvc) noexcept -> condition_code {
         processor::register_pair r1{ .even = cpnc, .odd = cpvc };
-        u64 r1v = r1.pair;
-        u64 r2v = 0;
-        return diagnose12<DIAG_CP_NAME_VER>(r1v, r2v);
+        processor::register_pair r2{};
+        return diagnose12<DIAG_CP_NAME_VER>(r1, r2);
     }
 
     /// @brief Manage hardware certificate store.
@@ -480,9 +549,8 @@ namespace arch::s390x::cpu::diag {
     /// @return         Condition code.
     auto diag500(u64 subcode, u64 param2) noexcept -> condition_code {
         processor::register_pair r1{ .even = subcode, .odd = param2 };
-        u64 r1v = r1.pair;
-        u64 r2v = 0;
-        return diagnose12<DIAG_VIRTIO>(r1v, r2v);
+        processor::register_pair r2{};
+        return diagnose12<DIAG_VIRTIO>(r1, r2);
     }
 
 } // namespace arch::s390x::cpu::diag

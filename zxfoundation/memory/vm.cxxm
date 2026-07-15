@@ -8,13 +8,12 @@ import zxfoundation.dgp.memory_contract;
 import zxfoundation.rcu.rcu;
 import zxfoundation.rcu.rcu_types;
 import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_table;
+import zxfoundation.scoms.scoms_ref;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.numa_types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.memory.slub;
-import zxfoundation.memory.slub_typed;
-import zxfoundation.memory.slub_types;
 import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_tlb;
 import arch.s390x.mmu.mmu_types;
@@ -24,8 +23,11 @@ import zxfoundation.locking.lock;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.printk_types;
 import zxfoundation.sys.syschk;
+import zxfoundation.base.typestate;
 import lib.placementnew;
 import zxfoundation.base.types;
+import zxfoundation.sys.cap_types;
+import zxfoundation.sys.cap;
 import arch.s390x.lib.atomic;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.skey;
@@ -34,13 +36,14 @@ import lib.expected;
 import lib.rbtree;
 import lib.util;
 import lib.placementnew;
+import lib.format;
 
 namespace zxfoundation::memory::vm::_internal {
 
     using namespace zxfoundation::memory;
     using arch::s390x::lib::atomic::memory_order;
 
-    static slub::typed_slab_cache<vm_region> g_region_cache{};
+    static scoms::kobject_table<vm_region, MAX_VM_REGIONS> g_region_table{};
     static bool g_vme_initialized{false};
 
     /// @brief Convert rb_node* to the containing vm_region*.
@@ -79,11 +82,11 @@ namespace zxfoundation::memory::vm::_internal {
         return true;
     }
 
-    /// @brief RCU callback: free a vm_region back to the slab after a grace period.
+    /// @brief RCU callback: free a vm_region back to the SCOMS table after a grace period.
     auto rcu_free_region_cb(rcu::rcu_head* head) noexcept -> void {
         auto* rgn = lib::container_of<vm_region, rcu::rcu_head,
             &vm_region::rcu>(head);
-        g_region_cache.dealloc(rgn);
+        (void)g_region_table.release(rgn->ko.id);
     }
 
     /// @brief Remove a vm_region from the rb-tree and defer freeing via RCU.
@@ -268,17 +271,20 @@ namespace zxfoundation::memory::vm::_internal {
         };
     }
 
-    /// @brief Allocate a vm_region from the slab, initialize it, and return.
+    /// @brief Allocate a vm_region from the SCOMS table, initialize it, and return.
     [[nodiscard]] auto alloc_region(
         u64 va_start, u64 va_end,
         vm_prot prot, vm_flags flags,
         vm_backing backing, u64 phys_base
     ) noexcept -> lib::expected<vm_region*, lib::kernel_error> {
-        auto result = g_region_cache.alloc();
+        auto result = g_region_table.alloc();
         if (!result) return lib::unexpected(result.error());
 
-        vm_region* rgn = *result;
-        // Placement-construct (the slab returns uninitialized memory).
+        auto embryo_ref = static_cast<
+            scoms::kobject_ref<vm_region, base::lifecycle_state::embryo>&&
+        >(result.value());
+
+        vm_region* rgn = &(*embryo_ref);
         ::new(static_cast<void*>(rgn)) vm_region{};
 
         rgn->ko.type  = scoms::kobject_type::vm_region;
@@ -288,6 +294,10 @@ namespace zxfoundation::memory::vm::_internal {
         rgn->flags    = flags;
         rgn->backing  = backing;
         rgn->phys_base = phys_base;
+
+        (void)static_cast<
+            scoms::kobject_ref<vm_region, base::lifecycle_state::embryo>&&
+        >(embryo_ref).activate();
 
         return rgn;
     }
@@ -372,24 +382,6 @@ export {
 
 namespace zxfoundation::memory::vm {
 
-    /// @brief Initialize the VME subsystem (create slab cache for vm_region).
-    auto vm_init() noexcept -> void {
-        using namespace _internal;
-        using namespace zxfoundation::memory::slub;
-
-        if (g_vme_initialized) return;
-
-        auto result = typed_slab_cache<vm_region>::create(
-            "vm_region", slub_flags::none);
-        if (!result)
-            sys::syschk::syschk_fatal(
-                result.error(),
-                "vm: failed to create vm_region slab cache");
-
-        g_region_cache = *result;
-        g_vme_initialized = true;
-    }
-
     /// @brief Initialize a per-domain VME address space.
     auto vm_space_init(vm_space& space) noexcept -> void {
         space.tree       = {};
@@ -404,13 +396,6 @@ namespace zxfoundation::memory::vm {
     }
 
     /// @brief RCU-protected lookup: find the vm_region containing VA.
-    ///
-    /// Uses rcu_read_lock internally.  The returned pointer is safe to
-    /// dereference within the caller's preemption-disabled context (page
-    /// fault handler or under vm_space::lock).  Callers that may block
-    /// after the lookup must first ensure the region cannot be freed
-    /// (e.g., by holding space.lock).
-    ///
     /// @return Pointer to the region, or nullptr if no region contains va.
     [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region* {
         rcu::rcu_read_lock();
@@ -609,7 +594,7 @@ namespace zxfoundation::memory::vm {
 
         // Insert the new region.
         if (!rb_insert_region(space, new_rgn)) {
-            g_region_cache.dealloc(new_rgn);
+            (void)g_region_table.release(new_rgn->ko.id);
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::region_overlap));
         }
@@ -653,7 +638,7 @@ namespace zxfoundation::memory::vm {
         apply_contract_result(space, *rgn, *contract_result);
 
         if (!rb_insert_region(space, rgn)) {
-            g_region_cache.dealloc(rgn);
+            (void)g_region_table.release(rgn->ko.id);
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::region_overlap));
         }
@@ -699,7 +684,7 @@ namespace zxfoundation::memory::vm {
         apply_contract_result(space, *rgn, *contract_result);
 
         if (!rb_insert_region(space, rgn)) {
-            g_region_cache.dealloc(rgn);
+            (void)g_region_table.release(rgn->ko.id);
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::region_overlap));
         }
@@ -915,13 +900,8 @@ namespace zxfoundation::memory::vm {
         while (node) {
             auto* rgn = region_of(node);
             lib::rb_node* next = lib::rb_next(node);
-
-            // Erase from tree.
             lib::rb_erase_cached(node, space.tree);
-
-            // Free the region descriptor.
-            g_region_cache.dealloc(rgn);
-
+            (void)g_region_table.release(rgn->ko.id);
             node = next;
         }
 
@@ -931,6 +911,36 @@ namespace zxfoundation::memory::vm {
         space.total_committed = 0;
         space.total_resident  = 0;
         space.region_count    = 0;
+    }
+
+    /// @brief Look up a vm_region by SCOMS ID.
+    /// @return Raw pointer, or nullptr if not found.
+    [[nodiscard]] auto vm_region_find_by_id(u32 id) noexcept -> vm_region* {
+        return _internal::g_region_table.find_raw(id);
+    }
+
+    auto register_vm_cap_lookup() noexcept -> void {
+        (void)zxfoundation::sys::cap::register_lookup(
+            zxfoundation::sys::cap::cap_type::memory,
+            [](u16 obj_id) noexcept -> scoms::kobject* {
+                auto* r = vm_region_find_by_id(static_cast<u32>(obj_id));
+                return r ? &r->ko : nullptr;
+            });
+    }
+
+    /// @brief Initialize the VME subsystem (create SCOMS table for vm_region).
+    auto vm_init() noexcept -> void {
+        using namespace _internal;
+
+        if (g_vme_initialized) return;
+
+        g_region_table.init(scoms::kobject_type::vm_region);
+        g_vme_initialized = true;
+
+        register_vm_cap_lookup();
+
+        sys::printk::pinfo("vm: scoms vm_region table initialized ({} slots)",
+            lib::format::dec{static_cast<u64>(MAX_VM_REGIONS)});
     }
 
 } // namespace zxfoundation::memory::vm

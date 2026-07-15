@@ -44,14 +44,7 @@ namespace arch::s390x::trap::ext {
         }
 
         if (ext_code == EXT_CPU_TIMER) {
-            arch::s390x::cpu::cputimer::timer_set(0ULL);
-
-            auto* d = reinterpret_cast<zxfoundation::domain::domain*>(
-                lc->current_domain);
-            if (d && (d->flags & zxfoundation::domain::domain_flags::idle) ==
-                     zxfoundation::domain::domain_flags::none) {
-                d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
-            }
+            zxfoundation::sched::cpu_timer_tick();
             return;
         }
 

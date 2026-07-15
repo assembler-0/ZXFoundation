@@ -10,7 +10,7 @@ import zxfoundation.sys.printk;
 import zxfoundation.sys.watchdog;
 import zxfoundation.base.config;
 import zxfoundation.memory.pmm;
-import zxfoundation.sys.irq.irqdesc_init;
+import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sys.syschk_core;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.service;
@@ -295,6 +295,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     _internal::verify_loader_fingerprint(*protocol);
 
     zxfoundation::base::cxxrtse::cxxabi::run_global_constructor();
+    zxfoundation::base::cxxrtse::cxxabi::ssp_init();
 
     zxfoundation::init::boot_protocol = *protocol;
 
@@ -302,23 +303,17 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
     zxfoundation::sys::syschk::syschk_init(*protocol);
     _internal::cmdline_init();
-
-    zxfoundation::base::cxxrtse::cxxabi::ssp_init();
+    _internal::banner();
 
     arch::s390x::cpu::features::init(zxfoundation::init::boot_protocol.stfle_fac);
-
     arch::s390x::cpu::features::enable_hardware_facilities();
-
     arch::s390x::cpu::lowcore::init_bsp(zxfoundation::init::boot_protocol);
     arch::s390x::cpu::percpu::init_bsp();
     zxfoundation::sys::time::initialize(protocol->tod_boot);
 
-    _internal::banner();
-
     _internal::initialize_hhdm_contract(*protocol);
     _internal::initialize_numa_topology(*protocol);
     zxfoundation::memory::pmm::init(*protocol);
-
     arch::s390x::mmu::mmu_init();
 
     zxfoundation::memory::slub::slub_init();
@@ -341,10 +336,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     arch::s390x::cpu::aste::aste_subsystem_init();
 
     zxfoundation::sched::sched_init();
-    arch::s390x::cpu::smp::init_bsp();
-    arch::s390x::cpu::smp::init_aps(*protocol);
-    arch::s390x::cpu::smp::ap_release_all();
-    arch::s390x::cpu::smp::wait_aps_initialized();
+    arch::s390x::cpu::smp::launch(*protocol);
     arch::s390x::cpu::irq::irq_enable();
 
     arch::s390x::css::css_init();

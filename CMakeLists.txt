@@ -17,10 +17,6 @@ project(ZXFoundation
     LANGUAGES C CXX ASM
 )
 
-if (NOT CMAKE_TOOLCHAIN_FILE)
-	message(FATAL_ERROR "zxfoundation::build: no toolchain file specified")
-endif()
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/toolchain")
 

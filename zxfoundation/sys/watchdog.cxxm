@@ -29,11 +29,9 @@ namespace _internal {
 
     /// @brief Arm / re-ping the hypervisor watchdog.
     static auto harddog_ping() noexcept -> bool {
-        i32 rc = diag::diag288(diag::WDT_FUNC_CHANGE, diag::WDT_DEFAULT_TIMEOUT,
-                                         diag::LPARWDT_RESTART, 0);
+        i32 rc = diag::diag288<diag::diag288_fn::change>(diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
         if (rc != 0) {
-            rc = diag::diag288(diag::WDT_FUNC_INIT, diag::WDT_DEFAULT_TIMEOUT,
-                              diag::LPARWDT_RESTART, 0);
+            rc = diag::diag288<diag::diag288_fn::init>(diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
         }
         return rc == 0;
     }
@@ -116,9 +114,11 @@ namespace zxfoundation::sys::watchdog {
         using namespace zxfoundation::sys::timer;
         using namespace zxfoundation::sys::printk;
 
-        i32 rc = diag::diag288(diag::WDT_FUNC_INIT, diag::WDT_DEFAULT_TIMEOUT,
-                              diag::LPARWDT_RESTART, 0);
-        if (rc != 0) {
+        if (
+            const condition_code rc =
+                diag::diag288<diag::diag288_fn::init>(diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
+            rc != 0
+        ) {
             pnotice("watchdog: harddog not available (rc={})",
                      static_cast<i32>(rc));
         } else {

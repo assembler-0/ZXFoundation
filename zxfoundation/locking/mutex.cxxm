@@ -199,7 +199,7 @@ namespace zxfoundation::locking::mutex {
                 }
 
                 // Block and yield the CPU.
-                current->ko.state = lifecycle_state::suspended;
+                current->substate = sched_substate::idle;
                 zxfoundation::sched::schedule();
 
                 // Woken: schedule() returned.  state is now runnable.

@@ -183,7 +183,7 @@ namespace zxfoundation::exec {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-        const auto* raw = reinterpret_cast<const u8*>(elf_data);
+        const auto* raw = static_cast<const u8*>(elf_data);
         const auto& ehdr = *reinterpret_cast<const elf::elf64_ehdr*>(raw);
 
         // Validate ELF header.
@@ -232,7 +232,7 @@ namespace zxfoundation::exec {
             return lib::unexpected(stack_r.error());
 
         // Store stack pointer in user regs (r15 = stack top).
-        d->primary_strand.uregs.gprs[15] = *stack_r;
+        d->primary_strand.body->uregs.gprs[15] = *stack_r;
 
         sys::printk::pverbose("elf: loaded {} segments, entry={:#x}, stack_top={:#x}\n",
             loaded, ehdr.e_entry, *stack_r);

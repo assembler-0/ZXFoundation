@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/watchdog_types.cxxm
+/// @file watchdog_disarm.cxxm
 /// @brief Primitive watchdog disarm operation — no kernel-subsystem imports.
 
 export module zxfoundation.sys.watchdog_disarm;
@@ -21,7 +21,7 @@ namespace zxfoundation::sys::watchdog {
     ///           already maintained by the hardware fixup mechanism).
     auto watchdog_disarm_raw() noexcept -> void {
         using namespace arch::s390x::cpu::diag;
-        (void)diag288(WDT_FUNC_CANCEL, 0, LPARWDT_RESTART, 0);
+        (void)diag288<diag288_fn::cancel>(WDT_RESTART, 0, 0);
     }
 
 } // namespace zxfoundation::sys::watchdog

@@ -36,7 +36,7 @@ namespace arch::s390x::cpu::processor {
 
     /// @brief s390x ELF ABI stack frame — 160-byte save area at r15.
     /// Layout per SA22-7832 §6.2, -mno-packed-stack, -mbackchain.
-    struct s390x_stack_frame {
+    struct stack_frame {
         u64 back_chain;      // offset   0: pointer to caller's frame (0 = end)
         u64 eos;             // offset   8: end-of-stack marker / glue
         u64 glue[4];         // offset  16: compiler glue area (4 × 8 = 32)
@@ -45,7 +45,7 @@ namespace arch::s390x::cpu::processor {
                              // gprs[9]  = r15 = saved SP         (offset 120)
         u64 fp_area[4];      // offset 128: FP save area (unused under -msoft-float)
     };
-    static_assert(sizeof(s390x_stack_frame) == S390X_STACK_FRAME_SIZE);
+    static_assert(sizeof(stack_frame) == S390X_STACK_FRAME_SIZE);
 
     /// @brief A 128-bit register pair (even/odd GPR pair).
     union register_pair {

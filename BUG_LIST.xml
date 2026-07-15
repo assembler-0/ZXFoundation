@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BugHistory xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:noNamespaceSchemaLocation="scripts/schemas/BUG_HISTORY.xsd">
+
+    <Title>ZXFoundation bug history</Title>
+    <LastUpdated>2026-07-14</LastUpdated>
+
+    <BugList>
+
+        <Bug id="BUG-001">
+            <FoundDate>2026-07-14</FoundDate>
+            <Severity>High</Severity>
+            <Description>
+                Recursive fault on system check (critical or lower) due to poor DIAG X'288' hercules patch
+            </Description>
+            <Behavior>
+                If any subsystem of the kernel triggers a system check (critical or lower), kernel will recursively
+                fault with Operation Exception, and/or trigger a restart (due to misconfigured timebomb)
+            </Behavior>
+            <Solution>
+                Patches Hercules DIAG X'288' Patch to be more robust (also mirror linux)
+            </Solution>
+            <AffectedBuilds>
+                <Range>
+                    <From>
+                        <Branch>26h2</Branch>
+                        <Number>1510</Number>
+                    </From>
+                    <To>
+                        <Branch>26h2</Branch>
+                        <Number>1643</Number>
+                    </To>
+                </Range>
+            </AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn>
+                <Branch>26h2</Branch>
+                <Number>1645</Number>
+            </FixedIn>
+        </Bug>
+
+    </BugList>
+
+</BugHistory>

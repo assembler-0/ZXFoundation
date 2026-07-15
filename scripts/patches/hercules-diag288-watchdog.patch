@@ -81,16 +81,15 @@ index 2bf0c21..efa17d8 100644
 +    /* to set/change/cancel a watchdog timer.  On expiry the system  */
 +    /* is restarted (IPL from the boot device).                      */
 +    /*                                                               */
-+    /* R1 high 32 = function code (0=INIT, 1=CHANGE, 2=CANCEL)      */
-+    /* R1 low  32 = timeout in seconds                               */
-+    /* R3 high 32 = action (0=LPAR restart, or CP cmd addr for VM)   */
-+    /* R3 low  32 = CP cmd length for VM, 0 for LPAR                 */
++    /* R1   = function code (0=INIT, 1=CHANGE, 2=CANCEL)             */
++    /* R1+1 = timeout in seconds                                     */
++    /* R3   = action (0=LPAR restart, or CP cmd addr for VM)         */
++    /* R3+1 = CP cmd length for VM, 0 for LPAR                       */
      /*---------------------------------------------------------------*/
 -        regs->psw.cc = ARCH_DEP(vm_timebomb) (r1, r3, regs);
 +    {
-+        U64 r1_val  = regs->GR(r1);
-+        U32 func    = (U32)(r1_val >> 32);
-+        U32 timeout = (U32)(r1_val);
++        U32 func    = (U32)regs->GR(r1);
++        U32 timeout = (U32)regs->GR(r1 + 1);
 +
 +        switch (func) {
 +        case 0:  /* WDT_FUNC_INIT  */

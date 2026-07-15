@@ -41,7 +41,7 @@ macro(_zx_kernel_flags _tgt)
         -mno-packed-stack -mhard-float -mvx
         -fno-exceptions -fno-rtti
         -nostdlib
-        -Wno-variadic-macros
+        -fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=
         -include ${ZX_VALIDATE_HEADER}
         -march=${MARCH_MODE} -mtune=${MARCH_MODE} -m64
         ${EXTRA_KERNEL_FLAGS}

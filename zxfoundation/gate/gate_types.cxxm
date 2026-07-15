@@ -12,10 +12,6 @@ namespace zxfoundation::gate {
 
     constexpr u32 MAX_GATES = 512U;
 
-    // -----------------------------------------------------------------
-    // Gate classification
-    // -----------------------------------------------------------------
-
     enum class gate_type : u8 {
         nucleus = 0,
         domain  = 1,
@@ -26,13 +22,6 @@ namespace zxfoundation::gate {
         keyed = 1,
         owner = 2,
     };
-
-    // -----------------------------------------------------------------
-    // Per-namespace call number encoding
-    //
-    // Call numbers are packed as: (namespace << 5) | operation
-    // Bits 7-5 = namespace (0-7), bits 4-0 = operation (0-31)
-    // -----------------------------------------------------------------
 
     /// @brief Namespace identifiers for dispatch.
     enum class call_namespace : u8 {

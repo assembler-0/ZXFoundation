@@ -5,6 +5,7 @@
 
 export module zxfoundation.sys.service;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.scoms.scoms_ref;
@@ -235,6 +236,65 @@ namespace zxfoundation::sys::service {
         return g_service_table.count();
     }
 
+    /// @brief Look up a service_entry by SCOMS ID.
+    /// @return Raw pointer, or nullptr if not found.
+    [[nodiscard]] auto service_entry_find_by_id(u32 id) noexcept -> service_entry* {
+        return _internal::g_service_table.find_raw(id);
+    }
+
+    auto register_service_cap_lookup() noexcept -> void {
+        (void)register_lookup(
+            cap_type::service,
+            [](u16 obj_id) noexcept -> scoms::kobject* {
+                auto* e = service_entry_find_by_id(static_cast<u32>(obj_id));
+                return e ? &e->ko : nullptr;
+            });
+    }
+
 } // namespace zxfoundation::sys::service
 
 } // end export
+
+// ── cap_validate specialization for service_entry ──────────────────────────
+
+namespace zxfoundation::sys::cap {
+
+    using zxfoundation::base::lifecycle_state;
+
+    template <>
+    [[nodiscard]] auto cap_validate<zxfoundation::sys::service::service_entry>(
+        cap_token token, cap_rights needed
+    ) noexcept -> lib::expected<zxfoundation::sys::service::service_entry*, lib::kernel_error> {
+
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (token.type() != cap_type::service) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        if ((token.rights() & needed) == cap_rights::none && needed != cap_rights::none) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto* e = zxfoundation::sys::service::service_entry_find_by_id(
+            static_cast<u32>(token.object_id()));
+        if (!e) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (e->ko.generation != static_cast<u32>(token.generation())) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (e->ko.state == lifecycle_state::dying) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+        return e;
+    }
+
+} // namespace zxfoundation::sys::cap
