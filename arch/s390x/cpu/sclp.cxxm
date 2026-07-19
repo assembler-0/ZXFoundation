@@ -30,7 +30,7 @@ namespace arch::s390x::cpu::sclp {
     /// @brief Read SCLP configuration info.
     /// @param info Output SCCB.
     /// @return 0 on success.
-    inline auto read_info(read_info_sccb& info) noexcept -> i32 {
+    inline auto read_info(read_info_sccb& info) noexcept -> condition_code {
         info.header.length = sizeof(read_info_sccb);
         info.header.function_code = 0x01;
         const condition_code cc = service_call(SCLP_CMDW_READ_SCP_INFO, &info);
@@ -42,10 +42,10 @@ namespace arch::s390x::cpu::sclp {
     /// @brief Read SCLP CPU info.
     /// @param info Output SCCB.
     /// @return 0 on success.
-    inline auto read_cpu_info(read_cpu_info_sccb& info) noexcept -> i32 {
+    inline auto read_cpu_info(read_cpu_info_sccb& info) noexcept -> condition_code {
         info.header.length = sizeof(read_cpu_info_sccb);
         info.header.function_code = 0x01;
-        const i32 cc = service_call(SCLP_CMDW_READ_CPU_INFO, &info);
+        const condition_code cc = service_call(SCLP_CMDW_READ_CPU_INFO, &info);
         if (cc != 0)
             return cc;
         return (info.header.response_code == SCLP_RC_NORMAL_COMPLETION) ? 0 : -1;

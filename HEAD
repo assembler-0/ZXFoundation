@@ -1,13 +1,67 @@
-build: added flag checking and LLVM 19/20/21 support/tested
+trap, sched, sys/irq: trap & interrupt infrastructure upgrade + BUG-002 fix
 
-build: added new flag checking system for C/C++ flags.
-	   added build id
+sys/scoms, sys/irq: fix IRQ dispatch slot mismatch (BUG-002)
+    see BUG_LIST.xml:BUG-002 for more information about behavior and solution.
 
-docs: updated build guide to reference minimum compiler to use (for LLVM)
+arch/s390x/trap/ext, sys/timer: route external interrupts through IRQ table
+    ext.cxxm handle() now dispatches via irq_dispatch(EXT_*) for every
+    external interrupt class instead of using hardcoded fast paths.  timer.cxxm
+    registers its handlers through irq_register() like every other subsystem,
+    relying on the fixed SCOMS slot allocation above for correct dispatch.
 
-arch/s390x/link: changed linker scripts to include note section
+arch/s390x/trap/mcck: MCESA save areas
+    Added full MCESA save area layout to arch/s390x/cpu/lowcore_types.cxxm
+    (save_area_sync[8], psw_save_area, prefixreg_save_area, fpc, tod, timer,
+    clkcomp, last_break, gr, fpr, cr, ar).  dump_mcesa() in mcck.cxxm:90-125
+    reports all areas on MCCK.
 
-codefmt: added missing newline at EOF, renamed NC_ERROR variables for each
-		 handler module
+arch/s390x/trap/mcck: MCIC backlog detection
+    Added MCIC_BACKLOG constant (bit 6, 1ULL << 57) to mcck.cxxm.  handle()
+    now decodes the MCIC backlog bit and, when a stacked MCCK is detected,
+    emits syschk_warning instead of continuing into the regular handler
+    path.  Added backlog=15 to the machine_error enum in lib/error.cxxm.
+
+arch/s390x/trap/entry.S: restart handler
+    Added trap_restart_entry in entry.S:176-197 with LC_RESTART_DATA /
+    LC_RESTART_SOURCE wired into lowcore.  Restarts now trap through a
+    dedicated entry rather than falling through the program-check path.
+
+zxfoundation/sched/sched: CPU timer EEVDF accounting
+    Implemented EEVDF vruntime accounting in sched.cxxm:502-553 (quantum,
+    weight, deadline, need_resched).  cpu_timer_tick() now updates vruntime
+    and recalculates deadline instead of only counting ticks.  Timer set
+    uses EEVDF_DEFAULT_SLICE for runnable strands and TICK_INTERVAL_TOD for
+    the idle strand.
+
+arch/s390x/cpu/sclp: timing alert / service signal
+    Service signal path is a null-op pending a future SCLP SCCB reader.
+    Acknowledged in code comments as future work — no dispatch regression
+    because the vector is not registered.
+
+arch/s390x/trap/pgm: program-check name table
+    pgm.cxxm now decodes and reports every PoP §6-4 program-check code by
+    name.  Added DXC subclass decoding and TEID inspection for data/page
+    exceptions.  arch/s390x/cpu/teid_types.cxxm added to hold the decoded
+    TEID bit layout.
+
+lib/uaccess, arch/s390x/trap/pgm: uaccess fixup mechanism
+    Added fixup table consulted by pgm.cxxm on access exceptions.
+    copy_from_user/copy_to_user now register fixup landing points so that
+    a fault on a user access returns -EFAULT to the caller instead of
+    escalating to a system check.  Existing uaccess code paths updated to
+    emit fixup entries.
+
+zxfoundation/sched/sched, arch/s390x/cpu/ipi: scheduler IPI wiring
+    Wired send_reschedule() into enqueue_strand() in sched.cxxm.  When a
+    strand is enqueued on a CPU other than the current CPU, the scheduler
+    now calls arch.s390x.cpu.ipi.send_reschedule(target_cpu).  This sends
+    SIGP external call with EC_SCHEDULE_BIT; the target CPU's handle_ipi
+    (smp.cxxm:235) sees the bit and calls sched_resched_current(), dragging
+    the CPU out of enabled_wait() to run the woken strand.  Closes the final
+    gap in SMP wake-up — remote enqueues no longer require a timer tick to
+    be observed by the target.
+
+build: Added configure.cmake script for quick project configuration (TL;DR)
+       Updated build guide to reference alternative method
 
 Signed-off-by: assembler-0 <diaviekone13@gmail.com>

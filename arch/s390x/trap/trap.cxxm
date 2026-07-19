@@ -4,12 +4,15 @@
 
 export module arch.s390x.trap.trap;
 import arch.s390x.cpu.irq_frame;
+import arch.s390x.cpu.lowcore;
 import arch.s390x.trap.io;
 import arch.s390x.trap.svc;
 import arch.s390x.trap.mcck;
 import arch.s390x.trap.ext;
 import arch.s390x.trap.pgm;
 import zxfoundation.base.types;
+import zxfoundation.sys.syschk;
+import lib.error;
 
 /// @brief Program check handler.
 extern "C" auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
@@ -34,4 +37,28 @@ extern "C" auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 sv
 /// @brief Machine-check handler — decode MCIC and attempt recovery.
 extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::mcck::handle(frame);
+}
+
+/// @brief Restart interruption handler.
+extern "C" [[noreturn]] auto do_restart_interrupt(
+    void* data,
+    i32   source,
+    u16   cpu_id,
+    u32   flags
+) noexcept -> void {
+    (void)source;
+    (void)flags;
+    (void)cpu_id;
+    auto& lc = *arch::s390x::cpu::lowcore::get_current();
+    const auto fn = reinterpret_cast<void(*)(void*)>(lc.restart_fn);
+    if (!fn) {
+        zxfoundation::sys::syschk::syschk_fatal(
+            ::lib::kernel_error::from_generic(::lib::generic_error::internal_error),
+            "restart: sigp restart on cpu {} without registered handler",
+            cpu_id);
+    }
+    fn(data);
+    zxfoundation::sys::syschk::syschk_critical(
+        ::lib::kernel_error::from_generic(::lib::generic_error::internal_error),
+        "restart: handler returned on cpu {}", cpu_id);
 }

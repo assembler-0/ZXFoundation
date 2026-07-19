@@ -4,9 +4,7 @@ Throughout its development ZXFoundation utilize CMake as its main build system o
 
 ---
 
-## Building
-
-### Prerequisite
+## Prerequisite
 
 | Tool           | (Suggested) Version        | Required | Note                                  |
 |----------------|----------------------------|----------|---------------------------------------|
@@ -18,6 +16,10 @@ Throughout its development ZXFoundation utilize CMake as its main build system o
 | Hercules       | n/a                        | No       | Needed for emulation                  |
 | Hercules Tools | n/a                        | No       | Needed for 3390 disk creation         |
 | Doxygen        | n/a                        | No       | Needed for documentation              |
+
+---
+
+## Building: The Normal way
 
 ### Toolchain (optional)
 
@@ -67,6 +69,55 @@ cmake -B build -DZX_TOOLCHAIN_FILE=<path_to_your_toolchain> -DZX_CONFIG_FILE=<pa
 cmake --build build --parallel <cpus> # "nproc" on linux or "sysctl -n hw.logicalcpu"
 ```
 
+## Building: The easy way
+
+The project provides `configure.cmake` at project root. You can configure everything and build the project with a single command.
+
+```shell
+$ cmake -P configure.cmake
+ZXFoundation configuration helper tool. Copyright (C) 2026 assembler-0. Licensed under the Apache License, Version 2.0.
+
+Usage:
+    cmake [-D<OPTION>=<VALUE> ...] -P configure.cmake -- [<COMMAND> ...]
+
+Options:
+    ZX_COMPILER_FAMILY (*) [clang]   | gcc | unknown             (default: clang)
+    ZX_C_COMPILER      (*) [clang]   | gcc | unknown             (default: clang)
+    ZX_CXX_COMPILER    (*) [clang++] | g++ | unknown             (default: clang++)
+    ZX_COMPILER_VERSION    version suffix, e.g. 17               (default: "")
+    ZX_COMPILER_PREFIX     cross prefix (for gcc)                (default: "")
+    ZX_OPT_LEVEL             0     1   [2]   3  s  z             (default: 2)
+    ZX_DSYM_LEVEL           [0]    1    2    3                   (default: 0)
+    ZX_MARCH_MODE          [z13]  z14  z15  z16 ...              (default: z13)
+    ZX_DASD_SERIAL         12-digit DASD serial                  (default: 001842095440)
+    ZX_BUILD_DIR           output directory                      (default: build)
+    ZX_TOOLCHAIN_FILE      path for the generated toolchain file (default: $ZX_BUILD_DIR/toolchain.generated.cmake)
+    ZX_CONFIG_FILE         path for the generated config file    (default: $ZX_BUILD_DIR/config.generated.cmake)
+    ZX_NOCHECK             no check for standard safeguards      (default: ON)
+
+Command:
+    [help]             (X) shows this help                       (default)
+    configure          (X) configures the project
+    build              (X) configures and build the project
+    genconfig          (X) generates configuration files
+
+Notes:
+    (*): Required option
+    (X): Choose one of the options
+
+Examples:
+  cmake -P configure.cmake -- help
+  cmake -P -DZX_C_OMPILER=clang -DZX_CXX_COMPILER=clang++ configure.cmake -- build
+```
+
+Notice, this is purely for getting started quickly, i personally does not recommend doing this on a daily basis and you should always make your own toolchain and configuration.
+
+---
+
+## Artifacts
+
+
+
 Now, after that, you will get the artifacts of the build, namely:
 
 ```
@@ -93,7 +144,7 @@ drwxr-xr-x. 1 assembler-0 assembler-0       8 Jun 23 08:06 user
 -rwxr-xr-x. 1 assembler-0 assembler-0   17848 Jun 24 08:24 zxsign                                # kernel signer
 ```
 
-### Documentation and misc. targets
+## Documentation and misc. targets
 
 - `releaseinfo`
   - prints all versioning info at the time of configuration

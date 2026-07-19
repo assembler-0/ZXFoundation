@@ -29,7 +29,7 @@ namespace zxfoundation::base::cmdline {
         callback, ///< Custom handler: @c handler(value) is called.
     };
 
-    /// @brief Signature for @ref value_type::callback handlers.
+    /// @brief Signature for @c value_type::callback handlers.
     /// @param value  The token after '=', or empty for flags.
     /// @return true on success, false to abort parsing.
     using handler_fn = auto (*)(lib::string_view value) noexcept -> bool;
@@ -76,7 +76,7 @@ namespace zxfoundation::base::cmdline {
     /// @c '=', the remainder is treated as the value.  Bare tokens (no @c '=')
     /// are treated as flags.
     ///
-    /// Quotes and backslash escapes are handled by @ref tokenizer.
+    /// Quotes and backslash escapes are handled by @c tokenizer.
     auto parse(lib::string_view cmdline) noexcept -> void {
         lib::tokenizer tok{cmdline};
 

@@ -10,7 +10,9 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.clkcomp;
 import arch.s390x.cpu.irq;
+import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
+import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sys.printk;
 import lib.min_heap;
 import lib.expected;
@@ -30,8 +32,6 @@ namespace _internal {
         }
     };
 
-    /// @brief Per-CPU timer heaps, indexed by logical cpu_id.
-    /// @note Sized by CONFIG_ZX_MAX_CPUS, not a hardcoded constant.
     static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
         g_heaps[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
@@ -67,13 +67,6 @@ namespace zxfoundation::sys::timer {
     [[nodiscard]] constexpr auto tod_to_ns(u64 tod) noexcept -> u64 {
         return static_cast<u64>(
             (static_cast<u128>(tod) * 1000ULL) / 4096ULL);
-    }
-
-    /// @brief Initialize the timer subsystem on the BSP (CPU 0).
-    auto timer_init() noexcept -> void {
-        _internal::g_timer_initialized = true;
-        printk::pinfo("timer: subsystem initialized (heap capacity={})",
-            lib::format::dec{static_cast<u64>(TIMER_HEAP_CAPACITY)});
     }
 
     /// @brief Initialize the timer subsystem on an application processor.
@@ -177,6 +170,71 @@ namespace zxfoundation::sys::timer {
         }
 
         _internal::rearm_comparator(cpu_id);
+    }
+
+    auto irq_handler_clock_comparator(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void {
+        (void)irq; (void)frame; (void)data;
+        timer_interrupt();
+    }
+
+    auto irq_handler_timing_alert(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void {
+        (void)irq; (void)frame; (void)data;
+        const u64 far_future = arch::s390x::cpu::clock::stck()
+                             + 40'960'000'000ULL;
+        arch::s390x::cpu::clkcomp::clkcomp_set(far_future);
+        zxfoundation::sys::printk::pverbose("ext: timing-alert re-armed\n");
+    }
+
+    auto irq_handler_service_signal(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void {
+        (void)irq; (void)frame; (void)data;
+        // SCLP SCCB reader not present yet — declared null-op so a noisy
+        // service signal cannot raise syschk on hardware that thinks the CP
+        // SCLP exists.
+        zxfoundation::sys::printk::pverbose("ext: service-signal acknowledged\n");
+    }
+
+    /// @brief Initialize the timer subsystem on the BSP (CPU 0).
+    auto timer_init() noexcept -> void {
+        _internal::g_timer_initialized = true;
+
+        using irq::IRQ_BASE_EXT;
+        using irq::EXT_IRQ_CLOCK_COMPARATOR;
+        using irq::EXT_IRQ_TIMING_ALERT;
+        using irq::EXT_IRQ_SERVICE_SIGNAL;
+        using irq::IRQF_FAST;
+
+        const u16 clk_comp_irq = static_cast<u16>(IRQ_BASE_EXT + EXT_IRQ_CLOCK_COMPARATOR);
+        const u16 timing_alert_irq = static_cast<u16>(IRQ_BASE_EXT + EXT_IRQ_TIMING_ALERT);
+        const u16 service_signal_irq = static_cast<u16>(IRQ_BASE_EXT + EXT_IRQ_SERVICE_SIGNAL);
+
+        auto reg = [](u16 vec, irq::handler_fn h) {
+            auto r = irq::irq_register(vec, h, nullptr, IRQF_FAST);
+            if (!r) [[unlikely]] {
+                zxfoundation::sys::printk::perr(
+                    "timer: failed to register IRQ {:#06x} (cat={:#x} code={})",
+                    vec, static_cast<u32>(r.error().category),
+                    r.error().code);
+            }
+        };
+
+        reg(clk_comp_irq,       _internal::irq_handler_clock_comparator);
+        reg(timing_alert_irq,   _internal::irq_handler_timing_alert);
+        reg(service_signal_irq, _internal::irq_handler_service_signal);
+
+        printk::pinfo("timer: subsystem initialized (heap capacity={})",
+            lib::format::dec{static_cast<u64>(TIMER_HEAP_CAPACITY)});
     }
 
 } // namespace zxfoundation::sys::timer

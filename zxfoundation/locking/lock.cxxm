@@ -31,7 +31,7 @@ namespace zxfoundation::locking {
     /// @{
 
     /// @brief Standard blocking lock guard.
-    /// @tparam L A type satisfying the @ref lockable concept.
+    /// @tparam L A type satisfying the @c lockable concept.
     template <lockable L>
     struct lock_guard {
         /// @brief Acquire the lock (blocking).
@@ -55,7 +55,7 @@ namespace zxfoundation::locking {
     };
 
     /// @brief Scoped lock guard that saves and restores IRQ state.
-    /// @tparam L A type satisfying the @ref irq_lockable concept.
+    /// @tparam L A type satisfying the @c irq_lockable concept.
     template <irq_lockable L>
     struct irq_lock_guard {
         /// @brief Acquire the lock and save IRQ state (blocking).

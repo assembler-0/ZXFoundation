@@ -16,6 +16,13 @@
 #define LC_NODAT_STACK      0x0358UL    ///< zx_lowcore_t::nodat_stack
 #define LC_RESTART_STACK    0x0360UL    ///< zx_lowcore_t::restart_stack
 #define LC_MCCK_STACK       0x0368UL    ///< zx_lowcore_t::mcck_stack
+#define LC_RESTART_FN       0x0370UL    ///< zx_lowcore_t::restart_fn
+#define LC_RESTART_DATA     0x0378UL    ///< zx_lowcore_t::restart_data
+#define LC_RESTART_SOURCE   0x0380UL    ///< zx_lowcore_t::restart_source
+#define LC_RESTART_FLAGS    0x0384UL    ///< zx_lowcore_t::restart_flags
+#define LC_PGM_CODE         0x008EUL    ///< zx_lowcore_t::pgm_code
+#define LC_SVC_CODE         0x008AUL    ///< zx_lowcore_t::svc_code
+#define LC_PSW_FLAG         0x0080UL    ///< zx_lowcore_t::psw_flag
 #define LC_KERNEL_ASCE      0x0388UL    ///< zx_lowcore_t::kernel_asce
 #define LC_RETURN_PSW       0x0290UL    ///< zx_lowcore_t::return_psw
 #define LC_PSW_TEMP         0x0248UL    ///< Temporary PSW storage used by RESTORE_FRAME (unused padding after stack_canary)

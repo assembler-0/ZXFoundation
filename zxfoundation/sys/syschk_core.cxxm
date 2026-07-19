@@ -42,10 +42,10 @@ namespace _internal {
     static atomic<u32> g_halting{0};
 
     /// @brief Snapshot of the boot-protocol CPU map pointer, saved by syschk_init.
-    ///        Null until @ref syschk_init is called.
+    ///        Null until @c syschk_init is called.
     static const arch::s390x::init::zxfl::cpu_info* g_cpu_map{nullptr};
 
-    /// @brief Number of CPUs in @ref g_cpu_map.
+    /// @brief Number of CPUs in @c g_cpu_map.
     static u32 g_cpu_count{0};
 
     /// @brief Hardware CPU address of the BSP — used to skip self when halting APs.
@@ -70,7 +70,7 @@ namespace zxfoundation::sys::syschk {
     /// @brief Initialize the system-check subsystem.
     /// @param[in] proto  The ZXFL boot protocol.
     ///
-    /// @note  @ref system_check is safe to call even before @ref syschk_init
+    /// @note  @c system_check is safe to call even before @c syschk_init
     ///        (e.g., during very early lowcore setup).  In that case the SMP
     ///        halt loop is simply skipped because @c g_cpu_map is null.
     auto syschk_init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {
@@ -81,14 +81,14 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Record a kernel error. Conditionally halt.
     ///
-    /// @param[in] err      The @ref lib::kernel_error that triggered this check.
+    /// @param[in] err      The @c lib::kernel_error that triggered this check.
     ///                     Its @c category and @c code are stored verbatim in the
     ///                     crash record — no translation occurs.
     /// @param[in] sev      Severity annotation.  Affects the log level used and the
     ///                     @c severity byte of the crash record.  All severity levels
     ///                     currently result in an unconditional halt.
     /// @param[in] msg      Human-readable reason string.  Truncated to
-    ///                     @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    ///                     @c ZX_CRASH_MSG_LEN - 1 bytes.
     /// @param[in] location Source location of the call site.
     auto system_check(
         lib::kernel_error    err,

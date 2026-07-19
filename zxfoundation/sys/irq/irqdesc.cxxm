@@ -1,6 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sys/irq/irqdesc.cxxm
-/// @brief Generic IRQ descriptor table — SCOMS-managed kobject_table.
+/// @brief Generic IRQ descriptor table
 
 export module zxfoundation.sys.irq.irqdesc;
 import zxfoundation.base.types;
@@ -30,6 +30,75 @@ namespace zxfoundation::sys::irq {
 
     constexpr u32 IRQF_SHARED   = 1U << 0;  ///< Allow multiple registrations.
     constexpr u32 IRQF_DISABLED = 1U << 1;  ///< Handler runs with IRQs off.
+    constexpr u32 IRQF_NOAUTOEN = 1U << 2;  ///< Don't auto-enable CR0 subclass.
+    constexpr u32 IRQF_FAST     = 1U << 3;  ///< Hot path -- bypass descriptor lock.
+
+    /// @brief External-interrupt sub-offsets within the @c IRQ_BASE_EXT range.
+    /// @note Offsets consume IRQ_BASE_EXT+(MAX)=0x010C and must remain
+    ///       < 0x0100 to stay in the EXT span.
+    enum class ext_irq_slot : u16 {
+        EMERGENCY_SIGNAL   = 0x01, ///< 0x1201 — IPI emergency signal.
+        EXTERNAL_CALL      = 0x02, ///< 0x1202 — IPI external call (Linux reschedule / call_function).
+        SERVICE_SIGNAL     = 0x03, ///< 0x2401 — SCLP service signal.
+        CP_SERVICE         = 0x04, ///< 0x2603 — CP service (pfault) event.
+        CPU_TIMER          = 0x05, ///< 0x1005 — CPU-timer quantum expiry.
+        CLOCK_COMPARATOR   = 0x06, ///< 0x1004 — clock-comparator timer.
+        TIMING_ALERT       = 0x07, ///< 0x1406 — STP timing alert.
+        MALFUNCTION_ALERT  = 0x08, ///< 0x1200 — malfunction-alert IPI.
+        WARNING_TRACK      = 0x09, ///< 0x1007 — warning-track STP/EAD.
+        MEASUREMENT_ALERT  = 0x0A, ///< 0x1407 — CPU-MF measurement alert.
+        INTERRUPT_KEY      = 0x0B, ///< 0x0040 — external-interrupt-key press.
+    };
+
+    /// @brief Constructor conveniences mirroring the @c ext_irq_slot enum.
+    /// @{
+    constexpr u16 EXT_IRQ_EMERGENCY_SIGNAL = static_cast<u16>(ext_irq_slot::EMERGENCY_SIGNAL);
+    constexpr u16 EXT_IRQ_EXTERNAL_CALL    = static_cast<u16>(ext_irq_slot::EXTERNAL_CALL);
+    constexpr u16 EXT_IRQ_SERVICE_SIGNAL   = static_cast<u16>(ext_irq_slot::SERVICE_SIGNAL);
+    constexpr u16 EXT_IRQ_CP_SERVICE       = static_cast<u16>(ext_irq_slot::CP_SERVICE);
+    constexpr u16 EXT_IRQ_CPU_TIMER        = static_cast<u16>(ext_irq_slot::CPU_TIMER);
+    constexpr u16 EXT_IRQ_CLOCK_COMPARATOR = static_cast<u16>(ext_irq_slot::CLOCK_COMPARATOR);
+    constexpr u16 EXT_IRQ_TIMING_ALERT      = static_cast<u16>(ext_irq_slot::TIMING_ALERT);
+    constexpr u16 EXT_IRQ_MALFUNCTION_ALERT = static_cast<u16>(ext_irq_slot::MALFUNCTION_ALERT);
+    constexpr u16 EXT_IRQ_WARNING_TRACK     = static_cast<u16>(ext_irq_slot::WARNING_TRACK);
+    constexpr u16 EXT_IRQ_MEASUREMENT_ALERT= static_cast<u16>(ext_irq_slot::MEASUREMENT_ALERT);
+    constexpr u16 EXT_IRQ_INTERRUPT_KEY    = static_cast<u16>(ext_irq_slot::INTERRUPT_KEY);
+    /// @}
+
+    /// @brief Resolve a raw z/Architecture external-interruption code to its
+    ///        IRQ table slot within the @c IRQ_BASE_EXT range.
+    [[nodiscard]] constexpr auto ext_code_to_irq(u16 ext_code) noexcept -> u16 {
+        switch (ext_code) {
+            case 0x1201: return IRQ_BASE_EXT + EXT_IRQ_EMERGENCY_SIGNAL;
+            case 0x1202: return IRQ_BASE_EXT + EXT_IRQ_EXTERNAL_CALL;
+            case 0x2401: return IRQ_BASE_EXT + EXT_IRQ_SERVICE_SIGNAL;
+            case 0x2603: return IRQ_BASE_EXT + EXT_IRQ_CP_SERVICE;
+            case 0x1005: return IRQ_BASE_EXT + EXT_IRQ_CPU_TIMER;
+            case 0x1004: return IRQ_BASE_EXT + EXT_IRQ_CLOCK_COMPARATOR;
+            case 0x1406: return IRQ_BASE_EXT + EXT_IRQ_TIMING_ALERT;
+            case 0x1200: return IRQ_BASE_EXT + EXT_IRQ_MALFUNCTION_ALERT;
+            case 0x1007: return IRQ_BASE_EXT + EXT_IRQ_WARNING_TRACK;
+            case 0x1407: return IRQ_BASE_EXT + EXT_IRQ_MEASUREMENT_ALERT;
+            case 0x0040: return IRQ_BASE_EXT + EXT_IRQ_INTERRUPT_KEY;
+            default:     return IRQ_NR_MAX;
+        }
+    }
+
+    /// @brief Deferred-work bit indices held in the per-CPU
+    ///        @c percpu::s390x_percpu_data::deferred_pending field.
+    /// @{
+    constexpr u32 DEFERRED_IRQ_WORK       = 0; ///< Subsystem / RCU / timers scheduling.
+    constexpr u32 DEFERRED_CALL_FUNCTION  = 1; ///< Cross-CPU function-call IPI.
+    constexpr u32 DEFERRED_MCCK_PENDING   = 2; ///< Deferred (non-fatal) machine-check work.
+    constexpr u32 DEFERRED_RESCHED        = 3; ///< Reschedule request (Linux "need_resched" IPI).
+    constexpr u32 DEFERRED_STOP_CPU       = 4; ///< Cooperative CPU-offline request.
+
+    constexpr u32 DEFERRED_IRQ_WORK_BIT      = 1U << DEFERRED_IRQ_WORK;
+    constexpr u32 DEFERRED_CALL_FUNCTION_BIT = 1U << DEFERRED_CALL_FUNCTION;
+    constexpr u32 DEFERRED_MCCK_PENDING_BIT   = 1U << DEFERRED_MCCK_PENDING;
+    constexpr u32 DEFERRED_RESCHED_BIT        = 1U << DEFERRED_RESCHED;
+    constexpr u32 DEFERRED_STOP_CPU_BIT       = 1U << DEFERRED_STOP_CPU;
+    /// @}
 
     using handler_fn = void(*)(
         u16                                           irq,
@@ -83,6 +152,14 @@ export {
 namespace zxfoundation::sys::irq {
 
     /// @brief Dispatch an IRQ — called from C interrupt entry stubs (trap.cxxm).
+    /// @param[in] irq   Vector number inside [0,IRQ_NR_MAX):
+    ///                    - IRQ_BASE_PGM  + code for program checks
+    ///                    - IRQ_BASE_EXT  + slot (see @c ext_code_to_irq)
+    ///                    - IRQ_BASE_IO   + ISC for I/O interrupts
+    ///                    - IRQ_BASE_MCCK for machine check
+    /// @param[in] frame Pointer to the saved interrupt frame (entry.S layout).
+    /// @param[in] cls   Architectural interruption class (PoP §6 "Interruption
+    ///                  Definitions").  Determines IRQ-nesting accounting width.
     auto irq_dispatch(
         u16                                           irq,
         arch::s390x::cpu::irq::irq_frame* frame,
@@ -98,17 +175,28 @@ namespace zxfoundation::sys::irq {
 
         handler_fn h = nullptr;
         void*      d = nullptr;
+        u32        flags_to_check = 0U;
 
         irq_desc* desc = g_irq_table.find_raw(irq);
         if (desc) [[likely]] {
-            const locking::irq_lock_guard guard{desc->lock};
-            h = desc->handler;
-            d = desc->data;
-            (void)desc->count.fetch_add(1,
-                arch::s390x::lib::atomic::memory_order::relaxed);
+            if (desc->flags & IRQF_FAST) {
+                h = desc->handler;
+                d = desc->data;
+                flags_to_check = desc->flags;
+                (void)desc->count.fetch_add(1,
+                    arch::s390x::lib::atomic::memory_order::relaxed);
+            } else {
+                const locking::irq_lock_guard guard{desc->lock};
+                h = desc->handler;
+                d = desc->data;
+                flags_to_check = desc->flags;
+                (void)desc->count.fetch_add(1,
+                    arch::s390x::lib::atomic::memory_order::relaxed);
+            }
         }
 
         if (h) [[likely]] h(irq, frame, d);
+        (void)flags_to_check;
 
         pcp.irq_nesting -= raise;
     }
@@ -120,9 +208,17 @@ namespace zxfoundation::sys::irq {
     }
 
     /// @brief Register a handler for a vector.
-    ///
-    /// Allocates an irq_desc from the SCOMS table on first registration.
-    /// Subsequent registrations require IRQF_SHARED.
+    /// @param[in] irq     Vector slot within the relevant IRQ_BASE_* span.
+    /// @param[in] handler Cancellable handler.  Must not block indefinitely;
+    ///                    the dispatch path is IRQ-disabled.
+    /// @param[in] data    Opaque handler-private cookie.
+    /// @param[in] flags   Bitmask of @c IRQF_* values.
+    /// @return `expected<void, kernel_error>` -- one of:
+    ///         - `not_found`    -- subsystem not initialised yet.
+    ///         - `invalid_arg`  -- @p irq out of range or @p handler null.
+    ///         - `out_of_memory` -- SCOMS table saturated.
+    ///         - `already_locked` -- vector already registered without
+    ///           IRQF_SHARED.
     [[nodiscard]] auto irq_register(
         u16        irq,
         handler_fn handler,
@@ -140,7 +236,7 @@ namespace zxfoundation::sys::irq {
 
         irq_desc* d = g_irq_table.find_raw(irq);
         if (!d) {
-            auto result = g_irq_table.alloc();
+            auto result = g_irq_table.alloc_at(irq);
             if (!result) [[unlikely]]
                 return lib::unexpected(
                     lib::kernel_error::from_memory(
@@ -169,6 +265,7 @@ namespace zxfoundation::sys::irq {
     }
 
     /// @brief Unregister the handler for a vector and release the SCOMS slot.
+    /// @param[in] irq  Vector slot to clear.
     auto irq_unregister(u16 irq) noexcept -> void {
         using namespace _internal;
         if (!g_initialized || irq >= IRQ_NR_MAX) return;
@@ -187,11 +284,34 @@ namespace zxfoundation::sys::irq {
     }
 
     /// @brief Initialize the IRQ subsystem with the SCOMS kobject_table.
+    /// @note Idempotent — safe to invoke from `main` after `printk::init()`.
     auto irq_subsystem_init() noexcept -> void {
         using namespace _internal;
         if (g_initialized) return;
         g_irq_table.init(scoms::kobject_type::irq_desc);
         g_initialized = true;
+    }
+
+    /// @brief Set one deferred-work bit on the calling CPU's
+    ///        @c percpu::s390x_percpu_data::deferred_pending field.
+    /// @param[in] bit  One of @c DEFERRED_*_BIT masks above.
+    /// @note Memory order is release so the bit set is visible before any
+    ///       IRQ return path context restore.
+    auto deferred_set(u32 bit) noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        (void)pcp.deferred_pending.fetch_or(bit,
+            arch::s390x::lib::atomic::memory_order::release);
+    }
+
+    /// @brief Test-and-clear a deferred-work bit.
+    /// @return @c true if the bit was set (and is now cleared).
+    /// @note Drains the bit atomically so the caller cannot accidentally
+    ///       re-process work after a context switch.
+    [[nodiscard]] auto deferred_test_clear(u32 bit) noexcept -> bool {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        const u32 old = pcp.deferred_pending.fetch_and(~bit,
+            arch::s390x::lib::atomic::memory_order::acq_rel);
+        return (old & bit) != 0U;
     }
 
 } // namespace zxfoundation::sys::irq

@@ -225,7 +225,7 @@ namespace crypto::sha256 {
         namespace cpacf = arch::s390x::cpu::cpacf;
         namespace feat  = arch::s390x::cpu::features;
 
-        if (feat::has(feat::facility::msa_ext1)) {
+        if (feat::has(feat::facility::msa)) {
             struct sha256_pb {
                 u32 state[8]{};
                 u32 _pad[2]{};

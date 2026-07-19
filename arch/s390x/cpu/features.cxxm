@@ -13,102 +13,89 @@ export {
 
 namespace arch::s390x::cpu::features {
 
-    /// @brief Named CPU facility identifiers — every bit the kernel uses.
+    /// @brief Named CPU facility identifiers — STFLE bit numbers per
+    ///        IBM z/Architecture PoP Appendix B (Figure 4-36).
     enum class facility : u32 {
-        // ── Base / mandatory ──────────────────────────────────────────
-        n3                 = 0,    ///< N3 (z/Architecture arch-mode).
-        zarch_arch_mode    = 1,    ///< z/Architecture arch-mode.
-        zarch              = 2,    ///< z/Architecture installed.
-        multi_epoch        = 3,    ///< Multiple-epoch facility.
-        hfp_madd_sub       = 4,    ///< HFP multiply-add/subtract.
-        hfp_unnorm_ext     = 5,    ///< HFP unnormalized extension.
-        asn_lx_reuse       = 6,    ///< ASN-and-LX-Reuse (PC/PT).
-        stfle              = 7,    ///< STFLE instruction.
-
-        // ── DAT / paging / large pages ────────────────────────────────
-        edat1              = 8,    ///< Enhanced-DAT-1 (1 MiB large pages).
-        sense_run_stat     = 9,    ///< Sense-Running-Status facility.
-        cond_sske          = 10,   ///< Conditional-SSKE facility.
-
-        // ── TLB / IDTE ────────────────────────────────────────────────
-        idte_seg_region    = 12,   ///< IDTE segment/region flush.
-        idte_partial       = 13,   ///< IDTE partial flush.
-
-        // ── Storage / framing ─────────────────────────────────────────
-        pfmf               = 14,   ///< Perform-Frame-Management-Function.
-        idte_page          = 15,   ///< IDTE / IPTE page flush.
-
-        // ── Crypto (MSA) ──────────────────────────────────────────────
-        msa                = 17,   ///< Message-Security-Assist (KIMD/KLMD/KM).
-        msa_ext1           = 18,   ///< MSA extension 1.
-        msa_ext2           = 19,   ///< MSA extension 2.
-        msa_ext3           = 20,   ///< MSA extension 3.
-        eimm               = 21,   ///< Extended-immediate facility.
-        hfp_signaling      = 22,   ///< HFP-signaling.
-        hfp_extra          = 23,   ///< HFP-extra.
-
-        // ── Clock ─────────────────────────────────────────────────────
-        gen_inst           = 25,   ///< General-instructions-extension (STCKF).
-
-        // ── String / I/O ──────────────────────────────────────────────
-        mvcos              = 27,   ///< Move-with-Optional-Specifications.
-
-        // ── PCI / I/O ─────────────────────────────────────────────────
-        pci                = 30,   ///< PCI I/O facility.
-
-        // ── Atomic / sync ─────────────────────────────────────────────
-        cssf               = 32,   ///< Compare-and-Swap-and-Store 1.
-        cssf2              = 33,   ///< Compare-and-Swap-and-Store 2.
-        csst               = 34,   ///< Compare-and-Swap-and-Store (CSST).
-        execute_ext        = 35,   ///< Execute-extensions facility.
-
-        // ── CPU measurement ───────────────────────────────────────────
-        ctx                = 40,   ///< CPU-measurement counter.
-        fp_ext             = 41,   ///< Floating-point extension.
-        dfp                = 42,   ///< Decimal-floating-point.
-        pfpo               = 44,   ///< PFPO instruction.
-        hfp_signaling2     = 45,   ///< HFP-signaling extension.
-
-        // ── Transactional / PAI ───────────────────────────────────────
-        pai                = 49,   ///< Processor-activity-instrumentation.
-        constr_te          = 50,   ///< Constrained Transactional-Execution.
-        transactional_exec = 51,   ///< Transactional-Execution (base).
-        crypto_assist      = 52,   ///< Crypto assist (KM, KMC, etc.).
-        msa_ext5           = 53,   ///< MSA extension 5.
-
-        // ── Misc extensions ───────────────────────────────────────────
-        pai_ext1           = 55,   ///< PAI extension 1.
-        msa_ext9           = 57,   ///< MSA extension 9.
-        misc_inst_ext1     = 58,   ///< Miscellaneous-instruction-extensions 1.
-        misc_inst_ext3     = 61,   ///< Miscellaneous-instruction-extensions 3.
-
-        // ── TE (higher bits) ──────────────────────────────────────────
-        transactional_exec_high = 73, ///< Transactional-Execution (high bit).
-
-        // ── Crypto / MSA continuation ─────────────────────────────────
-        msa_ext4           = 74,   ///< MSA extension 4.
-        msa_ext6           = 75,   ///< MSA extension 6.
-        misc_inst_ext2     = 76,   ///< Miscellaneous-instruction-extensions 2.
-        msa_ext7           = 77,   ///< MSA extension 7.
-        edat2              = 78,   ///< Enhanced-DAT-2 (2 GiB large pages).
-
-        // ── Vector / SIMD ─────────────────────────────────────────────
-        vector             = 129,  ///< Vector facility.
-        vect_pde           = 130,  ///< Vector packed-decimal.
-        vect_enh           = 131,  ///< Vector enhancements.
-        vect_bcd           = 132,  ///< Vector BCD enhancements.
-        guarded_storage    = 133,  ///< Guarded-storage facility.
-        vx_base            = 134,  ///< Vector-enhancements base (VX).
-        vector_enh1        = 135,  ///< Vector-enhancements facility 1.
-        vector_enh2        = 148,  ///< Vector-enhancements facility 2.
-        vxrs               = 149,  ///< Vector-enhancements facility 3 (VXRS).
-
-        // ── Crypto (MSA continuation, high bits) ──────────────────────
-        msa_ext8           = 155,  ///< MSA extension 8.
-        msa_ext10          = 156,  ///< MSA extension 10.
-
-        // ── AI / ML ───────────────────────────────────────────────────
-        nnpa               = 165,  ///< Neural-Network-Processing-Assist.
+        n3                          = 0,   ///< N3 instructions installed.
+        zarch_installed             = 1,   ///< z/Architecture architectural mode installed.
+        zarch_active                = 2,   ///< z/Architecture architectural mode active.
+        dat_enhancement             = 3,   ///< DAT-enhancement (IDTE, CSPG).
+        idte_segment_clear          = 4,   ///< IDTE selectively clears seg-table entries.
+        idte_region_clear           = 5,   ///< IDTE selectively clears region-table entries.
+        asn_lx_reuse                = 6,   ///< ASN-and-LX-Reuse (PC/PT).
+        stfle                       = 7,   ///< STFLE instruction.
+        edat1                       = 8,   ///< Enhanced-DAT-1 (1 MiB large pages).
+        sense_run_status            = 9,   ///< Sense-Running-Status facility.
+        cond_sske                   = 10,  ///< Conditional-SSKE facility.
+        configuration_topology      = 11,  ///< Configuration-topology facility.
+        ipte_range                  = 13,  ///< IPTE-range facility.
+        nonquiescing_key_setting    = 14,  ///< Nonquiescing-key-setting facility.
+        ap_query_info               = 12,  ///< AP Query Configuration Information
+        ap_facility_test            = 15,  ///< AP Facilities Test
+        msa                         = 17,  ///< Message-Security-Assist (KIMD/KLMD/KM).
+        long_displacement           = 18,  ///< Long-displacement facility.
+        hfp_madd_sub                = 20,  ///< HFP-multiply-and-add/subtract.
+        eimm                        = 21,  ///< Extended-immediate facility.
+        extended_translation_3      = 22,  ///< Extended-translation facility 3.
+        hfp_unnorm_ext              = 23,  ///< HFP-unnormalized-extension facility.
+        store_clock_fast            = 25,  ///< Store-clock-fast (STCKF).
+        tod_clock_steering          = 28,  ///< TOD-clock-steering facility.
+        mvcos                       = 27,  ///< Move-with-Optional-Specifications.
+        cmp_swap_and_store          = 32,  ///< Compare-and-Swap-and-Store facility.
+        cmp_swap_and_store_2        = 33,  ///< Compare-and-Swap-and-Store facility 2.
+        gen_inst_ext                = 34,  ///< General-instructions-extension facility.
+        execute_ext                 = 35,  ///< Execute-extensions facility.
+        fp_extension                = 37,  ///< Floating-point-extension facility.
+        load_program_params         = 40,  ///< Load-program-parameters facility.
+        fp_support_enh              = 41,  ///< Floating-point-support-enhancement facilities.
+        dfp                         = 42,  ///< DFP (decimal-floating-point) facility.
+        dfp_high_performance        = 43,  ///< DFP facility has high performance.
+        pfpo                        = 44,  ///< PFPO instruction.
+        distinct_operands           = 45,  ///< Distinct-operands, fast-BCR, highword, popcount, interlocked-access 1, load/store-on-cond 1.
+        misc_inst_ext1              = 49,  ///< Miscellaneous-instruction-extensions 1 (exec-hint, load-and-trap, PAI).
+        constr_te                   = 50,  ///< Constrained Transactional-Execution.
+        local_tlb_clearing          = 51,  ///< Local-TLB-clearing facility.
+        interlocked_access_2        = 52,  ///< Interlocked-Access facility 2.
+        load_store_on_cond_2        = 53,  ///< Load/store-on-condition 2 + load-and-zero-rightmost-byte.
+        msa_ext5                    = 57,  ///< MSA extension 5.
+        misc_inst_ext2              = 58,  ///< Miscellaneous-instruction-extensions 2.
+        misc_inst_ext3              = 61,  ///< Miscellaneous-instruction-extensions 3.
+        cpu_meas_counter            = 67,  ///< CPU-measurement counter facility.
+        cpu_meas_sampling           = 68,  ///< CPU-measurement sampling facility.
+        transactional_exec          = 73,  ///< Transactional-Execution.
+        store_hypervisor_info       = 74,  ///< Store-hypervisor-information facility.
+        access_exc_fetch_store_ind  = 75,  ///< Access-exception-fetch/store indication
+        msa_ext3                    = 76,  ///< MSA extension 3.
+        msa_ext4                    = 77,  ///< MSA extension 4.
+        edat2                       = 78,  ///< Enhanced-DAT-2 (2 GiB large pages).
+        dfp_packed_conversion       = 80,  ///< Decimal-floating-point packed-conversion facility.
+        ppa_in_order                = 81,  ///< PPA-in-order facility.
+        misc_inst_ext4              = 84,  ///< Miscellaneous-instruction-extensions 4.
+        vector                      = 129, ///< Vector facility for z/Architecture.
+        instruction_exec_protection = 130, ///< Instruction-Execution-Protection facility
+        side_effect_access          = 131, ///< Side-Effect-Access facility.
+        guarded_storage             = 133, ///< Guarded-storage facility.
+        vector_packed_decimal       = 134, ///< Vector-Packed-Decimal facility (implies 129).
+        vector_enh1                 = 135, ///< Vector-Enhancements facility 1 (implies 129).
+        config_zarch_arch_mode      = 138, ///< Configuration-z/Architecture-architectural-mode.
+        multiple_epoch              = 139, ///< Multiple-epoch facility (implies 25, 28).
+        store_cpu_counter_multiple  = 142, ///< Store-CPU-counter-multiple facility.
+        test_pending_ext_int        = 144, ///< Test-pending-external-interruption facility.
+        vector_enh2                 = 148, ///< Vector-Enhancements facility 2 (implies 129, 135).
+        move_page_and_set_key       = 149, ///< Move-Page-and-Set-Key facility (implies bit 14).
+        enhanced_sort               = 150, ///< Enhanced sort facility.
+        deflate_conversion          = 151, ///< DEFLATE-conversion facility.
+        vector_packed_decimal_enh   = 152, ///< Vector-Packed-Decimal-Enhancement (implies 129, 134).
+        msa_ext9                    = 155, ///< MSA extension 9 (implies 76, 77).
+        etoken                      = 156, ///< etoken
+        nnpa                        = 165, ///< Neural-Network-Processing-Assist.
+        esa390_compat_mode          = 168, ///< ESA/390-Compatibility-Mode facility.
+        ineff_nonconstrained_transaction = 170, ///< Ineffective-nonconstrained-transaction facility
+        bear                        = 193, ///< Bare enhancement facility.
+        rdp                         = 194, ///< Rdp enhancement facility.
+        proc_activity_inst          = 196, ///< Processor-Activity-Instrumentation facility.
+        proc_activity_inst_ext1     = 197, ///< Processor-Activity-Instrumentation-Extension 1 facility.
+        concurrent_funcs            = 201, ///< concurrent-functions facility.
     };
 
     /// @brief Initialize the CPU features cache.
@@ -127,7 +114,7 @@ namespace arch::s390x::cpu::features {
         ctlreg::ctl_set_bit<0>(45);
         if (has(facility::vector))
             ctlreg::ctl_set_bit<0>(46);
-        if (has(facility::transactional_exec) || has(facility::transactional_exec_high))
+        if (has(facility::transactional_exec))
             ctlreg::ctl_set_bit<0>(8);
     }
 

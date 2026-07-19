@@ -31,16 +31,20 @@ import zxfoundation.sys.syschk;
 import zxfoundation.sys.timer_types;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.time;
+import zxfoundation.sys.irq.irqdesc;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.cpumask;
+import arch.s390x.cpu.ipi;
 import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.irq;
+import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.cputimer;
 import arch.s390x.lib.atomic;
+import zxfoundation.locking.qspinlock;
 import zxfoundation.sys.timer_types;
 import lib.error;
 import lib.expected;
@@ -200,6 +204,15 @@ namespace _internal {
         return stolen;
     }
 
+
+    /// @brief Mark the currently executing domain as needing rescheduling.
+    auto set_need_resched() noexcept -> void {
+        auto* dom = static_cast<domain*>(
+            arch::s390x::cpu::lowcore::current_domain_ptr());
+        if (!dom) return;
+        dom->flags = dom->flags | domain_flags::need_resched;
+    }
+
 } // namespace _internal
 
 export {
@@ -254,6 +267,11 @@ namespace zxfoundation::sched {
         }
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
+
+        const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        if (s->cpu != pcp.cpu_id) {
+            arch::s390x::cpu::ipi::send_reschedule(s->cpu);
+        }
     }
 
     auto dequeue_strand(strand* s) noexcept -> void {
@@ -528,6 +546,18 @@ namespace zxfoundation::sched {
         watchdog_heartbeat_bump();
     }
 
+    /// @brief CPU timer IRQ handler — dispatched by the external-interrupt
+    ///        path via @c zxfoundation::sys::irq::irq_dispatch for vector
+    ///        @c IRQ_BASE_EXT + EXT_IRQ_CPU_TIMER (PoP code 0x1005).
+    auto irq_handler_cpu_timer(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void {
+        (void)irq; (void)frame; (void)data;
+        cpu_timer_tick();
+    }
+
     auto scheduler_tick() noexcept -> void {
         if (!_internal::g_sched_initialized) return;
 
@@ -557,6 +587,20 @@ namespace zxfoundation::sched {
             arch::s390x::cpu::lowcore::current_domain_ptr());
         if (!dom) return false;
         return !!(dom->flags & domain_flags::need_resched);
+    }
+
+    /// @brief Mark the currently executing domain as needing rescheduling.
+    /// @details Sets @c domain_flags::need_resched on the current domain's
+    ///          flag word.  Idempotent and safe to call from any IRQ context
+    ///          including external-call IPI handlers because the flag is a
+    ///          single bit set with a relaxed OR operation; the entry.S
+    ///          CHECK_PREEMPT macro re-reads the field on every preemptible
+    ///          return path.
+    /// @warning Does nothing if no current domain is bound to this CPU's
+    ///          lowcore (idle / nucleus context).  In that case, the trailing
+    ///          CHECK_PREEMPT in the IRQ frame return path is a no-op anyway.
+    auto sched_resched_current() noexcept -> void {
+        _internal::set_need_resched();
     }
 
     auto preempt_schedule() noexcept -> void {
@@ -617,6 +661,20 @@ namespace zxfoundation::sched {
         topology::refresh_cpu_record(0U, 0U, true);
         topology::topology_online_cpu(0U);
         g_sched_initialized = true;
+
+        {
+            namespace irq = zxfoundation::sys::irq;
+            constexpr u16 cpu_timer_irq = static_cast<u16>(
+                irq::IRQ_BASE_EXT + irq::EXT_IRQ_CPU_TIMER);
+            auto r = irq::irq_register(
+                cpu_timer_irq, irq_handler_cpu_timer, nullptr, irq::IRQF_FAST);
+            if (!r) [[unlikely]] {
+                zxfoundation::sys::syschk::syschk_warning(
+                    r.error(),
+                    "sched: failed to register CPU-timer IRQ {:#06x}",
+                    cpu_timer_irq);
+            }
+        }
 
         pinfo("sched: idle strand id={} on cpu 0, scheduler ready",
               idle_s->ko.id);

@@ -65,7 +65,7 @@ namespace lib {
         return reinterpret_cast<Owner*>(reinterpret_cast<uptr>(ptr) - offset);
     }
 
-    /// @brief Const-qualified overload of @ref container_of.
+    /// @brief Const-qualified overload of @c container_of.
     /// @tparam Owner   Type of the enclosing struct.
     /// @tparam Member  Type of the embedded field.
     /// @tparam member  Pointer-to-member identifying the field within @p Owner.

@@ -1,0 +1,122 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file teid_types.cxxm
+/// @brief Translation-Exception Identification (TEID) bit layout per
+///        IBM z/Architecture PoP §3-76 (saved at lowcore offset 0x00A8).
+
+export module arch.s390x.cpu.teid_types;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::teid {
+
+    /// @brief PoP bit-position helpers.  Each value is the LSB index of the
+    ///        bit in the underlying u64 (i.e. `1ULL << LSB` is the bit's mask).
+    /// @{
+    constexpr u8 ADDR_LSB_OFF   = 12;  ///< PoP bits 0-51  (translation-exc addr).
+    constexpr u8 FSI_LSB_OFF    = 10;  ///< PoP bits 52-53 (Access-Exc Fetch/Store).
+    constexpr u8 SE_LSB_OFF     = 9;   ///< PoP bit  54    (side-effect access).
+    constexpr u8 B56_LSB_OFF    = 7;   ///< PoP bit  56    (protection-code bit 0).
+    constexpr u8 B60_LSB_OFF    = 3;   ///< PoP bit  60    (protection-code bit 1 / ALC).
+    constexpr u8 B61_LSB_OFF    = 2;   ///< PoP bit  61    (protection-code bit 2 / MOVE PAGE).
+    constexpr u8 AS_LSB_OFF     = 0;   ///< PoP bits 62-63 (ASCE identifier).
+    /// @}
+
+    /// @brief Access-Exception Fetch/Store Indication (AEFSI) — TEID bits 52-53.
+    /// @details Available only when STFLE bit 75 (AEFSI facility) is installed;
+    /// @{
+    constexpr u64 TEID_FSI_UNKNOWN = 0;  ///< 00 — indeterminate (or facility not installed).
+    constexpr u64 TEID_FSI_STORE   = 1;  ///< 01 — store-type access.
+    constexpr u64 TEID_FSI_FETCH   = 2;  ///< 10 — instruction-fetch access.
+    /// @}
+
+    /// @brief ASCE identifier encoding (TEID bits 62-63) per PoP §3-76 Table 3-13.
+    /// @{
+    constexpr u64 TEID_AS_PRIMARY   = 0;  ///< 00 — primary ASCE.
+    constexpr u64 TEID_AS_AR        = 1;  ///< 01 — access-register mode (AR-specified).
+    constexpr u64 TEID_AS_SECONDARY = 2;  ///< 10 — secondary ASCE.
+    constexpr u64 TEID_AS_HOME     = 3;  ///< 11 — home ASCE.
+    /// @}
+
+    /// @brief Union view of a 64-bit TEID.
+    /// @note The 3-bit protection-code span (bits 56, 60, 61) is exposed as
+    ///       individual flags rather than a decoded enum, so callers can
+    ///       distinguish basic-SOP/ESOP-1 cases from ESOP-2
+    ///       instruction-execution-protection cases per PoP §3-76 Table 3-12.
+    union teid {
+        u64 val;
+        struct {
+            u64 addr : 52;  ///< PoP bits 0-51  — translation-exception address.
+            u64 fsi  : 2;   ///< PoP bits 52-53 — Access-Exc Fetch/Store Indication.
+            u64 sea  : 1;   ///< PoP bit  54    — side-effect access (use is_side_effect()).
+            u64      : 1;   ///< PoP bit  55    — unpredictable.
+            u64 b56  : 1;   ///< PoP bit  56    — protection-code bit 0 (ESOP-2).
+            u64      : 3;   ///< PoP bits 57-59 — unpredictable.
+            u64 b60  : 1;   ///< PoP bit  60    — protection-code bit 1 / ALC indication.
+            u64 b61  : 1;   ///< PoP bit  61    — protection-code bit 2 / MOVE PAGE / TEID remainder.
+            u64 as   : 2;   ///< PoP bits 62-63 — ASCE identifier.
+        };
+
+        /// @brief Extract the page-aligned translation-exception address.
+        /// @return The high 52 bits of @c val, shifted down to bit 0.
+        [[nodiscard]] constexpr auto address() const noexcept -> u64 {
+            return val >> ADDR_LSB_OFF;
+        }
+
+        /// @brief Extract the AEFSI fetch/store indication.
+        /// @return One of @c TEID_FSI_UNKNOWN / @c TEID_FSI_STORE /
+        ///         @c TEID_FSI_FETCH.
+        [[nodiscard]] constexpr auto fsi_raw() const noexcept -> u64 {
+            return (val >> FSI_LSB_OFF) & 0x3ULL;
+        }
+
+        /// @brief True if AEFSI says the access was a store.
+        /// @note Callers must first verify that the AEFSI facility is
+        ///       installed (STFLE bit 75); otherwise @c fsi_raw() returns
+        ///       @c TEID_FSI_UNKNOWN which we interpret conservatively as
+        ///       "not definitely a store" (caller may default to write).
+        [[nodiscard]] constexpr auto is_store() const noexcept -> bool {
+            return fsi_raw() == TEID_FSI_STORE;
+        }
+
+        /// @brief True if AEFSI says the access was an instruction fetch.
+        [[nodiscard]] constexpr auto is_fetch() const noexcept -> bool {
+            return fsi_raw() == TEID_FSI_FETCH;
+        }
+
+        /// @brief True if PoP bit 54 (side-effect-access indication) is set.
+        [[nodiscard]] constexpr auto is_side_effect() const noexcept -> bool {
+            return (val & (1ULL << SE_LSB_OFF)) != 0;
+        }
+
+        /// @brief True if the protection code reported by basic SOP / ESOP-1
+        ///        indicates access-list-controlled (ALC) protection.
+        [[nodiscard]] constexpr auto protection_is_alc() const noexcept -> bool {
+            return (val & (1ULL << B60_LSB_OFF)) != 0;
+        }
+
+        /// @brief True if the 3-bit protection code (bits 56, 60, 61) decodes
+        ///        to `101` — the instruction-execution-protection code under
+        ///        ESOP-2.  Requires the instruction-execution-protection
+        ///        facility (STFLE bit 130) to be installed.
+        [[nodiscard]] constexpr auto protection_is_exec() const noexcept -> bool {
+            const u64 b56 = (val >> B56_LSB_OFF) & 1ULL;
+            const u64 b60 = (val >> B60_LSB_OFF) & 1ULL;
+            const u64 b61 = (val >> B61_LSB_OFF) & 1ULL;
+            return ((b56 << 2) | (b60 << 1) | b61) == 0b101ULL;
+        }
+
+        /// @brief Extract the ASCE identifier (PoP bits 62-63).
+        [[nodiscard]] constexpr auto asce_id() const noexcept -> u64 {
+            return (val >> AS_LSB_OFF) & 0x3ULL;
+        }
+    };
+
+    static_assert(sizeof(teid) == sizeof(u64),
+        "teid must overlay a 64-bit TEID word");
+    static_assert(alignof(teid) == alignof(u64),
+        "teid must be u64-aligned");
+
+} // namespace arch::s390x::cpu::teid
+
+} // end export

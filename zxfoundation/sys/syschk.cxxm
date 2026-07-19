@@ -16,13 +16,13 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Issue a fatal system check with a formatted message.
     ///
-    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
     /// @param[in] fl    Format string literal and call-site source location.
     ///                  Implicitly constructed from a string literal; the
     ///                  source_location is captured at the call site.
-    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
     ///
-    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1
     ///        bytes.  No allocation occurs — the buffer is stack-local.
     ///
     /// @warning  Safe from any IRQL.
@@ -40,11 +40,11 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Issue a critical system check with a formatted message.
     ///
-    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
     /// @param[in] fl    Format string literal and call-site source location.
-    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
     ///
-    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1 bytes.
     template <typename... Args>
     [[noreturn]] auto syschk_critical(
         lib::kernel_error err,
@@ -59,11 +59,11 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Issue a warning-level system check with a formatted message.
     ///
-    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
     /// @param[in] fl    Format string literal and call-site source location.
-    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
     ///
-    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1 bytes.
     template <typename... Args>
     auto syschk_warning(
         lib::kernel_error err,
@@ -77,11 +77,11 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Issue a notice-level system check with a formatted message.
     ///
-    /// @param[in] err   The @ref lib::kernel_error that triggered the check.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
     /// @param[in] fl    Format string literal and call-site source location.
-    /// @param[in] args  Format arguments forwarded to @ref lib::format::format_to.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
     ///
-    /// @note  The formatted output is truncated to @ref ZX_CRASH_MSG_LEN - 1 bytes.
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1 bytes.
     template <typename... Args>
     auto syschk_notice(
         lib::kernel_error err,

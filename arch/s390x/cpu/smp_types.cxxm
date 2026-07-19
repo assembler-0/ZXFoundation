@@ -10,11 +10,46 @@ export {
 
 namespace arch::s390x::cpu::smp {
 
-    // 0x1201 and 0x1202 both fold to IRQ_BASE_EXT + 0x01 / 0x02 after the & 0xFF in trap.cxxm.
-    constexpr u16 IPI_IRQ_EMERGENCY = static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + 0x01);
-    constexpr u16 IPI_IRQ_EXTCALL   = static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + 0x02);
+    /// IRQ vector slots for IPI sub-channels, drawn from the IRQ_BASE_EXT
+    /// range defined by the IRQ subsystem.
+    constexpr u16 IPI_IRQ_EMERGENCY =
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + zxfoundation::sys::irq::EXT_IRQ_EMERGENCY_SIGNAL);
+    constexpr u16 IPI_IRQ_EXTCALL   =
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT +
+                         zxfoundation::sys::irq::EXT_IRQ_EXTERNAL_CALL);
 
     constexpr u64 EC_HALT_BIT = 1ULL << 1;
+
+    /// @brief Soft-IPI bit indices — OR-ed into percpu::ec_bits by the sender
+    ///        and atomically drained by the receiver.
+    /// @{
+    constexpr u64 EC_SCHEDULE             = 0;  ///< Request reschedule.
+    constexpr u64 EC_CALL_FUNCTION        = 1;  ///< Generic function-call IPI.
+    constexpr u64 EC_CALL_FUNCTION_SINGLE  = 2;  ///< Single-CPU function-call IPI.
+    constexpr u64 EC_STOP_CPU              = 3;  ///< Stop this CPU.
+    constexpr u64 EC_MCCK_PENDING          = 4;  ///< Deferred MCCK work pending.
+    constexpr u64 EC_IRQ_WORK              = 5;  ///< IRQ work (timer/lists).
+    constexpr u64 EC_HALT                  = 6;  ///< Halt / shutdown ordering.
+    /// @}
+
+    /// @brief 1<<N masks derived from the bit positions above.
+    constexpr u64 EC_SCHEDULE_BIT            = 1ULL << EC_SCHEDULE;
+    constexpr u64 EC_CALL_FUNCTION_BIT       = 1ULL << EC_CALL_FUNCTION;
+    constexpr u64 EC_CALL_FUNCTION_SINGLE_BIT= 1ULL << EC_CALL_FUNCTION_SINGLE;
+    constexpr u64 EC_STOP_CPU_BIT            = 1ULL << EC_STOP_CPU;
+    constexpr u64 EC_MCCK_PENDING_BIT        = 1ULL << EC_MCCK_PENDING;
+    constexpr u64 EC_IRQ_WORK_BIT            = 1ULL << EC_IRQ_WORK;
+    constexpr u64 EC_HALT_BIT_OFFSET         = 1ULL << EC_HALT;
+
+    /// @brief CR0 subclass control bit positions (IBM MSB-0 numbering)
+    /// @{
+    constexpr u8 CR0_SC_EXTERNAL_CALL       = 13; ///< CR0 bit 13 → ext_call 0x1202.
+    constexpr u8 CR0_SC_EMERGENCY_SIGNAL    = 14; ///< CR0 bit 14 → emergency 0x1201.
+    constexpr u8 CR0_SC_SERVICE_SIGNAL      = 15; ///< CR0 bit 15 → service 0x2401.
+    constexpr u8 CR0_SC_CPU_TIMER           = 23; ///< CR0 bit 23 → CPU timer 0x1005.
+    constexpr u8 CR0_SC_CLOCK_COMPARATOR    = 24; ///< CR0 bit 24 → clock comp 0x1004.
+    constexpr u8 CR0_SC_TIMING_ALERT        = 30; ///< CR0 bit 30 → timing alert 0x1406.
+    /// @}
 
 } // namespace arch::s390x::cpu::smp
 

@@ -10,25 +10,96 @@ import arch.s390x.cpu.sigp_types;
 import arch.s390x.cpu.smp_types;
 import arch.s390x.lib.atomic;
 import zxfoundation.base.types;
+import zxfoundation.sys.irq.irqdesc;
 
 export {
 
 namespace arch::s390x::cpu::ipi {
 
+    /// @brief Site-targeted helper: fetch-or a bit into the target's ec_bits
+    ///        and (if newly set) punch a SIGP to deliver the IPI.
+    auto send_bit_punch(u16 target_cpu_id, u64 bit_mask, u8 sigp_order) noexcept -> void {
+        percpu::s390x_percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        const u64 old = pcp->ec_bits.fetch_or(bit_mask,
+            lib::atomic::memory_order::seq_cst);
+        if (old & bit_mask) return;
+        u32 status{0};
+        sigp::sigp_busy(pcp->cpu_addr, sigp_order, 0, status);
+    }
+
+    /// @brief Send an external-call IPI with a single soft-IPI bit.
+    auto send_extcall(u16 target_cpu_id, u64 ec_bit_mask) noexcept -> void {
+        send_bit_punch(target_cpu_id, ec_bit_mask,
+            arch::s390x::cpu::sigp::SIGP_EXTERNAL_CALL);
+    }
+
+    /// @brief Send an emergency-signal IPI (for panic / halt paths only).
+    auto send_emergency(u16 target_cpu_id, u64 ec_bit_mask) noexcept -> void {
+        send_bit_punch(target_cpu_id, ec_bit_mask,
+            arch::s390x::cpu::sigp::SIGP_EMERGENCY_SIGNAL);
+    }
+
+    /// @brief Send a self-IPI via external call (MCCK deferred work, irq_work).
+    auto send_self_extcall(u64 ec_bit_mask) noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        (void)pcp.ec_bits.fetch_or(ec_bit_mask,
+            lib::atomic::memory_order::seq_cst);
+        u32 status{0};
+        sigp::sigp_busy(pcp.cpu_addr,
+            arch::s390x::cpu::sigp::SIGP_EXTERNAL_CALL, 0, status);
+    }
+
+    /// @brief Convenience: request a remote CPU to reschedule.
+    auto send_reschedule(u16 target_cpu_id) noexcept -> void {
+        send_extcall(target_cpu_id, smp::EC_SCHEDULE_BIT);
+    }
+
+    /// @brief Convenience: request a remote CPU to stop.
+    auto send_stop_cpu(u16 target_cpu_id) noexcept -> void {
+        send_emergency(target_cpu_id, smp::EC_STOP_CPU_BIT);
+    }
+
+    auto send_call_function(u16 target_cpu_id) noexcept -> void {
+        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        (void)pcp->deferred_pending.fetch_or(
+            zxfoundation::sys::irq::DEFERRED_CALL_FUNCTION_BIT,
+            lib::atomic::memory_order::release);
+        u32 status{0};
+        sigp::sigp_busy(pcp->cpu_addr, sigp::SIGP_EXTERNAL_CALL, 0, status);
+    }
+
+    auto send_irq_work(u16 target_cpu_id) noexcept -> void {
+        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        (void)pcp->deferred_pending.fetch_or(
+            zxfoundation::sys::irq::DEFERRED_IRQ_WORK_BIT,
+            lib::atomic::memory_order::release);
+        u32 status{0};
+        sigp::sigp_busy(pcp->cpu_addr, sigp::SIGP_EXTERNAL_CALL, 0, status);
+    }
+
+    auto send_mcck_pending(u16 target_cpu_id) noexcept -> void {
+        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        (void)pcp->deferred_pending.fetch_or(
+            zxfoundation::sys::irq::DEFERRED_MCCK_PENDING_BIT,
+            lib::atomic::memory_order::release);
+        u32 status{0};
+        sigp::sigp_busy(pcp->cpu_addr, sigp::SIGP_EMERGENCY_SIGNAL, 0, status);
+    }
+
     /// @brief Send a halt IPI to a logical CPU via SIGP_STOP_AND_STORE_STATUS.
-    /// @param[in] target_cpu_id  Logical CPU ID (0-based).  If the target has no
-    ///                           registered lowcore (not yet online or already torn
-    ///                           down) the call is a safe no-op.
     auto send_halt_ipi(u16 target_cpu_id) noexcept -> void {
         percpu::s390x_percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
         if (!pcp) [[unlikely]] return;
-
-        (void)pcp->ec_bits.fetch_or(smp::EC_HALT_BIT, lib::atomic::memory_order::seq_cst);
-
+        (void)pcp->ec_bits.fetch_or(smp::EC_HALT_BIT_OFFSET,
+            lib::atomic::memory_order::seq_cst);
         u32 status{0};
         sigp::sigp_busy(pcp->cpu_addr,
-                        sigp::SIGP_STOP_AND_STORE_STATUS,
-                        0, status);
+            arch::s390x::cpu::sigp::SIGP_STOP_AND_STORE_STATUS,
+            0, status);
     }
 
 } // namespace arch::s390x::cpu::ipi

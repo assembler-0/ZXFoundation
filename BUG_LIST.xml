@@ -3,7 +3,7 @@
             xsi:noNamespaceSchemaLocation="scripts/schemas/BUG_HISTORY.xsd">
 
     <Title>ZXFoundation bug history</Title>
-    <LastUpdated>2026-07-14</LastUpdated>
+    <LastUpdated>2026-07-19</LastUpdated>
 
     <BugList>
 
@@ -36,6 +36,66 @@
             <FixedIn>
                 <Branch>26h2</Branch>
                 <Number>1645</Number>
+            </FixedIn>
+        </Bug>
+
+        <Bug id="BUG-002">
+            <FoundDate>2026-07-19</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>
+                IRQ descriptor table slot-number allocation mismatch causes
+                all SCOMS-managed IRQ dispatch to silently fail, posting no
+                handlers for any external interrupt (clock comparator, CPU
+                timer, IPI, etc.)
+            </Description>
+            <Behavior>
+                irq_register() called g_irq_table.alloc() which pulled an
+                arbitrary free-list slot index S, populating m_slots[S] with
+                the handler.  irq_dispatch() and find_raw() look up slots by
+                the IRQ vector number V (so m_slots[V]), which remained with
+                ko.id == KOBJECT_ID_INVALID.  The lookup returned nullptr and
+                the handler was never invoked.
+
+                Consequence: ext.cxxm routed every external interrupt through
+                the IRQ table (instead of direct fast paths), so clock
+                comparator events, CPU timer ticks, timing alerts, service
+                signals, and IPI vectors all produced zero dispatch work.
+                Without timer-driven scheduler ticks the BSP stopped advancing,
+                and APs entering sched_init_ap simultaneously raced raw PMM
+                allocations with no scheduler heartbeat, yielding
+                nondeterministic PMM free-list corruption (assert_allocatable_frame
+                with frame_owner::stack, order 2), deadlocks (254/255 progress
+                stall), or undefined spin-wait hangs.
+            </Behavior>
+            <Solution>
+                Introduced kobject_table::alloc_at(u32 id) which claims a
+                specific slot index by unlinking it from the SCOMS free-list
+                rather than taking an arbitrary slot from the free-list head.
+                irqdesc::irq_register() now calls alloc_at(irq) so the
+                irq_desc for vector V always occupies m_slots[V], making
+                find_raw(V) reach the correct descriptor.
+
+                Additional benefit: alloc_at() is robust against reuse of a
+                slot by a different IRQ vector — if m_slots[id].ko.id !=
+                KOBJECT_ID_INVALID, the call returns already_locked, which
+                replaces the silent double-registration that existed before.
+            </Solution>
+            <AffectedBuilds>
+                <Range>
+                    <From>
+                        <Branch>26h2</Branch>
+                        <Number>1646</Number>
+                    </From>
+                    <To>
+                        <Branch>26h2</Branch>
+                        <Number>1654</Number>
+                    </To>
+                </Range>
+            </AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn>
+                <Branch>26h2</Branch>
+                <Number>1655</Number>
             </FixedIn>
         </Bug>
 

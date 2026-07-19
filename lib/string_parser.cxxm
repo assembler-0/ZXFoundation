@@ -17,11 +17,11 @@ namespace lib {
 
     /// @brief Zero-allocation streaming string tokenizer.
     ///
-    /// Splits a @ref string_view into tokens separated by configurable
+    /// Splits a @c string_view into tokens separated by configurable
     /// delimiter characters.  Supports single and double quoted strings
     /// and backslash escape sequences.
     ///
-    /// All returned tokens are @ref string_view slices into the original
+    /// All returned tokens are @c string_view slices into the original
     /// input — no data is copied and no memory is allocated.
     ///
     /// @note  This class does **not** modify the underlying buffer.
@@ -49,7 +49,7 @@ namespace lib {
         /// from the returned view only for quotes and backslashes
         /// (@c \\' , @c \\" , @c \\\\).
         ///
-        /// @return The next token, or @ref nullopt if exhausted.
+        /// @return The next token, or @c nullopt if exhausted.
         [[nodiscard]] auto next() noexcept -> optional<string_view> {
             skip_delimiters();
             if (m_pos >= m_input.size()) return nullopt;
@@ -93,10 +93,10 @@ namespace lib {
         /// Reads the next token (the key).  If the next non-delimiter
         /// character is @c '=', the value token is consumed too and
         /// returned as the second element of the pair.  If no @c '='
-        /// follows, the value is an empty @ref string_view — the key
+        /// follows, the value is an empty @c string_view — the key
         /// is still consumed.
         ///
-        /// @return A @c (key, value) pair, or @ref nullopt if exhausted.
+        /// @return A @c (key, value) pair, or @c nullopt if exhausted.
         [[nodiscard]] auto next_pair() noexcept
             -> optional<pair<string_view, string_view>>
         {

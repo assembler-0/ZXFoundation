@@ -159,7 +159,7 @@ trap_io_entry:
 trap_svc_entry:
     // irq_class = 4 (svc) — nucleus call dispatch (was the PC gate).
     SAVE_NUCLEUS_FRAME %r1, LC_SVC_OLD_PSW, LC_KERNEL_STACK, 4
-    llgh    %r3, 0x008a(0)          // %r3 = svc_code (u16) from lowcore PSA+0x8A
+    llgh    %r3, LC_SVC_CODE(0)          // %r3 = svc_code (u16) from lowcore PSA+0x8A
     brasl   %r14, do_svc_interrupt // C handler: dispatch nucleus call
     CHECK_PREEMPT
     RESTORE_NUCLEUS_FRAME
@@ -171,5 +171,27 @@ trap_mcck_entry:
     SAVE_FRAME %r1, LC_MCCK_OLD_PSW, LC_MCCK_STACK, 5
     brasl   %r14, do_mcck_interrupt
     RESTORE_FRAME
+
+    // RESTART interrupt handler
+    .section .text.trap_restart, "ax", @progbits
+    .globl  trap_restart_entry
+trap_restart_entry:
+    // Switch to dedicated restart stack (LC_RESTART_STACK).
+    lg      %r15, LC_RESTART_STACK(0)
+    ltgr    %r15, %r15
+    jz      9f
+
+    // Arg frame for C ABI: %r2=data, %r3=source, %r4=cpu_id, %r5=flags.
+    lg      %r2, LC_RESTART_DATA(0)
+    lgf     %r3, LC_RESTART_SOURCE(0)
+    llgh    %r4, LC_CPU_ID_OFFSET(0)
+    llgf    %r5, LC_RESTART_FLAGS(0)
+    lg      %r1, LC_RESTART_FN(0)
+    ltgr    %r1, %r1
+    jz      9f
+
+    brasl   %r14, do_restart_interrupt
+
+9:    j   9b                                  // stall until caller SIGP STOP
 
     .section .note.GNU-stack, "", @progbits

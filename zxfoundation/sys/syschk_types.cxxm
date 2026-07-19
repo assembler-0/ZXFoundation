@@ -36,18 +36,18 @@ namespace zxfoundation::sys::syschk {
     /// @brief Maximum length (bytes) of the crash message field, NUL included.
     constexpr u32 ZX_CRASH_MSG_LEN = 128U;
 
-    /// @brief Magic value that marks an initialized @ref zx_crash_record.
+    /// @brief Magic value that marks an initialized @c zx_crash_record.
     ///        ASCII: "ZXCRUNCH".
     constexpr u64 ZX_CRASH_RECORD_MAGIC = 0x5A584352554E4348ULL;
 
     /// @brief Byte offset of the crash record within the lowcore prefix page.
     constexpr u32 ZX_CRASH_RECORD_OFFSET = 0x1400U;
 
-    /// @brief Crash record written into the BSP lowcore on every @ref system_check call.
+    /// @brief Crash record written into the BSP lowcore on every @c system_check call.
     struct [[gnu::packed]] zx_crash_record {
         u64  magic{};                 ///< ZX_CRASH_RECORD_MAGIC when record is valid.
-        u8   severity{};              ///< Raw @ref syschk_severity value.
-        u8   err_category{};          ///< @ref lib::error_category value of the triggering error.
+        u8   severity{};              ///< Raw @c syschk_severity value.
+        u8   err_category{};          ///< @c lib::error_category value of the triggering error.
         u32  err_code{};              ///< Per-category error code.
         u16  cpu_id{};                ///< Logical CPU ID of the reporting processor.
         u8   _pad[4]{};               ///< Reserved; must be zero.

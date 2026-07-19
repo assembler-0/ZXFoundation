@@ -21,12 +21,13 @@ alignas(16) static u8 s_boot_nodat_stack[arch::s390x::cpu::processor::S390X_NODA
 alignas(16) static u8 s_boot_restart_stack[arch::s390x::cpu::processor::S390X_STACK_SIZE]{};
 
 extern "C" {
-    auto trap_pgm_entry()  -> void;
-    auto trap_ext_entry()  -> void;
-    auto trap_io_entry()   -> void;
-    auto trap_svc_entry()  -> void;
-    auto trap_mcck_entry() -> void;
-    auto ap_dat_on()       -> void;
+    auto trap_pgm_entry()     -> void;
+    auto trap_ext_entry()     -> void;
+    auto trap_io_entry()      -> void;
+    auto trap_svc_entry()     -> void;
+    auto trap_mcck_entry()    -> void;
+    auto trap_restart_entry() -> void;
+    auto ap_dat_on()          -> void;
 
     /// @brief Kernel-wide stack-protector guard
     extern u64 __stack_chk_guard;
@@ -109,6 +110,29 @@ namespace arch::s390x::cpu::lowcore {
         lc.io_new_psw       = psw::make_handler_psw(reinterpret_cast<u64>(trap_io_entry));
         lc.mcck_new_psw     = psw::make_handler_psw(reinterpret_cast<u64>(trap_mcck_entry));
         lc.svc_new_psw      = psw::make_handler_psw(reinterpret_cast<u64>(trap_svc_entry));
+        // restart_psw is left as the boot-time disabled-wait sentinel set
+        // by init_bsp until register_restart_handler() installs a live one.
+    }
+
+    /// @brief Install a runtime restart-interrupt handler on the current CPU.
+    /// @param[in] fn   Callback invoked by trap_restart_entry on SIGP RESTART.
+    ///                 C-ABI signature: <code>void (*)(void* data)</code>.
+    ///                 Must not return — do_restart_interrupt escalates a
+    ///                 return to syschk_critical.
+    /// @param[in] data Opaque cookie forwarded as %r2 to the callback.
+    /// @note Side effects: rewrites @c lowcore.restart_psw, restart_fn and
+    ///       restart_data for the calling CPU's lowcore.
+    /// @warning Must be called with IRQs disabled; the caller must hold the
+    ///          target CPU's online mark before installing.
+    auto register_restart_handler(
+        void(*fn)(void*) noexcept,
+        void* data
+    ) noexcept -> void {
+        zx_lowcore* lc = get_current();
+        lc->restart_fn   = reinterpret_cast<u64>(fn);
+        lc->restart_data = reinterpret_cast<u64>(data);
+        lc->restart_psw  = psw::make_handler_psw(
+            reinterpret_cast<u64>(trap_restart_entry));
     }
 
     /// @brief Initialize the BSP lowcore.  Must be called once after HHDM is active.

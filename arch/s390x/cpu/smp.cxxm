@@ -189,11 +189,8 @@ static u32 g_total_aps{0};
 extern "C" {
 
 auto ap_entry() -> void;
-auto ap_dat_on() -> void;
 
 [[noreturn]] auto ap_startup() -> void {
-    // CR0 bit 37 (IBM 64-bit MSB-0) = Secondary-space control (0x04000000)
-    // This MUST be set or SAC raises a Special-operation exception.
     arch::s390x::cpu::ctlreg::ctl_set_bit<0>(37);
     arch::s390x::cpu::ctlreg::ctl_set_bit<0>(52);
 
@@ -222,7 +219,7 @@ auto ap_dat_on() -> void;
     zxfoundation::sched::sched_idle_enter();
 }
 
-}
+} // extern "C"
 
 static auto handle_ipi(
     [[maybe_unused]] u16 irq,
@@ -230,8 +227,16 @@ static auto handle_ipi(
     [[maybe_unused]] void* data
 ) noexcept -> void {
     auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-    const u64 bits = pcp.ec_bits.exchange(0, arch::s390x::lib::atomic::memory_order::seq_cst);
-    if (bits & arch::s390x::cpu::smp::EC_HALT_BIT) {
+    const u64 bits = pcp.ec_bits.exchange(0,
+        arch::s390x::lib::atomic::memory_order::seq_cst);
+    using namespace arch::s390x::cpu::smp;
+
+    // Sync reschedule IPI.
+    if ((bits & EC_SCHEDULE_BIT) != 0ULL)
+        zxfoundation::sched::sched_resched_current();
+
+    // Stop / halt IPIs — cooperatively offline the CPU.
+    if ((bits & (EC_STOP_CPU_BIT | EC_HALT_BIT_OFFSET)) != 0ULL) {
         arch::s390x::cpu::cpumask::cpu_clear_online(pcp.cpu_id);
         zxfoundation::sched::topology::topology_offline_cpu(pcp.cpu_id);
         arch::s390x::cpu::psw::disabled_wait();

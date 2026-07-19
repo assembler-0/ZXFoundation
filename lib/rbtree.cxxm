@@ -135,7 +135,7 @@ namespace lib {
     ///   - @p parent: the future parent of @p node.
     ///   - @p link:   pointer to parent->left or parent->right (the nullptr slot).
     ///
-    /// After linking, call @ref rb_insert_color to rebalance.
+    /// After linking, call @c rb_insert_color to rebalance.
     ///
     /// @param[in] node    The new node to insert.
     /// @param[in] parent  Parent of the new node (nullptr if tree is empty).

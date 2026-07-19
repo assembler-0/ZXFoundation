@@ -20,6 +20,9 @@ import zxfoundation.base.typestate;
 import zxfoundation.domain.signal;
 import zxfoundation.sys.stacktrace;
 import arch.s390x.trap.fixup;
+import zxfoundation.scoms.scoms_ref;
+import arch.s390x.cpu.teid_types;
+import arch.s390x.cpu.features;
 import lib.error;
 import lib.string_view;
 
@@ -43,77 +46,120 @@ namespace _internal {
                 0xFFFFFFFFU);
     }
 
+    template <typename T>
     struct pgm_name_entry {
-        u16       code{};
+        T               code{};
         lib::string_view name{};
     };
 
-    constexpr pgm_name_entry pgm_names[] {
-        { 0x0001, "operation" },
-        { 0x0002, "privileged-operation" },
-        { 0x0003, "execute" },
-        { 0x0004, "protection" },
-        { 0x0005, "addressing" },
-        { 0x0006, "specification" },
-        { 0x0007, "data" },
-        { 0x0008, "fixed-point-overflow" },
-        { 0x0009, "fixed-point-divide" },
-        { 0x000A, "decimal-divide" },
-        { 0x000B, "hfp-exponent-underflow" },
-        { 0x000C, "hfp-exponent-overflow" },
-        { 0x000D, "hfp-significance" },
-        { 0x000E, "hfp-divide" },
-        { 0x000F, "hfp-sign-bit" },
-        { 0x0010, "segment-translation" },
-        { 0x0011, "page-translation" },
-        { 0x0012, "translation-specification" },
-        { 0x0013, "special-operation" },
-        { 0x0015, "operand" },
-        { 0x0016, "trace-table" },
-        { 0x0017, "array-switch" },
-        { 0x0018, "spectrum-exception" },
-        { 0x001C, "vector-operation" },
-        { 0x001D, "vector-exception-max" },
-        { 0x001E, "vector-exception-nr" },
-        { 0x001F, "vector-exception-erte" },
-        { 0x0020, "afx-translation" },
-        { 0x0021, "asx-translation" },
-        { 0x0022, "lx-translation" },
-        { 0x0023, "ex-translation" },
-        { 0x0024, "lfx-translation" },
-        { 0x0025, "lsx-translation" },
-        { 0x0026, "alt-translation" },
-        { 0x0027, "alfx-translation" },
-        { 0x0028, "lfx-unmapped" },
-        { 0x0029, "lsx-unmapped" },
-        { 0x002A, "alfx-unmapped" },
-        { 0x002B, "aste-validity" },
-        { 0x002C, "aste-sequence" },
-        { 0x002D, "aste-instance" },
-        { 0x002F, "extended-aste-instance" },
-        { 0x0030, "stack-full" },
-        { 0x0031, "stack-empty" },
-        { 0x0032, "stack-specification" },
-        { 0x0033, "stack-type" },
-        { 0x0034, "stack-operation" },
-        { 0x0035, "stack-overflow" },
-        { 0x0038, "asce-type" },
-        { 0x0039, "region-first-translation" },
-        { 0x003A, "region-second-translation" },
-        { 0x003B, "region-third-translation" },
-        { 0x0040, "monitor" },
-        { 0x0200, "transaction-abort" },
-        { 0x0218, "transaction-constraint" },
+    /// @brief Master program-interruption code names
+    constexpr pgm_name_entry<u16> master_pgm_names[] {
+        { 0x0001, "operation" },                       
+        { 0x0002, "privileged-operation" },             
+        { 0x0003, "execute" },                          
+        { 0x0004, "protection" },                       
+        { 0x0005, "addressing" },                       
+        { 0x0006, "specification" },                   
+        { 0x0007, "data" },                             
+        { 0x0008, "fixed-point-overflow" },            
+        { 0x0009, "fixed-point-divide" },               
+        { 0x000A, "decimal-overflow" },                 
+        { 0x000B, "decimal-divide" },                   
+        { 0x000C, "hfp-exponent-overflow" },            
+        { 0x000D, "hfp-significance" },                 
+        { 0x000E, "hfp-divide" },                       
+        { 0x000F, "hfp-square-root" },                  
+        { 0x0010, "segment-translation" },              
+        { 0x0011, "page-translation" },                 
+        { 0x0012, "translation-specification" },         
+        { 0x0013, "special-operation" },                
+        { 0x0015, "operand" },                         
+        { 0x0016, "trace-table" },                     
+        { 0x0017, "asn-translation-specification" },   
+        { 0x0018, "transaction-constraint" },          
+        { 0x001B, "vector-processing" },               
+        { 0x001C, "space-switch-event" },              
+        { 0x001D, "hfp-square-root" },                  
+        { 0x001E, "crypto-operation" },                
+        { 0x001F, "pc-translation-specification" },     
+        { 0x0020, "afx-translation" },                 
+        { 0x0021, "asx-translation" },                 
+        { 0x0022, "lx-translation" },                 
+        { 0x0023, "ex-translation" },                  
+        { 0x0024, "primary-authority" },               
+        { 0x0025, "secondary-authority" },            
+        { 0x0026, "lfx-translation" },                 
+        { 0x0027, "lsx-translation" },                 
+        { 0x0028, "alet-specification" },              
+        { 0x0029, "alen-translation" },                
+        { 0x002A, "ale-sequence" },                    
+        { 0x002B, "aste-validity" },                   
+        { 0x002C, "aste-sequence" },                   
+        { 0x002D, "extended-authority" },              
+        { 0x002E, "lste-sequence" },                  
+        { 0x002F, "aste-instance" },                  
+        { 0x0030, "stack-full" },                      
+        { 0x0031, "stack-empty" },                     
+        { 0x0032, "stack-specification" },            
+        { 0x0033, "stack-type" },                     
+        { 0x0034, "stack-operation" },                
+        { 0x0038, "asce-type" },                       
+        { 0x0039, "region-first-translation" },        
+        { 0x003A, "region-second-translation" },       
+        { 0x003B, "region-third-translation" },        
+        { 0x003D, "secure-storage-access" },           
+        { 0x003E, "non-secure-storage-access" },       
+        { 0x003F, "secure-storage-violation" },        
+        { 0x0040, "monitor-event" },                   
+        { 0x0080, "per-basic-event;per-nullification-event" }, 
+        { 0x0119, "crypto-operation" },                 
+        { 0x0200, "transactional-execution-aborted-event" }, 
+        { 0x0218, "transactional-execution-constraint" },    
     };
 
-    [[nodiscard]] constexpr auto pgm_name_for(u16 code) noexcept -> lib::string_view {
-        for (const auto& e : pgm_names) {
-            if (e.code == code) return e.name;
+
+    [[nodiscard]] constexpr auto master_pgm_name_for(const u16 code) noexcept -> lib::string_view {
+        for (const auto& [c, name] : master_pgm_names) {
+            if (c == code) return name;
         }
         return {};
     }
-    
-    
+
+    constexpr pgm_name_entry<u8> dxc_pgm_names[] {
+        { 0x00, "general-operand" },
+        { 0x01, "afp-register" },
+        { 0x02, "bfp-instruction" },
+        { 0x03, "dfp-instruction" },
+        { 0x04, "quantum-exception" },
+        { 0x07, "simulated-quantum-exception" },
+        { 0x08, "ieee-inexact-and-truncated" },
+        { 0x0B, "simulated-ieee-inexact" },
+        { 0x0C, "ieee-inexact-and-incremented" },
+        { 0x10, "ieee-underflow-exact" },
+        { 0x13, "simulated-ieee-underflow-exact" },
+        { 0x18, "ieee-underflow-inexact-and-truncated" },
+        { 0x1B, "simulated-ieee-underflow-inexact" },
+        { 0x1C, "ieee-underflow-inexact-and-incremented" },
+        { 0x20, "ieee-overflow-exact" },
+        { 0x23, "simulated-ieee-overflow-exact" },
+        { 0x28, "ieee-overflow-inexact-and-truncated" },
+        { 0x2B, "simulated-ieee-overflow-inexact" },
+        { 0x2C, "ieee-overflow-inexact-and-incremented" },
+        { 0x40, "ieee-division-by-zero" },
+        { 0x43, "simulated-ieee-division-by-zero" },
+        { 0x80, "ieee-invalid-operation" },
+        { 0x83, "simulated-ieee-invalid-operation" },
+        { 0xFE, "vector-instruction" },
+        { 0xFF, "compare-and-trap-instruction" },
+    };
+
+    [[nodiscard]] constexpr auto dxc_pgm_name_for(const u8 code) noexcept -> lib::string_view {
+        for (const auto& [c, name] : dxc_pgm_names) {
+            if (c == code) return name;
+        }
+        return {};
+    }
+
 }
 
 export {
@@ -164,17 +210,25 @@ namespace arch::s390x::trap::pgm {
     constexpr u16 PGM_VECTOR_ENR         = 0x001E;
     constexpr u16 PGM_VECTOR_ERTE        = 0x001F;
 
-    /// @brief Determine whether the access was for instruction fetch from
-    ///        the TEID stored at lowcore+0xA8.
-    [[nodiscard]] inline auto is_exec_from_teid(u64 teid) noexcept -> bool {
-        return (teid & (1ULL << 60)) != 0;
+    /// @brief Determine whether the access at the given TEID was an
+    ///        instruction-fetch.
+    [[nodiscard]] inline auto is_exec_from_teid(u64 raw) noexcept -> bool {
+        using cpu::features::facility;
+        const cpu::teid::teid t{ .val = raw };
+        if (cpu::features::has(facility::instruction_exec_protection) && t.protection_is_exec())
+            return true;
+        if (cpu::features::has(facility::access_exc_fetch_store_ind))
+            return t.is_fetch();
+        return false;
     }
 
-    /// @brief Determine whether the access was a write from TEID bit 62.
-    ///        PoP Table 6-10: bit 62 (IBM bit 2 of the second word) = 1
-    ///        for store-type access.
-    [[nodiscard]] inline auto is_write_from_teid(u64 teid) noexcept -> bool {
-        return (teid & (1ULL << 61)) != 0;
+    /// @brief Determine whether the access at the given TEID was a store.
+    [[nodiscard]] inline auto is_write_from_teid(u64 raw) noexcept -> bool {
+        using cpu::features::facility;
+        const cpu::teid::teid t{ .val = raw };
+        if (cpu::features::has(facility::access_exc_fetch_store_ind))
+            return t.is_store();
+        return true;
     }
 
     /// @brief Centralized program-check dispatcher.
@@ -187,16 +241,9 @@ namespace arch::s390x::trap::pgm {
         const bool in_problem_state =
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
 
-        ::lib::string_view pgm_name = _internal::pgm_name_for(pgm_code);
+        ::lib::string_view pgm_name = _internal::master_pgm_name_for(pgm_code);
 
         if (!in_problem_state) {
-            // TX abort/constraint: silently ignored in supervisor state.
-            if (pgm_code == PGM_TRANSACTION_CONSTRAINT ||
-                pgm_code == PGM_TRANSACTION_ABORT) {
-                return;
-            }
-
-
             if (pgm_code == PGM_ADDRESSING || pgm_code == PGM_PROTECTION ||
                 pgm_code == PGM_PAGE_TRANS    || pgm_code == PGM_SEGMENT_TRANS ||
                 pgm_code == PGM_SPECIFICATION || pgm_code == PGM_OPERATION ||
@@ -204,8 +251,7 @@ namespace arch::s390x::trap::pgm {
                 pgm_code == PGM_REGION_SECOND_TRANS ||
                 pgm_code == PGM_REGION_THIRD_TRANS  ||
                 pgm_code == PGM_TRANSLATION_SPEC) {
-                if (arch::s390x::trap::fixup::try_applying_fixup(
-                    frame->psw_addr, frame)) {
+                if (fixup::try_applying_fixup(frame->psw_addr, frame)) {
                     return;
                 }
             }
@@ -259,11 +305,15 @@ namespace arch::s390x::trap::pgm {
 
             _internal::log_domain_pgm(pgm_code, frame, trans_exc);
             if (pgm_code == PGM_DATA) {
+                const auto dxc_name = _internal::dxc_pgm_name_for(
+                    static_cast<u8>(data_exc_code & 0xFFU));
                 zxfoundation::sys::printk::perr(
-                    "pgm: data-exception code={:#010x}\n", data_exc_code);
+                    "pgm: data-exception dxc={:#04x}{}\n",
+                    static_cast<u8>(data_exc_code & 0xFFU),
+                    dxc_name);
             }
 
-            d->ko.state = zxfoundation::base::lifecycle_state::dying;
+            (void)zxfoundation::scoms::mark_dying(d);
             d->flags = d->flags | zxfoundation::domain::domain_flags::need_resched;
 
             frame->gprs[15] = d->primary_strand.kstack_top - 160U;

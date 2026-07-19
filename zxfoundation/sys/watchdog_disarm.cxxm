@@ -13,7 +13,7 @@ namespace zxfoundation::sys::watchdog {
 
     /// @brief Cancel the LPAR hardware watchdog (diag288 CANCEL).
     /// @note  Must not call any function that can in turn call
-    ///        @ref system_check — this function is called from inside
+    ///        @c system_check — this function is called from inside
     ///        the panic path and re-entrancy would deadlock on g_halting.
     ///
     /// @warning  Not safe to call with external interrupts enabled if the

@@ -50,4 +50,5 @@
     ecag.cxxm
     cpu_mf_types.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct -Wno-nested-anon-types -Wno-flexible-array-extensions) ]
     cpu_mf.cxxm
+    teid_types.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
 }

@@ -8,13 +8,13 @@
 # copyright (C) 2025-2026 assembler-0
 # ============================================================================
 
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 3.28...3.30)
 include(cmake/meta.cmake)
 project(ZXFoundation
-    VERSION 26.1
-    HOMEPAGE_URL "https://zxfoundation-devlog.vercel.app"
-    DESCRIPTION "Experimental C++ DGP kernel for IBM z/Architecture"
-    LANGUAGES C CXX ASM
+    VERSION        26.2
+    HOMEPAGE_URL   "https://zxfoundation-devlog.vercel.app"
+    DESCRIPTION    "Experimental C++ DGP kernel for IBM z/Architecture"
+    LANGUAGES      C CXX ASM
 )
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")

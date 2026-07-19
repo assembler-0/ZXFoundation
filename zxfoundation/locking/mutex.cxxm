@@ -52,7 +52,7 @@ namespace zxfoundation::locking::mutex {
     /// Slow path uses a spinlock-protected wait queue with scheduler
     /// integration for strand blocking and wakeup.
     ///
-    /// @note Satisfies the @ref zxfoundation::locking::lockable concept.
+    /// @note Satisfies the @c zxfoundation::locking::lockable concept.
     ///       Does NOT satisfy irq_lockable — this mutex may sleep, so it
     ///       must not be used in contexts where IRQs are disabled.
     /// @note DGP contract: lock() asserts can_sleep() and may call schedule().

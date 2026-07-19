@@ -143,15 +143,22 @@ namespace lib {
     /// @brief machine error (for mcck)
     namespace machine_error {
         enum code : u32 {
-            none                = 0,
-            system_damage       = 1,
-            inst_process_damage = 2,
-            system_recovery     = 3,
-            timing_facility     = 4,
-            external_damage     = 5,
-            failing_stor_addr   = 6,
-            backlog             = 7,
-            key                 = 8,
+            none                      = 0,
+            system_damage             = 1,
+            inst_process_damage       = 2,
+            system_recovery           = 3,
+            timing_facility           = 4,
+            external_damage           = 5,
+            failing_storage_addr      = 6,
+            storage_error_uncorrected = 7,
+            storage_key_error         = 8,
+            storage_degradation       = 9,
+            degradation               = 10,
+            warning                   = 11,
+            channel_report_pending    = 12,
+            service_processor_damage  = 13,
+            channel_subsystem_damage  = 14,
+            backlog                   = 15,
         };
     }
 
@@ -163,7 +170,7 @@ namespace lib {
         u32 code;                 ///< Subsystem-specific error code.
 
         /// @brief Default constructor: no error.
-        constexpr kernel_error() noexcept 
+        constexpr kernel_error() noexcept
             : category(error_category::none), code(0) {}
 
         /// @brief Construct from category and raw code.
@@ -258,7 +265,7 @@ namespace lib {
     /// @return         Statically allocated string; never null.
     [[nodiscard]] constexpr auto category_name(error_category cat) noexcept -> string_view {
         switch (cat) {
-        #define expand(error) case error_category::error: return #error;
+        #define expand(error) case error_category::error: return stringify(error);
             expand(none)
             expand(arch)
             expand(memory)
@@ -282,7 +289,7 @@ namespace lib {
         switch (cat) {
             case error_category::arch:
                 switch (code) {
-                #define expand(error) case arch_error::error: return #error;
+                #define expand(error) case arch_error::error: return stringify(error);
                     expand(none)
                     expand(sigp_busy)
                     expand(sigp_not_operational)
@@ -307,7 +314,7 @@ namespace lib {
                 }
             case error_category::memory:
                 switch (code) {
-                #define expand(error) case memory_error::error: return #error;
+                #define expand(error) case memory_error::error: return stringify(error);
                     expand(none)
                     expand(out_of_memory)
                     expand(invalid_address)
@@ -326,7 +333,7 @@ namespace lib {
                 }
             case error_category::locking:
                 switch (code) {
-                #define expand(error) case locking_error::error: return #error;
+                #define expand(error) case locking_error::error: return stringify(error);
                     expand(none)
                     expand(timeout)
                     expand(deadlock_detected)
@@ -338,7 +345,7 @@ namespace lib {
                 }
             case error_category::crypto:
                 switch (code) {
-                #define expand(error) case crypto_error::error: return #error;
+                #define expand(error) case crypto_error::error: return stringify(error);
                     expand(none)
                     expand(invalid_input)
                     expand(hash_mismatch)
@@ -348,7 +355,7 @@ namespace lib {
                 }
             case error_category::driver:
                 switch (code) {
-                #define expand(error) case driver_error::error: return #error;
+                #define expand(error) case driver_error::error: return stringify(error);
                     expand(none)
                     expand(not_found)
                     expand(not_ready)
@@ -360,7 +367,7 @@ namespace lib {
                 }
             case error_category::init:
                 switch (code) {
-                #define expand(error) case init_error::error: return #error;
+                #define expand(error) case init_error::error: return stringify(error);
                     expand(none)
                     expand(boot_failed)
                     expand(invalid_protocol)
@@ -370,7 +377,7 @@ namespace lib {
                 }
             case error_category::time:
                 switch (code) {
-                #define expand(error) case time_error::error: return #error;
+                #define expand(error) case time_error::error: return stringify(error);
                     expand(none)
                     expand(clock_not_available)
                     expand(invalid_timestamp)
@@ -380,7 +387,7 @@ namespace lib {
                 }
             case error_category::generic:
                 switch (code) {
-                #define expand(error) case generic_error::error: return #error;
+                #define expand(error) case generic_error::error: return stringify(error);
                     expand(none)
                     expand(invalid_arg)
                     expand(not_supported)
@@ -396,16 +403,23 @@ namespace lib {
                 }
             case error_category::machine:
                 switch (code) {
-                #define expand(error) case machine_error::error: return #error;
+                #define expand(error) case machine_error::error: return stringify(error);
                     expand(none)
                     expand(system_damage)
                     expand(inst_process_damage)
                     expand(system_recovery)
                     expand(timing_facility)
                     expand(external_damage)
-                    expand(failing_stor_addr)
+                    expand(failing_storage_addr)
+                    expand(storage_error_uncorrected)
+                    expand(storage_key_error)
+                    expand(storage_degradation)
+                    expand(degradation)
+                    expand(warning)
+                    expand(channel_report_pending)
+                    expand(service_processor_damage)
+                    expand(channel_subsystem_damage)
                     expand(backlog)
-                    expand(key)
                 #undef expand
                     default: return "?";
                 }
@@ -420,7 +434,7 @@ namespace lib {
 
 export {
 
-    /// @brief Formatter specialization for @ref lib::kernel_error.
+    /// @brief Formatter specialization for @c lib::kernel_error.
     template <>
     struct lib::format::formatter<lib::kernel_error> {
 

@@ -108,6 +108,79 @@ namespace zxfoundation::scoms {
             return kobject_ref<T, lifecycle_state::embryo>::from_raw_noref(&obj);
         }
 
+        /// @brief Allocate a specific slot index, returning an embryo ref.
+        /// @param[in] id  Slot index to claim.  Must be < N and currently free.
+        /// @return  An embryo ref on success, or kernel_error if the table is
+        ///          uninitialized, the index is out of range, or the slot is
+        ///          already in use (e.g. by another IRQ vector).
+        /// @note    Unlike @c alloc(), which pulls an arbitrary slot from the
+        ///          free-list, @c alloc_at() guarantees the resulting object
+        ///          lives at @c m_slots[id] — a requirement for IRQ vectors
+        ///          (and any other namespace where the slot index IS the
+        ///          lookup key) so that @c find_raw(id) reaches the right slot
+        ///          after registration.
+        /// @warning Caller must not already hold @c m_table_lock.
+        [[nodiscard]] auto alloc_at(u32 id) noexcept
+            -> lib::expected<kobject_ref<T, lifecycle_state::embryo>, lib::kernel_error>
+        {
+            if (!m_initialized) [[unlikely]]
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+
+            if (id >= N)
+                return lib::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+
+            const locking::irq_lock_guard guard{m_table_lock};
+
+            // A live object already occupies this slot — reject the request.
+            // We test ko.id (not m_next_free[]) so a slot that was claimed by
+            // a prior alloc_at() but never released reads as in-use.
+            if (m_slots[id].ko.id != KOBJECT_ID_INVALID)
+                return lib::unexpected(
+                    lib::kernel_error::from_locking(
+                        lib::locking_error::already_locked));
+
+            // Unlink id from the free-list.  The free-list is a singly-linked
+            // chain rooted at m_free_head, threaded through m_next_free[].
+            // We must walk it to find the predecessor so we can splice id out;
+            // alloc_at() is a cold path ( IRQ registration happens once per
+            // vector at boot), so the O(N) walk is acceptable.
+            if (m_free_head == ~0U)
+                return lib::unexpected(
+                    lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+
+            if (m_free_head == id) {
+                m_free_head = m_next_free[id];
+            } else {
+                u32 prev = m_free_head;
+                while (prev != ~0U && m_next_free[prev] != id)
+                    prev = m_next_free[prev];
+                if (prev == ~0U) {
+                    // id is not on the free-list but ko.id == INVALID — slot is
+                    // in a transient half-state.  Reject rather than corrupt.
+                    return lib::unexpected(
+                        lib::kernel_error::from_locking(
+                            lib::locking_error::already_locked));
+                }
+                m_next_free[prev] = m_next_free[id];
+            }
+            m_next_free[id] = ~0U;
+
+            // Initialize the slot exactly the way alloc() does for an
+            // arbitrary slot — same writes, same generation bump, same count.
+            T& obj           = m_slots[id];
+            obj.ko.id        = id;
+            obj.ko.type      = m_type;
+            obj.ko.state     = lifecycle_state::embryo;
+            obj.ko.ref.count.store(1, memory_order::relaxed);
+            obj.ko.generation += 1;
+
+            (void)m_count.fetch_add(1, memory_order::relaxed);
+
+            return kobject_ref<T, lifecycle_state::embryo>::from_raw_noref(&obj);
+        }
+
         /// @brief Look up by slot index.
         [[nodiscard]] auto find_raw(u32 id) noexcept -> T* {
             if (id >= N) return nullptr;

@@ -88,6 +88,13 @@ namespace arch::s390x::cpu::percpu {
 
         u32     pgm_fixup_applied{0};     ///< Non-zero if last PGM applied a fixup (set by pgm handler).
         u64     pgm_fixup_addr{0};        ///< Fixup recovery label address set by try_applying_fixup.
+
+        u32     ipd_count{0};             ///< Nullifying IPD event counter within sliding window.
+        u64     ipd_window_deadline{0};   ///< Absolute TOD deadline resetting the IPD window.
+
+        /// @brief Deferred-interrupt work bitmap
+        lib::atomic::atomic<u32> deferred_pending{};
+
         u8      _pad_fixup[2]{};
     };
 

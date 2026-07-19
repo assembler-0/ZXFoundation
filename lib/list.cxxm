@@ -14,7 +14,7 @@ namespace lib {
     ///
     /// Place one (or more) of these inside any struct that must participate
     /// in a list.  A node is self-linked on construction and after removal,
-    /// so it is always safe to call @ref list_head::remove on it.
+    /// so it is always safe to call @c list_head::remove on it.
     ///
     /// @note A struct may embed multiple @c list_node members to participate
     ///       in multiple independent lists simultaneously.
@@ -32,7 +32,7 @@ namespace lib {
         auto operator=(list_node&&)            = delete;
     };
 
-    /// @brief Bidirectional iterator over raw @ref list_node pointers.
+    /// @brief Bidirectional iterator over raw @c list_node pointers.
     ///
     /// The sentinel head is never yielded.
     /// @note Advance BEFORE removing the current node to avoid use-after-free:
@@ -61,11 +61,11 @@ namespace lib {
 
     /// @brief Typed bidirectional iterator that yields @c Owner& directly.
     ///
-    /// Uses @ref lib::container_of to recover the enclosing object from
-    /// the embedded @ref list_node member.
+    /// Uses @c lib::container_of to recover the enclosing object from
+    /// the embedded @c list_node member.
     ///
     /// @tparam Owner   Enclosing struct type.
-    /// @tparam member  Pointer-to-member identifying the @ref list_node field.
+    /// @tparam member  Pointer-to-member identifying the @c list_node field.
     template <typename Owner, list_node Owner::* member>
     struct typed_list_iterator {
         list_node* current;
@@ -88,7 +88,7 @@ namespace lib {
     ///
     /// Acts as both the sentinel and the primary API surface.  An empty list
     /// satisfies @c head.next == &head.  All operations are O(1) except
-    /// @ref count which is O(N).
+    /// @c count which is O(N).
     ///
     /// @note The list does not own its elements.  Destroying a @c list_head
     ///       while nodes are still linked leaves dangling pointers.  Callers
@@ -144,7 +144,7 @@ namespace lib {
 
         /// @brief Remove @p node from this list.
         ///
-        /// Leaves @p node self-linked so a subsequent @ref remove is safe.
+        /// Leaves @p node self-linked so a subsequent @c remove is safe.
         ///
         /// @param[in,out] node  Node to remove.
         /// @warning Do NOT pass the sentinel itself.
@@ -156,7 +156,7 @@ namespace lib {
         }
 
         /// @brief Remove and return the first element, or nullptr if empty.
-        /// @return Pointer to the removed @ref list_node, or nullptr.
+        /// @return Pointer to the removed @c list_node, or nullptr.
         constexpr auto pop_front() noexcept -> list_node* {
             if (empty()) return nullptr;
             list_node* n = sentinel.next;

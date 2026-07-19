@@ -10,6 +10,28 @@ using arch::s390x::cpu::features::facility;
 
 extern "C" {
 
+    auto __zx_clcle(const char *s1, usize l1,
+                    const char *s2, usize l2) -> condition_code {
+        using arch::s390x::cpu::processor::register_pair;
+        register_pair r1{};
+        register_pair r3{};
+        r1.even = reinterpret_cast<u64>(s1);
+        r1.odd = l1;
+        r3.even = reinterpret_cast<u64>(s2);
+        r3.odd = l2;
+
+        condition_code cc;
+        __asm__ volatile(
+            "0:     clcle   %[r1],%[r3],0\n"
+            "       jo      0b\n"
+            "       ipm     %[cc]\n"
+            "       srl     %[cc],28"
+            : [cc] "=d" (cc), [r1] "+d" (r1.pair), [r3] "+d" (r3.pair)
+            :
+            : "cc", "memory");
+        return cc;
+    }
+
     auto __zx_memcpy(void *dest, const void *src, usize n) -> void * {
         auto *d = static_cast<char *>(dest);
         const auto *s = static_cast<const char *>(src);
@@ -221,28 +243,6 @@ extern "C" {
             :
             : "cc", "memory", "0");
         return ret;
-    }
-
-    auto __zx_clcle(const char *s1, usize l1,
-                    const char *s2, usize l2) -> condition_code {
-        using arch::s390x::cpu::processor::register_pair;
-        register_pair r1{};
-        register_pair r3{};
-        r1.even = reinterpret_cast<u64>(s1);
-        r1.odd = l1;
-        r3.even = reinterpret_cast<u64>(s2);
-        r3.odd = l2;
-
-        condition_code cc;
-        __asm__ volatile(
-            "0:     clcle   %[r1],%[r3],0\n"
-            "       jo      0b\n"
-            "       ipm     %[cc]\n"
-            "       srl     %[cc],28"
-            : [cc] "=d" (cc), [r1] "+d" (r1.pair), [r3] "+d" (r3.pair)
-            :
-            : "cc", "memory");
-        return cc;
     }
 
 } // extern "C"

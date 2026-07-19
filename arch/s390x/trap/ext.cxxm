@@ -1,6 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file ext.cxxm
-/// @brief Centralized ext dispatch.
+/// @file arch/s390x/trap/ext.cxxm
+/// @brief Centralized external-interruption dispatcher.
 
 export module arch.s390x.trap.ext;
 import arch.s390x.cpu.lowcore;
@@ -9,59 +9,113 @@ import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.irq_types;
 import arch.s390x.cpu.clkcomp;
 import arch.s390x.cpu.cputimer;
+import arch.s390x.cpu.clock;
+import arch.s390x.cpu.cpumask;
+import arch.s390x.cpu.psw;
 import arch.s390x.css.css;
 import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sched.sched;
-import zxfoundation.sched.context;
+import zxfoundation.sched.sched_topology;
 import zxfoundation.domain.domain_types;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.timer_types;
-import zxfoundation.domain.domain_types;
 import lib.error;
 
 export {
 
 namespace arch::s390x::trap::ext {
 
-    constexpr u16 EXT_CLOCK_COMPARATOR   = 0x1004;
-    constexpr u16 EXT_CPU_TIMER          = 0x1005;
-    constexpr u16 EXT_EMERGENCY_SIGNAL   = 0x1201;
-    constexpr u16 EXT_EXTERNAL_CALL      = 0x1202;
-    constexpr u16 EXT_TIMING_ALERT       = 0x1406;
-    constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;
+    /// @brief Raw z/Architecture external-interruption codes per PoP §7-3.
+    ///        Mirror of @c zxfoundation::sys::irq::ext_code_to_irq for
+    ///        readability at the dispatch site.
+    /// @{
+    constexpr u16 EXT_INTERRUPT_KEY      = 0x0040;  ///< External-interrupt-key.
+    constexpr u16 EXT_CLOCK_COMPARATOR   = 0x1004;  ///< Clock comparator.
+    constexpr u16 EXT_CPU_TIMER          = 0x1005;  ///< CPU timer.
+    constexpr u16 EXT_WARNING_TRACK      = 0x1007;  ///< Warning track (STP).
+    constexpr u16 EXT_MALFUNCTION_ALERT  = 0x1200;  ///< Malfunction alert.
+    constexpr u16 EXT_EMERGENCY_SIGNAL   = 0x1201;  ///< Emergency-signal IPI.
+    constexpr u16 EXT_EXTERNAL_CALL      = 0x1202;  ///< External-call IPI.
+    constexpr u16 EXT_TIMING_ALERT       = 0x1406;  ///< STP timing alert.
+    constexpr u16 EXT_MEASUREMENT_ALERT  = 0x1407;  ///< CPU-MF measurement alert.
+    constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;  ///< SCLP service signal.
+    constexpr u16 EXT_CP_SERVICE         = 0x2603;  ///< CP service (pfault).
+    /// @}
+
+    namespace _internal {
+
+        /// @brief Acknowledge the current external interrupt in lowcore.
+        auto ack_lowcore() noexcept -> void {
+            auto* lc = arch::s390x::cpu::lowcore::get_current();
+            lc->ext_int_code = 0U;
+        }
+
+    } // namespace _internal
 
     /// @brief Centralized external-interruption dispatcher.
+    /// @param[in,out] frame  Saved interrupt frame from entry.S.
+    /// @warning If @c ext_code is one we genuinely don't know about
+    ///          (corrupted lowcore) the dispatcher just clears it.  We avoid
+    ///          @c syschk_fatal — a single spurious ack is preferable to a
+    ///          globally-deadlocked nucleus.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
         auto* lc = cpu::lowcore::get_current();
         const u16 ext_code = lc->ext_int_code;
 
-        if (ext_code == EXT_CLOCK_COMPARATOR) {
-            zxfoundation::sys::timer::timer_interrupt();
+        _internal::ack_lowcore();
+
+        const u16 irq_nr = zxfoundation::sys::irq::ext_code_to_irq(ext_code);
+        if (irq_nr == zxfoundation::sys::irq::IRQ_NR_MAX) {
+            zxfoundation::sys::printk::pverbose(
+                "ext: unrecognised ext_code {:#06x} — no IRQ slot\n",
+                ext_code);
             return;
         }
 
-        if (ext_code == EXT_CPU_TIMER) {
-            zxfoundation::sched::cpu_timer_tick();
-            return;
-        }
-
-        if (ext_code == EXT_TIMING_ALERT) {
-            zxfoundation::sys::printk::pverbose("ext: timing-alert\n");
-            return;
-        }
-
-        if (ext_code == EXT_SERVICE_SIGNAL) {
-            zxfoundation::sys::printk::pverbose("ext: service signal\n");
-            return;
-        }
-
-        const u16 irq_nr = static_cast<u16>(
-            zxfoundation::sys::irq::IRQ_BASE_EXT + (ext_code >> 4));
         zxfoundation::sys::irq::irq_dispatch(
             irq_nr, frame, cpu::irq::ZX_IRQ_CLASS_EXT);
+
+        namespace irq = zxfoundation::sys::irq;
+        if (irq::deferred_test_clear(irq::DEFERRED_RESCHED_BIT)) {
+            // zxfoundation::sched::sched_resched_current();
+        }
+
+        if (irq::deferred_test_clear(irq::DEFERRED_MCCK_PENDING_BIT)) {
+            // TODO:
+            // The actual deferred-MCCK handler is currently inline in the
+            // MCCK dispatcher (Phase 3.2 / 11.7 pending); until that chapter
+            // is wired we simply acknowledge the bit was set so the trap
+            // path stays self-consistent.
+            zxfoundation::sys::printk::pverbose(
+                "ext: deferred MCCK work armed on cpu={}\n",
+                arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id);
+        }
+
+        if (irq::deferred_test_clear(irq::DEFERRED_CALL_FUNCTION_BIT)) {
+            // TODO: a generic cross-CPU function call IPI.  Until the
+            // function-list plumbing is wired (Phase 4 / load-balancing) we
+            // emit verbose noise on the receive side.
+            zxfoundation::sys::printk::pverbose(
+                "ext: deferred call-function IPI received on cpu={}\n",
+                arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id);
+        }
+
+        if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
+            // TODO: irq_work callbacks: today this is the IRQ_SOFTIRQ sink for RCU and timer release.
+        }
+
+        if (irq::deferred_test_clear(irq::DEFERRED_STOP_CPU_BIT)) {
+            const auto cpu_id =
+                arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+            zxfoundation::sys::printk::pnotice(
+                "ext: stop-cpu deferred work on cpu={} — halting\n", cpu_id);
+            arch::s390x::cpu::cpumask::cpu_clear_online(cpu_id);
+            zxfoundation::sched::topology::topology_offline_cpu(cpu_id);
+            arch::s390x::cpu::psw::disabled_wait();
+        }
     }
 
 } // namespace arch::s390x::trap::ext
