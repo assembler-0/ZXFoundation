@@ -11,9 +11,6 @@ namespace arch::s390x::cpu::cpumask::_internal {
 
     /// @brief CPUs that physically exist in this configuration (set at boot,
     ///        stable thereafter).  Populated from the loader cpu_map.
-    /// @note Module linkage (not static): the exported for_each_*_cpu templates
-    ///       are instantiated in importing modules and must not reference a
-    ///       TU-local entity.
     ::lib::cpumask g_possible_mask{};
 
     /// @brief CPUs that are fully initialized and may be targeted by any

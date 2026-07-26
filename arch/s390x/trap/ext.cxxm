@@ -22,7 +22,9 @@ import zxfoundation.sys.syschk;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.timer_types;
+import zxfoundation.smp.smp;
 import lib.error;
+import lib.softirq;
 
 export {
 
@@ -95,16 +97,11 @@ namespace arch::s390x::trap::ext {
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_CALL_FUNCTION_BIT)) {
-            // TODO: a generic cross-CPU function call IPI.  Until the
-            // function-list plumbing is wired (Phase 4 / load-balancing) we
-            // emit verbose noise on the receive side.
-            zxfoundation::sys::printk::pverbose(
-                "ext: deferred call-function IPI received on cpu={}\n",
-                arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id);
+            zxfoundation::smp::smp_csd_drain_cpu();
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
-            // TODO: irq_work callbacks: today this is the IRQ_SOFTIRQ sink for RCU and timer release.
+            lib::do_softirq();
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_STOP_CPU_BIT)) {

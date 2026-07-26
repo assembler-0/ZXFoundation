@@ -163,7 +163,7 @@ namespace zxfoundation::sys::irq {
     auto irq_dispatch(
         u16                                           irq,
         arch::s390x::cpu::irq::irq_frame* frame,
-        arch::s390x::cpu::irq::arch_s390x_irq_class  cls
+        arch::s390x::cpu::irq::irq_class  cls
     ) noexcept -> void {
         using namespace _internal;
         if (irq >= IRQ_NR_MAX) [[unlikely]] return;
@@ -183,20 +183,20 @@ namespace zxfoundation::sys::irq {
                 h = desc->handler;
                 d = desc->data;
                 flags_to_check = desc->flags;
-                (void)desc->count.fetch_add(1,
+                discard_value desc->count.fetch_add(1,
                     arch::s390x::lib::atomic::memory_order::relaxed);
             } else {
                 const locking::irq_lock_guard guard{desc->lock};
                 h = desc->handler;
                 d = desc->data;
                 flags_to_check = desc->flags;
-                (void)desc->count.fetch_add(1,
+                discard_value desc->count.fetch_add(1,
                     arch::s390x::lib::atomic::memory_order::relaxed);
             }
         }
 
         if (h) [[likely]] h(irq, frame, d);
-        (void)flags_to_check;
+        discard_value flags_to_check;
 
         pcp.irq_nesting -= raise;
     }
@@ -246,7 +246,7 @@ namespace zxfoundation::sys::irq {
             >(result.value());
             d = &(*embryo_ref);
             d->irq_nr = irq;
-            (void)static_cast<
+            discard_value static_cast<
                 scoms::kobject_ref<irq_desc, base::lifecycle_state::embryo>&&
             >(embryo_ref).activate();
         }
@@ -280,7 +280,7 @@ namespace zxfoundation::sys::irq {
             d->flags   = 0;
         }
 
-        (void)g_irq_table.release(irq);
+        discard_value g_irq_table.release(irq);
     }
 
     /// @brief Initialize the IRQ subsystem with the SCOMS kobject_table.
@@ -299,7 +299,7 @@ namespace zxfoundation::sys::irq {
     ///       IRQ return path context restore.
     auto deferred_set(u32 bit) noexcept -> void {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        (void)pcp.deferred_pending.fetch_or(bit,
+        discard_value pcp.deferred_pending.fetch_or(bit,
             arch::s390x::lib::atomic::memory_order::release);
     }
 

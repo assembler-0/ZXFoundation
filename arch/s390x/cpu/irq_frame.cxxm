@@ -61,9 +61,7 @@ namespace arch::s390x::cpu::irq {
         "IRQ_FRAME_VRS + 256 offset mismatch for vector_regs_hi");
 
     /// @brief Interrupt class tag — identifies which lowcore new-PSW slot fired.
-    /// @note  Passed to the unified C dispatcher so it can route to the correct
-    ///        subsystem handler.
-    enum arch_s390x_irq_class : u8 {
+    enum irq_class : u8 {
         ZX_IRQ_CLASS_PGM  = 0, ///< Program check (0x01D0).
         ZX_IRQ_CLASS_EXT  = 1, ///< External interrupt (0x01B0).
         ZX_IRQ_CLASS_IO   = 2, ///< I/O interrupt (0x01F0).

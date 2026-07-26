@@ -16,10 +16,6 @@ namespace arch::s390x::cpu::percpu {
     using zxfoundation::memory::pmm::pcp_pool;
 
     /// @brief Explicit interrupt context classification.
-    /// @note  Unlike nesting-depth heuristics, this tracks the actual interrupt
-    ///        class that is currently being serviced.  Set by the SAVE_FRAME
-    ///        macro in entry.S, cleared by RESTORE_FRAME.  Ensures correct
-    ///        detection of MCCK context even when nested within other handlers.
     enum class irq_class : u8 {
         none      = 0,  ///< Not in any interrupt handler.
         ext       = 1,  ///< External interrupt (SAVE_FRAME from LC_EXT_OLD_PSW).
@@ -31,7 +27,7 @@ namespace arch::s390x::cpu::percpu {
     };
 
     /// @brief s390x per-CPU data block embedded in the lowcore at 0x0400.
-    struct alignas(processor::S390X_CACHE_LINE_SIZE) s390x_percpu_data {
+    struct alignas(processor::CACHE_LINE_SIZE) percpu_data {
         u64     prefix_phys{};         ///< Physical address of this CPU's 8 KB lowcore.
  
         u16     cpu_id{};              ///< Logical CPU ID (0 = BSP, dense, 0-based).
@@ -98,14 +94,14 @@ namespace arch::s390x::cpu::percpu {
         u8      _pad_fixup[2]{};
     };
 
-    static_assert(__builtin_offsetof(s390x_percpu_data, cpu_id) == 8,
+    static_assert(__builtin_offsetof(percpu_data, cpu_id) == 8,
         "cpu_id must be at offset 8 within s390x_percpu_data "
         "(required by LC_CPU_ID_OFFSET = 0x0408)");
 
-    static_assert(__builtin_offsetof(s390x_percpu_data, prefix_phys) == 0,
+    static_assert(__builtin_offsetof(percpu_data, prefix_phys) == 0,
         "prefix_phys must be at offset 0 within s390x_percpu_data");
 
-    static_assert(sizeof(s390x_percpu_data) <= 0x0E00,
+    static_assert(sizeof(percpu_data) <= 0x0E00,
         "s390x_percpu_data exceeds available lowcore space (0x0400–0x11FF = 0x0E00 bytes)");
 
 } // namespace arch::s390x::cpu::percpu

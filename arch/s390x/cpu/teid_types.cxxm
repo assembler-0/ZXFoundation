@@ -39,10 +39,6 @@ namespace arch::s390x::cpu::teid {
     /// @}
 
     /// @brief Union view of a 64-bit TEID.
-    /// @note The 3-bit protection-code span (bits 56, 60, 61) is exposed as
-    ///       individual flags rather than a decoded enum, so callers can
-    ///       distinguish basic-SOP/ESOP-1 cases from ESOP-2
-    ///       instruction-execution-protection cases per PoP §3-76 Table 3-12.
     union teid {
         u64 val;
         struct {

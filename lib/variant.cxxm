@@ -36,7 +36,7 @@ namespace lib {
         constexpr auto index_of() noexcept -> usize {
             usize i = 0;
             bool found = false;
-            ((found ? (void)++i : (void)(found = same_as<T, Ts> ? true : (++i, false))), ...);
+            ((found ? discard_value ++i : discard_value (found = same_as<T, Ts> ? true : (++i, false))), ...);
             return found ? i : variant_npos;
         }
 

@@ -37,6 +37,11 @@ SECTIONS {
         __rodata_start = .;
         *(.rodata .rodata.*)
         __rodata_end = .;
+
+        . = ALIGN(8);
+        __zinit_start = .;
+        KEEP(*(SORT_BY_NAME(.zinit_data.*)))
+        __zinit_end = .;
     } :nucleus_ro
 
     .ex_table : ALIGN(8) {

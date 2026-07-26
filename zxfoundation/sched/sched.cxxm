@@ -1,16 +1,31 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sched/sched.cxxm
-/// @brief Scheduler core — schedule(), tick, init, work-stealing.
+/// @brief Scheduler core — schedule(), tick, init, work-stealing, softirq, nohz.
 
 export module zxfoundation.sched.sched;
 import zxfoundation.sched.sched_class;
 import zxfoundation.sched.sched_policy_types;
+import zxfoundation.sched.sched_entity_types;
 import zxfoundation.sched.sched_fair;
 import zxfoundation.sched.sched_topology_types;
 import zxfoundation.sched.sched_topology;
 import zxfoundation.sched.sched_balance;
+import zxfoundation.sched.sched_rq_snapshot;
 import zxfoundation.sched.sched_idle;
 import zxfoundation.sched.sched_domain;
+import zxfoundation.sched.sched_domain_tree_types;
+import zxfoundation.sched.sched_domain_tree;
+import zxfoundation.sched.sched_softirq_types;
+import zxfoundation.sched.sched_softirq;
+import zxfoundation.sched.sched_nohz;
+import zxfoundation.sched.sched_numa_distance;
+import zxfoundation.sched.sched_pelt;
+import zxfoundation.sched.sched_eevdf;
+import zxfoundation.sched.sched_cpupri;
+import zxfoundation.sched.sched_cpudl;
+import zxfoundation.sched.sched_rt_bandwidth;
+import zxfoundation.sched.sched_cbs;
+import zxfoundation.sched.sched_smt;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
@@ -26,12 +41,17 @@ import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa_types;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.timer_types;
 import zxfoundation.sys.timer;
 import zxfoundation.sys.time;
 import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sched.context;
+import zxfoundation.sched.admit;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.sched.sched_rt;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.clock;
@@ -44,14 +64,14 @@ import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.cputimer;
 import arch.s390x.lib.atomic;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.sys.timer_types;
 import lib.error;
 import lib.expected;
 import lib.placementnew;
 import lib.format;
 import lib.rbtree;
-import arch.s390x.cpu.cputimer;
+import lib.softirq_types;
+import lib.softirq;
+import lib.cpumask;
 
 namespace _internal {
 
@@ -65,13 +85,50 @@ namespace _internal {
 
     static zxfoundation::sys::timer::kernel_timer g_ap_tick_timers[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
-    [[nodiscard]] auto can_admit_domain(const domain* d) noexcept -> bool {
-        if (!d) return true;
-        if (is_idle_domain(*d)) return true;
-        auto result = zxfoundation::dgp::isolation_validate_scheduler_admission(
-            d->ko.state, d->root_phys, d->asce.val);
-        return static_cast<bool>(result);
+    /// @brief Non-null after @c sched_init registers the balance walk.
+    using balance_walk_fn = auto (*)(u16 cpu, zxfoundation::sched::softirq_bal::balance_kind kind,
+                                     zxfoundation::sched::softirq_bal::balance_req& req) noexcept -> void;
+    static balance_walk_fn s_balance_walk{nullptr};
+
+    /// @brief Return the per-CPU periodic tick timer used by the nohz machinery.
+    /// @details The BSP uses @c g_bsp_tick_timer; APs use @c g_ap_tick_timers[cpu].
+    ///          No external locking — only @c sched_idle_enter and @c enqueue_strand
+    ///          mutate the timer's armed state, both with IRQs disabled.
+    [[nodiscard]] auto tick_timer_for(u16 cpu_id) noexcept -> zxfoundation::sys::timer::kernel_timer& {
+        return (cpu_id == 0U) ? g_bsp_tick_timer : g_ap_tick_timers[cpu_id];
     }
+
+    /// @brief nohz ops — Phase 4.4 wiring of the tickless idle state machine.
+    /// @details The hooks operate on the current CPU's tick timer and raise
+    ///          SCHED_SOFTIRQ so the balancer can re-evaluate on wake.
+    auto nohz_do_prepare_idle() noexcept -> void { /* nothing extra to do */ }
+    auto nohz_do_tick_stop() noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& t = tick_timer_for(pcp.cpu_id);
+        if (t.armed) discard_value zxfoundation::sys::timer::timer_cancel(t);
+    }
+    auto nohz_do_tick_start() noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& t = tick_timer_for(pcp.cpu_id);
+        if (!t.armed) {
+            t.deadline_tod = arch::s390x::cpu::clock::stck() + zxfoundation::sys::timer::TICK_INTERVAL_TOD;
+            discard_value zxfoundation::sys::timer::timer_add(t);
+        }
+    }
+    auto nohz_do_enter_balance() noexcept -> void {
+        zxfoundation::sched::softirq_bal::raise_balance_local(
+            zxfoundation::sched::softirq_bal::balance_kind::nohz_idle);
+    }
+
+    /// @brief Constant nohz ops table installed on every CPU.
+    /// @note @c context is left null since the ops use per-CPU lowcore state.
+    constexpr zxfoundation::sched::nohz::nohz_ops s_nohz_ops{
+        .prepare_idle  = &nohz_do_prepare_idle,
+        .enter_balance = &nohz_do_enter_balance,
+        .tick_stop     = &nohz_do_tick_stop,
+        .tick_start    = &nohz_do_tick_start,
+        .context       = nullptr
+    };
 
     auto validate_scheduler_irq_context(u32 domain_id = 0U) noexcept -> void {
         const auto state = zxfoundation::dgp::sync_contract_snapshot(
@@ -92,7 +149,7 @@ namespace _internal {
         if (d.ko.id == zxfoundation::scoms::KOBJECT_ID_INVALID) return;
         if (d.ko.state != zxfoundation::scoms::lifecycle_state::dying) return;
 
-        (void)zxfoundation::domain::domain_destroy(d.ko.id);
+        discard_value zxfoundation::domain::domain_destroy(d.ko.id);
     }
 
     auto record_asce_attachment(domain& d) noexcept -> void {
@@ -102,65 +159,77 @@ namespace _internal {
         pcp.attached_dgp_state = static_cast<u8>(d.ko.state);
     }
 
-    /// @brief Topology-aware work stealing across four tiers.
-    /// @param[in,out] local_rq  The idle CPU's run queue (lock held on
-    ///                          entry by the caller via schedule()).
-    /// @return A stolen strand for the local run queue, or nullptr.
-    /// @note The stolen strand's vruntime is normalized to the local
-    ///       run queue's min_vruntime.  Weighted vruntime delta from
-    ///       the source CPU is preserved through the normalization.
+    /// @brief Hierarchical work stealing walking the @c sched_domain tree.
+    /// @param[in,out] local_rq  The idle CPU's run queue (lock held on entry).
+    /// @return A stolen strand, or nullptr.
+    /// @note The stolen strand's @c se.vruntime is normalized to the local
+    ///       run queue's min_vruntime; weighted vruntime delta from the
+    ///       source CPU is preserved.
     auto try_steal_strand_locked(run_queue& local_rq) noexcept -> strand* {
         namespace fair = zxfoundation::sched::fair;
         namespace balance = zxfoundation::sched::balance;
         namespace topology = zxfoundation::sched::topology;
-
+        namespace sd = zxfoundation::sched::sd;
         namespace cpumask = arch::s390x::cpu::cpumask;
 
+        topology::refresh_cpu_record(local_rq.cpu_id, local_rq.nr_running,
+                                      cpumask::cpu_online(local_rq.cpu_id));
+
+        // Walk the sched_domain hierarchy from finest (SMT) to coarsest (NUMA)
+        // to find a busiest CPU to pull work from.
         run_queue* busiest = nullptr;
         u32 best_score = 0U;
 
-        topology::refresh_cpu_record(
-            local_rq.cpu_id,
-            local_rq.nr_running,
-            cpumask::cpu_online(local_rq.cpu_id));
+        const auto* dom_root = local_rq.sd_tree.levels[0];
 
-        constexpr topology::cpu_relation tiers[] {
-            topology::cpu_relation::same_smt_core,
-            topology::cpu_relation::same_core_group,
-            topology::cpu_relation::same_numa_node,
-            topology::cpu_relation::remote_numa_node,
-        };
-
-        for (const auto tier : tiers) {
-            topology::for_each_steal_candidate(
-                local_rq.cpu_id, tier,
-                [&](u16 i) noexcept -> void {
-                    auto& rq = g_rqs[i];
-                    if (&rq == &local_rq) return;
-
-                    const bool online = cpumask::cpu_online(rq.cpu_id);
-                    topology::refresh_cpu_record(rq.cpu_id, rq.nr_running, online);
-                    if (!online) return;
-
-                    const u32 score = balance::steal_source_score(
-                        local_rq.cpu_id,
-                        rq.cpu_id,
-                        rq.nr_running,
-                        tier);
-                    if (score > best_score) {
-                        best_score = score;
-                        busiest = &rq;
-                    }
+        // Fallback to cpu_relation tiers when the domain tree is not yet warm.
+        if (!dom_root) {
+            constexpr topology::cpu_relation tiers[] {
+                topology::cpu_relation::same_smt_core,
+                topology::cpu_relation::same_core_group,
+                topology::cpu_relation::same_numa_node,
+                topology::cpu_relation::remote_numa_node,
+            };
+            for (const auto tier : tiers) {
+                topology::for_each_steal_candidate(
+                    local_rq.cpu_id, tier,
+                    [&](u16 i) noexcept -> void {
+                        auto& rq = g_rqs[i];
+                        if (&rq == &local_rq) return;
+                        const bool online = cpumask::cpu_online(rq.cpu_id);
+                        if (!online) return;
+                        const u32 score = balance::steal_source_score(
+                            local_rq.cpu_id, rq.cpu_id, rq.nr_running,
+                            rq.cpu_capacity_curr, tier);
+                        if (score > best_score) { best_score = score; busiest = &rq; }
+                    });
+                if (busiest) break;
+            }
+        } else {
+            for (const sd::sched_domain* sd = dom_root; sd != nullptr; sd = sd->parent) {
+                sd::for_each_group(*sd, [&](const sd::sched_group& sg) noexcept -> void {
+                    sg.cpus.for_each([&](u16 i) noexcept -> void {
+                        auto& rq = g_rqs[i];
+                        if (&rq == &local_rq) return;
+                        const bool online = cpumask::cpu_online(rq.cpu_id);
+                        if (!online || rq.nr_running <= 1U) return;
+                        const auto tier = static_cast<topology::cpu_relation>(
+                            static_cast<u8>(topology::cpu_relation::same_numa_node)
+                            + static_cast<u8>(sd->level));
+                        const u32 score = balance::steal_source_score(
+                            local_rq.cpu_id, rq.cpu_id, rq.nr_running,
+                            rq.cpu_capacity_curr, tier);
+                        if (score > best_score) { best_score = score; busiest = &rq; }
+                    });
                 });
-
-            if (busiest) break;
+                if (busiest) break;
+            }
         }
 
-        if (!busiest) return nullptr;   // local_rq.lock still held
+        if (!busiest) return nullptr;
 
         run_queue& first  = (local_rq.cpu_id < busiest->cpu_id) ? local_rq : *busiest;
         run_queue& second = (local_rq.cpu_id < busiest->cpu_id) ? *busiest : local_rq;
-
         second.lock.lock();
 
         if (!cpumask::cpu_online(busiest->cpu_id) || busiest->nr_running <= 1) {
@@ -170,42 +239,29 @@ namespace _internal {
         }
 
         strand* stolen = nullptr;
-
         auto* last = busiest->fair_tree.root.node;
         if (last) {
             while (last->right) last = last->right;
-
             stolen = fair::rb_node_to_strand(last);
-
             const auto* stolen_domain = static_cast<const domain*>(stolen->owner);
             auto placement_result = balance::validate_cpu_for_strand(*stolen, local_rq.cpu_id);
             if (stolen->cpu != busiest->cpu_id || !stolen->on_rq
-                || !can_admit_domain(stolen_domain) || !placement_result) [[unlikely]] {
+                || !zxfoundation::sched::admit::can_admit_domain(stolen_domain) || !placement_result) [[unlikely]] {
                 stolen = nullptr;
             } else {
                 const u64 source_min_vruntime = busiest->min_vruntime;
-
                 fair::dequeue(*busiest, *stolen);
                 stolen->cpu = local_rq.cpu_id;
-
-                stolen->sched.vruntime = local_rq.min_vruntime +
-                    (stolen->sched.vruntime > source_min_vruntime
-                     ? stolen->sched.vruntime - source_min_vruntime
-                     : 0U);
-                stolen->sched.deadline = stolen->sched.vruntime +
-                    (stolen->sched.slice * 1024 / stolen->sched.weight);
+                zxfoundation::sched::eevdf::migrate_entity(stolen->se, source_min_vruntime,
+                                                           local_rq.min_vruntime);
             }
         }
 
         first.lock.unlock();
         if (&second != &first) second.lock.unlock();
-
-
         return stolen;
     }
 
-
-    /// @brief Mark the currently executing domain as needing rescheduling.
     auto set_need_resched() noexcept -> void {
         auto* dom = static_cast<domain*>(
             arch::s390x::cpu::lowcore::current_domain_ptr());
@@ -226,6 +282,8 @@ namespace zxfoundation::sched {
     using zxfoundation::domain::sched_substate;
     using zxfoundation::base::lifecycle_state;
     using zxfoundation::domain::run_queue;
+    using zxfoundation::sched::sched_entity;
+    using zxfoundation::sched::sd::sched_domain_tree;
 
     using domain_ctx::setup_domain_context;
     using domain_ctx::setup_strand_context;
@@ -247,12 +305,6 @@ namespace zxfoundation::sched {
 
     auto enqueue_strand(strand* s) noexcept -> void {
         auto* d = static_cast<domain*>(s->owner);
-        if (!_internal::can_admit_domain(d)) [[unlikely]] {
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
-                "sched: DGP scheduler admission denied");
-        }
-
         auto& rq = cpu_rq(s->cpu);
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         _internal::validate_scheduler_irq_context(d ? d->ko.id : 0U);
@@ -271,7 +323,16 @@ namespace zxfoundation::sched {
         const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         if (s->cpu != pcp.cpu_id) {
             arch::s390x::cpu::ipi::send_reschedule(s->cpu);
+        } else {
+            if (rq.curr == rq.idle_strand) {
+                auto* curr_dom = static_cast<domain*>(
+                    arch::s390x::cpu::lowcore::current_domain_ptr());
+                if (curr_dom) {
+                    curr_dom->flags = curr_dom->flags | domain_flags::need_resched;
+                }
+            }
         }
+        softirq_bal::raise_balance_local(softirq_bal::balance_kind::periodic);
     }
 
     auto dequeue_strand(strand* s) noexcept -> void {
@@ -302,9 +363,6 @@ namespace zxfoundation::sched {
         if (!owner || s.on_rq) {
             return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-        if (!_internal::can_admit_domain(owner)) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
         return classed::admit_policy(*owner, s, policy);
     }
 
@@ -327,11 +385,6 @@ namespace zxfoundation::sched {
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
 
-        if (!_internal::can_admit_domain(owner)) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
-
         auto create_result = zxfoundation::domain::strand_create(owner, request.cpu);
         if (!create_result) {
             return lib::unexpected(create_result.error());
@@ -341,11 +394,6 @@ namespace zxfoundation::sched {
         zxfoundation::sched::domain_ctx::setup_strand_context(s, request.entry, request.arg);
 
         if (request.enqueue) {
-            if (!_internal::can_admit_domain(owner)) {
-                (void)zxfoundation::domain::strand_destroy(*s);
-                return lib::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-            }
             enqueue_strand(s);
         }
 
@@ -373,8 +421,7 @@ namespace zxfoundation::sched {
             }
 
             if (prev_dom
-                && prev_dom->ko.state == lifecycle_state::active
-                && _internal::can_admit_domain(prev_dom)
+                && admit::can_admit_domain(prev_dom)
                 && (prev->substate == sched_substate::running || prev->substate == sched_substate::runnable)
                 && !prev->on_rq
                 && prev != rq.idle_strand) {
@@ -414,12 +461,23 @@ namespace zxfoundation::sched {
         }
 
         auto* next_owner = static_cast<domain*>(next->owner);
-        if (!_internal::can_admit_domain(next_owner)) [[unlikely]] {
+        if (!admit::can_admit_domain(next_owner)) [[unlikely]] {
+            next = rq.idle_strand;
+            next_owner = static_cast<domain*>(next->owner);
+        }
+
+        if (next != rq.idle_strand && next_owner
+            && next_owner->pending_rights_revoke_raw != 0U) {
+            classed::dequeue(rq, *next);
+            next->substate = sched_substate::idle;
             next = rq.idle_strand;
             next_owner = static_cast<domain*>(next->owner);
         }
 
         if (next == prev) {
+            if (next != rq.idle_strand) {
+                next->substate = sched_substate::running;
+            }
             rq.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
             return;
@@ -429,10 +487,20 @@ namespace zxfoundation::sched {
             classed::dequeue(rq, *next);
         }
 
+        if (next == rq.idle_strand && (prev == nullptr || prev != rq.idle_strand)) {
+            nohz::nohz_idle_enter(rq.nohz_flags, _internal::s_nohz_ops);
+        } else if (next != rq.idle_strand && prev == rq.idle_strand) {
+            nohz::nohz_idle_exit(rq.nohz_flags, _internal::s_nohz_ops);
+        }
+
         if (next != rq.idle_strand) {
             next->substate = sched_substate::running;
-            arch::s390x::cpu::cputimer::timer_set(
-                zxfoundation::sched::fair::EEVDF_DEFAULT_SLICE);
+            if (next_owner && next_owner->signal_queue.has_pending()) {
+                next_owner->flags |= domain_flags::need_resched;
+            }
+            const u64 calibrated_slice = eevdf::sched_slice(next->se, rq.nr_running);
+            next->se.slice = calibrated_slice;
+            arch::s390x::cpu::cputimer::timer_set(calibrated_slice);
         } else {
             arch::s390x::cpu::cputimer::timer_set(
                 zxfoundation::sys::timer::TICK_INTERVAL_TOD);
@@ -448,7 +516,7 @@ namespace zxfoundation::sched {
             && next_owner->asce.val != 0
             && (!prev_owner || next_owner->asce.val != prev_owner->asce.val)) {
             _internal::validate_scheduler_irq_context(next_owner->ko.id);
-             const u64 next_asce_val = next_owner->asce.val;
+            const u64 next_asce_val = next_owner->asce.val;
             arch::s390x::cpu::ctlreg::ctl_load<1, 1>(next_asce_val);
             auto* lc = arch::s390x::cpu::lowcore::get_current();
             lc->user_asce = next_asce_val;
@@ -457,7 +525,6 @@ namespace zxfoundation::sched {
 
         rq.context_lock.unlock();
 
-        // Update per-CPU current_strand before the switch.
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         pcp.current_strand = reinterpret_cast<u64>(next);
 
@@ -465,7 +532,8 @@ namespace zxfoundation::sched {
 
         arch::s390x::cpu::irq::irq_restore(flags);
 
-        // Deliver pending signals to the newly scheduled domain.
+        softirq_bal::raise_balance_local(softirq_bal::balance_kind::periodic);
+
         if (next_owner) {
             zxfoundation::domain::signal::signal_deliver_all(*next_owner);
         }
@@ -484,7 +552,7 @@ namespace zxfoundation::sched {
         auto* current = reinterpret_cast<strand*>(pcp.current_strand);
         if (current) {
             current->on_rq = false;
-            (void)scoms::mark_destroyed(current);
+            discard_value scoms::mark_destroyed(current);
             if (auto* owner = static_cast<domain*>(current->owner)) {
                 owner->flags = owner->flags | domain_flags::need_resched;
             }
@@ -503,8 +571,6 @@ namespace zxfoundation::sched {
     /// @brief CPU timer quantum enforcement — fires when a strand's quantum expires.
     /// @note This is called from the external interrupt dispatcher with IRQs disabled.
     ///       The caller does NOT hold rq.lock — we take it for vruntime accounting.
-    /// @warning This is the hardware preemption mechanism.  Without it, strands
-    ///          would run until they voluntarily yield.
     auto cpu_timer_tick() noexcept -> void {
         if (!_internal::g_sched_initialized) return;
 
@@ -523,41 +589,50 @@ namespace zxfoundation::sched {
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         rq.lock.lock();
 
-        const u64 weighted_delta = (elapsed * 1024) / curr->sched.weight;
-        curr->sched.vruntime += weighted_delta;
+        const u64 weighted_delta = (elapsed * 1024) / curr->se.weight;
+        curr->se.vruntime += weighted_delta;
 
-        if (curr->sched.vruntime > rq.min_vruntime)
-            rq.min_vruntime = curr->sched.vruntime;
+        if (curr->se.vruntime > rq.min_vruntime)
+            rq.min_vruntime = curr->se.vruntime;
 
-        const bool deadline_expired = (curr->sched.vruntime >= curr->sched.deadline);
+        const bool deadline_expired = (curr->se.vruntime >= curr->se.deadline);
+
+        namespace pelt = zxfoundation::sched::pelt;
+        const u64 now_ns = zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
+        if (curr->body) {
+            pelt::update_entity_load_avg(curr->body->pelt_avg, now_ns, curr->se.weight, 1U, 1U);
+        }
+        pelt::update_rq_load_avg(rq.cfs_avg, now_ns, (rq.nr_running > 0U) ? 1U : 0U);
+
+        const u32 total = rq.nr_running;
+        topology::refresh_class_load(rq.cpu_id, total, 0U, 0U);
 
         rq.lock.unlock();
 
         if (deadline_expired) {
             auto* owner = static_cast<domain*>(curr->owner);
             owner->flags = owner->flags | domain_flags::need_resched;
-            curr->sched.deadline = curr->sched.vruntime +
-                (curr->sched.slice * 1024 / curr->sched.weight);
-            curr->sched.slice = fair::EEVDF_DEFAULT_SLICE;
+            curr->se.deadline = curr->se.vruntime +
+                (curr->se.slice * 1024 / curr->se.weight);
+            curr->se.slice = eevdf::sched_slice(curr->se, rq.nr_running);
         }
 
-        arch::s390x::cpu::cputimer::timer_set(fair::EEVDF_DEFAULT_SLICE);
+        arch::s390x::cpu::cputimer::timer_set(curr->se.slice);
         arch::s390x::cpu::irq::irq_restore(flags);
         watchdog_heartbeat_bump();
     }
 
-    /// @brief CPU timer IRQ handler — dispatched by the external-interrupt
-    ///        path via @c zxfoundation::sys::irq::irq_dispatch for vector
-    ///        @c IRQ_BASE_EXT + EXT_IRQ_CPU_TIMER (PoP code 0x1005).
+    /// @brief CPU timer IRQ handler — dispatches vector EXT_IRQ_CPU_TIMER.
     auto irq_handler_cpu_timer(
         u16 irq,
         arch::s390x::cpu::irq::irq_frame* frame,
         void* data
     ) noexcept -> void {
-        (void)irq; (void)frame; (void)data;
+        discard_value irq; discard_value frame; discard_value data;
         cpu_timer_tick();
     }
 
+    /// @brief Periodic scheduler tick
     auto scheduler_tick() noexcept -> void {
         if (!_internal::g_sched_initialized) return;
 
@@ -569,16 +644,40 @@ namespace zxfoundation::sched {
 
         auto* curr = rq.curr;
         if (!curr || curr == rq.idle_strand) {
+            namespace pelt = zxfoundation::sched::pelt;
+            const u64 now_ns = zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
+            pelt::update_rq_load_avg(rq.cfs_avg, now_ns, 0U);
+            topology::refresh_class_load(rq.cpu_id, 0U, 0U, 0U);
             rq.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
+            softirq_bal::raise_balance_local(softirq_bal::balance_kind::nohz_idle);
             watchdog_heartbeat_bump();
             return;
         }
 
         classed::tick(rq, *curr);
+
+        namespace pelt = zxfoundation::sched::pelt;
+        const u64 now_ns = zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
+        if (curr->body) {
+            pelt::update_entity_load_avg(curr->body->pelt_avg, now_ns, curr->se.weight, 1U, 1U);
+        }
+        pelt::update_rq_load_avg(rq.cfs_avg, now_ns, (rq.nr_running > 0U) ? 1U : 0U);
+
+        const u32 total = rq.nr_running;
+        topology::refresh_class_load(rq.cpu_id, total, 0U, 0U);
+
+        if (auto* owner = static_cast<domain*>(curr->owner);
+            owner && owner->pending_rights_revoke_raw != 0U) {
+            classed::dequeue(rq, *curr);
+            curr->substate = sched_substate::idle;
+            owner->flags |= domain_flags::need_resched;
+        }
+
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
 
+        softirq_bal::raise_balance_local(softirq_bal::balance_kind::periodic);
         watchdog_heartbeat_bump();
     }
 
@@ -590,15 +689,6 @@ namespace zxfoundation::sched {
     }
 
     /// @brief Mark the currently executing domain as needing rescheduling.
-    /// @details Sets @c domain_flags::need_resched on the current domain's
-    ///          flag word.  Idempotent and safe to call from any IRQ context
-    ///          including external-call IPI handlers because the flag is a
-    ///          single bit set with a relaxed OR operation; the entry.S
-    ///          CHECK_PREEMPT macro re-reads the field on every preemptible
-    ///          return path.
-    /// @warning Does nothing if no current domain is bound to this CPU's
-    ///          lowcore (idle / nucleus context).  In that case, the trailing
-    ///          CHECK_PREEMPT in the IRQ frame return path is a no-op anyway.
     auto sched_resched_current() noexcept -> void {
         _internal::set_need_resched();
     }
@@ -617,6 +707,13 @@ namespace zxfoundation::sched {
     auto sched_init() noexcept -> void {
         using namespace _internal;
 
+        zxfoundation::sched::rt::set_enqueue_accessor(
+            &zxfoundation::sched::enqueue_strand);
+        zxfoundation::sched::rt::set_dequeue_accessor(
+            &zxfoundation::sched::dequeue_strand);
+        zxfoundation::sched::rt::set_schedule_accessor(
+            &zxfoundation::sched::schedule);
+
         topology::sched_topology_init();
 
         for (u32 i = 0; i < base::config::CONFIG_ZX_MAX_CPUS; ++i) {
@@ -634,12 +731,22 @@ namespace zxfoundation::sched {
         rq.curr = rq.idle_strand;
 
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
-        lc.current_domain = 0;
+        auto* nucleus = zxfoundation::domain::domain_nucleus();
+        lc.current_domain = nucleus ? reinterpret_cast<u64>(nucleus) : 0U;
         lc.kernel_stack = idle_s->kstack_top;
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        pcp.current_domain = 0;
+        pcp.current_domain = lc.current_domain;
         pcp.current_strand = reinterpret_cast<u64>(rq.curr);
         pcp.kernel_stack = idle_s->kstack_top;
+
+        cpupri::cpupri_init();
+        cpudl::cpudl_init();
+        rt_bw::rt_bw_init(rq.rt_bw, 0U);
+        {
+            const auto* rec = topology::record_for(0U);
+            const u8 node = (rec && rec->numa_node < memory::numa::MAX_NUMA_NODES) ? rec->numa_node : 0xFFU;
+            sd::sched_domain_tree_build(0U, rec, topology::node_mask_of(node), rq.sd_tree);
+        }
 
         {
             using namespace zxfoundation::sys::timer;
@@ -652,7 +759,7 @@ namespace zxfoundation::sched {
             };
             t.data         = nullptr;
             t.mode         = timer_mode::periodic;
-            (void)timer_add(t);
+            discard_value timer_add(t);
         }
 
         rq.online.store(1, arch::s390x::lib::atomic::memory_order::release);
@@ -676,6 +783,13 @@ namespace zxfoundation::sched {
             }
         }
 
+        softirq_bal::open_sched_softirq();
+        zxfoundation::sched::balance::set_rq_accessor(&cpu_rq);
+        _internal::s_balance_walk = &zxfoundation::sched::balance::balance_dispatch;
+        softirq_bal::register_balance_dispatch(_internal::s_balance_walk);
+
+        zxfoundation::sched::rq_snap::set_this_rq_accessor(&this_rq);
+
         pinfo("sched: idle strand id={} on cpu 0, scheduler ready",
               idle_s->ko.id);
     }
@@ -694,12 +808,22 @@ namespace zxfoundation::sched {
         auto& rq = g_rqs[cpu_id];
 
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
-        lc.current_domain = 0;
+        auto* nucleus = zxfoundation::domain::domain_nucleus();
+        lc.current_domain = nucleus ? reinterpret_cast<u64>(nucleus) : 0U;
         lc.kernel_stack = idle_s->kstack_top;
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        pcp.current_domain = 0;
+        pcp.current_domain = lc.current_domain;
         pcp.current_strand = 0;
         pcp.kernel_stack = idle_s->kstack_top;
+
+        cpupri::cpupri_init();
+        cpudl::cpudl_init();
+        rt_bw::rt_bw_init(rq.rt_bw, cpu_id);
+        {
+            const auto* rec = topology::record_for(cpu_id);
+            const u8 node = (rec && rec->numa_node < memory::numa::MAX_NUMA_NODES) ? rec->numa_node : 0xFFU;
+            sd::sched_domain_tree_build(cpu_id, rec, topology::node_mask_of(node), rq.sd_tree);
+        }
 
         {
             using namespace zxfoundation::sys::timer;
@@ -713,7 +837,7 @@ namespace zxfoundation::sched {
             };
             t.data         = nullptr;
             t.mode         = timer_mode::periodic;
-            (void)timer_add(t);
+            discard_value timer_add(t);
         }
 
         {
@@ -761,6 +885,15 @@ namespace zxfoundation::sched {
             arch::s390x::cpu::irq::irq_restore(flags);
         }
 
+        cpupri::cpupri_init();
+        cpudl::cpudl_init();
+        rt_bw::rt_bw_init(rq.rt_bw, cpu_id);
+        {
+            const auto* rec = topology::record_for(cpu_id);
+            const u8 node = (rec && rec->numa_node < memory::numa::MAX_NUMA_NODES) ? rec->numa_node : 0xFFU;
+            sd::sched_domain_tree_build(cpu_id, rec, topology::node_mask_of(node), rq.sd_tree);
+        }
+
         arch::s390x::cpu::cpumask::cpu_set_online(cpu_id);
         topology::refresh_cpu_record(cpu_id, 0U, true);
         topology::topology_online_cpu(cpu_id);
@@ -784,23 +917,24 @@ namespace zxfoundation::sched {
 
         strand* old_idle = rq.idle_strand;
 
-        {
-            for (strand& s : rq.fair_tree.iter<strand, &strand::sched_rb>()) {
-                classed::dequeue(rq, s);
-                u16 dest_cpu = 0;
-                for (u16 i = 0; i < base::config::CONFIG_ZX_MAX_CPUS; ++i) {
-                    if (i != cpu_id && arch::s390x::cpu::cpumask::cpu_online(i)) {
-                        dest_cpu = i;
-                        break;
-                    }
+        for (strand& s : fair::iter(rq)) {
+            classed::dequeue(rq, s);
+            u16 dest_cpu = 0;
+            for (u16 i = 0; i < base::config::CONFIG_ZX_MAX_CPUS; ++i) {
+                if (i != cpu_id && arch::s390x::cpu::cpumask::cpu_online(i)) {
+                    dest_cpu = i;
+                    break;
                 }
-                s.cpu = dest_cpu;
-                s.on_rq = false;
-                s.substate = sched_substate::runnable;
-                auto& dest_rq = g_rqs[dest_cpu];
-                (void)classed::enqueue(dest_rq, s);
             }
+            s.cpu = dest_cpu;
+            s.on_rq = false;
+            s.substate = sched_substate::runnable;
+            auto& dest_rq = g_rqs[dest_cpu];
+            discard_value classed::enqueue(dest_rq, s);
         }
+
+        cpupri::cpupri_set(cpu_id, cpupri::cpupri_top(cpu_id), cpupri::CPUPRI_INVALID);
+        cpudl::cpudl_clear(cpu_id);
 
         rq.idle_strand = nullptr;
         rq.curr = nullptr;
@@ -813,7 +947,7 @@ namespace zxfoundation::sched {
         topology::topology_offline_cpu(cpu_id);
 
         if (old_idle) {
-            (void)idle::deinit_idle_strand(*old_idle);
+            discard_value idle::deinit_idle_strand(*old_idle);
         }
         return {};
     }

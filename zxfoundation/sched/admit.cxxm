@@ -1,0 +1,28 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/admit.cxxm
+/// @brief DGP scheduler admission gate.
+
+export module zxfoundation.sched.admit;
+import zxfoundation.base.types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.dgp.isolation;
+import zxfoundation.dgp.isolation_types;
+
+export {
+namespace zxfoundation::sched::admit {
+
+    /// @brief DGP scheduler admission gate.
+    /// @param[in] d Domain attempting to enqueue a strand on any CPU.
+    /// @return True when @c d may run a strand; false otherwise.
+    [[nodiscard]] inline auto can_admit_domain(
+        const zxfoundation::domain::domain* d
+    ) noexcept -> bool {
+        if (!d) return true;
+        if (zxfoundation::domain::is_idle_domain(*d)) return true;
+        auto result = zxfoundation::dgp::isolation_validate_scheduler_admission(
+            d->ko.state, d->root_phys, d->asce.val);
+        return static_cast<bool>(result);
+    }
+
+} // namespace zxfoundation::sched::admit
+} // end export

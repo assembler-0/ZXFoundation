@@ -44,9 +44,14 @@ namespace zxfoundation::gate::dispatch_table::_internal {
 
     [[nodiscard]] auto acquire_caller_domain() noexcept
         -> zxfoundation::domain::domain * {
-        auto *lc = arch::s390x::cpu::lowcore::get_current();
-        if (!lc) [[unlikely]] return nullptr;
-        return reinterpret_cast<zxfoundation::domain::domain *>(lc->current_domain);
+        // Use current_domain_or_nucleus() so the dispatch layer never
+        // sees a null caller — nucleus is the kernel's own domain
+        // identity, present from boot onward and immutable thereafter.
+        // This was previously `lowcore::current_domain` cast directly,
+        // which returned null during boot (pre-first-user-domain) and
+        // silently made validate_call() fail every call.  Now those
+        // paths correctly attribute the call to the nucleus domain.
+        return zxfoundation::domain::current_domain_or_nucleus();
     }
 
     [[nodiscard]] auto dgp_rights_for(gate_auth_level auth) noexcept
@@ -64,6 +69,8 @@ namespace zxfoundation::gate::dispatch_table::_internal {
                 return isolation_rights::enter | isolation_rights::share;
             case gate_auth_level::io:
                 return isolation_rights::enter | isolation_rights::io;
+            case gate_auth_level::signal:
+                return isolation_rights::enter | isolation_rights::signal;
         }
         return isolation_rights::enter;
     }
@@ -86,7 +93,7 @@ namespace zxfoundation::gate::dispatch_table::_internal {
         auto result = zxfoundation::dgp::dgp_authorize(
             *caller_domain, *target_domain,
             zxfoundation::dgp::operation_kind::gate_entry,
-            zxfoundation::dgp::dgp_authorization_metadata 
+            zxfoundation::dgp::dgp_authorization_metadata
                 { .requested_rights = requested, .gate_id = gate->ko.id }
         );
         if (!result) return false;
@@ -95,11 +102,103 @@ namespace zxfoundation::gate::dispatch_table::_internal {
         return true;
     }
 
+    /// @brief Resolve the *target* domain for an op (the domain being acted
+    ///        upon, distinct from the caller).  Domain id 0 reserves the
+    ///        nucleus domain — the kernel itself — and may be a valid
+    ///        target for inspection (domain_query) but never for life-
+    ///        cycle operations (domain_destroy refuses id 0).
+    [[nodiscard]] auto target_domain_for_op(
+        zxfoundation::dgp::operation_kind op_kind,
+        zxfoundation::domain::domain& caller,
+        u64 a0, u64 a1
+    ) noexcept -> zxfoundation::domain::domain* {
+        using zxfoundation::dgp::operation_kind;
+        switch (op_kind) {
+            // Cross-domain ops (a1 carries the target domain id for most):
+            case operation_kind::mem_share:
+            case operation_kind::portal_create:
+            case operation_kind::portal_destroy:
+            case operation_kind::domain_destroy: {
+                const auto tid = static_cast<zxfoundation::domain::domain_id>(a1);
+                if (tid == 0) return zxfoundation::domain::domain_nucleus();
+                return zxfoundation::domain::domain_find(tid);
+            }
+            // signal_send and domain_query carry the target domain id in a0:
+            case operation_kind::signal_send: {
+                const auto tid = static_cast<zxfoundation::domain::domain_id>(a0);
+                if (tid == 0) return zxfoundation::domain::domain_nucleus();
+                return zxfoundation::domain::domain_find(tid);
+            }
+            case operation_kind::domain_query: {
+                // Handler convention: a0==0 means "query self" — but
+                // once nucleus is reserved as a real domain, "self" for
+                // any user-space caller is *also* id 0 from the caller's
+                // perspective.  Match the handler's behaviour: 0 -> caller.
+                const auto tid = static_cast<zxfoundation::domain::domain_id>(a0);
+                if (tid == 0 || tid == caller.ko.id) return &caller;
+                return zxfoundation::domain::domain_find(tid);
+            }
+
+            case operation_kind::strand_create: {
+                const auto owner = static_cast<zxfoundation::domain::domain_id>(a1 & 0xFFFFU);
+                if (owner == 0 || owner == caller.ko.id) return &caller;
+                return zxfoundation::domain::domain_find(owner);
+            }
+            // Everything else targets the caller's own domain.
+            default:
+                return &caller;
+        }
+    }
+
+    /// @brief Extract operation-specific authorization metadata (VA range,
+    ///        gate id, requested-rights hint) from the syscall arguments.
+    [[nodiscard]] auto metadata_for_op(
+        zxfoundation::dgp::operation_kind op_kind,
+        u64 a0, u64 a1, u64 a2, u64 a3
+    ) noexcept -> zxfoundation::dgp::dgp_authorization_metadata {
+        using zxfoundation::dgp::operation_kind;
+        zxfoundation::dgp::dgp_authorization_metadata meta{};
+
+        switch (op_kind) {
+            // VA-bounded ops.  The DGP invariant is start < end.
+            case operation_kind::mem_map: {
+                meta.target_va_start = a1;
+                meta.target_va_end   = a1 + a3;
+                break;
+            }
+            case operation_kind::mem_unmap:
+            case operation_kind::mem_protect:
+            case operation_kind::mem_free: {
+                meta.target_va_start = a0;
+                meta.target_va_end   = a0 + a1;
+                break;
+            }
+            case operation_kind::mem_share:
+            case operation_kind::portal_create: {
+                meta.target_va_start = a2;
+                meta.target_va_end   = a3;
+                break;
+            }
+
+            // Gate-id carrying ops.
+            case operation_kind::gate_entry:
+                meta.gate_id = static_cast<u32>(a0);
+                break;
+            case operation_kind::io_irq_bind:
+                meta.gate_id = static_cast<u32>(a1);
+                break;
+
+            default:
+                break;
+        }
+        return meta;
+    }
+
     /// @brief Validate DGP contract + capability before dispatch.
     /// @return true if the call is authorized.
     [[nodiscard]] auto validate_call(
         u32 packed_nr,
-        u64 a0,
+        u64 a0, u64 a1, u64 a2, u64 a3,
         const entry &ent,
         zxfoundation::domain::domain *caller
     ) noexcept -> bool {
@@ -112,6 +211,25 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             sys::printk::perr("dispatch: call {} — DGP sync contract failed",
                               packed_nr);
             return false;
+        }
+
+        if (ent.meta.op_kind != zxfoundation::dgp::operation_kind::none) {
+            auto* target = target_domain_for_op(
+                ent.meta.op_kind, *caller, a0, a1);
+            if (!target) {
+                sys::printk::perr("dispatch: call {} — target domain not found",
+                                  packed_nr);
+                return false;
+            }
+            auto meta = metadata_for_op(ent.meta.op_kind, a0, a1, a2, a3);
+            auto dgp_r = zxfoundation::dgp::dgp_authorize(
+                *caller, *target, ent.meta.op_kind, meta);
+            if (!dgp_r) {
+                sys::printk::perr("dispatch: call {} — DGP authorize denied (op_kind={})",
+                                  packed_nr,
+                                  static_cast<u32>(ent.meta.op_kind));
+                return false;
+            }
         }
 
         if (ent.meta.auth != gate_auth_level::none) {
@@ -163,20 +281,13 @@ namespace zxfoundation::gate::dispatch_table::_internal {
                 break;
             }
 
-            case gate_auth_level::io: {
-                auto dgp_r = zxfoundation::dgp::dgp_authorize(
-                    *caller, *caller,
-                    zxfoundation::dgp::operation_kind::io_bind,
-                    zxfoundation::dgp::dgp_authorization_metadata{
-                        .requested_rights = isolation_rights::io,
-                    });
-                if (!dgp_r) {
-                    sys::printk::perr("dispatch: call {} — DGP io authorization failed",
-                                      packed_nr);
-                    return false;
-                }
+            case gate_auth_level::io:
+            case gate_auth_level::signal:
+                // No additional capability check needed here — the DGP
+                // rights check above already enforced io / signal authority
+                // and the handler validates any capability tokens it
+                // requires (e.g. io_irq_bind's io_token) on its own.
                 break;
-            }
         }
 
         return true;
@@ -270,7 +381,7 @@ export {
             }
 
             auto *caller = _internal::acquire_caller_domain();
-            if (!_internal::validate_call(packed_nr, a0, ent, caller)) [[unlikely]] {
+            if (!_internal::validate_call(packed_nr, a0, a1, a2, a3, ent, caller)) [[unlikely]] {
                 return ~0ULL;
             }
 

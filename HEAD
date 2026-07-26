@@ -1,67 +1,296 @@
-trap, sched, sys/irq: trap & interrupt infrastructure upgrade + BUG-002 fix
+dgp, sched, gate, domain, locking, sys, build: nucleus entity, dispatch-layer DGP chokepoint, RT mutex PI, signal framework, scheduler policy syscalls, lazy rights revocation, zinit initcall system, Perl configure
 
-sys/scoms, sys/irq: fix IRQ dispatch slot mismatch (BUG-002)
-    see BUG_LIST.xml:BUG-002 for more information about behavior and solution.
+    This is the largest single change set since the original DGP commit
+    (f03989e).  It introduces a real nucleus domain, completed DGP
+    authorization at the dispatch layer, the rest of the Phase-4 SMP/
+    NUMA scheduler hardening, the locking/PI bridge, the signal
+    framework, scheduler-policy syscalls, lazy rights revocation, a
+    zinit initcall system, and a Perl configure tool.  The tree builds
+    cleanly (cl+lld, freestanding C++23) and all 58 user tests pass.
 
-arch/s390x/trap/ext, sys/timer: route external interrupts through IRQ table
-    ext.cxxm handle() now dispatches via irq_dispatch(EXT_*) for every
-    external interrupt class instead of using hardcoded fast paths.  timer.cxxm
-    registers its handlers through irq_register() like every other subsystem,
-    relying on the fixed SCOMS slot allocation above for correct dispatch.
+    * Two-layer model formally documented in the isolation_rights
+      doxygen header: coarse domain-class authority (isolation_rights
+      stored on domain::granted_rights, enforced by dgp_authorize)
+      vs fine per-object capability rights (cap_rights packed in
+      cap_token, enforced by cap_validate).  The two are not
+      interchangeable and not duplicates — they cooperate.  The doc
+      block includes a per-auth-level table showing where each layer
+      is checked.
 
-arch/s390x/trap/mcck: MCESA save areas
-    Added full MCESA save area layout to arch/s390x/cpu/lowcore_types.cxxm
-    (save_area_sync[8], psw_save_area, prefixreg_save_area, fpc, tod, timer,
-    clkcomp, last_break, gr, fpr, cr, ar).  dump_mcesa() in mcck.cxxm:90-125
-    reports all areas on MCCK.
+    * dispatch_table::validate_call now runs dgp_authorize for *every*
+      registered op_kind, not only io/signal/gate_entry as before.
+      This is defense-in-depth at the dispatch layer so a handler bug
+      cannot accidentally bypass the DGP rights model.
 
-arch/s390x/trap/mcck: MCIC backlog detection
-    Added MCIC_BACKLOG constant (bit 6, 1ULL << 57) to mcck.cxxm.  handle()
-    now decodes the MCIC backlog bit and, when a stacked MCCK is detected,
-    emits syschk_warning instead of continuing into the regular handler
-    path.  Added backlog=15 to the machine_error enum in lib/error.cxxm.
+    * dispatch_entry_meta carries an op_kind field, populated at
+      registration time by gate_registration::make_op.  The dispatch
+      layer uses it to derive the correct dgp_authorize invocation.
 
-arch/s390x/trap/entry.S: restart handler
-    Added trap_restart_entry in entry.S:176-197 with LC_RESTART_DATA /
-    LC_RESTART_SOURCE wired into lowcore.  Restarts now trap through a
-    dedicated entry rather than falling through the program-check path.
+    * New target_domain_for_op() resolves the DGP target domain from
+      the syscall arguments for cross-domain ops (domain_query,
+      signal_send, mem_share, portal_create/destroy, domain_destroy,
+      strand_create).  Domain id 0 resolves to the nucleus domain.
 
-zxfoundation/sched/sched: CPU timer EEVDF accounting
-    Implemented EEVDF vruntime accounting in sched.cxxm:502-553 (quantum,
-    weight, deadline, need_resched).  cpu_timer_tick() now updates vruntime
-    and recalculates deadline instead of only counting ticks.  Timer set
-    uses EEVDF_DEFAULT_SLICE for runnable strands and TICK_INTERVAL_TOD for
-    the idle strand.
+    * New metadata_for_op() populates dgp_authorization_metadata
+      (target_va_start/end, gate_id) from syscall arguments for the
+      ops that the DGP invariant requires: VA-bounded memory ops
+      (mem_map, mem_unmap, mem_protect, mem_free, mem_share,
+      portal_create) and gate-id carrying ops (gate_entry,
+      io_irq_bind).  validate_op_metadata in dgp_authorize.cxxm is
+      no longer dead code — the metadata is now actually populated
+      and the VA/gate-id invariants it enforces become real gates.
 
-arch/s390x/cpu/sclp: timing alert / service signal
-    Service signal path is a null-op pending a future SCLP SCCB reader.
-    Acknowledged in code comments as future work — no dispatch regression
-    because the vector is not registered.
+    * All 8 nc_* handler families now share the dispatch-layer
+      chokepoint on the way in.  Handler-side dgp_authorize calls
+      remain in place as belt-and-suspenders against run-time
+      handler-level regressions.
 
-arch/s390x/trap/pgm: program-check name table
-    pgm.cxxm now decodes and reports every PoP §6-4 program-check code by
-    name.  Added DXC subclass decoding and TEID inspection for data/page
-    exceptions.  arch/s390x/cpu/teid_types.cxxm added to hold the decoded
-    TEID bit layout.
+    * operation_kind enum renumbered into contiguous groups:
+      domain_lifecycle (1-6), gate (7-9), portal (10-11), io (12-15),
+      signal (16-22), mem (23-28), cap (29-32), sys (33-39),
+      scheduling-policy (40-42).  required_rights_for_op and
+      validate_op_metadata cases cover every operation_kind
+      exhaustively; no -Wswitch errors.
 
-lib/uaccess, arch/s390x/trap/pgm: uaccess fixup mechanism
-    Added fixup table consulted by pgm.cxxm on access exceptions.
-    copy_from_user/copy_to_user now register fixup landing points so that
-    a fault on a user access returns -EFAULT to the caller instead of
-    escalating to a system check.  Existing uaccess code paths updated to
-    emit fixup entries.
+    * cap_revoke added to cap_op (cap_op is now acquire/release/
+      validate/revoke).  cap_revoke bumps the underlying object's
+      generation counter, invalidating all outstanding tokens
+      efficiently.  DGP-gated behind delegate|lifecycle.
 
-zxfoundation/sched/sched, arch/s390x/cpu/ipi: scheduler IPI wiring
-    Wired send_reschedule() into enqueue_strand() in sched.cxxm.  When a
-    strand is enqueued on a CPU other than the current CPU, the scheduler
-    now calls arch.s390x.cpu.ipi.send_reschedule(target_cpu).  This sends
-    SIGP external call with EC_SCHEDULE_BIT; the target CPU's handle_ipi
-    (smp.cxxm:235) sees the bit and calls sched_resched_current(), dragging
-    the CPU out of enabled_wait() to run the woken strand.  Closes the final
-    gap in SMP wake-up — remote enqueues no longer require a timer tick to
-    be observed by the target.
+    The kernel itself was previously a "blob of code with no face":
+    domain_id 0 was reserved-as-invalid and domain_find(0) returned
+    null, current_domain_ptr() was null pre-first-user-domain, printk
+    had to fall back to a "nucleus" string literal, and the DGP
+    cross-domain target path had no nucleus domain to authorize
+    against.
 
-build: Added configure.cmake script for quick project configuration (TL;DR)
-       Updated build guide to reference alternative method
+    A new domain_init_nucleus() runs immediately after domain_init()
+    and permanently reserves g_domain_table slot 0:
+      - name is "foundation/core.zxfoundation.nucleus" (literal
+        lifetime == kernel lifetime)
+      - granted_rights = isolation_rights::all
+      - storage_key = SKEY_NUCLEUS (architecture-reserved master key 0)
+      - asce / root_phys seeded from the running CR1 (read via the
+        public arch::s390x::cpu::ctlreg::ctl_store<1,1>())
+      - lifecycle_state := active (set once, never transitions)
+      - primary_strand fields initialised to safe idle defaults
+        (ksp/kstack_top zero, substate=idle, owner=self, flags=idle);
+        nucleus is not context-switched into — the kernel is already
+        running on its own stack — but the fields are now non-bogus
+        so scheduler introspection paths see a real object instead of
+        uninitialised memory.
+      - hard-forbid: domain_destroy refuses id 0 and any domain
+        carrying domain_flags::nucleus, unconditionally.
 
-Signed-off-by: assembler-0 <diaviekone13@gmail.com>
+    domain_nucleus() returns the slot-0 pointer; current_domain_or_
+    nucleus() returns current_domain_ptr() or falls back to
+    domain_nucleus() when no domain is attached to the running CPU.
+    This eliminates the "null current domain" case throughout the
+    boot path.
+
+    Per-CPU idle strands now have owner == domain_nucleus() rather
+    than nullptr — every strand in the system has a real domain
+    owner. sched_init's BSP and AP bringup paths bind lowcore's
+    current_domain to domain_nucleus() so the kernel-idle context
+    runs "as nucleus" until the first user domain is scheduled, and
+    svc/pgm/mcck trap handlers see a real caller domain instead of
+    having to bail on null.
+
+    domain_query(0) — historically special-cased in the handler —
+    now resolves against the nucleus domain through the normal
+    target_domain_for_op lookup, fixing an audit regression exposed
+    by the new dispatch-layer DGP check.
+
+    domain_flags::nucleus is architecturally unacquirable: domain_
+    create() unconditionally initialises new domains with
+    domain_flags::none.  The check in domain_destroy is defense-in-
+    depth against internal corruption.
+
+    * Module split sched.context (leaf: irqs/preempt/asserts) and
+      sched.admit (high-level can_admit_domain).  No module SCCs;
+      C++ module dependency graph verified clean.
+
+    * strand.se (64 bytes) replaces the old sched + sched_rb pair.
+      sched_entity carries vruntime, deadline, slice, lag, weight,
+      rel_count and the EEVDF fair_node — sized exactly for the
+      fair_tree rb-tree layout.
+
+    * sched_avg (PELT, 72 bytes) embedded in strand_body; sched_avg_rq
+      (72 bytes) embedded in run_queue::cfs_avg, mirroring Linux's
+      cfs_rq::avg.
+
+    * CBS replenishment (cbs_replen, <=96 bytes) embedded in strand_
+      body; rt_bandwidth (<=96 bytes) per-CPU in run_queue::rt_bw.
+
+    * CFS/RT/Deadline classes wired with enqueue/dequeue/pick_next/
+      tick/check_preempt vtables.  Function-pointer bridge between
+      sched_rt and sched.sched avoids the (sched.sched -> sched_class
+      -> sched_rt) cycle: set_enqueue_accessor / set_dequeue_accessor
+      / set_schedule_accessor, wired from init/main.cxxm after
+      sched_init.
+
+    * sched_balance given a set_rq_accessor() injection to avoid
+      importing sched.sched; same pattern for rq_snap.
+
+    * Per-CPU sched_domain_tree (SMT-MC-DIE-BOOK-NUMA) embedded in
+      run_queue, built by sd::sched_domain_tree_build.
+
+    * scheduler_tick, schedule(), softirq-driven load balancing,
+      cpupri/cpudl, RT bandwidth throttling, deadline replenishment,
+      PELT decay, nohz idle, SMT-aware capacity scaling.
+
+    * BUG-003 fix: schedule()'s early-return path (next==prev) was
+      leaving the re-picked strand with substate==runnable instead
+      of substate==running.  Fixed in sched.cxxm; BUG_LIST.xml entry
+      added.
+
+    * locking/rt_mutex.cxxm — Linux rt_mutex_adjust_prio_chain-style
+      chain-walk.  Lock-ordering rule: acquire the next mutex's
+      m_pi_lock BEFORE releasing the previous mutex's m_pi_lock to
+      avoid deadlocks during the chain walk.
+
+    * DGP cross-domain gate for PI chain traversal: pi_may_cross()
+      requires the owner domain to hold delegate and the waiter
+      domain to hold enter.  MAX_PI_DEPTH = 16 bounds the walk.
+
+    * sched_rt PI hooks (boost_prio / unboost_prio / task_wake_pi)
+      driven through a fn-ptr bridge (set_enqueue_accessor and
+      siblings) to break the sched.sched -> sched_class -> sched_rt
+      cycle at the module level.  Wired from init/main.cxxm
+      immediately after sched_init.
+
+    * strand_body gains PI fields: blocked_on (void*), pi_waiters
+      (lib::list_node), boosted_prio (u8), saved_class
+      (sched_class_id), saved_prio (u8).
+
+    * sgn_op: register_handler, poll, ack, send, mask_set, mask_get,
+      wait.  All 7 dispatch cases implemented in nc_sgn.cxxm.
+
+    * signal_send reads target domain id from a0, validates via
+      dgp_authorize(signal_send) for the cross-domain DGP check,
+      then enqueues to target domain's per-domain queue and fires
+      ipi::send_reschedule to wake the target.
+
+    * signal_wait checks pending in the caller's queue, falls through
+      to schedule() if nothing deliverable.
+
+    * scheduler(schedule(), in the prev_resched and next_owner paths)
+      checks strand::has_pending() and sets need_resched so a queued
+      signal is delivered promptly.
+
+    * signal_deliver_all and block-aware signal_deliver_one
+      delivered via domain/signal.cxxm.
+
+    * gate_auth_level::signal added to the dispatch authorization
+      model; dgp_rights_for returns enter|signal; validate_call
+      enforces caller's signal right and target domain existence.
+
+    * dom_op extended: create, destroy, exit, info, query,
+      strand_create, strand_set_policy, strand_set_affinity,
+      strand_query_state (9 ops total).
+
+    * strand_set_policy reads a sched_policy from user VA and re-
+      admits it via strand_admit_policy.  strand_set_affinity sets
+      sched_policy.allowed_cpus.bits.  strand_query_state returns a
+      packed u64 encoding (substate, class, on_rq, prio, cpu) with no
+      struct ABI — consistent with the existing nc_domain_query
+      pattern.
+
+    All handlers wired through gate_registration.cxxm with the
+    appropriate gate_auth_level and operation_kind metadata.
+
+    * cap_op extended to 4 ops (acquire, release, validate, revoke).
+    * nc_cap_revoke handler implemented; delegate|lifecycle-gated.
+    * cap_revoke() bumps the object generation, invalidating all
+      prior outstanding tokens atomically.
+
+    * dgp::revoke_domain_rights() clears bits from granted_rights
+      and ORs them into domain::pending_rights_revoke_raw, bumping
+      revocation_epoch.  No cross-CPU IPI — propagation is lazy.
+
+    * schedule() checks pending_rights_revoke_raw on each entry and
+      force-dequeues the affected strand when revocation is pending,
+      so a domain whose rights have been revoked cannot continue to
+      execute.
+
+    * scheduler_tick sweeps the current strand's domain, allowing
+      pending revocations to flush on each CPU.
+
+    * printk() now prints the calling domain's name in the log
+      prefix: format is now
+        ZXF!-[(SSSS).uuuuuu] [(type)NN] (T)@[domain] <message>
+      so every line identifies which protection domain produced it.
+      Pre-domain boot lines print "nucleus"; with the nucleus domain
+      entity now real, this string now comes from the nucleus
+      domain's name field rather than the literal fallback.
+
+    * printk uses natural range-for loops, discard_value for
+      intentional discard of nodiscard returns — no more (void)
+      casts.
+
+    * New subsystem: zxfoundation/sys/zinit.cxxm + zinit_types.cxxm.
+      Provides a linker-section-driven initcall table (__zinit_start
+      / __zinit_end) of zi_desc entries, each tagged with the
+      subsystem name, init function pointer, and an action mask
+      (silent/quiet/verbose).
+
+    * Core subsystems register their boot-time initialisation
+      functions through zinit descriptors; zinit::execute iterates
+      the section and runs them in declaration order, enforcing the
+      ordered init contract that was previously implicit in main.cxxm's
+      call-list.
+
+    * Replaced configure.cmake with configure.pl — a Perl-driven
+      configuration helper that derives compiler selection (clang/
+      gcc), opt level (0/1/2/3/s/z), debug-sym level, target march
+      (z13..z16), DASD serial, build directory, generated toolchain
+      file, and a "skip safeguard checks" flag.  Defaults are picked
+      from a single hash table; override via env vars or command-line
+      --KEY=VALUE pairs.  Generates build/toolchain.generated.cmake
+      and build/config.generated.cmake.  Updates the run launcher
+      scripts accordingly.
+
+    * cmake/zx-discovery.cmake and toolchain-validate.cmake
+      updated to consume the generated config.  New flags.cmake
+      clauses enforce freestanding + no-rtti + no-exceptions + no-
+      unwind-tables.
+
+    * Linker script and CMakeFiles updated for zinit section
+      markers (__zinit_start / __zinit_end).
+
+    * .gitignore adjusted to ignore the generated toolchain files
+      and the new build/ directory layout.
+
+    * lib::list_head gains insert_before() for non-tail list
+      insertions; required by rt_mutex pi_waiters ordering.
+
+    * lib::string_copy converted from a byte-by-byte loop to a
+      memcpy-based bulk copy that uses the architecture's s390x mvc
+      instruction.  Two off-by-one bugs in a commented-out "fast"
+      alternative were caught during the audit; correct invariant is
+      n = min(src.size(), cap - 1), followed by memcpy of n bytes
+      and a single NUL terminator at dest[n].
+
+    * softirq split into a types module (softirq_types) and the
+      implementation module (softirq) to break module-dependency
+      cycles for users like sched_softirq.
+
+    * variant polish: improved visitor interface; expected::transform
+      added.  rbtree minor stability fixes.
+
+    user/init/init.S extended to 58 tests, exercising every new
+    syscall (sgn_send, sgn_mask_set, sgn_wait, dom_strand_create,
+    dom_strand_set_policy, dom_strand_set_affinity, dom_strand_
+    query_state, cap_revoke, mem operations, signal delivery cross-
+    domain).  Test 37 (mem::share) was changed from "accept either"
+    to an explicit negative test asserting ERR_SENTINEL — DGP
+    correctly denies cross-domain share when the caller lacks the
+    share right.  Test 3 (dom::query(0)) now resolves through the
+    real nucleus domain entity rather than a handler-side
+    special-case.
+
+    * BUG-003 (Closed): schedule's next==prev early-return path was
+      leaving the re-picked strand in substate==runnable.  Fixed;
+      BUG_LIST.xml entry added.
+
+Signed-off-by: assembler-0 <diaviekone@gmail.com>

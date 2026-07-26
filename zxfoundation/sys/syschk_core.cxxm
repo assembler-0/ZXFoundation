@@ -97,7 +97,7 @@ namespace zxfoundation::sys::syschk {
         lib::source_location location
     ) noexcept -> void {
 
-        (void)arch::s390x::cpu::irq::irq_save_disable();
+        discard_value arch::s390x::cpu::irq::irq_save_disable();
 
         u32 expected = 0;
         if (!_internal::g_halting.compare_exchange_strong(

@@ -26,10 +26,13 @@ import zxfoundation.sys.cap;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
+import zxfoundation.memory.kmalloc;
 import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.mmu_const;
 import arch.s390x.cpu.lowcore;
-import zxfoundation.memory.kmalloc;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.ctlreg;
 import lib.error;
 import lib.expected;
 import lib.algorithm;
@@ -53,6 +56,14 @@ namespace zxfoundation::domain::_internal {
 
     /// @brief Secondary strand SCOMS table.
     static scoms::kobject_table<strand, MAX_SECONDARY_STRAND_IDS> g_strand_table{};
+
+    /// @brief Nucleus domain — the kernel itself, represented as the
+    ///        first permanently-resident entity in @c g_domain_table.
+    struct nucleus_domain_handle {
+        domain* ptr{nullptr};
+    };
+
+    nucleus_domain_handle g_nucleus{};
 
     /// @brief Teardown callbacks registered by the gate and portal subsystems.
     ///        Used by domain_destroy() to drain gates and portals without
@@ -103,7 +114,7 @@ namespace zxfoundation::domain::_internal {
         // Allocate strand body (cold fields: uregs, strand_list, kstack_base, rt/dl accounting).
         const auto body_result = memory::kmalloc::kmalloc_t<strand_body>();
         if (!body_result) {
-            (void)g_strand_table.release(s.ko.id);
+            discard_value g_strand_table.release(s.ko.id);
             return lib::unexpected(
                 lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         }
@@ -117,7 +128,7 @@ namespace zxfoundation::domain::_internal {
             pmm::page_init::zeroed);
         if (!stack_r) {
             memory::kmalloc::kfree_t(s.body);
-            (void)g_strand_table.release(s.ko.id);
+            discard_value g_strand_table.release(s.ko.id);
             return lib::unexpected(stack_r.error());
         }
 
@@ -127,7 +138,7 @@ namespace zxfoundation::domain::_internal {
         s.kstack_top  = stack_virt + DOMAIN_KERNEL_STACK_SIZE;
         s.ksp         = s.kstack_top;
 
-        (void)static_cast<
+        discard_value static_cast<
             scoms::kobject_ref<strand, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
@@ -156,7 +167,7 @@ namespace zxfoundation::domain::_internal {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        (void)scoms::mark_dying(&s);
+        discard_value scoms::mark_dying(&s);
         lib::list_head::remove(s.body->strand_list);
 
         if (s.body->kstack_base != 0U) {
@@ -169,7 +180,7 @@ namespace zxfoundation::domain::_internal {
 
         memory::kmalloc::kfree_t(s.body);
 
-        (void)scoms::mark_destroyed(&s);
+        discard_value scoms::mark_destroyed(&s);
         auto release_result = g_strand_table.release(s.ko.id);
         if (!release_result) return lib::unexpected(release_result.error());
         return {};
@@ -194,7 +205,14 @@ namespace zxfoundation::domain::_internal {
         strand& s = *embryo_ref;
         s.ko.generation = 1U;
 
-        s.owner   = nullptr;
+        // Bind the idle strand to the nucleus domain (its "great father"
+        // owner).  This guarantees every strand — including per-CPU
+        // idle strands — has a real @ref domain owner, eliminating the
+        // orphan-strand case throughout the scheduler and audit paths.
+        // The nucleus domain is guaranteed to exist by the time idle
+        // strands are created (boot order: domain_init -> domain_init_nucleus
+        // -> sched_init -> idle strand creation).
+        s.owner   = _internal::g_nucleus.ptr;
         s.substate = sched_substate::runnable;
         s.cpu     = cpu;
         s.on_rq   = false;
@@ -207,7 +225,7 @@ namespace zxfoundation::domain::_internal {
             pmm::purpose::stack,
             pmm::page_init::zeroed);
         if (!stack_r) {
-            (void)g_strand_table.release(s.ko.id);
+            discard_value g_strand_table.release(s.ko.id);
             return lib::unexpected(stack_r.error());
         }
 
@@ -216,7 +234,7 @@ namespace zxfoundation::domain::_internal {
         s.kstack_top  = stack_virt + DOMAIN_KERNEL_STACK_SIZE;
         s.ksp         = s.kstack_top;
 
-        (void)static_cast<
+        discard_value static_cast<
             scoms::kobject_ref<strand, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
@@ -236,7 +254,7 @@ namespace zxfoundation::domain::_internal {
                 lib::kernel_error::from_driver(lib::driver_error::busy));
         }
 
-        (void)scoms::mark_dying(&s);
+        discard_value scoms::mark_dying(&s);
 
         if (s.kstack_top != 0U) {
             const u64 stack_phys = hhdm::virt_to_phys(s.kstack_top - DOMAIN_KERNEL_STACK_SIZE);
@@ -246,7 +264,7 @@ namespace zxfoundation::domain::_internal {
             pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
         }
 
-        (void)scoms::mark_destroyed(&s);
+        discard_value scoms::mark_destroyed(&s);
         auto release_result = g_strand_table.release(s.ko.id);
         if (!release_result) return lib::unexpected(release_result.error());
         return {};
@@ -293,7 +311,7 @@ namespace zxfoundation::domain::_internal {
             // 2. Release DGP isolation identity and storage-key ownership.
             if (m_has_skey) {
                 auto ls = zxfoundation::base::lifecycle_state::sealed;
-                (void)zxfoundation::dgp::isolation_destroy_domain(
+                discard_value zxfoundation::dgp::isolation_destroy_domain(
                     ls,
                     m_dgp_state.storage_key,
                     m_dgp_state.storage_key_generation,
@@ -304,7 +322,7 @@ namespace zxfoundation::domain::_internal {
 
             // 1. Release table slot (allocated first).
             if (m_has_slot) {
-                (void)g_domain_table.release(m_slot);
+                discard_value g_domain_table.release(m_slot);
             }
         }
 
@@ -396,7 +414,7 @@ namespace zxfoundation::domain::_internal {
 
                 auto body_result = memory::kmalloc::kmalloc_t<strand_body>();
                 if (!body_result) {
-                    (void)g_domain_table.release(m_slot);
+                    discard_value g_domain_table.release(m_slot);
                     return lib::unexpected(
                         lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
                 }
@@ -551,10 +569,24 @@ namespace zxfoundation::domain {
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
+        // Nucleus (id 0) is immortal — it carries the kernel itself
+        // and cannot be destroyed under any circumstance.  This is the
+        // single invariant that makes the @ref domain_nucleus accessor
+        // safe to call at any time: if id 0 exists at all, it always
+        // exists.
+        if (id == DOMAIN_ID_NUCLEUS)
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+
         domain* d = g_domain_table.find_raw(id);
         if (!d)
             return lib::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
+
+        if ((d->flags & domain_flags::nucleus) != domain_flags::none) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
 
         const auto deny_new_entries_state = zxfoundation::dgp::sync_contract_snapshot(
             zxfoundation::dgp::lock_context::teardown,
@@ -567,7 +599,7 @@ namespace zxfoundation::domain {
             return lib::unexpected(teardown_result.error());
         }
 
-        (void)scoms::mark_dying(d);
+        discard_value scoms::mark_dying(d);
 
         sys::printk::pverbose("domain: destroying id={} name='{}'\n", id, d->name);
 
@@ -644,7 +676,7 @@ namespace zxfoundation::domain {
                 pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
             }
             memory::kmalloc::kfree_t(s);
-            (void)g_strand_table.release(strand_ptr->ko.id);
+            discard_value g_strand_table.release(strand_ptr->ko.id);
         }
 
         auto isolation_destroy_result = zxfoundation::dgp::isolation_destroy_domain(
@@ -680,7 +712,7 @@ namespace zxfoundation::domain {
         d->asce                  = {};
         d->root_phys             = 0;
         d->storage_key           = 0;
-        (void)scoms::swap_state_to(zxfoundation::base::lifecycle_state::embryo, d);
+        discard_value scoms::swap_state_to(zxfoundation::base::lifecycle_state::embryo, d);
         d->granted_rights        = zxfoundation::dgp::isolation_rights::none;
         d->numa_node             = 0;
         d->revocation_epoch      = 0;
@@ -748,7 +780,7 @@ namespace zxfoundation::domain {
     }
 
     auto register_domain_cap_lookup() noexcept -> void {
-        (void)zxfoundation::sys::cap::register_lookup(
+        discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::domain,
             [](u16 obj_id) noexcept -> scoms::kobject* {
                 auto* d = domain_find(static_cast<domain_id>(obj_id));
@@ -766,6 +798,102 @@ namespace zxfoundation::domain {
 
         sys::printk::pinfo("domain: subsystem initialized, max_domains={}\n",
                            MAX_DOMAINS);
+    }
+
+    /// @brief Get the nucleus domain — the kernel's own domain identity.
+    /// @return Pointer to the nucleus domain (slot 0).  Always non-null
+    ///         after @ref domain_init_nucleus has been called.
+    /// @note   Calling this before @ref domain_init is a programming
+    ///         error — returns @c nullptr in that case.
+    [[nodiscard]] inline auto domain_nucleus() noexcept -> domain* {
+        return _internal::g_nucleus.ptr;
+    }
+
+    /// @brief Return the currently-running domain, falling back to the
+    ///        nucleus domain when no domain is attached to the current
+    ///        CPU.
+    [[nodiscard]] inline auto current_domain_or_nucleus() noexcept -> domain* {
+        auto* current = static_cast<domain*>(
+            arch::s390x::cpu::lowcore::current_domain_ptr());
+        if (current != nullptr) [[likely]] return current;
+        return domain_nucleus();
+    }
+
+    /// @brief Initialize the nucleus domain at slot 0.
+    /// @return Success, or kernel_error if the table cannot reserve
+    ///         slot 0 (e.g. it was already populated — a fatal
+    ///         boot-order bug).
+    [[nodiscard]] auto domain_init_nucleus() noexcept
+        -> lib::expected<void, lib::kernel_error> {
+        using namespace _internal;
+        namespace mmu = arch::s390x::mmu;
+
+        if (!g_domain_table.initialized())
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+
+        auto slot_r = g_domain_table.alloc_at(0);
+        if (!slot_r) {
+            sys::printk::pcrit("domain: nucleus slot 0 already occupied — "
+                              "boot-order violation\n");
+            return lib::unexpected(slot_r.error());
+        }
+
+        auto embryo_ref = static_cast<
+            scoms::kobject_ref<domain, base::lifecycle_state::embryo>&&
+        >(slot_r.value());
+
+        domain* d = embryo_ref.raw();
+        d->ko.generation = 1U;
+
+        d->name = "foundation/nucleus";
+        d->flags = domain_flags::nucleus;
+
+        d->storage_key              = SKEY_NUCLEUS;
+        d->storage_key_state        = zxfoundation::dgp::storage_key_revocation_state::active;
+        d->storage_key_generation   = 1U;
+        d->revocation_epoch         = 0U;
+        d->numa_node                = 0U;
+        d->granted_rights           = zxfoundation::dgp::isolation_rights::all;
+
+        u64 cr1{0};
+        arch::s390x::cpu::ctlreg::ctl_store<1U, 1U>(cr1);
+        if (cr1 == 0U) {
+            sys::printk::pcrit("domain: kernel CR1 is zero at nucleus init\n");
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        d->asce = arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1>{cr1};
+        d->root_phys = cr1 & mmu::ASCE_ORIGIN_MASK;
+
+        d->primary_strand.kstack_top = 0U;
+        d->primary_strand.ksp        = 0U;
+        d->primary_strand.on_rq      = false;
+        d->primary_strand.cpu        = 0U;
+        d->primary_strand.substate   = sched_substate::idle;
+        d->primary_strand.owner      = d;
+        d->primary_strand.body       = nullptr;
+        d->primary_strand.flags      = strand_flags::idle;
+
+        if (!scoms::swap_state_to(zxfoundation::base::lifecycle_state::active, d)) {
+            sys::printk::pcrit("domain: nucleus state swap failed\n");
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        }
+
+        _internal::g_nucleus.ptr = d;
+
+        {
+            auto* lc = arch::s390x::cpu::lowcore::get_current();
+            if (lc) [[likely]] {
+                lc->current_domain = reinterpret_cast<u64>(d);
+            }
+        }
+
+        sys::printk::pnotice("domain: nucleus domain created (id={}, asce={:#x}, root={:#x})\n",
+                          d->ko.id, d->asce.raw(), d->root_phys);
+        return {};
     }
 
 } // namespace zxfoundation::domain

@@ -36,7 +36,7 @@ namespace zxfoundation::scoms {
         /// @brief Release the reference.
         ~kobject_ref() noexcept {
             if (ptr_) {
-                (void)ptr_->ko.ref.put();
+                discard_value ptr_->ko.ref.put();
             }
         }
 
@@ -48,7 +48,7 @@ namespace zxfoundation::scoms {
 
         auto operator=(kobject_ref&& other) noexcept -> kobject_ref& {
             if (this != &other) {
-                if (ptr_) (void)ptr_->ko.ref.put();
+                if (ptr_) discard_value ptr_->ko.ref.put();
                 ptr_ = other.ptr_;
                 other.ptr_ = nullptr;
             }
@@ -64,7 +64,7 @@ namespace zxfoundation::scoms {
 
         auto operator=(const kobject_ref& other) noexcept -> kobject_ref& {
             if (this != &other) {
-                if (ptr_) (void)ptr_->ko.ref.put();
+                if (ptr_) discard_value ptr_->ko.ref.put();
                 ptr_ = other.ptr_;
                 if (ptr_) ptr_->ko.ref.get();
             }

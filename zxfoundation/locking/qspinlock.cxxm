@@ -98,7 +98,7 @@ namespace zxfoundation::locking::qspinlock {
         /// @pre The caller holds the lock.
         /// @post The lock is released.
         auto unlock() noexcept -> void {
-            (void)m_val.fetch_and(~_Q_LOCKED_VAL, memory_order::release);
+            discard_value m_val.fetch_and(~_Q_LOCKED_VAL, memory_order::release);
         }
 
         /// @brief Test whether the lock is held (non-deterministic snapshot).
@@ -228,7 +228,7 @@ namespace zxfoundation::locking::qspinlock {
                 return;   // sole waiter, no successor to wake
             }
 
-            (void)m_val.fetch_or(_Q_LOCKED_VAL, memory_order::acquire);
+            discard_value m_val.fetch_or(_Q_LOCKED_VAL, memory_order::acquire);
 
             mcs::mcs_node* next_node;
             while (!(next_node = node->next.load(memory_order::acquire)))

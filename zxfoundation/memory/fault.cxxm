@@ -118,9 +118,9 @@ namespace zxfoundation::memory::vm {
 
                 // Extend the region downward.
                 nearest_above->va_start = new_start;
-                (void)nearest_above->resident.fetch_add(1,
+                discard_value nearest_above->resident.fetch_add(1,
                     arch::s390x::lib::atomic::memory_order::relaxed);
-                (void)nearest_above->committed.fetch_add(1,
+                discard_value nearest_above->committed.fetch_add(1,
                     arch::s390x::lib::atomic::memory_order::relaxed);
                 space.total_mapped   += VM_PAGE_SIZE;
                 space.total_resident += 1;
@@ -185,9 +185,9 @@ namespace zxfoundation::memory::vm {
                 arch::s390x::cpu::skey::make_skey(storage_key, false));
 
             // Update accounting.
-            (void)rgn->resident.fetch_add(1,
+            discard_value rgn->resident.fetch_add(1,
                 arch::s390x::lib::atomic::memory_order::relaxed);
-            (void)rgn->committed.fetch_add(1,
+            discard_value rgn->committed.fetch_add(1,
                 arch::s390x::lib::atomic::memory_order::relaxed);
             space.total_resident  += 1;
             space.total_committed += 1;

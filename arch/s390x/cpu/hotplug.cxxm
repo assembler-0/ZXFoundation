@@ -122,9 +122,6 @@ namespace arch::s390x::cpu::hotplug {
     /// @brief Bring a CPU online.
     /// @param[in] cpu_id Logical CPU ID to online.
     /// @return Success or kernel_error describing why the transition failed.
-    /// @note This is the high-level API.  For AP bring-up during boot,
-    ///       call smp::init_aps() instead, which performs the full SIGP
-    ///       sequence.  This function is for post-boot hot-add.
     [[nodiscard]] auto cpu_up(u16 cpu_id) noexcept
         -> ::lib::expected<void, ::lib::kernel_error>
     {

@@ -4,6 +4,8 @@
 
 export module zxfoundation.domain.strand_types;
 import zxfoundation.sched.sched_policy_types;
+import zxfoundation.sched.sched_entity_types;
+import zxfoundation.sched.sched_cbs;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
@@ -42,6 +44,7 @@ namespace zxfoundation::domain {
         idle     = 0,   ///< Active but not on any run queue.
         runnable = 1,   ///< On the run queue, waiting for CPU time.
         running  = 2,   ///< Currently executing on a CPU.
+        blocked  = 3,   ///< Off run queue, awaiting wake (signal/rt-mutex/sleep).
     };
 
     /// @brief Per-strand flags (bitfield, stored in strand::flags).
@@ -98,13 +101,11 @@ namespace zxfoundation::domain {
         bool                            on_rq{false};
         strand_flags                    flags{strand_flags::none};
 
-        sched_params                    sched{};
+        zxfoundation::sched::sched_entity se{};
 
-        lib::rb_node                    sched_rb{};
-
-        strand_body*                    body{nullptr};  ///< Slab-allocated cold-fields body.
-        u64                             kstack_top{0};  ///< Kernel stack top (offset 112).
-        u64                             ksp{0};          ///< Current kernel stack pointer (offset 120).
+        strand_body*                    body{nullptr};  ///< allocated cold-fields body.
+        u64                             kstack_top{0};  ///< Virtual kernel stack top (offset 112).
+        u64                             ksp{0};         ///< Current kernel stack pointer (offset 120).
 
         lib::list_node                  sched_link{};
 
@@ -122,8 +123,8 @@ namespace zxfoundation::domain {
     static_assert(__builtin_offsetof(strand, ko) == 0,
         "strand::ko must be at offset 0");
 
-    static_assert(__builtin_offsetof(strand, sched) == 40,
-        "strand::sched must be at offset 40");
+    static_assert(__builtin_offsetof(strand, se) == 40,
+        "strand::se must be at offset 40");
 
     static_assert(__builtin_offsetof(strand, kstack_top) == 112,
         "strand::kstack_top must be at offset 112");
@@ -137,10 +138,23 @@ namespace zxfoundation::domain {
         u64             kstack_base{0};           ///< Base VA of the kernel stack.
         lib::list_node  strand_list{};            ///< Link into domain's strand list.
 
-        u64             rt_runtime_used_ns{0};     ///< Runtime consumed during current RT period.
-        u64             rt_period_start_ns{0};     ///< RT accounting period start.
-        u64             deadline_runtime_used_ns{0}; ///< Runtime consumed during current deadline period.
-        u64             absolute_deadline_ns{0};   ///< Conservative absolute deadline key.
+        u64             rt_runtime_used_ns{0};     /// Runtime consumed during current RT period.
+        u64             rt_period_start_ns{0};     /// RT accounting period start.
+        u64             deadline_runtime_used_ns{0}; /// Runtime consumed during current deadline period.
+        u64             absolute_deadline_ns{0};   /// Conservative absolute deadline key.
+
+        /// @brief PELT averaging state
+        zxfoundation::sched::sched_avg  pelt_avg{};
+
+        /// @note Only meaningful when @c sched_policy.class_id == deadline.
+        zxfoundation::sched::cbs::cbs_replen  cbs{};
+
+        void*           blocked_on{nullptr};
+        lib::list_node  pi_waiters{};
+        u8              boosted_prio{0};
+        zxfoundation::sched::sched_class_id saved_class{zxfoundation::sched::sched_class_id::fair};
+        u8              saved_prio{0};
+        u8              _pad_pi[1]{};
 
         user_regs       uregs{};                   ///< User-mode register save area.
 

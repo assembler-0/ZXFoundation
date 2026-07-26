@@ -155,9 +155,9 @@ namespace arch::s390x::cpu::lowcore {
         u64    percpu_offset{};                   /* 0x03b8 */
         u8     pad_0x03c0[0x0400 - 0x03c0]{};    /* 0x03c0 */
 
-        percpu::s390x_percpu_data  percpu{};      /* 0x0400 */
+        percpu::percpu_data  percpu{};      /* 0x0400 */
 
-        u8     pad_percpu_end[0x1200 - (0x0400 + sizeof(percpu::s390x_percpu_data))]{};
+        u8     pad_percpu_end[0x1200 - (0x0400 + sizeof(percpu::percpu_data))]{};
 
         u64    floating_pt_save_area[16]{};       /* 0x1200 */
         u64    gpregs_save_area[16]{};            /* 0x1280 */
@@ -220,23 +220,23 @@ namespace arch::s390x::cpu::lowcore {
 
     static_assert(
         __builtin_offsetof(zx_lowcore, percpu) +
-        __builtin_offsetof(percpu::s390x_percpu_data, cpu_id) == LC_CPU_ID_OFFSET,
+        __builtin_offsetof(percpu::percpu_data, cpu_id) == LC_CPU_ID_OFFSET,
         "LC_CPU_ID_OFFSET does not match actual cpu_id field offset in zx_lowcore; "
         "update LC_CPU_ID_OFFSET to match");
 
     static_assert(
         __builtin_offsetof(zx_lowcore, percpu) +
-        __builtin_offsetof(percpu::s390x_percpu_data, irq_nesting) == LC_IRQ_NESTING,
+        __builtin_offsetof(percpu::percpu_data, irq_nesting) == LC_IRQ_NESTING,
         "LC_IRQ_NESTING does not match irq_nesting field; update LC_IRQ_NESTING");
 
     static_assert(
         __builtin_offsetof(zx_lowcore, percpu) +
-        __builtin_offsetof(percpu::s390x_percpu_data, nucleus_nesting) == LC_NUCLEUS_NESTING,
+        __builtin_offsetof(percpu::percpu_data, nucleus_nesting) == LC_NUCLEUS_NESTING,
         "LC_NUCLEUS_NESTING does not match nucleus_nesting field; update LC_NUCLEUS_NESTING");
 
     static_assert(
         __builtin_offsetof(zx_lowcore, percpu) +
-        __builtin_offsetof(percpu::s390x_percpu_data, preempt_count) == LC_PREEMPT_COUNT,
+        __builtin_offsetof(percpu::percpu_data, preempt_count) == LC_PREEMPT_COUNT,
         "LC_PREEMPT_COUNT does not match preempt_count field; update entry.S");
 
 } // namespace arch::s390x::cpu::lowcore

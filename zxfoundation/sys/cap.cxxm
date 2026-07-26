@@ -88,6 +88,15 @@ namespace zxfoundation::sys::cap {
         cap_rights  needed
     ) noexcept -> lib::expected<void, lib::kernel_error>;
 
+    /// @brief Revoke a capability token administratively.
+    /// @param[in] token   Capability token marking the object to revoke.
+    ///                    Only the @c type and @c object_id fields are read;
+    ///                    the rights and generation fields are ignored.
+    /// @return Success, or kernel_error if the token is null or the object
+    ///         vanished before we could bump its generation.
+    [[nodiscard]] auto cap_revoke(cap_token token) noexcept
+        -> lib::expected<void, lib::kernel_error>;
+
     // ── Lookup registry (callback-based to avoid import cycles) ───────────
 
     /// @brief Callback signature for looking up a kobject by object ID.
@@ -269,6 +278,39 @@ namespace zxfoundation::sys::cap {
                 lib::kernel_error::from_generic(lib::generic_error::not_supported));
         }
         _internal::s_lookup_table[idx] = fn;
+        return {};
+    }
+
+    [[nodiscard]] auto cap_revoke(cap_token token) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        if (!token) {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto result = _internal::lookup_kobject(token.type(), token.object_id());
+        if (!result) {
+            perr("cap_revoke: type={} id={} — object not found",
+                 cap_type_name(token.type()), static_cast<u32>(token.object_id()));
+            return lib::unexpected(result.error());
+        }
+
+        auto [ko, gen] = *result;
+
+        if (ko->state == lifecycle_state::dying) {
+            pverbose("cap_revoke: type={} id={} already dying — no-op",
+                  cap_type_name(token.type()), static_cast<u32>(token.object_id()));
+            return {};
+        }
+
+        const u32 next_gen = gen + 1;
+        ko->generation = next_gen;
+
+        pverbose("cap_revoke: type={} id={} gen {}->{} (all prior tokens invalidated)",
+              cap_type_name(token.type()), static_cast<u32>(token.object_id()),
+              gen, next_gen);
+
         return {};
     }
 

@@ -123,7 +123,7 @@ namespace lib {
                                     && requires
                                     {
                                         _Tp{};
-                                        (void) ::new _Tp;
+                                        discard_value ::new _Tp;
                                     };
 
     /// [concept.moveconstructible], concept move_constructible

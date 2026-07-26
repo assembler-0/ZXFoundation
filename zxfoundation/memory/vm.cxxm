@@ -86,7 +86,7 @@ namespace zxfoundation::memory::vm::_internal {
     auto rcu_free_region_cb(rcu::rcu_head* head) noexcept -> void {
         auto* rgn = lib::container_of<vm_region, rcu::rcu_head,
             &vm_region::rcu>(head);
-        (void)g_region_table.release(rgn->ko.id);
+        discard_value g_region_table.release(rgn->ko.id);
     }
 
     /// @brief Remove a vm_region from the rb-tree and defer freeing via RCU.
@@ -295,7 +295,7 @@ namespace zxfoundation::memory::vm::_internal {
         rgn->backing  = backing;
         rgn->phys_base = phys_base;
 
-        (void)static_cast<
+        discard_value static_cast<
             scoms::kobject_ref<vm_region, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
@@ -368,12 +368,12 @@ namespace zxfoundation::memory::vm::_internal {
 
     /// @brief Atomically add to committed.
     inline auto add_committed(vm_region& rgn, u64 delta) noexcept -> void {
-        (void)rgn.committed.fetch_add(delta, memory_order::relaxed);
+        discard_value rgn.committed.fetch_add(delta, memory_order::relaxed);
     }
 
     /// @brief Atomically add to resident.
     inline auto add_resident(vm_region& rgn, u64 delta) noexcept -> void {
-        (void)rgn.resident.fetch_add(delta, memory_order::relaxed);
+        discard_value rgn.resident.fetch_add(delta, memory_order::relaxed);
     }
 
 } // namespace zxfoundation::memory::vm::_internal
@@ -594,7 +594,7 @@ namespace zxfoundation::memory::vm {
 
         // Insert the new region.
         if (!rb_insert_region(space, new_rgn)) {
-            (void)g_region_table.release(new_rgn->ko.id);
+            discard_value g_region_table.release(new_rgn->ko.id);
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::region_overlap));
         }
@@ -638,7 +638,7 @@ namespace zxfoundation::memory::vm {
         apply_contract_result(space, *rgn, *contract_result);
 
         if (!rb_insert_region(space, rgn)) {
-            (void)g_region_table.release(rgn->ko.id);
+            discard_value g_region_table.release(rgn->ko.id);
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::region_overlap));
         }
@@ -684,7 +684,7 @@ namespace zxfoundation::memory::vm {
         apply_contract_result(space, *rgn, *contract_result);
 
         if (!rb_insert_region(space, rgn)) {
-            (void)g_region_table.release(rgn->ko.id);
+            discard_value g_region_table.release(rgn->ko.id);
             return lib::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::region_overlap));
         }
@@ -876,7 +876,7 @@ namespace zxfoundation::memory::vm {
             // Update DAT PTEs for mapped pages in this region.
             for (u64 cursor = rgn->va_start; cursor < rgn->va_end; cursor += VM_PAGE_SIZE) {
                 // Only update if a mapping exists (ignore unmapped demand pages).
-                (void)protect<dat_level::region_1>(root, cursor, hw_prot);
+                discard_value protect<dat_level::region_1>(root, cursor, hw_prot);
             }
             apply_vm_invalidation(root_phys, *rgn, protect_result->invalidate);
 
@@ -901,7 +901,7 @@ namespace zxfoundation::memory::vm {
             auto* rgn = region_of(node);
             lib::rb_node* next = lib::rb_next(node);
             lib::rb_erase_cached(node, space.tree);
-            (void)g_region_table.release(rgn->ko.id);
+            discard_value g_region_table.release(rgn->ko.id);
             node = next;
         }
 
@@ -920,7 +920,7 @@ namespace zxfoundation::memory::vm {
     }
 
     auto register_vm_cap_lookup() noexcept -> void {
-        (void)zxfoundation::sys::cap::register_lookup(
+        discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::memory,
             [](u16 obj_id) noexcept -> scoms::kobject* {
                 auto* r = vm_region_find_by_id(static_cast<u32>(obj_id));

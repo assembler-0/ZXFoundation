@@ -4,16 +4,23 @@
 
 export module zxfoundation.sched.sched_rt;
 import zxfoundation.sched.sched_policy_types;
+import zxfoundation.sched.sched_cpupri;
+import zxfoundation.sched.sched_rt_bandwidth;
+import zxfoundation.sched.sched_smt;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
+import zxfoundation.base.config;
 import lib.error;
 import lib.expected;
 import lib.list;
 import lib.placementnew;
+import lib.cpumask;
+import arch.s390x.cpu.cpumask;
+import arch.s390x.lib.atomic;
 
 namespace _internal {
 
@@ -22,6 +29,14 @@ namespace _internal {
     using zxfoundation::domain::run_queue;
     using zxfoundation::domain::strand;
     using zxfoundation::sched::sched_class_id;
+
+    using enqueue_strand_fn   = auto (*)(strand* s) noexcept -> void;
+    using dequeue_strand_fn   = auto (*)(strand* s) noexcept -> void;
+    using yield_schedule_fn   = auto (*)() noexcept -> void;
+
+    enqueue_strand_fn s_enqueue_accessor{nullptr};
+    dequeue_strand_fn s_dequeue_accessor{nullptr};
+    yield_schedule_fn s_schedule_accessor{nullptr};
 
     [[nodiscard]] auto has_rt_authority(const domain& d) noexcept -> bool {
         if (d.rt_capability_token != 0U && d.rt_capability_token == d.admin_token) return true;
@@ -74,6 +89,19 @@ namespace _internal {
 export {
 
 namespace zxfoundation::sched::rt {
+
+    /// @brief Inject the @c enqueue_strand accessor — wire from
+    ///        @c sched::sched_init or the nucleus init path.  Required
+    ///        for the rt-mutex PI @c task_wake_pi hook.
+    auto set_enqueue_accessor(const _internal::enqueue_strand_fn& fn) noexcept -> void {
+        _internal::s_enqueue_accessor = fn;
+    }
+    auto set_dequeue_accessor(const _internal::dequeue_strand_fn& fn) noexcept -> void {
+        _internal::s_dequeue_accessor = fn;
+    }
+    auto set_schedule_accessor(const _internal::yield_schedule_fn& fn) noexcept -> void {
+        _internal::s_schedule_accessor = fn;
+    }
 
     using zxfoundation::domain::domain;
     using zxfoundation::domain::run_queue;
@@ -137,7 +165,8 @@ namespace zxfoundation::sched::rt {
     /// @brief Enqueue an admitted RT strand on a per-CPU run queue.
     /// @param[in,out] rq Run queue protected by the caller.
     /// @param[in,out] s Admitted real-time strand.
-    /// @return Success or kernel_error if admission metadata is invalid.
+    /// @return Success or kernel_error if admission metadata is invalid or
+    ///         SMT isolation-sensitive placement is violated on the target CPU.
     [[nodiscard]] auto enqueue(
         run_queue& rq,
         strand& s
@@ -149,9 +178,22 @@ namespace zxfoundation::sched::rt {
         }
         if (s.on_rq) return {};
 
+        // Phase 4.8: refuse placement when SMT isolation-sensitive strands
+        // from a different DGP domain already occupy this CPU's SMT core.
+        if (!s.sched_policy.allow_smt_sibling
+            && zxfoundation::sched::smt::smt_isolation_violation(s, rq.cpu_id)) {
+            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        const u8 old_top = cpupri::cpupri_top(rq.cpu_id);
         rq.rt_queue.push_back(s.sched_link);
         s.on_rq = true;
         ++rq.nr_running;
+
+        // Phase 4.6: update the per-system cpupri index so balancers can
+        // target this CPU for RT push/pull.
+        const u8 new_top = s.sched_policy.rt_priority;
+        cpupri::cpupri_set(rq.cpu_id, old_top, new_top);
         return {};
     }
 
@@ -160,9 +202,20 @@ namespace zxfoundation::sched::rt {
     /// @param[in,out] s Real-time strand to remove.
     auto dequeue(run_queue& rq, strand& s) noexcept -> void {
         if (!s.on_rq) return;
+
+        const u8 old_top = cpupri::cpupri_top(rq.cpu_id);
         lib::list_head::remove(s.sched_link);
         s.on_rq = false;
         if (rq.nr_running) --rq.nr_running;
+
+        u8 new_top = cpupri::CPUPRI_INVALID;
+        strand* best = nullptr;
+        for (auto& c : rq.rt_queue.iter<strand, &strand::sched_link>()) {
+            if (!best || c.sched_policy.rt_priority > best->sched_policy.rt_priority)
+                best = &c;
+        }
+        if (best) new_top = best->sched_policy.rt_priority;
+        cpupri::cpupri_set(rq.cpu_id, old_top, new_top);
     }
 
     /// @brief Pick the highest-priority RT strand from a run queue.
@@ -176,14 +229,30 @@ namespace zxfoundation::sched::rt {
         return best;
     }
 
-    /// @brief Account an RT scheduler tick and request throttling on budget exhaustion.
+    /// @brief Account an RT scheduler tick, charge per-CPU RT bandwidth, and
+    ///        dequeue the strand on budget exhaustion or per-CPU throttle.
     /// @param[in,out] rq Run queue protected by the caller.
-    /// @param[in,out] s Currently running real-time strand.
-    /// @note Runtime accounting is conservative until high-resolution replenishment is added.
+    /// @param[in,out] s  Currently running real-time strand.
+    /// @note When the per-CPU @c rt_time exceeds the global @c rt_runtime
+    ///       cap, the entire RT queue on this CPU is throttled (dequeued
+    ///       and re-enqueued when the replenishment timer fires).
     auto tick(run_queue& rq, strand& s) noexcept -> void {
         constexpr u64 RT_ACCOUNTING_TICK_NS = 1'000'000ULL;
         if (s.sched_policy.class_id != sched_class_id::rt) return;
         s.body->rt_runtime_used_ns += RT_ACCOUNTING_TICK_NS;
+
+        namespace rt_bw = zxfoundation::sched::rt_bw;
+        discard_value rt_bw::rt_bw_charge(rq.rt_bw, RT_ACCOUNTING_TICK_NS);
+
+        if (rq.rt_bw.rt_throttled) {
+            // Global per-CPU RT bandwidth exhausted: drain the RT queue and
+            // mark for preemption.
+            auto* owner = static_cast<domain*>(s.owner);
+            if (owner) owner->flags |= zxfoundation::domain::domain_flags::need_resched;
+            dequeue(rq, s);
+            return;
+        }
+
         if (s.body->rt_runtime_used_ns >= s.sched_admission.admitted_runtime_ns) {
             auto* owner = static_cast<domain*>(s.owner);
             if (owner) owner->flags |= zxfoundation::domain::domain_flags::need_resched;
@@ -198,6 +267,107 @@ namespace zxfoundation::sched::rt {
         if (!rq.curr || waking.sched_policy.class_id != sched_class_id::rt) return;
         auto* curr_owner = static_cast<domain*>(rq.curr->owner);
         if (curr_owner) curr_owner->flags |= zxfoundation::domain::domain_flags::need_resched;
+    }
+
+    /// @brief Push the highest-priority RT strand from @c src_rq to a less
+    ///        busy CPU (Phase 4.6 push/pull migration).
+    /// @param[in,out] src_rq Source CPU run queue (lock held).
+    /// @return Destination CPU id, or CONFIG_ZX_MAX_CPUS if no destination found.
+    /// @note Uses @c cpupri::cpupri_find_fitness with the strand's affinity mask
+    ///       to find the least-loaded CPU at or below the strand's priority.
+    [[nodiscard]] auto push(run_queue& src_rq) noexcept -> u16 {
+        strand* highest = nullptr;
+        for (auto& c : src_rq.rt_queue.iter<strand, &strand::sched_link>()) {
+            if (!highest || c.sched_policy.rt_priority > highest->sched_policy.rt_priority)
+                highest = &c;
+        }
+        if (!highest) return static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS);
+
+        // Convert sched_mask (a single u64) to lib::cpumask (768-bit bitmap).
+        ::lib::cpumask affinity{};
+        if (highest->sched_policy.allowed_cpus.bits == 0U) {
+            for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i)
+                affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+        } else {
+            u64 bits = highest->sched_policy.allowed_cpus.bits;
+            for (u32 i = 0; i < 64U && bits; ++i, bits >>= 1) {
+                if (bits & 1U) affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+            }
+        }
+
+        const u16 dest = cpupri::cpupri_find_fitness(highest->sched_policy.rt_priority, affinity);
+        if (dest >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) return dest;
+        return dest;
+    }
+
+    /// @brief Pull the highest idle-RT candidate from another CPU (Phase 4.6).
+    /// @param[in]     idle_cpu CPU performing the pull (lock held on its own RQ).
+    /// @param[in,out] src_rq   Source CPU run queue (lock held; caller may derive
+    ///                         source cpu_id from @c src_rq.cpu_id).
+    /// @return Stolen strand, or nullptr.
+    /// @note The stolen strand is dequeued from src_rq, its cpupri entry
+    ///       is updated, and its @c cpu field reassigned.
+    [[nodiscard]] auto pull(u16 idle_cpu, run_queue& src_rq) noexcept -> strand* {
+        strand* highest = nullptr;
+        for (auto& c : src_rq.rt_queue.iter<strand, &strand::sched_link>()) {
+            if (!highest || c.sched_policy.rt_priority > highest->sched_policy.rt_priority)
+                highest = &c;
+        }
+        if (!highest) return nullptr;
+
+        const u64 aff_bits = highest->sched_policy.allowed_cpus.bits;
+        if (aff_bits != 0U && idle_cpu < 64U && !((aff_bits >> idle_cpu) & 1U))
+            return nullptr;
+        dequeue(src_rq, *highest);
+        highest->cpu = idle_cpu;
+        highest->on_rq = false;
+        return highest;
+    }
+
+    /// @brief Apply a priority inheritance boost to @c s.
+    /// @details Snapshot the strand's current class/prio and raise
+    ///          @c sched_policy.rt_priority to @c new_prio if higher.
+    /// @note    Called from @c rt_mutex chain-walk.  Caller holds the
+    ///          mutex's @c m_pi_lock.  Free function (not a method on rt_mutex)
+    ///          so the chain walk in rt_mutex.cxxm can iterate cleanly.
+    auto boost_prio(strand& s, u8 new_prio) noexcept -> void {
+        if (!s.body) [[unlikely]] return;
+        if (s.body->boosted_prio == 0U) {
+            s.body->saved_class = s.sched_policy.class_id;
+            s.body->saved_prio   = s.sched_policy.rt_priority;
+        }
+        if (new_prio > s.body->boosted_prio) {
+            s.body->boosted_prio = new_prio;
+            s.sched_policy.class_id    = sched_class_id::rt;
+            s.sched_policy.rt_priority = new_prio;
+        }
+    }
+
+    /// @brief Remove the priority boost on @c s and restore saved policy.
+    /// @note  Called from @c rt_mutex::unlock after ownership handoff.
+    auto unboost_prio(strand& s) noexcept -> void {
+        if (!s.body) [[unlikely]] return;
+        if (s.body->boosted_prio == 0U) return;
+        s.body->boosted_prio = 0U;
+        s.sched_policy.class_id    = s.body->saved_class;
+        s.sched_policy.rt_priority = s.body->saved_prio;
+    }
+
+    /// @brief Wake a strand that was sleeping on an rt_mutex.
+    /// @details Re-enqueues @c s on its run queue.  The rt_mutex caller
+    ///          has already cleared @c blocked_on under the PI lock.
+    ///          Identical to @c sched::enqueue_strand for the simple case
+    ///          but provided here so the rt_mutex path stays self-contained
+    ///          for future tuning (e.g. the @c task_wake_pi hook in Linux
+    ///          re-runs the chain walk in reverse to shed stale boosts).
+    auto task_wake_pi(strand& s) noexcept -> void {
+        s.substate = zxfoundation::domain::sched_substate::runnable;
+        if (_internal::s_enqueue_accessor) [[likely]] {
+            _internal::s_enqueue_accessor(&s);
+        }
+        if (auto* dom = static_cast<domain*>(s.owner)) {
+            dom->flags |= zxfoundation::domain::domain_flags::need_resched;
+        }
     }
 
 } // namespace zxfoundation::sched::rt

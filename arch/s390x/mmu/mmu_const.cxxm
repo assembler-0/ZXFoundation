@@ -1,11 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/mmu/mmu_const.cxxm
 /// @brief Hardware DAT entry bit definitions for z/Architecture.
-///
-/// Bit numbering follows PoP convention: bit 0 is MSB of a u64.
-/// For a u64 value, PoP bit N = value >> (63 - N).
-/// All masks and constants are verified against PoP SA22-7832-13,
-/// Chapter 3 "Storage".
 
 export module arch.s390x.mmu.mmu_const;
 import arch.s390x.mmu.mmu_types;

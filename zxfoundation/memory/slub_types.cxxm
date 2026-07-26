@@ -19,7 +19,7 @@ namespace zxfoundation::memory::slub {
     using base::lifecycle_state;
     using arch::s390x::lib::atomic::atomic;
     using arch::s390x::lib::atomic::memory_order;
-    using arch::s390x::cpu::processor::S390X_CACHE_LINE_SIZE;
+    using arch::s390x::cpu::processor::CACHE_LINE_SIZE;
 
     /// @brief Maximum number of distinct kmem_caches (static table).
     constexpr u32 SLUB_MAX_CACHES     = 64U;
@@ -160,7 +160,7 @@ namespace zxfoundation::memory::slub {
         /// @pre state == embryo.
         auto activate() noexcept -> void {
             __builtin_expect(state == lifecycle_state::embryo, 1)
-                ? (void)0
+                ? discard_value 0
                 : __builtin_trap();
             state = lifecycle_state::active;
         }
@@ -169,7 +169,7 @@ namespace zxfoundation::memory::slub {
         /// @pre state == active.
         auto begin_destroy() noexcept -> void {
             __builtin_expect(state == lifecycle_state::active, 1)
-                ? (void)0
+                ? discard_value 0
                 : __builtin_trap();
             state = lifecycle_state::dying;
         }

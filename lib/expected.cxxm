@@ -245,7 +245,6 @@ namespace lib {
         /// @tparam F Callable type: T -> expected<U, E>.
         /// @param[in] f  Function to apply if value is present.
         /// @return Result of f(value) if has_value(), otherwise propagates error.
-        /// @note C++23 monadic operation.
         template <typename F>
         [[nodiscard]] constexpr auto and_then(F&& f) & {
             using result_t = decltype(f(storage.val));
@@ -282,7 +281,6 @@ namespace lib {
         /// @tparam F Callable type: E -> expected<T, F>.
         /// @param[in] f  Function to apply if error is present.
         /// @return Result of f(error) if !has_value(), otherwise propagates value.
-        /// @note C++23 monadic operation.
         template <typename F>
         [[nodiscard]] constexpr auto or_else(F&& f) & {
             using result_t = decltype(f(storage.err));
@@ -319,7 +317,6 @@ namespace lib {
         /// @tparam F Callable type: T -> U.
         /// @param[in] f  Function to apply to value.
         /// @return expected<U, E> containing f(value) if has_value(), otherwise propagates error.
-        /// @note C++23 monadic operation.
         template <typename F>
         [[nodiscard]] constexpr auto transform(F&& f) & {
             using U = decltype(f(storage.val));
@@ -359,7 +356,6 @@ namespace lib {
         /// @tparam F Callable type: E -> G.
         /// @param[in] f  Function to apply to error.
         /// @return expected<T, G> containing value if has_value(), otherwise expected<T, G>(f(error)).
-        /// @note C++23 monadic operation.
         template <typename F>
         [[nodiscard]] constexpr auto transform_error(F&& f) & {
             using G = decltype(f(storage.err));
@@ -657,7 +653,7 @@ namespace lib::format {
         /// @param[in]     val  Expected to format.
         auto format(format_context& ctx, const expected<void, E>& val) const noexcept -> void {
             if (val.has_value()) {
-                ctx.write("expected<ok(void)>");
+                ctx.write("expected<okdiscard_value >");
             } else {
                 ctx.write("expected<err(");
                 formatter<remove_cvref_t<E>>{}.format(ctx, val.error());

@@ -70,7 +70,7 @@ namespace zxfoundation::scoms {
             }
             if (prev == 1U) {
                 atomic<u32> fence_dummy{0};
-                (void)fence_dummy.load(memory_order::acquire);
+                discard_value fence_dummy.load(memory_order::acquire);
                 return true;
             }
             return false;

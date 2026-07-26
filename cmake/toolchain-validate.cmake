@@ -197,31 +197,31 @@ endif()
 
 if(ZX_FOUND_DASDLOAD AND DASD_SERIAL)
     set(ZX_CAN_BUILD_DASD TRUE
-        CACHE BOOL "Build sysres.3390 disk image" FORCE)
+        CACHE BOOL "Build core.zxfoundation.sysdsk00.cckd disk image" FORCE)
     message(STATUS "zxfoundation::validate: DASD image: dasdload available = ${DASDLOAD}")
 else()
     set(ZX_CAN_BUILD_DASD FALSE
-        CACHE BOOL "Build sysres.3390 disk image" FORCE)
+        CACHE BOOL "Build core.zxfoundation.sysdsk00.cckd disk image" FORCE)
     message(STATUS "zxfoundation::validate: DASD image: dasdload missing")
 endif()
 
 if(ZX_FOUND_DASDLOAD AND ZX_FOUND_CCKDCDSK)
     set(ZX_CAN_CHECK_DASD TRUE
-            CACHE BOOL "Validate sysres.3390 disk image" FORCE)
+            CACHE BOOL "Validate core.zxfoundation.sysdsk00.cckd disk image" FORCE)
     message(STATUS "zxfoundation::validate: DASD check: cckdcdsk available = ${CCKDCDSK}")
 else()
     set(ZX_CAN_CHECK_DASD FALSE
-            CACHE BOOL "Validate sysres.3390 disk image" FORCE)
+            CACHE BOOL "Validate core.zxfoundation.sysdsk00.cckd disk image" FORCE)
     message(STATUS "zxfoundation::validate: DASD check: cckdcdsk missing")
 endif()
 
 if(ZX_FOUND_DASDLOAD AND ZX_FOUND_DASDSER)
     set(ZX_CAN_SERIAL_DASD TRUE
-            CACHE BOOL "Serial sysres.3390 disk image" FORCE)
+            CACHE BOOL "Serial core.zxfoundation.sysdsk00.cckd disk image" FORCE)
     message(STATUS "zxfoundation::validate: DASD serial: dasdser available = ${DASDSER}")
 else()
     set(ZX_CAN_SERIAL_DASD FALSE
-            CACHE BOOL "Serial sysres.3390 disk image" FORCE)
+            CACHE BOOL "Serial core.zxfoundation.sysdsk00.cckd disk image" FORCE)
     message(STATUS "zxfoundation::validate: DASD serial: dasdser missing")
 endif()
 

@@ -1,0 +1,103 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_cbs.cxxm
+/// @brief Per-strand CBS (Constant Bandwidth Server) replenishment timers
+///        for the EDF deadline scheduling class
+
+export module zxfoundation.sched.sched_cbs;
+import zxfoundation.sched.sched_entity_types;
+import zxfoundation.sys.timer_types;
+import zxfoundation.sys.timer;
+import zxfoundation.sys.time;
+import zxfoundation.base.types;
+import lib.error;
+import lib.expected;
+import arch.s390x.lib.atomic;
+
+export {
+
+namespace zxfoundation::sched::cbs {
+
+    /// @brief Default CBS server period in nanoseconds (100 ms).
+    inline constexpr u64 CBS_PERIOD_DEFAULT_NS = 100'000'000ULL;
+
+    /// @brief Default CBS runtime per period (10 ms = 10% of 100 ms).
+    inline constexpr u64 CBS_RUNTIME_DEFAULT_NS = 10'000'000ULL;
+
+    /// @brief Per-strand CBS state record (one per admitted deadline strand).
+    struct cbs_replen {
+        u64                     period_ns{CBS_PERIOD_DEFAULT_NS};
+        u64                     runtime_ns{CBS_RUNTIME_DEFAULT_NS};
+        u64                     used_runtime_ns{0ULL};
+        u64                     period_deadline{0ULL};          ///< absolute time of next period end
+        u8                      _pad[4]{};
+        zxfoundation::sys::timer::kernel_timer  timer{};
+    };
+
+    static_assert(sizeof(cbs_replen) <= 96U,
+        "cbs_replen fits in one cache sector");
+
+    /// @brief Build a CBS block for a strand that is about to be admitted.
+    /// @param[out] cbs  Output record (stack-resident).
+    auto cbs_init(cbs_replen& cbs) noexcept -> void {
+        cbs.period_ns = CBS_PERIOD_DEFAULT_NS;
+        cbs.runtime_ns = CBS_RUNTIME_DEFAULT_NS;
+        cbs.used_runtime_ns = 0U;
+        cbs.period_deadline = 0ULL;
+        cbs.timer.deadline_tod = 0ULL;
+        cbs.timer.interval_tod = 0ULL;
+        cbs.timer.callback = nullptr;
+        cbs.timer.data = nullptr;
+        cbs.timer.mode = zxfoundation::sys::timer::timer_mode::oneshot;
+        cbs.timer.armed = false;
+        cbs.timer.cpu = 0U;
+    }
+
+    /// @brief Charge one tick against the CBS runtime.
+    /// @param[in,out] cbs       Local CBS block.
+    /// @param[in]     delta_ns  Charge amount (1 ms = 1 tick accounting).
+    /// @return true when the runtime is exhausted and throttling should
+    ///         occur (the strand should be dequeued).
+    auto cbs_charge(cbs_replen& cbs, u64 delta_ns) noexcept -> bool {
+        cbs.used_runtime_ns += delta_ns;
+        return (cbs.used_runtime_ns >= cbs.runtime_ns);
+    }
+
+    /// @brief Replenish a CBS record with the remainder of the current period.
+    /// @note Called when the period timer fires; the strand is re‑enqueued
+    ///       when it was throttleing.  The function refreshes the
+    ///       @c period_deadline by advancing it one period and resetting
+    ///       used_runtime_ns.
+    auto cbs_replenish(cbs_replen& cbs) noexcept -> void {
+        const u64 now = zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
+        cbs.period_deadline = now + cbs.period_ns;
+        cbs.used_runtime_ns = 0ULL;
+    }
+
+    /// @brief Install the CBS timer expiry handler on a strand's CBS block.
+    /// @param[in,out] cbs     CBS block (overwrites timer members).
+    /// @param[in]     cpu     CPU id the timer is pinned to.
+    /// @param[in]     cb      Callback function pointer (must not be null).
+    /// @param[in]     data    Opaque callback data (typically the strand*).
+    auto cbs_install_timer(cbs_replen& cbs, u16 cpu,
+                            zxfoundation::sys::timer::timer_fn cb,
+                            void* data) noexcept -> void {
+        cbs.timer.deadline_tod = cbs.period_deadline;
+        cbs.timer.interval_tod = cbs.period_ns;
+        cbs.timer.callback = cb;
+        cbs.timer.data = data;
+        cbs.timer.mode = zxfoundation::sys::timer::timer_mode::oneshot;
+        cbs.timer.armed = true;
+        cbs.timer.cpu = cpu;
+    }
+
+    /// @brief Remove CBS timer from the timer heap (called on dequeue/destroy).
+    auto cbs_cancel_timer(cbs_replen& cbs) noexcept -> void {
+        if (cbs.timer.armed) {
+            discard_value zxfoundation::sys::timer::timer_cancel(cbs.timer);
+            cbs.timer.armed = false;
+        }
+    }
+
+} // namespace zxfoundation::sched::cbs
+
+} // end export

@@ -75,6 +75,11 @@ namespace zxfoundation::memory::numa {
         bool allow_remote{true};
     };
 
+    /// @brief System Locality Information Table — distance matrix for NUMA nodes.
+    struct slit_matrix {
+        u8 distances[MAX_NUMA_NODES][MAX_NUMA_NODES]{};
+    };
+
     /// @brief Result of resolving a placement policy against topology state.
     struct placement_result {
         u8 selected_node{NUMA_NODE_BOOT};

@@ -168,12 +168,8 @@ extern "C" {
 
     auto __zx_memcmp(const void *s1, const void *s2, usize n) -> int {
         using arch::s390x::cpu::processor::register_pair;
-        register_pair r1{};
-        register_pair r3{};
-        r1.even = reinterpret_cast<u64>(s1);
-        r1.odd = n;
-        r3.even = reinterpret_cast<u64>(s2);
-        r3.odd = n;
+        register_pair r1{ .even = reinterpret_cast<u64>(s1), .odd = n };
+        register_pair r3{ .even = reinterpret_cast<u64>(s2), .odd = n };
 
         condition_code cc;
         __asm__ volatile(
@@ -244,5 +240,17 @@ extern "C" {
             : "cc", "memory", "0");
         return ret;
     }
+
+    void* memcpy(void* dest, const void* src, usize count)
+        __attribute__((alias("__zx_memcpy")));
+
+    void* memset(void* dest, int ch, usize count)
+        __attribute__((alias("__zx_memset")));
+
+    void* memmove(void* dest, const void* src, usize count)
+        __attribute__((alias("__zx_memmove")));
+
+    int memcmp(const void* lhs, const void* rhs, usize count)
+        __attribute__((alias("__zx_memcmp")));
 
 } // extern "C"

@@ -15,3 +15,5 @@ zxfoundation/base/config.cxxm
 doxygen-build/
 convert*.py
 build/
+docs/papers/
+*.pm

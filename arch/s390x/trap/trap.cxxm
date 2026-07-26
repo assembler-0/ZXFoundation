@@ -13,10 +13,19 @@ import arch.s390x.trap.pgm;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import lib.error;
+import lib.softirq;
+import zxfoundation.sys.irq.irqdesc;
 
 /// @brief Program check handler.
+/// @note Drains deferred softirq work after the primary handler so any
+///       softirq raised from the pgm path (or carried over from an
+///       IRQ-disabled owner) is dispatched before IRQ-return.
 extern "C" auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::pgm::handle(frame);
+    namespace irq = zxfoundation::sys::irq;
+    if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
+        lib::do_softirq();
+    }
 }
 
 /// @brief External interrupt handler.
@@ -25,13 +34,24 @@ extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexce
 }
 
 /// @brief I/O interrupt handler.
+/// @note Drains deferred softirq work after the primary handler — see
+///       @c do_pgm_interrupt above.
 extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::io::handle(frame);
+    namespace irq = zxfoundation::sys::irq;
+    if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
+        lib::do_softirq();
+    }
 }
 
 /// @brief SVC handler — nucleus-call dispatch.
+/// @note Drains deferred softirq work after the nucleus call completes.
 extern "C" auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 svc_code) noexcept -> void {
     frame->gprs[2] = arch::s390x::trap::svc::handle(frame, svc_code);
+    namespace irq = zxfoundation::sys::irq;
+    if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
+        lib::do_softirq();
+    }
 }
 
 /// @brief Machine-check handler — decode MCIC and attempt recovery.
@@ -46,9 +66,9 @@ extern "C" [[noreturn]] auto do_restart_interrupt(
     u16   cpu_id,
     u32   flags
 ) noexcept -> void {
-    (void)source;
-    (void)flags;
-    (void)cpu_id;
+    discard_value source;
+    discard_value flags;
+    discard_value cpu_id;
     auto& lc = *arch::s390x::cpu::lowcore::get_current();
     const auto fn = reinterpret_cast<void(*)(void*)>(lc.restart_fn);
     if (!fn) {

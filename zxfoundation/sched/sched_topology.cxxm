@@ -182,6 +182,17 @@ namespace zxfoundation::sched::topology {
         return &_internal::g_cpu_records[cpu_id];
     }
 
+    /// @brief Read the per-NUMA-node CPU mask maintained by the topology module.
+    /// @param[in] node NUMA node id (must be < @c MAX_NUMA_NODES).
+    /// @return Const reference to the mask, or to a static empty mask when
+    ///         @c node is out of range — so callers can pass-through safely.
+    /// @note Lifetime is process-wide; the underlying storage is module-static.
+    [[nodiscard]] auto node_mask_of(u8 node) noexcept -> const ::lib::cpumask& {
+        static const ::lib::cpumask s_empty{};
+        if (node >= zxfoundation::memory::numa::MAX_NUMA_NODES) return s_empty;
+        return _internal::g_node_masks[node];
+    }
+
     /// @brief Classify the topology distance between two logical CPUs.
     /// @param[in] from_cpu Source CPU.
     /// @param[in] to_cpu Candidate CPU.

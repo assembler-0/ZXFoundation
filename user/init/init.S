@@ -22,17 +22,15 @@
     .globl _start
     .type _start, @function
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Equates: Packed call numbers (namespace << 5) | operation
-// Namespace encoding: dom=0, mem=1, gate=2, portal=3, io=4, sgn=5, cap=6, sys=7
-// ═══════════════════════════════════════════════════════════════════════════
-
     .equ DOM_CREATE,           (0 << 5) | 0    // 0
     .equ DOM_DESTROY,          (0 << 5) | 1    // 1
     .equ DOM_EXIT,             (0 << 5) | 2    // 2
     .equ DOM_INFO,             (0 << 5) | 3    // 3
     .equ DOM_QUERY,            (0 << 5) | 4    // 4
     .equ DOM_STRAND_CREATE,    (0 << 5) | 5    // 5
+    .equ DOM_STRAND_SET_POLICY,(0 << 5) | 6    // 6
+    .equ DOM_STRAND_SET_AFFIN, (0 << 5) | 7    // 7
+    .equ DOM_STRAND_QUERY,     (0 << 5) | 8    // 8
 
     .equ MEM_ALLOC,            (1 << 5) | 0    // 32
     .equ MEM_FREE,             (1 << 5) | 1    // 33
@@ -55,10 +53,15 @@
     .equ SGN_REGISTER,         (5 << 5) | 0    // 160
     .equ SGN_POLL,             (5 << 5) | 1    // 161
     .equ SGN_ACK,              (5 << 5) | 2    // 162
+    .equ SGN_SEND,             (5 << 5) | 3    // 163
+    .equ SGN_MASK_SET,         (5 << 5) | 4    // 164
+    .equ SGN_MASK_GET,         (5 << 5) | 5    // 165
+    .equ SGN_WAIT,             (5 << 5) | 6    // 166
 
     .equ CAP_ACQUIRE,          (6 << 5) | 0    // 192
     .equ CAP_RELEASE,          (6 << 5) | 1    // 193
     .equ CAP_VALIDATE,         (6 << 5) | 2    // 194
+    .equ CAP_REVOKE,           (6 << 5) | 3    // 195
 
     .equ SYS_YIELD,            (7 << 5) | 0    // 224
     .equ SYS_DEADLINE,         (7 << 5) | 1    // 225
@@ -71,43 +74,33 @@
     .equ ERR_SENTINEL,  -1       // ~0ULL
     .equ PAGE_SIZE,     4096
 
-// Macro: print string at label msg
     .macro PRINT msg
     larl    %r2, \msg
     lghi    %r3, \msg\()_len
     svc     SYS_CONSOLE
     .endm
 
-// Macro: do nucleus call via SVC.  The SVC instruction's 8-bit number
-// field carries the packed call number (namespace << 5) | operation.
-// All packed numbers in this file fit in 8 bits (max = 230).
     .macro NCALL nr
     svc     \nr
     .endm
 
-// Macro: jump to fail if r2 == ERR_SENTINEL
     .macro CHECK_OK lbl
     lghi    %r1, ERR_SENTINEL
     cgr     %r2, %r1
     je      \lbl
     .endm
 
-// Macro: jump to fail if r2 != expected in rX
     .macro CHECK_EQ reg, lbl
     cgr     %r2, \reg
     jne     \lbl
     .endm
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Entry
-// ═══════════════════════════════════════════════════════════════════════════
-
 _start:
     lghi    %r9, 0                  // r9 = pass count
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  1: sys::console_write  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t01_name
     larl    %r2, msg_startup
     lghi    %r3, msg_startup_len
@@ -115,9 +108,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  2: dom::info  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t02_name
     lghi    %r2, 0
     NCALL   DOM_INFO
@@ -129,9 +122,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  3: dom::query(0)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t03_name
     lghi    %r2, 0
     NCALL   DOM_QUERY
@@ -143,9 +136,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  4: mem::alloc(4096)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t04_name
     lghi    %r2, PAGE_SIZE
     NCALL   MEM_ALLOC
@@ -154,9 +147,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  5: demand-paging  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t05_name
     lghi    %r3, 0x42
     stc     %r3, 0(%r11)
@@ -174,9 +167,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  6: mem::protect(VA, 4096, prot=1)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t06_name
     lgr     %r2, %r11
     lghi    %r3, PAGE_SIZE
@@ -186,9 +179,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  7: read after read-only  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t07_name
     lg      %r4, 0(%r11)
     llihh   %r3, 0xDEAD
@@ -200,9 +193,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  8: mem::protect(VA, 4096, prot=3)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t08_name
     lgr     %r2, %r11
     lghi    %r3, PAGE_SIZE
@@ -212,9 +205,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test  9: write after RW restored
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t09_name
     lghi    %r3, 0x55
     stc     %r3, 0(%r11)
@@ -224,9 +217,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 10: mem::free(VA, 4096)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t10_name
     lgr     %r2, %r11
     lghi    %r3, PAGE_SIZE
@@ -235,9 +228,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 11: mem::alloc(16384)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t11_name
     lgfi    %r2, 16384
     NCALL   MEM_ALLOC
@@ -246,9 +239,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 12: touch all 4 pages  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t12_name
     lghi    %r3, 0xAA
     stcy    %r3, 0(%r11)
@@ -258,9 +251,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 13: verify all 4 pages
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t13_name
     lghi    %r3, 0xAA
     llgc    %r4, 0(%r11)
@@ -278,9 +271,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 14: mem::free(16384)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t14_name
     lgr     %r2, %r11
     lgfi    %r3, 16384
@@ -289,9 +282,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 15: sys::time_now  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t15_name
     lghi    %r2, 0
     NCALL   SYS_NOW
@@ -302,9 +295,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 16: sys::time_deadline(1ms)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t16_name
     lgfi    %r2, 1000000
     NCALL   SYS_DEADLINE
@@ -314,18 +307,18 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 17: sys::time_yield  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t17_name
     lghi    %r2, 0
     NCALL   SYS_YIELD
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 18: cap::acquire(domain, self_id, admin)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t18_name
     lghi    %r2, 1                  // cap_type::domain = 1
     lgr     %r3, %r8                // self domain_id
@@ -336,9 +329,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 19: cap::validate(admin_token, admin)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t19_name
     lgr     %r2, %r12               // admin token
     lghi    %r3, 0x20               // admin right
@@ -347,9 +340,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 20: dom::create(admin, "test/child")  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t20_name
     lgr     %r2, %r12               // admin cap token
     larl    %r3, name_child         // name
@@ -359,9 +352,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 21: dom::query(child_id)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t21_name
     lgr     %r2, %r13               // child domain_id
     NCALL   DOM_QUERY
@@ -373,9 +366,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 22: cap::acquire(domain, self_id, map)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t22_name
     lghi    %r2, 1                  // cap_type::domain
     lgr     %r3, %r8                // self domain_id
@@ -386,10 +379,10 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 23: cap::acquire(domain, self_id, delegate)  
     //   (Re-acquired and released later in the mem::share test)
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t23_name
     lghi    %r2, 1                  // cap_type::domain
     lgr     %r3, %r8                // self domain_id
@@ -401,9 +394,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 24: sgn::register_handler(fault, handler=0, data=0) (cross: PC)
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t24_name
     lghi    %r2, 3                  // signal_kind::fault = 3
     lghi    %r3, 0                  // handler = null
@@ -413,9 +406,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 25: sgn::poll  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t25_name
     lghi    %r2, 0
     NCALL   SGN_POLL
@@ -425,9 +418,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 26: sgn::ack(0)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t26_name
     lghi    %r2, 0
     NCALL   SGN_ACK
@@ -435,9 +428,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 27: gate::create(nucleus, any, target=self, entry=0, key=0) (cross: PC)
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t27_name
     lgr     %r2, %r12               // a0 = admin cap token
     lghi    %r3, 0                  // a1 = gate_type::nucleus = 0
@@ -450,9 +443,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 28: gate::destroy(gate_id) (cross: PC)
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t28_name
     lgr     %r2, %r12               // a0 = admin cap token
     lgr     %r3, %r0                // a1 = gate_id
@@ -461,11 +454,11 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 29: portal::create(target=child, va_start=0, va_end=PAGE_SIZE,
     //                         prot=rw=3) (cross: PC)
     //   Uses child domain (r13) as target.
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t29_name
     lgr     %r2, %r12               // a0 = admin cap token
     lgr     %r3, %r13               // a1 = target = child domain_id
@@ -478,9 +471,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 30: portal::destroy(portal_id) (cross: PC)
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t30_name
     lgr     %r2, %r12               // a0 = admin cap token
     lgr     %r3, %r11               // a1 = portal_id
@@ -489,9 +482,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 31: io::bind(dev_no=0)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t31_name
     lghi    %r2, 0                  // a0 = dev_no = 0
     NCALL   IO_BIND
@@ -499,18 +492,18 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 32: io::unbind(token_or_error) (cross: PC)
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t32_name
     lgr     %r2, %r0                // a0 = io token
     NCALL   IO_UNBIND
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 33: io::submit(bogus, null)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t33_name
     lghi    %r2, ERR_SENTINEL       // bogus token
     lghi    %r3, 0                  // null orb
@@ -518,9 +511,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 34: io::irq_bind(bogus, gate=0)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t34_name
     lghi    %r2, ERR_SENTINEL
     lghi    %r3, 0
@@ -531,9 +524,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 35: mem::unmap  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t35_name
     lghi    %r2, PAGE_SIZE
     NCALL   MEM_ALLOC
@@ -546,9 +539,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 36: mem::map  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t36_name
     // Acquire map cap
     lghi    %r2, 1
@@ -579,10 +572,10 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 37: mem::share  
     //   Acquire delegate cap, call mem_share with child domain_id.
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t37_name
     lghi    %r2, 1
     lgr     %r3, %r8
@@ -594,15 +587,22 @@ _start:
     lgr     %r2, %r7
     lgr     %r3, %r13               // share with child domain
     NCALL   MEM_SHARE
-    // Accept either success or failure
+    // BUG-004: MEM_SHARE expects ERR_SENTINEL — the DGP isolation gate
+    // refuses cross-domain share because the bootstrap domain does not
+    // hold isolation_rights::share against the child domain (child was
+    // created with no_rights_cap).  Asserting the failure makes this a
+    // real negative test, not a "accept either" no-op.
+    lghi    %r1, ERR_SENTINEL
+    cgr     %r2, %r1
+    jne     t37_fail
     lgr     %r2, %r7
     NCALL   CAP_RELEASE
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 38: service::register(admin_token, "zx.test")  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t38_name
     lgr     %r2, %r12               // a0 = admin cap token
     larl    %r3, name_service       // a1 = name pointer
@@ -612,9 +612,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 39: service::lookup("zx.test")  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t39_name
     larl    %r2, name_service
     NCALL   SVC_LOOKUP
@@ -630,9 +630,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 40: service::unregister(service_id) (cross: PC)
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t40_name
     lgr     %r2, %r0                // service_id from register
     NCALL   SVC_UNREGISTER
@@ -640,9 +640,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 41: dom::strand_create(admin, cpu=0, self)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t41_name
     lgr     %r2, %r12               // admin cap token
     lghi    %r3, 0                  // CPU 0 / default BSP placement
@@ -656,9 +656,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 42: dom::strand_create(admin, cpu=0, self)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t42_name
     lgr     %r2, %r12               // admin cap token
     lghi    %r3, 0                  // CPU 0 / default BSP placement
@@ -674,9 +674,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 43: scheduler::yield loop  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t43_name
     lghi    %r7, 8
 .Lt43_yield_loop:
@@ -689,9 +689,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 44: dom::strand_create(invalid CPU)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t44_name
     lgr     %r2, %r12               // admin cap token
     lghi    %r3, 768                // invalid CPU (>= CONFIG_ZX_MAX_CPUS=768)
@@ -704,9 +704,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 45: dom::strand_create(admin, cpu=0, child)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t45_name
     lgr     %r2, %r12               // admin cap token
     lghi    %r3, 0                  // CPU 0
@@ -719,9 +719,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 46: dom::destroy(child)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t46_name
     lgr     %r2, %r12               // admin cap token
     lgr     %r3, %r13               // target = child domain_id
@@ -730,18 +730,18 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 47: cap::release(admin_token)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t47_name
     lgr     %r2, %r12
     NCALL   CAP_RELEASE
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 48: dom::create(no-token)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t48_name
     lghi    %r2, ERR_SENTINEL       // bogus admin token
     larl    %r3, name_child
@@ -752,9 +752,9 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
-    // ─────────────────────────────────────────────────────────────────────
+    
     // Test 49: cap::validate(null)  
-    // ─────────────────────────────────────────────────────────────────────
+    
     PRINT   t49_name
     lghi    %r2, 0                  // null token
     lghi    %r3, 0x20               // admin right
@@ -765,13 +765,116 @@ _start:
     PRINT   t_pass
     aghi    %r9, 1
 
+    
+    // Test 50: sgn::mask_set (mask all signal bits = 0xFFFF_FFFF)
+    
+    PRINT   t50_name
+    lghi    %r2, -1                 // all kinds blocked
+    NCALL   SGN_MASK_SET
+    CHECK_OK t50_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 51: sgn::mask_get should be non-error after mask_set(-1)
+    
+    PRINT   t51_name
+    NCALL   SGN_MASK_GET
+    lghi    %r1, ERR_SENTINEL
+    cgr     %r2, %r1
+    je      t51_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 52: sgn::mask_set (clear the mask)
+    
+    PRINT   t52_name
+    lghi    %r2, 0                  // no kinds blocked
+    NCALL   SGN_MASK_SET
+    CHECK_OK t52_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 53: sgn::mask_get should now return 0
+    
+    PRINT   t53_name
+    NCALL   SGN_MASK_GET
+    ltgr    %r2, %r2
+    jne     t53_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 54: sgn::send(self, kind=timer, data=0x42)
+    //   Dispatcher auth level == signal uses a0 as target domain id.
+    //   Bootstrap granted our domain signal right.
+    
+    PRINT   t54_name
+    lgr     %r2, %r8                // target = self domain_id
+    lghi    %r3, 1                  // signal_kind::timer = 1
+    lghi    %r4, 0x42               // data
+    NCALL   SGN_SEND
+    CHECK_OK t54_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 55: sgn::poll — should report the timer bit pending (1 << 1 = 2)
+    
+    PRINT   t55_name
+    NCALL   SGN_POLL
+    lghi    %r1, 2
+    CHECK_EQ %r1, t55_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 56: sgn::ack(timer bit) clears the pending bit.
+    
+    PRINT   t56_name
+    lghi    %r2, 2                  // ack timer bit
+    NCALL   SGN_ACK
+    CHECK_OK t56_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 57: dom::strand_query_state(self, strand_id=0)
+    //   Returns packed u64 with substate in bits 0..7.  Self strand is
+    //   running on the bootstrap CPU at this point.
+    
+    PRINT   t57_name
+    lgr     %r2, %r12               // admin cap
+    lghi    %r3, 0                  // strand_id = 0
+    NCALL   DOM_STRAND_QUERY
+    CHECK_OK t57_fail
+    // Sanity: substate (bits 0..7) should be sched_substate::running == 2.
+    llgcr   %r1, %r2                // %r1 = low byte
+    cghi    %r1, 2
+    jne     t57_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    
+    // Test 58: dom::strand_set_affinity(self, strand_id=0, mask=1)
+    //   Restrict this domain's primary strand to CPU 0.
+    
+    PRINT   t58_name
+    lgr     %r2, %r12               // admin cap
+    lghi    %r3, 0                  // strand_id = 0
+    lghi    %r4, 1                  // sched_mask bits = CPU 0 only
+    NCALL   DOM_STRAND_SET_AFFIN
+    CHECK_OK t58_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
     PRINT   msg_all_pass
     .Lexit:
     NCALL DOM_EXIT
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Failure handlers
-// ═══════════════════════════════════════════════════════════════════════════
 
 t02_fail:  PRINT t02_fail_msg;  j .Lexit
 t03_fail:  PRINT t03_fail_msg;  j .Lexit
@@ -820,15 +923,22 @@ t46_fail:  PRINT t46_fail_msg;  j .Lexit
 t47_fail:  PRINT t47_fail_msg;  j .Lexit
 t48_fail:  PRINT t48_fail_msg;  j .Lexit
 t49_fail:  PRINT t49_fail_msg;  j .Lexit
+t50_fail:  PRINT t50_fail_msg;  j .Lexit
+t51_fail:  PRINT t51_fail_msg;  j .Lexit
+t52_fail:  PRINT t52_fail_msg;  j .Lexit
+t53_fail:  PRINT t53_fail_msg;  j .Lexit
+t54_fail:  PRINT t54_fail_msg;  j .Lexit
+t55_fail:  PRINT t55_fail_msg;  j .Lexit
+t56_fail:  PRINT t56_fail_msg;  j .Lexit
+t57_fail:  PRINT t57_fail_msg;  j .Lexit
+t58_fail:  PRINT t58_fail_msg;  j .Lexit
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Data
-// ═══════════════════════════════════════════════════════════════════════════
 
     .section .rodata
     .align 8
 
-msg_startup:   .ascii "[init] ZXFoundation kernel test suite starting\n"
+msg_startup:   .ascii "[init] Pre-eXecution System 26h1\n"
     .equ msg_startup_len, . - msg_startup
 	.align 2
 
@@ -989,6 +1099,33 @@ t48_fail_msg:  .ascii "FAIL: dom::create(no-token) should fail\n"
 	.align 2
 t49_fail_msg:  .ascii "FAIL: cap::validate(null) should fail\n"
     .equ t49_fail_msg_len, . - t49_fail_msg
+	.align 2
+t50_fail_msg:  .ascii "FAIL: sgn::mask_set(all) failed\n"
+    .equ t50_fail_msg_len, . - t50_fail_msg
+	.align 2
+t51_fail_msg:  .ascii "FAIL: sgn::mask_get returned ERR after mask_set(all)\n"
+    .equ t51_fail_msg_len, . - t51_fail_msg
+	.align 2
+t52_fail_msg:  .ascii "FAIL: sgn::mask_set(0) failed\n"
+    .equ t52_fail_msg_len, . - t52_fail_msg
+	.align 2
+t53_fail_msg:  .ascii "FAIL: sgn::mask_get should be 0 after clearing\n"
+    .equ t53_fail_msg_len, . - t53_fail_msg
+	.align 2
+t54_fail_msg:  .ascii "FAIL: sgn::send(self, timer) failed\n"
+    .equ t54_fail_msg_len, . - t54_fail_msg
+	.align 2
+t55_fail_msg:  .ascii "FAIL: sgn::poll did not report timer bit pending\n"
+    .equ t55_fail_msg_len, . - t55_fail_msg
+	.align 2
+t56_fail_msg:  .ascii "FAIL: sgn::ack(timer) failed\n"
+    .equ t56_fail_msg_len, . - t56_fail_msg
+	.align 2
+t57_fail_msg:  .ascii "FAIL: dom::strand_query_state returned wrong substate\n"
+    .equ t57_fail_msg_len, . - t57_fail_msg
+	.align 2
+t58_fail_msg:  .ascii "FAIL: dom::strand_set_affinity failed\n"
+    .equ t58_fail_msg_len, . - t58_fail_msg
 
 // Test names
     .align 8
@@ -1089,5 +1226,23 @@ t47_name:  .ascii "[init] Test 47: cap::release .................... "; .equ t47
 t48_name:  .ascii "[init] Test 48: dom::create(no-token)->ERR ...... "; .equ t48_name_len, . - t48_name
 	.align 2
 t49_name:  .ascii "[init] Test 49: cap::validate(null)->ERR ........ "; .equ t49_name_len, . - t49_name
+	.align 2
+t50_name:  .ascii "[init] Test 50: sgn::mask_set(all) ................ "; .equ t50_name_len, . - t50_name
+	.align 2
+t51_name:  .ascii "[init] Test 51: sgn::mask_get (nonzero) ........... "; .equ t51_name_len, . - t51_name
+	.align 2
+t52_name:  .ascii "[init] Test 52: sgn::mask_set(0) .................. "; .equ t52_name_len, . - t52_name
+	.align 2
+t53_name:  .ascii "[init] Test 53: sgn::mask_get should be 0 .......... "; .equ t53_name_len, . - t53_name
+	.align 2
+t54_name:  .ascii "[init] Test 54: sgn::send(self, timer, 0x42) ........ "; .equ t54_name_len, . - t54_name
+	.align 2
+t55_name:  .ascii "[init] Test 55: sgn::poll reports timer bit ........ "; .equ t55_name_len, . - t55_name
+	.align 2
+t56_name:  .ascii "[init] Test 56: sgn::ack clears timer bit ........... "; .equ t56_name_len, . - t56_name
+	.align 2
+t57_name:  .ascii "[init] Test 57: dom::strand_query_state ............ "; .equ t57_name_len, . - t57_name
+	.align 2
+t58_name:  .ascii "[init] Test 58: dom::strand_set_affinity ........... "; .equ t58_name_len, . - t58_name
 
     .section .note.GNU-stack, "", @progbits

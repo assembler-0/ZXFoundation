@@ -71,46 +71,46 @@ cmake --build build --parallel <cpus> # "nproc" on linux or "sysctl -n hw.logica
 
 ## Building: The easy way
 
-The project provides `configure.cmake` at project root. You can configure everything and build the project with a single command.
+Note: building the project manually or using the *easy way* results in no difference in the final binaries. So please feel free to make your own toolchain when possible
+
+The project provides `configure.perl` at project root. You can configure everything and build the project with a single command.
 
 ```shell
-$ cmake -P configure.cmake
 ZXFoundation configuration helper tool. Copyright (C) 2026 assembler-0. Licensed under the Apache License, Version 2.0.
 
 Usage:
-    cmake [-D<OPTION>=<VALUE> ...] -P configure.cmake -- [<COMMAND> ...]
+    perl configure.pl [option=value ...] [command]
 
 Options:
-    ZX_COMPILER_FAMILY (*) [clang]   | gcc | unknown             (default: clang)
-    ZX_C_COMPILER      (*) [clang]   | gcc | unknown             (default: clang)
-    ZX_CXX_COMPILER    (*) [clang++] | g++ | unknown             (default: clang++)
-    ZX_COMPILER_VERSION    version suffix, e.g. 17               (default: "")
-    ZX_COMPILER_PREFIX     cross prefix (for gcc)                (default: "")
-    ZX_OPT_LEVEL             0     1   [2]   3  s  z             (default: 2)
-    ZX_DSYM_LEVEL           [0]    1    2    3                   (default: 0)
-    ZX_MARCH_MODE          [z13]  z14  z15  z16 ...              (default: z13)
-    ZX_DASD_SERIAL         12-digit DASD serial                  (default: 001842095440)
-    ZX_BUILD_DIR           output directory                      (default: build)
-    ZX_TOOLCHAIN_FILE      path for the generated toolchain file (default: $ZX_BUILD_DIR/toolchain.generated.cmake)
-    ZX_CONFIG_FILE         path for the generated config file    (default: $ZX_BUILD_DIR/config.generated.cmake)
-    ZX_NOCHECK             no check for standard safeguards      (default: ON)
+    family=     (*) clang | gcc | unknown                        (default: clang)
+    cc=         (*) clang | gcc | unknown                        (default: clang)
+    cxx=        (*) clang++ | g++ | unknown                      (default: clang++)
+    version=        version suffix, e.g. 17                      (default: "")
+    prefix=         cross prefix (for gcc)                       (default: "")
+    opt=            0 | 1 | 2 | 3 | s | z                        (default: 2)
+    dsym=           0 | 1 | 2 | 3                                (default: 0)
+    march=          z13 | z14 | z15 | z16 ...                    (default: z13)
+    dasd=           12-digit DASD serial                         (default: 001842095440)
+    dir=            output directory                             (default: build)
+    toolchain=      path for the generated toolchain file        (default: $dir/toolchain.generated.cmake)
+    config=         path for the generated config file           (default: $dir/config.generated.cmake)
+    nocheck=        on | off -- skip standard safeguard checks   (default: off)
 
 Command:
-    [help]             (X) shows this help                       (default)
-    configure          (X) configures the project
-    build              (X) configures and build the project
-    genconfig          (X) generates configuration files
+    [help]      (X) shows this help                               (default)
+    configure   (X) configures the project
+    build       (X) configures and build the project
+    genconfig   (X) generates configuration files
 
 Notes:
     (*): Required option
     (X): Choose one of the options
 
 Examples:
-  cmake -P configure.cmake -- help
-  cmake -P -DZX_C_OMPILER=clang -DZX_CXX_COMPILER=clang++ configure.cmake -- build
+  perl configure.pl help
+  perl configure.pl cc=clang cxx=clang++ build
+  perl configure.pl family=gcc cc=gcc cxx=g++ prefix=s390x-linux-gnu version=12 build
 ```
-
-Notice, this is purely for getting started quickly, i personally does not recommend doing this on a daily basis and you should always make your own toolchain and configuration.
 
 ---
 
@@ -132,7 +132,7 @@ drwxr-xr-x. 1 assembler-0 assembler-0     512 Jun 24 12:22 CMakeFiles
 -rwxr-xr-x. 1 assembler-0 assembler-0 2064240 Jun 24 12:33 core.zxfoundation.nucleus.pass1       # kernel image without symbol table
 -rw-r--r--. 1 assembler-0 assembler-0      28 Jun 24 12:33 etc.zxfoundation.parm                 # boot comfiguration and cmdline
 -rw-r--r--. 1 assembler-0 assembler-0     447 Jun 24 12:33 hercules.cnf                          # hercules configuration script provided
--rw-r-----. 1 assembler-0 assembler-0  534659 Jun 24 12:34 sysres.3390                           # 3390 bootable disk image
+-rw-r-----. 1 assembler-0 assembler-0  534659 Jun 24 12:34 core.zxfoundation.sysdsk00.cckd                           # 3390 bootable disk image
 drwxr-xr-x. 1 assembler-0 assembler-0      18 Jun 23 08:34 Testing
 drwxr-xr-x. 1 assembler-0 assembler-0       8 Jun 23 08:06 user
 -rw-r--r--. 1 assembler-0 assembler-0 1105930 Jun 24 12:33 zxallsyms_data.cxx                    # symbol table source 
@@ -168,7 +168,7 @@ MAINSIZE     4G       # Desired amount of CS (Central Storage)
 MAXCPU       8        # Maximum CPUs (ZXFoundation supports up to 768 CPUs - see patching_hercules.md)
 NUMCPU       8        # CPUs active at IPL time
 DIAG8CMD     ENABLE   # Needed for ZXFoundation, if this is disabled a Specification Exception will be thrown
-0100         3390    sysres.3390 # Declare our generated 3390 disk image as device 0100
+0100         3390    core.zxfoundation.sysdsk00.cckd # Declare our generated 3390 disk image as device 0100
 
 IPL 0100 # Start the emulator by IPL-ing the 0100 device
 ```

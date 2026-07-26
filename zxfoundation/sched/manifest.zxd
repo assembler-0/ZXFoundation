@@ -1,9 +1,24 @@
 !files : !compile_group -> [auto] {
     context.cxxm
     sched_policy_types.cxxm
+    sched_entity_types.cxxm
+    sched_pelt.cxxm
+    sched_eevdf.cxxm
     sched_topology_types.cxxm
     sched_topology.cxxm
+    sched_domain_tree_types.cxxm
+    sched_domain_tree.cxxm
+    sched_numa_distance.cxxm
+    sched_softirq_types.cxxm
+    sched_softirq.cxxm
+    sched_cpupri.cxxm
+    sched_cpudl.cxxm
+    sched_rt_bandwidth.cxxm
+    sched_cbs.cxxm
+    sched_nohz.cxxm
+    sched_smt.cxxm
     sched_balance.cxxm
+    sched_rq_snapshot.cxxm
     sched_fair.cxxm
     sched_idle.cxxm
     sched_rt.cxxm
@@ -11,4 +26,5 @@
     sched_class.cxxm
     sched_domain.cxxm
     sched.cxxm
+    admit.cxxm
 }

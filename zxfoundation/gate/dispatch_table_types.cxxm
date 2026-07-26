@@ -5,6 +5,7 @@
 export module zxfoundation.gate.dispatch_table_types;
 import zxfoundation.base.types;
 import zxfoundation.gate.gate_types;
+import zxfoundation.dgp.dgp_authorize;
 
 export {
 
@@ -20,14 +21,17 @@ namespace zxfoundation::gate::dispatch_table {
         domain_map  = 3, ///< Domain capability with map right required.
         storage_key = 4, ///< Storage-key match required between caller and target.
         io          = 5, ///< I/O authority required (a0 is op-specific, not a cap).
+        signal      = 6, ///< Signal-send right required (a0 = target domain id).
     };
 
     /// @brief Metadata attached to each dispatch table entry.
     struct dispatch_entry_meta {
-        u8              namespace_id{0};
-        u8              operation_id{0};
-        gate_auth_level auth{gate_auth_level::none};
-        bool            requires_admin{false};
+        u8                              namespace_id{0};
+        u8                              operation_id{0};
+        gate_auth_level                 auth{gate_auth_level::none};
+        bool                            requires_admin{false};
+        zxfoundation::dgp::operation_kind op_kind{
+            zxfoundation::dgp::operation_kind::none};
     };
 
     /// @brief Maximum entries: 8 namespaces x 32 operations = 256.

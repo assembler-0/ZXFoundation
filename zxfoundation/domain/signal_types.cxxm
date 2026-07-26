@@ -84,6 +84,7 @@ namespace zxfoundation::domain::signal {
         u32                 tail{0};                         ///< Enqueue index.
         u32                 count{0};                        ///< Pending signals.
         u32                 pending_mask{0};                 ///< Bitmask of signal_kind values present.
+        u32                 blocked_mask{0};                 ///< Bitmask of currently-blocked kinds; enqueue still succeeds but delivery is deferred until unblocked.
 
         signal_handler_info handlers[8]{};                   ///< Registered handlers by kind.
 

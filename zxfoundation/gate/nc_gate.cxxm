@@ -28,7 +28,7 @@ namespace __gate_detail {
     }
 
     auto nc_gate_create(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
-        (void)a0; // validated cap token (dispatch_table already checked it)
+        discard_value a0; // validated cap token (dispatch_table already checked it)
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_GATE_ERROR;
 
@@ -72,7 +72,7 @@ namespace __gate_detail {
     }
 
     auto nc_gate_destroy(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
-        (void)a0; // validated cap token (dispatch_table already checked it)
+        discard_value a0; // validated cap token (dispatch_table already checked it)
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_GATE_ERROR;
 

@@ -62,6 +62,21 @@
 #define EX_TYPE_UA_MVCOS_TO  4   
 #define EX_TYPE_UA_MVCOS_FROM 5
 
+#define __zinit__(c, p, entry, a)                                                 \
+    extern "C" {                                                                  \
+    constexpr zxfoundation::sys::zinit::zi_desc __zi_desc_##entry                 \
+    [[gnu::used, gnu::section(".zinit_data." stringify(c) "." stringify(entry))]] \
+    {                                                                             \
+        .name = stringify(entry),                                                 \
+        .init = entry,                                                            \
+        .cls  = zxfoundation::sys::zinit::zi_class::c,                            \
+        .prio = zxfoundation::sys::zinit::zi_prio::p,                             \
+        .action = zxfoundation::sys::zinit::zi_action::a,                         \
+    };                                                                            \
+    }
+
+#define discard_value (void)
+
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
     #define assert(expr) contract_assert(expr)
 #else

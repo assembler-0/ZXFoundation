@@ -1,0 +1,102 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_rq_snapshot.cxxm
+/// @brief Remote run-queue snapshot taken via the CSD function-call IPI.
+
+export module zxfoundation.sched.sched_rq_snapshot;
+import zxfoundation.sched.sched_entity_types;
+import zxfoundation.domain.domain_types;
+import zxfoundation.smp.smp;
+import zxfoundation.smp.smp_types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import lib.expected;
+import lib.error;
+import arch.s390x.lib.atomic;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu_types;
+
+export {
+
+namespace zxfoundation::sched::rq_snap {
+
+    using this_rq_accessor_fn = auto (*)() noexcept -> zxfoundation::domain::run_queue&;
+
+    namespace _internal {
+        this_rq_accessor_fn s_this_rq_accessor{nullptr};
+    }
+
+    /// @brief Inject the @c this_rq() accessor — called by @c sched_init.
+    auto set_this_rq_accessor(this_rq_accessor_fn fn) noexcept -> void {
+        _internal::s_this_rq_accessor = fn;
+    }
+
+    /// @brief Snapshot of a remote @c run_queue's balancer-relevant fields.
+    struct rq_snapshot {
+        u64 min_vruntime{0};
+        u64 cfs_load_avg{0};
+        u64 cfs_util_avg{0};
+        u64 cfs_runnable_avg{0};
+        u64 attached_asce{0};
+        u32 nr_running{0};
+        u32 attached_domain_id{0};
+        u32 cpu_capacity_curr{0};
+        u32 online{0};
+        u16 target_cpu{0};
+        u8  attached_dgp_state{0};
+        u8  _pad0{0};
+    };
+
+    static_assert(sizeof(rq_snapshot) <= 64U,
+        "rq_snapshot fits one cache line — important for cross-CPU csd copy");
+
+    /// @brief Collector callback invoked on the @e target CPU via the CSD
+    ///        framework.  Reads fields from @c this_rq() into the
+    ///        producer-supplied snapshot pointer.
+    /// @param[in] info Unused — supplied as @c 0; the producer's @c data
+    ///            pointer carries the snapshot output.
+    /// @param[in] data Pointer to an @c rq_snapshot in the producer's stack.
+    auto rq_snapshot_collect(u64 info, void* data) noexcept -> void {
+        discard_value info;
+        if (!data) return;
+        auto* out = static_cast<rq_snapshot*>(data);
+        if (!_internal::s_this_rq_accessor) return;
+        auto& rq = _internal::s_this_rq_accessor();
+        out->target_cpu         = rq.cpu_id;
+        out->min_vruntime       = rq.min_vruntime;
+        out->cfs_load_avg       = rq.cfs_avg.load_avg;
+        out->cfs_util_avg       = rq.cfs_avg.util_avg;
+        out->cfs_runnable_avg  = rq.cfs_avg.runnable_avg;
+        out->nr_running        = rq.nr_running;
+        out->cpu_capacity_curr = rq.cpu_capacity_curr;
+        out->online           = rq.online.load(
+            arch::s390x::lib::atomic::memory_order::acquire);
+        if (const auto* pcp = arch::s390x::cpu::lowcore::cpu_percpu(rq.cpu_id)) {
+            out->attached_dgp_state = pcp->attached_dgp_state;
+            out->attached_domain_id = pcp->attached_domain_id;
+            out->attached_asce      = pcp->attached_asce;
+        } else {
+            out->attached_dgp_state = 0U;
+            out->attached_domain_id = 0U;
+            out->attached_asce      = 0U;
+        }
+    }
+
+    /// @brief Collect a snapshot of @c cpu's run-queue state via the CSD
+    ///        function-call IPI — blocks until the target CPU completes.
+    /// @param[in]  cpu Target CPU id (may equal this_cpu — handled inline).
+    /// @param[out] out Snapshot filled by the target CPU.
+    /// @return Success, or @c invalid_arg on bad CPU id.
+    [[nodiscard]] auto collect(u16 cpu, rq_snapshot& out) noexcept
+        -> lib::expected<void, lib::kernel_error>
+    {
+        if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] {
+            return lib::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        return zxfoundation::smp::smp_call_function_single_sync(
+            cpu, rq_snapshot_collect, &out, 0U);
+    }
+
+} // namespace zxfoundation::sched::rq_snap
+
+} // end export

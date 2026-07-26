@@ -15,10 +15,10 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.init.zxfl.protocol;
 
-alignas(16) static u8 s_boot_async_stack[arch::s390x::cpu::processor::S390X_ASYNC_STACK_SIZE]{};
-alignas(16) static u8 s_boot_mcck_stack[arch::s390x::cpu::processor::S390X_MCCK_STACK_SIZE]{};
-alignas(16) static u8 s_boot_nodat_stack[arch::s390x::cpu::processor::S390X_NODAT_STACK_SIZE]{};
-alignas(16) static u8 s_boot_restart_stack[arch::s390x::cpu::processor::S390X_STACK_SIZE]{};
+alignas(16) static u8 s_boot_async_stack[arch::s390x::cpu::processor::ASYNC_STACK_SIZE]{};
+alignas(16) static u8 s_boot_mcck_stack[arch::s390x::cpu::processor::MCCK_STACK_SIZE]{};
+alignas(16) static u8 s_boot_nodat_stack[arch::s390x::cpu::processor::NODAT_STACK_SIZE]{};
+alignas(16) static u8 s_boot_restart_stack[arch::s390x::cpu::processor::STACK_SIZE]{};
 
 extern "C" {
     auto trap_pgm_entry()     -> void;
@@ -83,7 +83,7 @@ namespace arch::s390x::cpu::lowcore {
             phys_lc, lib::atomic::memory_order::release);
     }
 
-    [[nodiscard]] inline auto this_cpu_percpu() noexcept -> percpu::s390x_percpu_data& {
+    [[nodiscard]] inline auto this_cpu_percpu() noexcept -> percpu::percpu_data& {
         return get_current()->percpu;
     }
 
@@ -99,7 +99,7 @@ namespace arch::s390x::cpu::lowcore {
         return reinterpret_cast<void*>(pcp.current_strand);
     }
 
-    [[nodiscard]] auto cpu_percpu(const u16 cpu_id) noexcept -> percpu::s390x_percpu_data* {
+    [[nodiscard]] auto cpu_percpu(const u16 cpu_id) noexcept -> percpu::percpu_data* {
         zx_lowcore* lc = get_for_cpu(cpu_id);
         return lc ? &lc->percpu : nullptr;
     }
@@ -120,10 +120,6 @@ namespace arch::s390x::cpu::lowcore {
     ///                 Must not return — do_restart_interrupt escalates a
     ///                 return to syschk_critical.
     /// @param[in] data Opaque cookie forwarded as %r2 to the callback.
-    /// @note Side effects: rewrites @c lowcore.restart_psw, restart_fn and
-    ///       restart_data for the calling CPU's lowcore.
-    /// @warning Must be called with IRQs disabled; the caller must hold the
-    ///          target CPU's online mark before installing.
     auto register_restart_handler(
         void(*fn)(void*) noexcept,
         void* data

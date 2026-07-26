@@ -130,7 +130,7 @@ namespace zxfoundation::sys::time {
     ///
     /// @param[in]  tick_ns  Duration of one tick in nanoseconds (10,000,000).
     auto tick_advance_wall(u64 tick_ns) noexcept -> void {
-        (void)_internal::g_tick.fetch_add(
+        discard_value _internal::g_tick.fetch_add(
             1U, arch::s390x::lib::atomic::memory_order::relaxed);
         const u64 old_offset = _internal::g_wall_offset.read();
         _internal::g_wall_offset.write(old_offset + tick_ns);

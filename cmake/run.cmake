@@ -3,13 +3,13 @@
 
 if (ZX_CAN_BUILD_DASD)
     add_custom_command(
-        OUTPUT sysres.3390
-        COMMAND ${CMAKE_COMMAND} -E rm -f sysres.3390
+        OUTPUT core.zxfoundation.sysdsk00.cckd
+        COMMAND ${CMAKE_COMMAND} -E rm -f core.zxfoundation.sysdsk00.cckd
         COMMAND ${CMAKE_COMMAND} -E copy
             ${CMAKE_SOURCE_DIR}/scripts/etc.zxfoundation.parm
             etc.zxfoundation.parm
         COMMAND ${DASDLOAD} -z ${CMAKE_SOURCE_DIR}/scripts/sysres.conf
-            sysres.3390
+            core.zxfoundation.sysdsk00.cckd
         COMMAND ${CMAKE_COMMAND} -E copy
             ${CMAKE_SOURCE_DIR}/scripts/hercules.cnf
             hercules.cnf
@@ -17,35 +17,35 @@ if (ZX_CAN_BUILD_DASD)
         VERBATIM
         DEPENDS core.zxfoundation.nucleus zxfl_stage1.elf zxfl_stage2.elf
                 zxf.init ${CMAKE_SOURCE_DIR}/scripts/sysres.conf
-        COMMENT "zxfoundation::build: generating sysres.3390"
+        COMMENT "zxfoundation::build: generating core.zxfoundation.sysdsk00.cckd"
     )
-    add_custom_target(dasd ALL DEPENDS sysres.3390)
+    add_custom_target(dasd ALL DEPENDS core.zxfoundation.sysdsk00.cckd)
 endif()
 
 if (ZX_CAN_BUILD_DASD AND ZX_CAN_CHECK_DASD)
     add_custom_command(
-        OUTPUT sysres.3390.chk
-        COMMAND ${CCKDCDSK} -ro -3 sysres.3390
-        COMMAND ${CMAKE_COMMAND} -E touch sysres.3390.chk
+        OUTPUT core.zxfoundation.sysdsk00.cckd.chk
+        COMMAND ${CCKDCDSK} -ro -3 core.zxfoundation.sysdsk00.cckd
+        COMMAND ${CMAKE_COMMAND} -E touch core.zxfoundation.sysdsk00.cckd.chk
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         VERBATIM
         DEPENDS dasd
-        COMMENT "zxfoundation::build: checking sysres.3390"
+        COMMENT "zxfoundation::build: checking core.zxfoundation.sysdsk00.cckd"
     )
-    add_custom_target(dasdcheck ALL DEPENDS sysres.3390.chk sysres.3390)
+    add_custom_target(dasdcheck ALL DEPENDS core.zxfoundation.sysdsk00.cckd.chk core.zxfoundation.sysdsk00.cckd)
 endif()
 
 if (ZX_CAN_BUILD_DASD AND ZX_CAN_SERIAL_DASD AND DASD_SERIAL)
     add_custom_command(
-        OUTPUT sysres.3390.serial
-        COMMAND ${DASDSER} sysres.3390 ${DASD_SERIAL}
-        COMMAND ${CMAKE_COMMAND} -E touch sysres.3390.serial
+        OUTPUT core.zxfoundation.sysdsk00.cckd.serial
+        COMMAND ${DASDSER} core.zxfoundation.sysdsk00.cckd ${DASD_SERIAL}
+        COMMAND ${CMAKE_COMMAND} -E touch core.zxfoundation.sysdsk00.cckd.serial
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         VERBATIM
         DEPENDS dasd
-        COMMENT "zxfoundation::build: serializing sysres.3390"
+        COMMENT "zxfoundation::build: serializing core.zxfoundation.sysdsk00.cckd"
     )
-    add_custom_target(dasdserial ALL DEPENDS sysres.3390.serial sysres.3390)
+    add_custom_target(dasdserial ALL DEPENDS core.zxfoundation.sysdsk00.cckd.serial core.zxfoundation.sysdsk00.cckd)
 endif()
 
 if (ZX_CAN_DUMP_ARTIFACTS)

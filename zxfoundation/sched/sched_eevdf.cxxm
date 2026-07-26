@@ -1,0 +1,208 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/sched_eevdf.cxxm
+/// @brief EEVDF helper functions operating on @c sched_entity / @c cfs_rq.
+export module zxfoundation.sched.sched_eevdf;
+import zxfoundation.sched.sched_entity_types;
+import zxfoundation.base.types;
+import lib.util;
+import lib.algorithm;
+import lib.rbtree;
+
+export {
+
+namespace zxfoundation::sched::eevdf {
+
+    using zxfoundation::sched::sched_entity;
+    using zxfoundation::sched::entity_class;
+
+    /// @brief Default nice-0 weight (1024).
+    inline constexpr u32 NICE_0_WEIGHT = 1024U;
+
+    /// @brief Default EEVDF slice in TOD ticks (≈ 1 ms ≈ 4 096 000 TOD units,
+    ///        measured as the kernel's default 40'960'000 comparison value
+    ///        scaled down to ns-equivalent granularity).
+    /// @note Mirrors the existing @c sched_fair::EEVDF_DEFAULT_SLICE legacy
+    ///       constant but is the single source of truth under Phase 4.5.
+    inline constexpr u64 EEVDF_DEFAULT_SLICE_NS = 40'960'000ULL;
+
+    /// @brief Maximum weight used in inverse-weight scaling (1024 == 1.0).
+    inline constexpr u32 WEIGHT_MAX = 1024U;
+
+    /// @brief Scaled delta for calc_delta_fair: weighted virtual time advance.
+    /// @param[in] delta  Wall-time delta (ns-equivalent or TOD ticks).
+    /// @param[in] se     Schedulable entity.
+    /// @return The weighted vruntime delta = delta * WEIGHT_MAX / se->weight.
+    /// @note A heavier entity advances its vruntime slower (so it gets a
+    ///       proportionally larger slice). Mirrors Linux's @c calc_delta_fair.
+    [[nodiscard]] inline auto calc_delta_fair(u64 delta, const sched_entity& se) noexcept -> u64 {
+        const u32 w = (se.weight == 0U) ? NICE_0_WEIGHT : se.weight;
+        if (w == NICE_0_WEIGHT) return delta;
+        // Scaled_mul_u64: delta * WEIGHT_MAX / w  — uses u128 to avoid overflow.
+        const u128 product = static_cast<u128>(delta) * static_cast<u128>(WEIGHT_MAX);
+        return static_cast<u64>(product / w);
+    }
+
+    /// @brief Compute the average vruntime across the queued entities.
+    /// @param[in] cfs_min_vruntime  Current min_vruntime of the cfs_rq.
+    /// @param[in] avg_vruntime_acc   Accumulator keeping weighted average.
+    /// @param[in] avg_weight_acc     Accumulator keeping total weight.
+    /// @return The current avg vruntime (in vruntime units).
+    /// @note Mirrors Linux's avg_vruntime(): avg = avg_acc + min_vruntime
+    ///       when contributions are seeded.
+    [[nodiscard]] inline auto avg_vruntime(u64 cfs_min_vruntime,
+                                            i64 avg_vruntime_acc,
+                                            u64 avg_weight_acc) noexcept -> u64 {
+        if (avg_weight_acc == 0U) return cfs_min_vruntime;
+        // avg = cfs_min_vruntime + avg_vruntime_acc / avg_weight_acc
+        // Use signed 64-bit folding via i128 to preserve sign of lag.
+        const i128 acc = static_cast<i128>(avg_vruntime_acc);
+        const i128 wgt = static_cast<i128>(avg_weight_acc);
+        const i128 avg = acc / wgt;
+        return static_cast<u64>(static_cast<i64>(avg) + static_cast<i64>(cfs_min_vruntime));
+    }
+
+    /// @brief Update the running avg_vruntime accumulator when an entity is
+    ///        added to the cfs_rq.
+    /// @param[in]     se         Entity being inserted.
+    /// @param[in,out] avg_acc    Mutable accumulator (i64, signed).
+    /// @param[in,out] avg_w_acc  Mutable total weight accumulator (u64).
+    /// @note Mirrors Linux's avg_vruntime_add delta: weight * (vruntime - min_vruntime).
+    inline auto avg_vruntime_add(const sched_entity& se, u64 cfs_min_vruntime,
+                                 i64& avg_acc, u64& avg_w_acc) noexcept -> void {
+        const u32 w = (se.weight == 0U) ? NICE_0_WEIGHT : se.weight;
+        const i64 normalized = static_cast<i64>(se.vruntime) - static_cast<i64>(cfs_min_vruntime);
+        avg_acc += static_cast<i64>(w) * normalized;
+        avg_w_acc += w;
+    }
+
+    /// @brief Update the running avg_vruntime accumulator when an entity is
+    ///        removed from the cfs_rq.
+    inline auto avg_vruntime_sub(const sched_entity& se, u64 cfs_min_vruntime,
+                                 i64& avg_acc, u64& avg_w_acc) noexcept -> void {
+        const u32 w = (se.weight == 0U) ? NICE_0_WEIGHT : se.weight;
+        const i64 normalized = static_cast<i64>(se.vruntime) - static_cast<i64>(cfs_min_vruntime);
+        avg_acc -= static_cast<i64>(w) * normalized;
+        if (avg_w_acc >= w) avg_w_acc -= w; else avg_w_acc = 0U;
+    }
+
+    /// @brief Promote @c min_vruntime on every tick / dequeue to prevent the
+    ///        floor from dropping as entities age out.
+    /// @param[in]     cfs_min_vruntime  Current min_vruntime (mutable by caller).
+    /// @param[in,out] new_floor         Candidate new floor (in-out).
+    /// @return The next @c min_vruntime value to assign.
+    /// @note Mirrors Linux's @c update_min_vruntime: the new floor is
+    ///       max(min_vruntime, candidate_vruntime) guarded by monotonicity.
+    [[nodiscard]] inline auto update_min_vruntime(u64 cfs_min_vruntime, u64 new_floor) noexcept -> u64 {
+        if (new_floor > cfs_min_vruntime) return new_floor;
+        return cfs_min_vruntime + 1ULL;
+    }
+
+    /// @brief Predicate returning whether @c se is eligible to run on this
+    ///        cfs_rq (i.e. its lag <= 0).
+    /// @return True when se is eligible (lag <= 0); false otherwise.
+    /// @note Mirrors Linux's @c entity_eligible.
+    [[nodiscard]] inline auto entity_eligible(const sched_entity& se) noexcept -> bool {
+        return se.lag <= 0LL;
+    }
+
+    /// @brief Compute the per-entity slice in vruntime units, calibrated
+    ///        to the number of queued entities (Linux's @c sched_slice).
+    /// @param[in] se         Entity being scheduled.
+    /// @param[in] nr_running Current cfs_rq::nr_running.
+    /// @return The slice duration in vruntime units.
+    /// @note Mirrors Linux's @c sched_slice: slice = EEVDF_DEFAULT_SLICE_NS / nr_running
+    ///       calibrated by calc_delta_fair so a heavier entity gets a longer slice.
+    [[nodiscard]] inline auto sched_slice(const sched_entity& se, u32 nr_running) noexcept -> u64 {
+        const u32 n = (nr_running == 0U) ? 1U : nr_running;
+        const u64 raw = EEVDF_DEFAULT_SLICE_NS / n;
+        return calc_delta_fair(raw, se);
+    }
+
+    /// @brief Place an entity into the cfs_rq, computing its initial vruntime.
+    /// @param[in,out] se              Entity to place.
+    /// @param[in]     avg_vruntime    Current avg vruntime over the cfs_rq.
+    /// @param[in]     min_vruntime    Current cfs_rq::min_vruntime.
+    /// @param[in]     initial         1 on initial enqueue (zero start); 0 on wakeup.
+    /// @note Mirrors Linux's @c place_entity: initial vslice = calc_delta_fair(slice, se);
+    ///       vruntime = avg_vruntime - initial_offset (constant kernel lag offset).
+    inline auto place_entity(sched_entity& se, u64 avg_vruntime, u64 min_vruntime,
+                              bool initial) noexcept -> void {
+        const u64 initial_offset_ns = EEVDF_DEFAULT_SLICE_NS >> 1U;
+        if (initial) {
+            // Brand-new entity: start at avg - initial_offset to pay a "startup"
+            // penalty to existing entities (avoids sucking CPU on burst spawns).
+            const u64 base = (avg_vruntime > min_vruntime) ? avg_vruntime : min_vruntime;
+            se.vruntime = (base > initial_offset_ns) ? (base - initial_offset_ns) : 0ULL;
+            se.lag = static_cast<i64>(se.vruntime) - static_cast<i64>(base);
+        } else {
+            // Wakeup from block: clamp vruntime to the min so a long-sleeper
+            // cannot declare itself across the universe.
+            se.vruntime = (se.vruntime < min_vruntime) ? min_vruntime : se.vruntime;
+            se.lag = static_cast<i64>(se.vruntime) - static_cast<i64>(avg_vruntime);
+        }
+        se.slice = sched_slice(se, 1U);
+        se.deadline = se.vruntime + se.slice;
+    }
+
+    /// @brief Debit the running entity by the elapsed wall-time delta.
+    /// @param[in,out] se        Entity receiving the debit.
+    /// @param[in,out] min_vr    Mutable cfs_rq::min_vruntime reference (advanced here).
+    /// @param[in]     delta     Elapsed wall-time delta (vtime units).
+    /// @note Mirrors Linux's @c update_curr: vruntime += calc_delta_fair(delta, se).
+    inline auto update_curr(sched_entity& se, u64& min_vr, u64 delta) noexcept -> void {
+        if (delta == 0U) return;
+        se.vruntime += calc_delta_fair(delta, se);
+        if (se.vruntime > min_vr) {
+            min_vr = update_min_vruntime(min_vr, se.vruntime);
+        }
+        // Recompute eligibility when the entity crosses its deadline.
+        if (se.vruntime >= se.deadline) {
+            se.deadline = se.vruntime + se.slice;
+            se.lag = static_cast<i64>(se.vruntime) - static_cast<i64>(min_vr);
+        }
+    }
+
+    /// @brief Recompute an entity's lag after a balancer migration.
+    /// @param[in,out] se          Entity being migrated.
+    /// @param[in]     src_min_vr  Source cfs_rq::min_vruntime.
+    /// @param[in]     dst_min_vr  Destination cfs_rq::min_vruntime.
+    /// @note Preserves the weighted vruntime delta from the source while
+    ///       normalizing to the destination's floor (mirrors Linux's detach
+    ///       + attach pattern).
+    inline auto migrate_entity(sched_entity& se, u64 src_min_vr, u64 dst_min_vr) noexcept -> void {
+        const u64 delta = (se.vruntime > src_min_vr) ? (se.vruntime - src_min_vr) : 0ULL;
+        se.vruntime = dst_min_vr + delta;
+        se.deadline = se.vruntime + se.slice;
+        se.lag = static_cast<i64>(se.vruntime) - static_cast<i64>(dst_min_vr);
+        se.rel_count += 1U;
+    }
+
+    /// @brief Yield: collapse @c se->vruntime to @c min_vruntime so the runner
+    ///        ages backward into the queue.
+    /// @note Mirrors Linux's @c yield_to_fair: at most move vruntime one slice
+    ///       back so a sequence of yields cannot starve the entity in reverse.
+    inline auto yield_entity(sched_entity& se, u64 min_vr) noexcept -> void {
+        const u64 new_vr = (se.vruntime > min_vr) ? (se.vruntime - se.slice) : min_vr;
+        se.vruntime = new_vr;
+        se.deadline = se.vruntime + se.slice;
+        se.lag = static_cast<i64>(se.vruntime) - static_cast<i64>(min_vr);
+    }
+
+    /// @brief Directed yield: move @c yielding_se ahead of @c target_se.
+    inline auto yield_to_entity(sched_entity& yielding_se,
+                                 const sched_entity& target_se,
+                                 u64 min_vr) noexcept -> void {
+        if (yielding_se.vruntime < target_se.vruntime) {
+            const u64 delta = target_se.vruntime - yielding_se.vruntime;
+            yielding_se.vruntime = (yielding_se.vruntime + delta + 1ULL) & ~0ULL;
+            if (yielding_se.vruntime < min_vr) yielding_se.vruntime = min_vr;
+        } else {
+            yielding_se.vruntime += 1ULL;
+        }
+        yielding_se.deadline = yielding_se.vruntime + yielding_se.slice;
+        yielding_se.lag = static_cast<i64>(yielding_se.vruntime) - static_cast<i64>(min_vr);
+    }
+
+} // namespace zxfoundation::sched::eevdf
+
+} // end export

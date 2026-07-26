@@ -11,6 +11,10 @@ import lib.util;
 import lib.compare;
 import lib.tuple_types;
 
+extern "C" {
+    auto __zx_memcmp(const void* s1, const void* s2, usize n) -> int;
+}
+
 export {
 
 namespace lib {
@@ -105,10 +109,7 @@ namespace lib {
 
         /// @brief Equality comparison.
         [[nodiscard]] constexpr auto operator==(const array& other) const -> bool {
-            for (usize i = 0; i < N; ++i) {
-                if (storage[i] != other.storage[i]) return false;
-            }
-            return true;
+            return __zx_memcmp(storage, other.storage, N) == 0;
         }
 
         /// @brief Three-way comparison.

@@ -17,6 +17,8 @@
     placementnew.cxxm
     queue.cxxm
     ring_buffer.cxxm
+    softirq_types.cxxm
+    softirq.cxxm
     span.cxxm
     static_vector.cxxm
     string_view.cxxm

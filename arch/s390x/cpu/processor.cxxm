@@ -77,8 +77,6 @@ namespace arch::s390x::cpu::processor {
 
     /// @brief Store Prefix (STPX) — returns the physical address in the Prefix Register.
     /// @return Physical base address of the current CPU's lowcore.
-    /// @note   z/Architecture prefix register only supports addresses < 4 GiB.
-    ///         The kernel enforces this by allocating lowcores from zone::dma31.
     [[deprecated("STPX is expensive — use lowcore::get_current() on the hot path")]]
     [[gnu::no_stack_protector]] auto get_prefix() noexcept -> u32 {
         u32 prefix;
@@ -101,9 +99,6 @@ namespace arch::s390x::cpu::processor {
     }
 
     /// @brief Full CPU serialisation (bcr 15,0).
-    /// @note PoP §4-44: completes all previous storage references before
-    ///       any subsequent instructions are initiated.  BCR 15,0 is the
-    ///       unconditional form (BCR 14,0 is conditional on CC ≠ 0).
     auto sync() noexcept -> void {
         __asm__ volatile("bcr 15,0" ::: "memory");
     }

@@ -22,6 +22,7 @@ import zxfoundation.sched.sched;
 import lib.error;
 import lib.expected;
 import lib.algorithm;
+import zxfoundation.sched.sched_policy_types;
 
 static constexpr u64 NC_DOM_ERROR = ~0ULL;
 
@@ -160,7 +161,7 @@ namespace __dom_detail {
             return NC_DOM_ERROR;
         }
 
-        (void)zxfoundation::scoms::mark_dying(d);
+        discard_value zxfoundation::scoms::mark_dying(d);
         d->flags = d->flags | domain_flags::need_resched;
 
         return 0;
@@ -270,6 +271,126 @@ namespace __dom_detail {
         return static_cast<u64>(result);
     }
 
+    /// @brief dom_op::strand_set_policy — (admin cap, strand_id, &policy_u64...)
+    /// @details Currently only the calling domain's primary strand (id=0)
+    ///          is selectable — secondary-strand policy is left to a
+    ///          follow-up.  Reads a @c sched_policy struct (sizeof=64) from
+    ///          user VA @c a2 and re-admits it through @c sched_class::admit_policy.
+    auto nc_dom_strand_set_policy(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        if (!validate_admin(cap_token{a0})) return NC_DOM_ERROR;
+
+        auto* self = current_domain();
+        if (!self) [[unlikely]] return NC_DOM_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *self, *self,
+            zxfoundation::dgp::operation_kind::strand_set_policy,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::sched,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("strand_set_policy: DGP authorization denied");
+            return NC_DOM_ERROR;
+        }
+
+        const auto sid = static_cast<zxfoundation::domain::strand_id>(a1);
+        if (sid != 0U) {
+            // Only primary-strand policy updates are supported in this phase.
+            zxfoundation::sys::printk::perr("strand_set_policy: non-primary strand {}", sid);
+            return NC_DOM_ERROR;
+        }
+
+        zxfoundation::sched::sched_policy pol{};
+        if (copy_from_user(&pol, a2, sizeof(pol), self) != 0) {
+            zxfoundation::sys::printk::perr("strand_set_policy: copy_from_user failed");
+            return NC_DOM_ERROR;
+        }
+
+        auto& s = self->primary_strand;
+        const bool was_on_rq = s.on_rq;
+        if (was_on_rq) {
+            zxfoundation::sched::dequeue_strand(&s);
+        }
+        s.sched_policy = pol;
+        s.sched_admission = {};
+        if (auto r = zxfoundation::sched::strand_admit_policy(s, pol); !r) {
+            zxfoundation::sys::printk::perr("strand_set_policy: admit_policy failed");
+            // Roll back to fair default policy to avoid leaving strand in limbo.
+            s.sched_policy = zxfoundation::sched::sched_policy{};
+            s.sched_admission = {};
+        } else {
+            s.sched_admission = *r;
+        }
+        if (was_on_rq) {
+            zxfoundation::sched::enqueue_strand(&s);
+        }
+        return 0;
+    }
+
+    /// @brief dom_op::strand_set_affinity — (admin cap, strand_id, sched_mask_bits)
+    auto nc_dom_strand_set_affinity(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        if (!validate_admin(cap_token{a0})) return NC_DOM_ERROR;
+
+        auto* self = current_domain();
+        if (!self) [[unlikely]] return NC_DOM_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *self, *self,
+            zxfoundation::dgp::operation_kind::strand_set_affinity,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::sched,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("strand_set_affinity: DGP authorization denied");
+            return NC_DOM_ERROR;
+        }
+
+        const auto sid = static_cast<zxfoundation::domain::strand_id>(a1);
+        if (sid != 0U) {
+            zxfoundation::sys::printk::perr("strand_set_affinity: non-primary strand {}", sid);
+            return NC_DOM_ERROR;
+        }
+
+        const u64 bits = a2;
+        self->primary_strand.sched_policy.allowed_cpus.bits = bits;
+        return 0;
+    }
+
+    /// @brief dom_op::strand_query_state — (admin cap, strand_id)
+    /// @details Returns a packed u64
+    auto nc_dom_strand_query_state(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        if (!validate_admin(cap_token{a0})) return NC_DOM_ERROR;
+
+        auto* self = current_domain();
+        if (!self) [[unlikely]] return NC_DOM_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *self, *self,
+            zxfoundation::dgp::operation_kind::strand_query_state,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::sched
+                                  | zxfoundation::dgp::isolation_rights::debug,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("strand_query_state: DGP authorization denied");
+            return NC_DOM_ERROR;
+        }
+
+        const auto sid = static_cast<zxfoundation::domain::strand_id>(a1);
+        if (sid != 0U) {
+            zxfoundation::sys::printk::perr("strand_query_state: non-primary strand {}", sid);
+            return NC_DOM_ERROR;
+        }
+
+        const auto& s = self->primary_strand;
+        const u64 sub   = static_cast<u64>(static_cast<u8>(s.substate)) & 0xFFULL;
+        const u64 cls   = (static_cast<u64>(static_cast<u8>(s.sched_policy.class_id)) & 0x0FULL) << 8;
+        const u64 on_rq = s.on_rq ? (1ULL << 11) : 0ULL;
+        const u64 prio  = (static_cast<u64>(s.sched_policy.rt_priority) & 0xFFULL) << 16;
+        const u64 cpu   = (static_cast<u64>(s.cpu) & 0xFFFFULL) << 24;
+        return sub | cls | on_rq | prio | cpu;
+    }
+
 } // namespace __dom_detail
 
 export {
@@ -293,6 +414,12 @@ namespace zxfoundation::gate::nc_dom {
             return __dom_detail::nc_domain_query(a0, a1, a2, a3, a4);
         case dom_op::strand_create:
             return __dom_detail::nc_domain_strand_create(a0, a1, a2, a3, a4);
+        case dom_op::strand_set_policy:
+            return __dom_detail::nc_dom_strand_set_policy(a0, a1, a2, a3, a4);
+        case dom_op::strand_set_affinity:
+            return __dom_detail::nc_dom_strand_set_affinity(a0, a1, a2, a3, a4);
+        case dom_op::strand_query_state:
+            return __dom_detail::nc_dom_strand_query_state(a0, a1, a2, a3, a4);
         default:
             zxfoundation::sys::printk::perr("dom_dispatch: unknown op {}", op);
             return NC_DOM_ERROR;

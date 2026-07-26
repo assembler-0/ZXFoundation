@@ -9,10 +9,12 @@ import zxfoundation.sys.printk_types;
 import zxfoundation.sys.time;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
+import zxfoundation.domain.domain_types;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.irq_types;
+import arch.s390x.cpu.lowcore;
 import lib.string_view;
 import lib.span;
 import lib.format;
@@ -76,7 +78,7 @@ namespace zxfoundation::sys::printk {
         if (backend.init) backend.init();
         auto b = backend;
         b.active = true;
-        (void)g_state.backends.push_back(b);
+        discard_value g_state.backends.push_back(b);
         g_state.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(irq_flags);
     }
@@ -109,7 +111,7 @@ namespace zxfoundation::sys::printk {
     /// @param[in] offset  Number of valid bytes in buf (not counting NUL).
     /// @param[in] cpu     Logical CPU ID of the calling processor.
     auto printk_commit(const char* buf, usize offset, u16 cpu) noexcept -> void {
-        (void)cpu;
+        discard_value cpu;
 
         const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
 
@@ -121,7 +123,7 @@ namespace zxfoundation::sys::printk {
                 usize written = g_state.log_buffer.push(to_push);
                 if (written == to_push.size()) break;
                 u8 discard[1024];
-                (void)g_state.log_buffer.pop(
+                discard_value g_state.log_buffer.pop(
                     {discard, lib::min(static_cast<usize>(sizeof(discard)),
                                        g_state.log_buffer.size())});
                 if (written > 0) to_push = to_push.subspan(written);
@@ -141,9 +143,9 @@ namespace zxfoundation::sys::printk {
 
                         g_state.lock.lock();
                         // Snapshot the active backends
-                        for (usize i = 0; i < g_state.backends.size(); ++i) {
-                            if (g_state.backends[i].active) {
-                                (void)snap.push_back(g_state.backends[i]);
+                        for (auto & backend : g_state.backends) {
+                            if (backend.active) {
+                                discard_value snap.push_back(backend);
                             }
                         }
 
@@ -201,7 +203,7 @@ namespace zxfoundation::sys::printk {
             lib::static_vector<printk_backend, MAX_BACKENDS> snap;
             for (auto & backend : g_state.backends) {
                 if (backend.active) {
-                    (void)snap.push_back(backend);
+                    discard_value snap.push_back(backend);
                 }
             }
             const lib::string_view msg(buf, offset);
@@ -239,23 +241,36 @@ namespace zxfoundation::sys::printk {
             default:                tag = '?'; break;
         }
 
-        // Format: ZXF!-[(SSSS).uuuuuu] [(type)NN] T <message>\n
+        // Format: ZXF!-[(SSSS).uuuuuu] [(type)NN] T@<logged_domain> <message>\n
+        lib::string_view logged_domain_name = "nucleus";
+        {
+            if (const auto* dom_ptr = arch::s390x::cpu::lowcore::current_domain_ptr();
+                dom_ptr != nullptr) [[likely]] {
+                if (auto* dom = static_cast<const zxfoundation::domain::domain*>(dom_ptr);
+                    dom->name != nullptr && dom->name[0] != '\0') {
+                    logged_domain_name = dom->name;
+                }
+            }
+        }
+
         usize offset = 0;
         if (s > 1'000'000'000U) [[unlikely]] {
             offset = lib::format::format_to({buf, PRINTK_LINE_MAX},
-                "ZXF!-[(XXXX).xxxxxx] [({}){}] {} ",
+                "ZXF!-[(XXXX).xxxxxx] [({}){}] ({})@[{}] ",
                 prefix,
                 lib::format::dec{static_cast<u64>(cpu), 3, true},
-                tag
+                tag,
+                logged_domain_name
             );
         } else {
             offset = lib::format::format_to({buf, PRINTK_LINE_MAX},
-                "ZXF!-[({}).{}] [({}){}] {} ",
+                "ZXF!-[({}).{}] [({}){}] ({})@[{}] ",
                 lib::format::dec{s, 4, true},
                 lib::format::dec{us, 6, true},
                 prefix,
                 lib::format::dec{static_cast<u64>(cpu), 3, true},
-                tag
+                tag,
+                logged_domain_name
             );
         }
 

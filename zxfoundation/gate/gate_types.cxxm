@@ -49,7 +49,10 @@ namespace zxfoundation::gate {
         info         = 3,
         query        = 4,
         strand_create = 5,
-        _count       = 6,
+        strand_set_policy   = 6,  ///< (strand_id, &sched_policy, ctx) — change class/prio/affinity.
+        strand_set_affinity = 7,  ///< (strand_id, sched_mask_bits) — restrict CPU placement.
+        strand_query_state  = 8,  ///< (strand_id, &out) — read cpu/on_rq/substate/prio/vruntime.
+        _count       = 9,
     };
 
     enum class mem_op : u32 {
@@ -86,14 +89,19 @@ namespace zxfoundation::gate {
         register_handler = 0,
         poll             = 1,
         ack              = 2,
-        _count           = 3,
+        send             = 3,  ///< Cross-domain signal delivery: target_domain_id, kind, data.
+        mask_set         = 4,  ///< Update blocked_mask (sigprocmask-style).
+        mask_get         = 5,  ///< Read current blocked_mask.
+        wait             = 6,  ///< Block current strand until any unblocked signal arrives.
+        _count           = 7,
     };
 
     enum class cap_op : u32 {
         acquire  = 0,
         release  = 1,
         validate = 2,
-        _count   = 3,
+        revoke   = 3,  ///< Admin-side revoke of a capability token (or its underlying rights bundle).
+        _count   = 4,
     };
 
     enum class sys_op : u32 {

@@ -133,7 +133,7 @@ namespace zxfoundation::sys::watchdog {
         t.callback     = watchdog_check;
         t.data         = nullptr;
         t.mode         = timer_mode::periodic;
-        (void)timer_add(t);
+        discard_value timer_add(t);
 
         pinfo("watchdog: softdog armed (interval={}s, miss_threshold={})",
             WATCHDOG_INTERVAL_SECONDS, WATCHDOG_FATAL_THRESHOLD);

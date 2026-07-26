@@ -18,6 +18,6 @@ PGMPRDOS     RESTRICTED
 001C         SYSG
 001F         3270
 
-0100         3390 sysres.3390 cu=2107
+0100         3390 core.zxfoundation.sysdsk00.cckd cu=2107
 
 IPL 0100

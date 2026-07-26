@@ -19,10 +19,10 @@ export {
 namespace zxfoundation::sys::stacktrace {
 
     using arch::s390x::cpu::processor::stack_frame;
-    using arch::s390x::cpu::processor::S390X_STACK_SIZE;
-    using arch::s390x::cpu::processor::S390X_ASYNC_STACK_SIZE;
-    using arch::s390x::cpu::processor::S390X_MCCK_STACK_SIZE;
-    using arch::s390x::cpu::processor::S390X_STACK_FRAME_SIZE;
+    using arch::s390x::cpu::processor::STACK_SIZE;
+    using arch::s390x::cpu::processor::ASYNC_STACK_SIZE;
+    using arch::s390x::cpu::processor::MCCK_STACK_SIZE;
+    using arch::s390x::cpu::processor::STACK_FRAME_SIZE;
 
 
     enum class stack_type : u8 {
@@ -52,21 +52,21 @@ namespace zxfoundation::sys::stacktrace {
 
         if (lc->kernel_stack != 0) {
             const u64 top  = lc->kernel_stack;
-            const u64 base = top - S390X_STACK_SIZE;
+            const u64 base = top - STACK_SIZE;
             if (sp >= base && sp < top)
                 return { stack_type::task, base, top };
         }
 
         if (lc->async_stack != 0) {
             const u64 top  = lc->async_stack;
-            const u64 base = top - S390X_ASYNC_STACK_SIZE;
+            const u64 base = top - ASYNC_STACK_SIZE;
             if (sp >= base && sp < top)
                 return { stack_type::async, base, top };
         }
 
         if (lc->mcck_stack != 0) {
             const u64 top  = lc->mcck_stack;
-            const u64 base = top - S390X_MCCK_STACK_SIZE;
+            const u64 base = top - MCCK_STACK_SIZE;
             if (sp >= base && sp < top)
                 return { stack_type::mcck, base, top };
         }
@@ -93,7 +93,7 @@ namespace zxfoundation::sys::stacktrace {
             const auto info = get_stack_info(sp);
             if (info.type == stack_type::unknown)
                 break;
-            if (sp + S390X_STACK_FRAME_SIZE > info.end)
+            if (sp + STACK_FRAME_SIZE > info.end)
                 break;
 
             const auto* frame = reinterpret_cast<const stack_frame*>(sp);

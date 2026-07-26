@@ -115,9 +115,9 @@ namespace zxfoundation::memory::slub::_internal {
 
     /// @brief Free a slab page: immediately or via RCU depending on flags.
     auto free_slab(kmem_cache& cache, slab_header* sh) noexcept -> void {
-        (void)cache.stat_free_slab.fetch_add(1U, memory_order::relaxed);
-        (void)cache.node.total_slabs.fetch_sub(1U, memory_order::relaxed);
-        (void)cache.node.total_objects.fetch_sub(sh->objects, memory_order::relaxed);
+        discard_value cache.stat_free_slab.fetch_add(1U, memory_order::relaxed);
+        discard_value cache.node.total_slabs.fetch_sub(1U, memory_order::relaxed);
+        discard_value cache.node.total_objects.fetch_sub(sh->objects, memory_order::relaxed);
 
         const bool use_rcu = !!(cache.flags & slub_flags::typesafe_by_rcu);
         if (use_rcu) [[unlikely]] {
@@ -162,9 +162,9 @@ namespace zxfoundation::memory::slub::_internal {
         set_fp(cache, obj, nullptr);
         sh->freelist = first;
 
-        (void)cache.stat_alloc_slab.fetch_add(1U, memory_order::relaxed);
-        (void)cache.node.total_slabs.fetch_add(1U, memory_order::relaxed);
-        (void)cache.node.total_objects.fetch_add(sh->objects, memory_order::relaxed);
+        discard_value cache.stat_alloc_slab.fetch_add(1U, memory_order::relaxed);
+        discard_value cache.node.total_slabs.fetch_add(1U, memory_order::relaxed);
+        discard_value cache.node.total_objects.fetch_add(sh->objects, memory_order::relaxed);
 
         return sh;
     }
@@ -230,8 +230,8 @@ namespace zxfoundation::memory::slub::_internal {
                     ++sh->inuse;
                     arch::s390x::cpu::irq::irq_restore(flags);
                     sched::context::preempt_enable();
-                    (void)cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
-                    (void)cache.live_objects.fetch_add(1, memory_order::relaxed);
+                    discard_value cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
+                    discard_value cache.live_objects.fetch_add(1, memory_order::relaxed);
                     return obj;
                 }
             }
@@ -272,8 +272,8 @@ namespace zxfoundation::memory::slub::_internal {
                     ++sh->inuse;
                     arch::s390x::cpu::irq::irq_restore(iflags);
                     sched::context::preempt_enable();
-                    (void)cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
-                    (void)cache.live_objects.fetch_add(1, memory_order::relaxed);
+                    discard_value cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
+                    discard_value cache.live_objects.fetch_add(1, memory_order::relaxed);
                     return obj;
                 }
                 arch::s390x::cpu::irq::irq_restore(iflags);
@@ -298,15 +298,15 @@ namespace zxfoundation::memory::slub::_internal {
         sched::context::preempt_enable();
 
         if (obj) {
-            (void)cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
-            (void)cache.live_objects.fetch_add(1, memory_order::relaxed);
+            discard_value cache.stat_alloc_slow.fetch_add(1U, memory_order::relaxed);
+            discard_value cache.live_objects.fetch_add(1, memory_order::relaxed);
         }
         return obj;
     }
 
     auto free_slow(kmem_cache& cache, slab_header* sh, void* obj) noexcept -> void {
-        (void)cache.stat_free_slow.fetch_add(1U, memory_order::relaxed);
-        (void)cache.live_objects.fetch_sub(1, memory_order::relaxed);
+        discard_value cache.stat_free_slow.fetch_add(1U, memory_order::relaxed);
+        discard_value cache.live_objects.fetch_sub(1, memory_order::relaxed);
 
         const locking::irq_lock_guard guard{cache.node.list_lock};
 
@@ -396,7 +396,7 @@ namespace zxfoundation::memory::slub {
         u32 eff_align = (align > 0) ? align : 8U;
         if (!!(flags & slub_flags::hwcache_align))
             eff_align = lib::max(eff_align,
-                        static_cast<u32>(S390X_CACHE_LINE_SIZE));
+                        static_cast<u32>(CACHE_LINE_SIZE));
 
         const u32 eff_size = lib::align_up(static_cast<u64>(object_size),
                                       static_cast<u64>(eff_align));

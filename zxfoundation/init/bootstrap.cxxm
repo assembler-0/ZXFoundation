@@ -69,7 +69,7 @@ namespace _internal {
 
         if (!entry_r) [[unlikely]] {
             perr("bootstrap: elf_load failed for user/init");
-            (void)zxfoundation::scoms::mark_dying(self);
+            discard_value zxfoundation::scoms::mark_dying(self);
             zxfoundation::sched::schedule();
             return;
         }
@@ -121,7 +121,7 @@ namespace zxfoundation::init::bootstrap {
             auto* self = static_cast<zxfoundation::domain::domain*>(
                 arch::s390x::cpu::lowcore::current_domain_ptr());
             if (self) {
-                (void)scoms::mark_dying(self);
+                discard_value scoms::mark_dying(self);
             }
             zxfoundation::sched::schedule();
             return;
@@ -137,7 +137,7 @@ namespace zxfoundation::init::bootstrap {
             auto* self = static_cast<zxfoundation::domain::domain*>(
                 arch::s390x::cpu::lowcore::current_domain_ptr());
             if (self) {
-                (void)scoms::mark_dying(self);
+                discard_value scoms::mark_dying(self);
             }
             zxfoundation::sched::schedule();
             return;
@@ -176,7 +176,7 @@ namespace zxfoundation::init::bootstrap {
         auto* self = static_cast<zxfoundation::domain::domain*>(
             arch::s390x::cpu::lowcore::current_domain_ptr());
         if (self) {
-            (void)scoms::mark_dying(self);
+            discard_value scoms::mark_dying(self);
         }
         zxfoundation::sched::schedule();
     }

@@ -3,7 +3,7 @@
             xsi:noNamespaceSchemaLocation="scripts/schemas/BUG_HISTORY.xsd">
 
     <Title>ZXFoundation bug history</Title>
-    <LastUpdated>2026-07-19</LastUpdated>
+    <LastUpdated>2026-07-26</LastUpdated>
 
     <BugList>
 
@@ -96,6 +96,58 @@
             <FixedIn>
                 <Branch>26h2</Branch>
                 <Number>1655</Number>
+            </FixedIn>
+        </Bug>
+
+        <Bug id="BUG-003">
+            <FoundDate>2026-07-26</FoundDate>
+            <Severity>High</Severity>
+            <Description>
+                __schedule early-return path leaves the re-picked strand with
+                substate==runnable instead of substate==running.
+            </Description>
+            <Behavior>
+                In sched::schedule() the prev strand is enqueued (or kept
+                runnable) at L423-L437 — its substate is set to
+                sched_substate::runnable.  When select_next() then picks the
+                same strand again (next == prev), the function takes the
+                early-return branch (L477-L481) and skips the
+                next->substate = sched_substate::running transition at
+                L494.
+
+                Consequence: any strand that yields and is immediately
+                re-picked retains substate==runnable even though it IS the
+                running strand.  This was exposed by dom_op::strand_query_state
+                (user/init/init.S Test 57) which read the primary strand's
+                substate from inside a running SVC handler and observed
+                substate==1 (runnable) instead of substate==2 (running).
+                Beyond the test failure, the bug silently corrupts any
+                scheduler introspection or migration logic that consults
+                strand.substate on the running strand to decide whether the
+                CPU is currently committed.
+            </Behavior>
+            <Solution>
+                Set next->substate = sched_substate::running before the
+                early-return from the next==prev branch in __schedule.
+                This is the same transition the long-form handoff path
+                performs at L494; the early-return was simply missing it.
+            </Solution>
+            <AffectedBuilds>
+                <Range>
+                    <From>
+                        <Branch>26h2</Branch>
+                        <Number>1700</Number>
+                    </From>
+                    <To>
+                        <Branch>26h2</Branch>
+                        <Number>1878</Number>
+                    </To>
+                </Range>
+            </AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn>
+                <Branch>26h2</Branch>
+                <Number>1879</Number>
             </FixedIn>
         </Bug>
 

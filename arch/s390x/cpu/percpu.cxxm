@@ -20,7 +20,7 @@ namespace arch::s390x::cpu::percpu {
 
     /// @brief Finish BSP per-CPU initialization.
     auto init_bsp() noexcept -> void {
-        s390x_percpu_data& pcp = lowcore::this_cpu_percpu();
+        percpu_data& pcp = lowcore::this_cpu_percpu();
 
         pcp.rcu_gp_seq         = 0;
         pcp.rcu_qs_seq         = 0;
@@ -47,7 +47,7 @@ namespace arch::s390x::cpu::percpu {
     /// @brief Finish AP per-CPU initialization.
     /// @param lc  HHDM-mapped pointer to the AP's lowcore.
     auto init_ap(lowcore::zx_lowcore& lc) noexcept -> void {
-        s390x_percpu_data& pcp = lc.percpu;
+        percpu_data& pcp = lc.percpu;
 
         pcp.rcu_gp_seq        = 0;
         pcp.rcu_qs_seq        = 0;
@@ -74,7 +74,7 @@ namespace arch::s390x::cpu::percpu {
     }
 
     /// @brief Return a reference to the current CPU's per-CPU block.
-    [[nodiscard]] inline auto this_cpu() noexcept -> s390x_percpu_data& {
+    [[nodiscard]] inline auto this_cpu() noexcept -> percpu_data& {
         return lowcore::this_cpu_percpu();
     }
 

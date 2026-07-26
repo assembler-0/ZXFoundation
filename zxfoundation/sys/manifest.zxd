@@ -19,4 +19,6 @@
     service.cxxm
     io_types.cxxm
     io.cxxm
+    zinit.cxxm
+    zinit_types.cxxm
 }

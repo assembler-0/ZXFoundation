@@ -103,7 +103,7 @@ namespace zxfoundation::scoms {
             obj.ko.ref.count.store(1, memory_order::relaxed);
             obj.ko.generation += 1;  // Bump generation (ABA prevention).
 
-            (void)m_count.fetch_add(1, memory_order::relaxed);
+            discard_value m_count.fetch_add(1, memory_order::relaxed);
 
             return kobject_ref<T, lifecycle_state::embryo>::from_raw_noref(&obj);
         }
@@ -176,7 +176,7 @@ namespace zxfoundation::scoms {
             obj.ko.ref.count.store(1, memory_order::relaxed);
             obj.ko.generation += 1;
 
-            (void)m_count.fetch_add(1, memory_order::relaxed);
+            discard_value m_count.fetch_add(1, memory_order::relaxed);
 
             return kobject_ref<T, lifecycle_state::embryo>::from_raw_noref(&obj);
         }
@@ -242,7 +242,7 @@ namespace zxfoundation::scoms {
             m_next_free[id] = m_free_head;
             m_free_head     = id;
 
-            (void)m_count.fetch_sub(1, memory_order::relaxed);
+            discard_value m_count.fetch_sub(1, memory_order::relaxed);
 
             return {};
         }
@@ -270,7 +270,7 @@ namespace zxfoundation::scoms {
                 m_next_free[i] = m_free_head;
                 m_free_head    = i;
 
-                (void)m_count.fetch_sub(1, memory_order::relaxed);
+                discard_value m_count.fetch_sub(1, memory_order::relaxed);
                 ++destroyed;
             }
 

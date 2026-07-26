@@ -140,6 +140,15 @@ namespace lib {
             splice_raw(&node, &node, sentinel.prev, &sentinel);
         }
 
+        /// @brief Insert @p node immediately before @p marker.
+        /// @param[in] marker  A node already linked into this list.  Behavior
+        ///                     is undefined if @p marker is the sentinel of a
+        ///                     different @c list_head.
+        /// @param[in] node     The node to insert; must not be linked.
+        constexpr auto insert_before(list_node& marker, list_node& node) noexcept -> void {
+            splice_raw(&node, &node, marker.prev, &marker);
+        }
+
         // ----- removal ---------------------------------------------------
 
         /// @brief Remove @p node from this list.

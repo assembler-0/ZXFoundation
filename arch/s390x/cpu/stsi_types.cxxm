@@ -137,7 +137,7 @@ namespace arch::s390x::cpu::stsi {
 		char ext_names[8][256]{};
 	};
 
-	#define TOPOLOGY_NR_MAG		6
+	constexpr auto TOPOLOGY_NR_MAG = 6U;
 
 	struct topology_core {
 		uchar nl;

@@ -42,15 +42,7 @@ namespace _internal {
         return sched_class_id::fair;
     }
 
-    [[nodiscard]] auto pick_deadline(run_queue&) noexcept -> strand* {
-        return nullptr;
-    }
-
-    [[nodiscard]] auto pick_rt(run_queue&) noexcept -> strand* {
-        return nullptr;
-    }
-
-} // namespace _internal
+    } // namespace _internal
 
 export {
 
@@ -164,8 +156,11 @@ namespace zxfoundation::sched::classed {
     /// @brief Enqueue a strand through its scheduler class backend.
     /// @param[in,out] rq Run queue protected by the caller.
     /// @param[in,out] s Strand to insert into the selected class queue.
-    /// @return Success when the class accepts the strand, or an error if the class is unsupported.
-    /// @note The current implementation routes all non-idle work to the fair backend.
+    /// @return Success when the class accepts the strand, or an error if the
+    ///         class is unsupported or SMT isolation-sensitive placement
+    ///         is violated on the target CPU.
+    /// @note The fair class now performs an SMT isolation-sensitive check
+    ///       on @p s against the current CPU's SMT sibling set.
     [[nodiscard]] auto enqueue(
         run_queue& rq,
         strand& s
@@ -176,8 +171,7 @@ namespace zxfoundation::sched::classed {
             case sched_class_id::rt:
                 return zxfoundation::sched::rt::enqueue(rq, s);
             case sched_class_id::fair:
-                zxfoundation::sched::fair::enqueue(rq, s);
-                return {};
+                return zxfoundation::sched::fair::enqueue(rq, s);
             case sched_class_id::idle:
                 return {};
         }

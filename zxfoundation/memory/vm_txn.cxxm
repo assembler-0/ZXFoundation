@@ -69,7 +69,7 @@ namespace zxfoundation::memory::vm {
             if (m_space && m_mapped_va != 0 && m_mapped_size != 0) {
                 // Use vm_unmap to cleanly remove the region.
                 // Ignore errors during rollback — best effort.
-                (void)vm_unmap(*m_space, m_root_phys, m_mapped_va, m_mapped_size);
+                discard_value vm_unmap(*m_space, m_root_phys, m_mapped_va, m_mapped_size);
             }
 
             m_mapped_va   = 0;

@@ -48,15 +48,6 @@ namespace zxfoundation::dgp {
     };
 
     /// @brief Authority bits interpreted by the DGP policy plane.
-    ///
-    /// These are coarse-grained, static rights assigned at domain creation
-    /// that determine what *category* of operation a domain class may
-    /// perform at all.  Fine-grained, per-object authorization is handled
-    /// separately by the capability system (cap_token / cap_rights).
-    ///
-    /// The old single `admin` god-bit has been decomposed into specific
-    /// authorities.  A domain may hold `lifecycle` without holding `io`,
-    /// for example.
     enum class isolation_rights : u32 {
         none      = 0U,
         enter     = 1U << 0,   ///< Cross-domain gate entry.

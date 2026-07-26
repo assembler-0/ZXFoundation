@@ -619,6 +619,142 @@ namespace lib {
         return _detail::__rb_count(root.node);
     }
 
+    /// @brief Trichotomy helper for the common case where Key comparison
+    ///        reduces to a numeric difference.
+    /// @return -1 / 0 / +1 for less / equal / greater.
+    template <typename T>
+    [[nodiscard]] inline auto rb_cmp(T a, T b) noexcept -> i32 {
+        if (a < b) return -1;
+        if (b < a) return 1;
+        return 0;
+    }
+
+    /// @brief Lower-bound search: first node for which cmp(node, key) >= 0.
+    /// @tparam Cmp  Functor: `auto(const rb_node*, const Key&) -> i32`
+    ///               returning <0 when node < key, 0 on equal, >0 > key.
+    /// @return Pointer to the lower-bound node, or nullptr if all nodes
+    ///         are strictly less than @p key.
+    template <typename Key, typename Cmp>
+    [[nodiscard]] auto rb_lower_bound(const rb_root& root, const Key& key, Cmp&& cmp) noexcept -> rb_node* {
+        rb_node* n = root.node;
+        rb_node* lb = nullptr;
+        while (n) {
+            if (cmp(n, key) >= 0) { lb = n; n = n->left; }
+            else                  {        n = n->right; }
+        }
+        return lb;
+    }
+
+    /// @brief Exact find: first node equal to @p key.
+    /// @return Pointer to the node, or nullptr when no exact match.
+    template <typename Key, typename Cmp>
+    [[nodiscard]] auto rb_find(const rb_root& root, const Key& key, Cmp&& cmp) noexcept -> rb_node* {
+        auto* lb = rb_lower_bound(root, key, lib::forward<Cmp>(cmp));
+        if (lb && cmp(lb, key) == 0) return lb;
+        return nullptr;
+    }
+
+    /// @brief Insert a pre-allocated node via BST walk + link + rebalance.
+    /// @details Walks the tree using @p cmp(node, key) to find the parent
+    ///          and link slot, then calls @c rb_link_node and @c rb_insert_color.
+    template <typename Key, typename Cmp>
+    auto rb_insert(rb_root& root, rb_node* node, const Key& key, Cmp&& cmp) noexcept -> void {
+        rb_node** link = &root.node;
+        rb_node*  parent = nullptr;
+        while (*link) {
+            parent = *link;
+            if (cmp(parent, key) > 0)
+                link = &parent->left;
+            else
+                link = &parent->right;
+        }
+        rb_link_node(node, parent, link);
+        rb_insert_color(node, root);
+    }
+
+    /// @brief Insert + cached leftmost update in one call.
+    /// @details Mirrors @c rb_insert_color_cached with the walk folded in.
+    ///          The @p leftmost cookie is refreshed when the new node is
+    ///          inserted to the leftmost path.
+    template <typename Key, typename Cmp>
+    auto rb_insert_cached(rb_root_cached& tree, rb_node* node,
+                           const Key& key, Cmp&& cmp) noexcept -> void {
+        rb_node** link = &tree.root.node;
+        rb_node*  parent = nullptr;
+        bool leftmost = true;
+        while (*link) {
+            parent = *link;
+            if (cmp(parent, key) > 0) {
+                link = &parent->left;
+            } else {
+                link = &parent->right;
+                leftmost = false;
+            }
+        }
+        rb_link_node(node, parent, link);
+        rb_insert_color_cached(node, tree, leftmost);
+    }
+
+    /// @brief In-order walk invoking @p fn for each node.
+    /// @tparam Fn Invocable as `auto(rb_node&) -> void` (mutable ref so
+    ///         callees can mutate node contents, but the tree structure
+    ///         is presumed stable for the duration of the walk).
+    template <typename Fn>
+    auto rb_for_each(const rb_root& root, Fn&& fn) noexcept -> void {
+        for (rb_node* n = rb_first(root); n; n = rb_next(n))
+            fn(*n);
+    }
+
+    /// @brief Erase-safe iteration: snapshot successor before invoking @p fn
+    ///        so @p fn may safely call @c rb_erase on the yielded node.
+    /// @details Used by components that drain the tree inside the loop body
+    ///         (e.g. @c sched_cpu_down walking the fair_tree).  The iterator
+    ///         recomputes the next node after the body so it remains valid
+    ///         even when @p fn erases the current node.
+    template <typename Fn>
+    auto rb_for_each_safe(rb_root& root, Fn&& fn) noexcept -> void {
+        rb_node* n = rb_first(root);
+        while (n) {
+            rb_node* next = rb_next(n);
+            fn(*n);
+            n = next;
+        }
+    }
+
+    /// @brief Erase-safe iteration over a cached tree (maintains @c leftmost).
+    template <typename Fn>
+    auto rb_for_each_safe_cached(rb_root_cached& tree, Fn&& fn) noexcept -> void {
+        rb_node* n = rb_first(tree.root);
+        while (n) {
+            rb_node* next = rb_next(n);
+            fn(*n);
+            n = next;
+        }
+        // leftmost may have been erased; recompute lazily for callers
+        // that rely on the cache cookie — the cheap fix is to set it to the
+        // first remaining node when we drained anything.
+        if (!tree.root.node)
+            tree.leftmost = nullptr;
+        else if (!tree.leftmost || rb_prev(tree.leftmost) == nullptr)
+            tree.leftmost = rb_first(tree.root);
+    }
+
+    /// @brief Erase all nodes matching a predicate.  Erase-safe internally
+    ///        via @c rb_for_each_safe.
+    template <typename Pred>
+    auto rb_erase_if(rb_root& root, Pred&& pred) noexcept -> void {
+        rb_for_each_safe(root, [&](rb_node& n) noexcept -> void {
+            if (pred(n)) rb_erase(&n, root);
+        });
+    }
+
+    template <typename Pred>
+    auto rb_erase_if_cached(rb_root_cached& tree, Pred&& pred) noexcept -> void {
+        rb_for_each_safe_cached(tree, [&](rb_node& n) noexcept -> void {
+            if (pred(n)) rb_erase_cached(&n, tree);
+        });
+    }
+
 } // namespace lib
 
 } // end export

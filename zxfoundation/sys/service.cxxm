@@ -116,7 +116,7 @@ namespace zxfoundation::sys::service {
             // Console service: points to domain 0 (nucleus)
             auto d0_token = cap_token::make(
                 cap_type::domain, 0, 0, cap_rights::read | cap_rights::write);
-            (void)service_register("zx.console", d0_token, 0);
+            discard_value service_register("zx.console", d0_token, 0);
         }
 
         g_service_initialized = true;
@@ -243,7 +243,7 @@ namespace zxfoundation::sys::service {
     }
 
     auto register_service_cap_lookup() noexcept -> void {
-        (void)register_lookup(
+        discard_value register_lookup(
             cap_type::service,
             [](u16 obj_id) noexcept -> scoms::kobject* {
                 auto* e = service_entry_find_by_id(static_cast<u32>(obj_id));

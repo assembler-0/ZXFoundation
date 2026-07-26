@@ -13,11 +13,68 @@ import zxfoundation.scoms.scoms_ref;
 import lib.error;
 import lib.expected;
 
+// ── Implementation detail (non-exported) ────────────────────────────────────
+namespace zxfoundation::domain::signal::_detail {
+
+    using namespace zxfoundation::sys::printk;
+    using zxfoundation::domain::domain;
+    using zxfoundation::domain::domain_flags;
+    using zxfoundation::scoms::mark_dying;
+
+    /// @brief Inner: dispatch a dequeued entry to its registered handler,
+    ///        falling back to its signal_default action when no handler is
+    ///        installed.
+    [[nodiscard]] auto deliver_entry(domain& d, signal_entry entry) noexcept -> bool {
+        if (entry.kind == signal_kind::none) {
+            return false;
+        }
+        const u8 idx = static_cast<u8>(entry.kind);
+        const auto& hinfo = d.signal_queue.handlers[idx];
+
+        bool handled = false;
+        if (hinfo.handler != nullptr) {
+            handled = hinfo.handler(entry.kind, entry.data, hinfo.user_data);
+        }
+
+        if (!handled) {
+            auto effective_def = hinfo.def;
+            if (hinfo.handler == nullptr) {
+                switch (entry.kind) {
+                    case signal_kind::fault:
+                    case signal_kind::term:
+                        effective_def = signal_default::terminate;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            switch (effective_def) {
+                case signal_default::terminate:
+                    pinfo("signal: domain {} — unhandled {} (default: terminate)",
+                          d.ko.id, signal_kind_name(entry.kind));
+                    discard_value mark_dying(&d);
+                    d.flags = d.flags | domain_flags::need_resched;
+                    break;
+                case signal_default::notify:
+                    // Domain can poll signal_queue.pending_mask.
+                    break;
+                case signal_default::ignore:
+                default:
+                    // Silent discard.
+                    break;
+            }
+        }
+        return true;
+    }
+
+} // namespace zxfoundation::domain::signal::_detail
+
 export {
 
 namespace zxfoundation::domain::signal {
 
     using namespace zxfoundation::sys::printk;
+    using zxfoundation::domain::domain;
 
     /// @brief Register a signal handler for the given domain and kind.
     /// @param[in,out] d     The target domain.
@@ -54,64 +111,62 @@ namespace zxfoundation::domain::signal {
         d.signal_queue.enqueue(kind, data);
     }
 
-    /// @brief Deliver one pending signal to the domain.
-    /// @param[in,out] d  The domain about to return to user mode.
-    /// @return  true if a signal was delivered; false if the queue was empty.
-    ///
-    /// @note  If the default action is terminate and no handler is registered,
-    ///        the domain is marked dying and the caller should invoke schedule().
+    /// @brief Update the per-domain blocked mask.  Blocked kinds are kept
+    ///        queued but not delivered until unblocked.  Matches POSIX
+    ///        @c sigprocmask semantics: bit @c n in @c mask blocks the kind
+    ///        with numeric value @c n.
+    auto signal_block(domain& d, u32 mask) noexcept -> void {
+        d.signal_queue.blocked_mask = mask;
+    }
+
+    /// @brief Return the current blocked mask.
+    [[nodiscard]] auto signal_blocked_mask(const domain& d) noexcept -> u32 {
+        return d.signal_queue.blocked_mask;
+    }
+
+    /// @brief Deliver one unblocked pending signal to the domain.
+    /// @return  True if a signal was delivered; false if the queue was empty
+    ///          or every pending kind was blocked.
+    /// @note    Blocked entries are preserved in the queue so an unblock
+    ///          delivers them in arrival order.
     auto signal_deliver_one(domain& d) noexcept -> bool {
-        if (!d.signal_queue.has_pending()) {
-            return false;
-        }
-
-        auto entry = d.signal_queue.dequeue();
-        if (entry.kind == signal_kind::none) {
-            return false;
-        }
-
-        const u8 idx = static_cast<u8>(entry.kind);
-        const auto& hinfo = d.signal_queue.handlers[idx];
-
-        bool handled = false;
-        if (hinfo.handler != nullptr) {
-            handled = hinfo.handler(entry.kind, entry.data, hinfo.user_data);
-        }
-
-        if (!handled) {
-            // When no handler is registered, use kind-specific built-in defaults
-            // so that critical signals (fault, term) terminate by default.
-            auto effective_def = hinfo.def;
-            if (hinfo.handler == nullptr) {
-                switch (entry.kind) {
-                    case signal_kind::fault:
-                    case signal_kind::term:
-                        effective_def = signal_default::terminate;
-                        break;
-                    default:
-                        break;
+        auto& q = d.signal_queue;
+        if (q.count == 0) return false;
+        for (u32 i = 0U; i < q.count; ++i) {
+            const u32 idx = (q.head + i) % SIGNAL_QUEUE_DEPTH;
+            const auto k = q.entries[idx].kind;
+            if (k == signal_kind::none) continue;
+            const u32 kbit = 1U << static_cast<u8>(k);
+            if ((q.blocked_mask & kbit) == 0U) {
+                auto entry = q.entries[idx];
+                if (idx == q.head) {
+                    q.entries[q.head] = {};
+                    q.head = (q.head + 1) % SIGNAL_QUEUE_DEPTH;
+                } else {
+                    // Compact the ring to preserve order of the remaining
+                    // entries without touching the head pointer.
+                    for (u32 j = idx;
+                         j != (q.head + (q.count - 1U)) % SIGNAL_QUEUE_DEPTH;
+                         j = (j + 1) % SIGNAL_QUEUE_DEPTH) {
+                        q.entries[j] = q.entries[(j + 1) % SIGNAL_QUEUE_DEPTH];
+                    }
+                    const u32 last = (q.head + (q.count - 1U)) % SIGNAL_QUEUE_DEPTH;
+                    q.entries[last] = {};
                 }
-            }
-            switch (effective_def) {
-                case signal_default::terminate:
-                    pinfo("signal: domain {} — unhandled {} (default: terminate)",
-                          d.ko.id, signal_kind_name(entry.kind));
-                    (void)scoms::mark_dying(&d);
-                    d.flags = d.flags | domain_flags::need_resched;
-                    break;
-
-                case signal_default::notify:
-                    // Domain can poll signal_queue.pending_mask.
-                    break;
-
-                case signal_default::ignore:
-                default:
-                    // Silent discard.
-                    break;
+                --q.count;
+                if (q.count == 0) q.pending_mask = 0;
+                else {
+                    q.pending_mask = 0;
+                    for (u32 r = 0U; r < q.count; ++r) {
+                        const auto rk = q.entries[(q.head + r) % SIGNAL_QUEUE_DEPTH].kind;
+                        if (rk != signal_kind::none)
+                            q.pending_mask |= (1U << static_cast<u8>(rk));
+                    }
+                }
+                return _detail::deliver_entry(d, entry);
             }
         }
-
-        return true;
+        return false;
     }
 
     /// @brief Deliver all pending signals to the domain.
@@ -120,7 +175,7 @@ namespace zxfoundation::domain::signal {
     auto signal_deliver_all(domain& d) noexcept -> bool {
         bool needs_resched = false;
         while (d.signal_queue.has_pending()) {
-            (void)signal_deliver_one(d);
+            discard_value signal_deliver_one(d);
             if (d.ko.state == base::lifecycle_state::dying) {
                 needs_resched = true;
                 break;

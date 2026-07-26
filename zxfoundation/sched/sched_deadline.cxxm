@@ -4,16 +4,24 @@
 
 export module zxfoundation.sched.sched_deadline;
 import zxfoundation.sched.sched_policy_types;
+import zxfoundation.sched.sched_cpudl;
+import zxfoundation.sched.sched_cbs;
+import zxfoundation.sys.timer;
+import zxfoundation.sys.time;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
+import zxfoundation.base.config;
 import lib.error;
 import lib.expected;
 import lib.list;
 import lib.placementnew;
+import lib.cpumask;
+import arch.s390x.cpu.cpumask;
+import arch.s390x.lib.atomic;
 
 namespace _internal {
 
@@ -93,7 +101,29 @@ namespace zxfoundation::sched::deadline {
         s.sched_admission = *dgp_result;
         s.body->deadline_runtime_used_ns = 0U;
         s.body->absolute_deadline_ns = policy.deadline_ns;
-        s.sched.deadline = policy.deadline_ns;
+        s.se.deadline = policy.deadline_ns;
+
+        cbs::cbs_init(s.body->cbs);
+        const u16 sched_cpu = s.cpu;
+        const u64 now_ns = zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
+        s.body->cbs.period_deadline = now_ns + s.body->cbs.period_ns;
+        cbs::cbs_install_timer(
+            s.body->cbs, sched_cpu,
+            [](void* data) noexcept -> void {
+                auto* const p_s = static_cast<strand*>(data);
+                if (!p_s || !p_s->body) return;
+                auto* const owner_dom =
+                    static_cast<domain*>(p_s->owner);
+                if (!owner_dom
+                    || owner_dom->ko.state != base::lifecycle_state::active) {
+                    cbs::cbs_cancel_timer(p_s->body->cbs);
+                    return;
+                }
+                cbs::cbs_replenish(p_s->body->cbs);
+                p_s->body->absolute_deadline_ns = p_s->body->cbs.period_deadline;
+            },
+            &s);
+        discard_value zxfoundation::sys::timer::timer_add(s.body->cbs.timer);
         return *dgp_result;
     }
 
@@ -102,6 +132,7 @@ namespace zxfoundation::sched::deadline {
     /// @param[in,out] s Strand whose reservation is released.
     auto release_admission(domain& owner, strand& s) noexcept -> void {
         if (s.sched_policy.class_id != sched_class_id::deadline) return;
+        cbs::cbs_cancel_timer(s.body->cbs);
         _internal::release_domain_runtime(owner, s.sched_admission.admitted_runtime_ns);
         s.sched_policy = sched_policy{};
         s.sched_admission = sched_admission_result{};
@@ -126,6 +157,13 @@ namespace zxfoundation::sched::deadline {
         rq.deadline_queue.push_back(s.sched_link);
         s.on_rq = true;
         ++rq.nr_running;
+
+        u64 earliest = ~0ULL;
+        for (auto& c : rq.deadline_queue.iter<strand, &strand::sched_link>()) {
+            if (c.body->absolute_deadline_ns < earliest)
+                earliest = c.body->absolute_deadline_ns;
+        }
+        cpudl::cpudl_set(rq.cpu_id, earliest);
         return {};
     }
 
@@ -137,6 +175,17 @@ namespace zxfoundation::sched::deadline {
         lib::list_head::remove(s.sched_link);
         s.on_rq = false;
         if (rq.nr_running) --rq.nr_running;
+
+        u64 earliest = ~0ULL;
+        for (auto& c : rq.deadline_queue.iter<strand, &strand::sched_link>()) {
+            if (c.body->absolute_deadline_ns < earliest)
+                earliest = c.body->absolute_deadline_ns;
+        }
+        if (earliest == ~0ULL) {
+            cpudl::cpudl_clear(rq.cpu_id);
+        } else {
+            cpudl::cpudl_set(rq.cpu_id, earliest);
+        }
     }
 
     /// @brief Pick the earliest-deadline strand from a run queue.
@@ -150,13 +199,16 @@ namespace zxfoundation::sched::deadline {
         return best;
     }
 
-    /// @brief Account one conservative deadline tick.
+    /// @brief Account one conservative deadline tick with CBS replenishment.
     /// @param[in,out] rq Run queue protected by the caller.
-    /// @param[in,out] s Currently running deadline strand.
+    /// @param[in,out] s  Currently running deadline strand.
     auto tick(run_queue& rq, strand& s) noexcept -> void {
         constexpr u64 DEADLINE_ACCOUNTING_TICK_NS = 1'000'000ULL;
         if (s.sched_policy.class_id != sched_class_id::deadline) return;
         s.body->deadline_runtime_used_ns += DEADLINE_ACCOUNTING_TICK_NS;
+
+        discard_value cbs::cbs_charge(s.body->cbs, DEADLINE_ACCOUNTING_TICK_NS);
+
         if (s.body->deadline_runtime_used_ns >= s.sched_admission.admitted_runtime_ns) {
             auto* owner = static_cast<domain*>(s.owner);
             if (owner) owner->flags |= zxfoundation::domain::domain_flags::need_resched;
@@ -171,6 +223,53 @@ namespace zxfoundation::sched::deadline {
         if (!rq.curr || waking.sched_policy.class_id != sched_class_id::deadline) return;
         auto* curr_owner = static_cast<domain*>(rq.curr->owner);
         if (curr_owner) curr_owner->flags |= zxfoundation::domain::domain_flags::need_resched;
+    }
+
+    /// @brief Push the earliest-deadline strand to the CPU with the latest
+    ///        deadline (Phase 4.7 EDF push migration).
+    /// @param[in,out] src_rq Source CPU run queue (lock held).
+    /// @return Destination CPU id, or CONFIG_ZX_MAX_CPUS if no destination.
+    [[nodiscard]] auto push(run_queue& src_rq) noexcept -> u16 {
+        strand* earliest = nullptr;
+        for (auto& c : src_rq.deadline_queue.iter<strand, &strand::sched_link>()) {
+            if (!earliest || c.body->absolute_deadline_ns < earliest->body->absolute_deadline_ns)
+                earliest = &c;
+        }
+        if (!earliest) return static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS);
+
+        // Convert sched_mask (single u64) to lib::cpumask (768-bit bitmap).
+        ::lib::cpumask affinity{};
+        if (earliest->sched_policy.allowed_cpus.bits == 0U) {
+            for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i)
+                affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+        } else {
+            u64 bits = earliest->sched_policy.allowed_cpus.bits;
+            for (u32 i = 0; i < 64U && bits; ++i, bits >>= 1) {
+                if (bits & 1U) affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+            }
+        }
+        return cpudl::cpudl_find_latest(affinity);
+    }
+
+    /// @brief Pull the earliest-deadline strand from another CPU (Phase 4.7).
+    /// @param[in]     idle_cpu CPU performing the pull.
+    /// @param[in,out] src_rq   Source CPU run queue (lock held).
+    /// @return Stolen strand, or nullptr.
+    [[nodiscard]] auto pull(u16 idle_cpu, run_queue& src_rq) noexcept -> strand* {
+        strand* earliest = nullptr;
+        for (auto& c : src_rq.deadline_queue.iter<strand, &strand::sched_link>()) {
+            if (!earliest || c.body->absolute_deadline_ns < earliest->body->absolute_deadline_ns)
+                earliest = &c;
+        }
+        if (!earliest) return nullptr;
+
+        const u64 aff_bits = earliest->sched_policy.allowed_cpus.bits;
+        if (aff_bits != 0U && idle_cpu < 64U && !((aff_bits >> idle_cpu) & 1U))
+            return nullptr;
+        dequeue(src_rq, *earliest);
+        earliest->cpu = idle_cpu;
+        earliest->on_rq = false;
+        return earliest;
     }
 
 } // namespace zxfoundation::sched::deadline

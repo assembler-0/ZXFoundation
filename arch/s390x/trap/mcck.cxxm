@@ -126,7 +126,7 @@ namespace arch::s390x::trap::mcck {
         }
 
         [[nodiscard]] auto ipd_window_expired(
-            arch::s390x::cpu::percpu::s390x_percpu_data& pcp,
+            arch::s390x::cpu::percpu::percpu_data& pcp,
             u64 now
         ) noexcept -> bool {
             return now >= pcp.ipd_window_deadline;

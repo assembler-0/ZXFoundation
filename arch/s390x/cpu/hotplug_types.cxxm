@@ -10,10 +10,6 @@ export {
 namespace arch::s390x::cpu::hotplug {
 
     /// @brief CPU lifecycle states per the hotplug state machine.
-    /// @note Transition graph:
-    ///   absent → present → possible → online → offline → absent
-    ///                                 ↑  ↕  ↓
-    ///                              failed
     enum class cpu_hotplug_state : u8 {
         absent   = 0,  ///< Slot does not exist or has been permanently removed.
         present  = 1,  ///< Hardware exists but is not yet released by firmware.

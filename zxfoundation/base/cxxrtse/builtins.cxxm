@@ -160,7 +160,7 @@ auto __multi3(u128 a, u128 b) noexcept -> u128 {
 
     const u64 res_lo = ll_lo;
     const u64 res_hi = ll_hi + cr_lo;
-    (void)cr_hi; // overflow discarded
+    discard_value cr_hi; // overflow discarded
 
     return _internal::combine(res_hi, res_lo);
 }

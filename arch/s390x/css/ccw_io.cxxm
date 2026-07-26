@@ -59,7 +59,7 @@ namespace arch::s390x::css::ccw_io {
         // Drain any stale status left from a prior operation before arming.
         {
             irb discard{};
-            (void)tsch(entry->schid, discard);
+            discard_value tsch(entry->schid, discard);
         }
 
         entry->io_done.store(0, atomic::memory_order::seq_cst);
@@ -103,7 +103,7 @@ namespace arch::s390x::css::ccw_io {
 
             // Drain whatever status is pending and retry.
             irb discard{};
-            (void)tsch(entry->schid, discard);
+            discard_value tsch(entry->schid, discard);
         }
 
         // Calculate timeout deadline in TOD ticks (1 µs = 4096 ticks).
@@ -157,9 +157,9 @@ namespace arch::s390x::css::ccw_io {
                     }
                 }
 
-                (void)csch(entry->schid);
+                discard_value csch(entry->schid);
                 irb discard{};
-                (void)tsch(entry->schid, discard);
+                discard_value tsch(entry->schid, discard);
                 entry->state = subchannel_state::idle;
                 irqctl::irq_restore(saved_irq);
                 return ::lib::unexpected(

@@ -23,6 +23,7 @@ import zxfoundation.rcu.rcu;
 import zxfoundation.memory.kmalloc;
 import zxfoundation.memory.vm;
 import zxfoundation.sched.sched;
+import zxfoundation.sched.sched_numa_distance;
 import zxfoundation.init.bootstrap;
 import zxfoundation.domain.domain;
 import zxfoundation.domain.domain_types;
@@ -31,6 +32,7 @@ import zxfoundation.gate.gate_registration;
 import zxfoundation.portal.portal;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
+import zxfoundation.base.cmdline;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.stfle_types;
 import arch.s390x.cpu.percpu;
@@ -50,7 +52,6 @@ import drivers.console.diag;
 import lib.span;
 import lib.error;
 import lib.format;
-import zxfoundation.base.cmdline;
 import lib.string_view;
 
 using zxfoundation::sys::printk::pinfo;
@@ -249,7 +250,7 @@ namespace _internal {
     }
 
     auto launch_bootstrap_domain() -> void  {
-        auto dom_r = zxfoundation::domain::domain_create("sys/bootstrap");
+        auto dom_r = zxfoundation::domain::domain_create("foundation/bootstrapd");
         if (!dom_r) {
             zxfoundation::sys::printk::pcrit("sys: cannot launch bootstrap domain");
             return;
@@ -327,6 +328,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::rcu::rcu_init();
     zxfoundation::domain::domain_init();
+    discard_value zxfoundation::domain::domain_init_nucleus();
     zxfoundation::domain::strand_init();
     zxfoundation::sys::service::service_init();
     zxfoundation::gate::gate_init();
@@ -336,6 +338,8 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     arch::s390x::cpu::aste::aste_subsystem_init();
 
     zxfoundation::sched::sched_init();
+
+    zxfoundation::sched::numa_distance::slit_load();
     arch::s390x::cpu::smp::launch(*protocol);
     arch::s390x::cpu::irq::irq_enable();
 

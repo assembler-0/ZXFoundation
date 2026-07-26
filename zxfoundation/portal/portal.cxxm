@@ -61,13 +61,13 @@ namespace _internal {
         auto on_rollback() noexcept -> void {
             // Reverse order teardown.
             if (m_ale_created) {
-                (void)arch::s390x::cpu::aste::ale_destroy(m_alet);
+                discard_value arch::s390x::cpu::aste::ale_destroy(m_alet);
             }
             if (m_aste_allocated) {
-                (void)arch::s390x::cpu::aste::aste_free(m_aste_index);
+                discard_value arch::s390x::cpu::aste::aste_free(m_aste_index);
             }
             if (m_slot_allocated) {
-                (void)_internal::g_portal_table.release(m_slot_id);
+                discard_value _internal::g_portal_table.release(m_slot_id);
             }
         }
 
@@ -260,7 +260,7 @@ namespace zxfoundation::portal {
 
         // Tear down the hardware ALE after ALB invalidation and DGP revocation.
         if (desc->alet > arch::s390x::cpu::aste::ALET_RESERVED_MAX) {
-            (void)arch::s390x::cpu::aste::ale_destroy(desc->alet);
+            discard_value arch::s390x::cpu::aste::ale_destroy(desc->alet);
         }
 
         // Release the slot back to the SCOMS table.
@@ -285,7 +285,7 @@ namespace zxfoundation::portal {
             [](portal_desc& p) noexcept -> void {
                 auto* src = zxfoundation::domain::domain_find(p.source_domain);
                 if (src) {
-                    (void)zxfoundation::dgp::isolation_begin_portal_teardown(
+                    discard_value zxfoundation::dgp::isolation_begin_portal_teardown(
                         src->ko.state,
                         src->revocation_epoch);
                     if (src->portal_count > 0) --src->portal_count;
@@ -294,7 +294,7 @@ namespace zxfoundation::portal {
                 arch::s390x::cpu::ar::purge_alb();
 
                 if (p.alet > arch::s390x::cpu::aste::ALET_RESERVED_MAX) {
-                    (void)arch::s390x::cpu::aste::ale_destroy(p.alet);
+                    discard_value arch::s390x::cpu::aste::ale_destroy(p.alet);
                 }
             });
     }
@@ -309,7 +309,7 @@ namespace zxfoundation::portal {
     }
 
     auto register_portal_cap_lookup() noexcept -> void {
-        (void)zxfoundation::sys::cap::register_lookup(
+        discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::portal,
             [](u16 obj_id) noexcept -> scoms::kobject* {
                 auto* p = portal_find(static_cast<u32>(obj_id));

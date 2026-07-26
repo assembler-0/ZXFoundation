@@ -3,5 +3,6 @@
     mcs_types.cxxm
     mutex.cxxm
     qspinlock.cxxm
+    rt_mutex.cxxm
     seqlock.cxxm
 }

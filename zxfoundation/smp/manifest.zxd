@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    smp_types.cxxm
+    smp.cxxm
+}

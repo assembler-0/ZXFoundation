@@ -156,7 +156,7 @@ namespace zxfoundation::gate {
     }
 
     auto register_gate_cap_lookup() noexcept -> void {
-        (void)zxfoundation::sys::cap::register_lookup(
+        discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::gate,
             [](u16 obj_id) noexcept -> scoms::kobject* {
                 auto* g = gate_find(static_cast<u32>(obj_id));

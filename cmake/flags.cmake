@@ -97,7 +97,7 @@ set(_ZX_NEEDED_CXX_FLAGS
     "-fno-exceptions|REQUIRED"
     "-fno-rtti|REQUIRED"
     "-nostdlib|REQUIRED"
-    "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=|REQUIRED"
+    "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=|OPTIONAL"
     "-march=${MARCH_MODE}|OPTIONAL"
     "-mtune=${MARCH_MODE}|OPTIONAL"
     "-O${OPT_LEVEL}|OPTIONAL"

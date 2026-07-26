@@ -417,8 +417,8 @@ namespace zxfoundation::dgp {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
 
-        (void)source_domain_id;
-        (void)target_domain_id;
+        discard_value source_domain_id;
+        discard_value target_domain_id;
 
         if (va_start >= va_end) {
             return lib::unexpected(_internal::generic_invalid_arg());
@@ -427,6 +427,29 @@ namespace zxfoundation::dgp {
         if (!has_all_rights(requested, isolation_rights::share)) {
             return lib::unexpected(_internal::generic_invalid_arg());
         }
+
+        return {};
+    }
+
+    /// @brief Lazy revocation of DGP rights on a domain.
+    /// @param[in] d          Target domain.  Must be non-null and active.
+    /// @param[in] drop_mask  Bits to clear from @c granted_rights.
+    ///                       Bits not currently set have no effect.
+    /// @return Success on completion, or kernel_error if @c d is null.
+    auto revoke_domain_rights(
+        zxfoundation::domain::domain& d,
+        isolation_rights drop_mask
+    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        const auto drop_raw = static_cast<u32>(drop_mask);
+        const auto granted_raw = static_cast<u32>(d.granted_rights);
+        const auto effective_drop = drop_raw & granted_raw;
+        if (effective_drop == 0U) {
+            return {};
+        }
+
+        d.granted_rights = static_cast<isolation_rights>(granted_raw & ~effective_drop);
+        d.pending_rights_revoke_raw |= effective_drop;
+        ++d.revocation_epoch;
 
         return {};
     }

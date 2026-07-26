@@ -58,7 +58,7 @@ namespace zxfoundation::rcu::_internal {
     }
 
     auto drain_callbacks(
-        arch::s390x::cpu::percpu::s390x_percpu_data& pcp,
+        arch::s390x::cpu::percpu::percpu_data& pcp,
         gp_seq_t completed_gp
     ) noexcept -> void {
         if (!pcp.rcu_pending_cbs) return;
