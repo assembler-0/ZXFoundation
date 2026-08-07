@@ -4,7 +4,6 @@
 
 export module zxfoundation.sys.zxallsyms_types;
 import zxfoundation.base.types;
-import lib.string_view;
 
 export {
 

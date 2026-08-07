@@ -5,7 +5,7 @@
 export module lib.error;
 import zxfoundation.base.types;
 import lib.format;
-import lib.string_view;
+import std;
 
 export {
 
@@ -263,7 +263,7 @@ namespace lib {
     /// @brief Return the ASCII name of an error_category.
     /// @param[in] cat  Category to name.
     /// @return         Statically allocated string; never null.
-    [[nodiscard]] constexpr auto category_name(error_category cat) noexcept -> string_view {
+    [[nodiscard]] constexpr auto category_name(error_category cat) noexcept -> std::string_view {
         switch (cat) {
         #define expand(error) case error_category::error: return stringify(error);
             expand(none)
@@ -285,7 +285,7 @@ namespace lib {
     /// @param[in] cat   Category that owns the code.
     /// @param[in] code  Raw code value.
     /// @return          Statically allocated string; "?" if code is unknown.
-    [[nodiscard]] constexpr auto error_code_name(error_category cat, u32 code) noexcept -> string_view {
+    [[nodiscard]] constexpr auto error_code_name(error_category cat, u32 code) noexcept -> std::string_view {
         switch (cat) {
             case error_category::arch:
                 switch (code) {
@@ -444,8 +444,8 @@ export {
         static auto format(format_context& ctx, const kernel_error& val) noexcept -> void {
             ctx.write(category_name(val.category));
             ctx.write("::");
-            string_view name = lib::error_code_name(val.category, val.code);
-            if (name == "?") {
+            std::string_view name = lib::error_code_name(val.category, val.code);
+            if (name.compare("?") == 0) {
                 formatter<u32>{}.format(ctx, val.code);
             } else {
                 ctx.write(name);

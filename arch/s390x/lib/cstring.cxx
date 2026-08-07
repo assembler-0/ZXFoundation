@@ -4,7 +4,7 @@
 
 import zxfoundation.base.types;
 import arch.s390x.cpu.features;
-import arch.s390x.cpu.processor_types;
+import arch.s390x.cpu.types;
 
 using arch::s390x::cpu::features::facility;
 
@@ -241,6 +241,27 @@ extern "C" {
         return ret;
     }
 
+    auto __zx_strlen(const char* s) -> usize {
+        return __zx_strend(s) - s;
+    }
+
+    auto __zx_strnlen(const char* str, usize max) -> usize {
+        return __zx_strnend(str, max) - str;
+    }
+
+    auto __zx_strstr(const char* s1, const char* s2) -> char* {
+        const usize l2 = __zx_strlen(s2);
+        usize l1 = __zx_strlen(s1);
+        if (!l2)
+            return const_cast<char*>(s1);
+        while (l1-- >= l2) {
+            if (!__zx_clcle(s1, l2, s2, l2))
+                return const_cast<char*>(s1);
+            s1++;
+        }
+        return nullptr;
+    }
+
     void* memcpy(void* dest, const void* src, usize count)
         __attribute__((alias("__zx_memcpy")));
 
@@ -252,5 +273,26 @@ extern "C" {
 
     int memcmp(const void* lhs, const void* rhs, usize count)
         __attribute__((alias("__zx_memcmp")));
+
+    int strcmp(const char* s1, const char* s2)
+        __attribute__((alias("__zx_strcmp")));
+
+    char* strcat(char* dest, const char* src)
+        __attribute__((alias("__zx_strcat")));
+
+    usize strlen(const char* s)
+        __attribute__((alias("__zx_strlen")));
+
+    char* strstr(const char* s1, const char* s2)
+        __attribute__((alias("__zx_strstr")));
+
+    usize strnlen(const char* str, usize max)
+        __attribute__((alias("__zx_strnlen")));
+
+    char* strend(const char* s)
+        __attribute__((alias("__zx_strend")));
+
+    char* strnend(const char* s, usize n)
+        __attribute__((alias("__zx_strnend")));
 
 } // extern "C"

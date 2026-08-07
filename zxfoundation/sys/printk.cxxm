@@ -13,16 +13,12 @@ import zxfoundation.domain.domain_types;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
-import arch.s390x.cpu.irq_types;
+import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
-import lib.string_view;
-import lib.span;
 import lib.format;
-import lib.util;
 import lib.ring_buffer;
-import lib.algorithm;
 import lib.static_vector;
-import lib.placementnew;
+import std;
 
 static constexpr usize MAX_BACKENDS        = 4;
 static constexpr usize LOG_BUFFER_SIZE     = 128 * 1024;
@@ -39,7 +35,7 @@ namespace zxfoundation::sys::printk {
         locking::qspinlock::qspinlock flush_lock;
         lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
         log_level min_level{log_level::VERBOSE};
-        lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
+        std::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
     };
 
     printk_state g_state;
@@ -48,7 +44,7 @@ namespace zxfoundation::sys::printk {
         g_state.min_level = level;
     }
 
-    auto handle_min_level(lib::string_view val) noexcept -> bool {
+    auto handle_min_level(std::string_view val) noexcept -> bool {
         if (val.empty()) [[unlikely]]
             return false;
         u64 level = 0;
@@ -83,7 +79,7 @@ namespace zxfoundation::sys::printk {
         arch::s390x::cpu::irq::irq_restore(irq_flags);
     }
 
-    auto read_logs(lib::span<u8> dest, bool consume) noexcept -> usize {
+    auto read_logs(std::span<u8> dest, bool consume) noexcept -> usize {
         const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
         g_state.lock.lock();
         usize result;
@@ -117,14 +113,14 @@ namespace zxfoundation::sys::printk {
 
         bool pushed = false;
         if (g_state.lock.try_lock()) {
-            lib::span<const u8> to_push(
+            std::span<const u8> to_push(
                 reinterpret_cast<const u8*>(buf), offset);
             while (to_push.size() > 0) {
                 usize written = g_state.log_buffer.push(to_push);
                 if (written == to_push.size()) break;
                 u8 discard[1024];
                 discard_value g_state.log_buffer.pop(
-                    {discard, lib::min(static_cast<usize>(sizeof(discard)),
+                    {discard, std::min(static_cast<usize>(sizeof(discard)),
                                        g_state.log_buffer.size())});
                 if (written > 0) to_push = to_push.subspan(written);
             }
@@ -175,7 +171,7 @@ namespace zxfoundation::sys::printk {
                         }
 
                         // Emit the popped message to all snapshot backends
-                        const lib::string_view msg(line_buf, popped);
+                        const std::string_view msg(line_buf, popped);
                         for (auto & i : snap) {
                             i.emit(msg);
                         }
@@ -206,7 +202,7 @@ namespace zxfoundation::sys::printk {
                     discard_value snap.push_back(backend);
                 }
             }
-            const lib::string_view msg(buf, offset);
+            const std::string_view msg(buf, offset);
             for (auto & i : snap) {
                 i.emit(msg);
             }
@@ -216,7 +212,7 @@ namespace zxfoundation::sys::printk {
     }
 
     template <typename... Args>
-    auto printk(log_level level, lib::string_view fmt, Args&&... args) noexcept -> void {
+    auto printk(log_level level, std::string_view fmt, Args&&... args) noexcept -> void {
         if (static_cast<u8>(level) > static_cast<u8>(g_state.min_level))
             return;
 
@@ -242,7 +238,7 @@ namespace zxfoundation::sys::printk {
         }
 
         // Format: ZXF!-[(SSSS).uuuuuu] [(type)NN] T@<logged_domain> <message>\n
-        lib::string_view logged_domain_name = "nucleus";
+        std::string_view logged_domain_name = "nucleus";
         {
             if (const auto* dom_ptr = arch::s390x::cpu::lowcore::current_domain_ptr();
                 dom_ptr != nullptr) [[likely]] {
@@ -277,7 +273,7 @@ namespace zxfoundation::sys::printk {
         offset += lib::format::format_to(
             {buf + offset, PRINTK_LINE_MAX - offset},
             fmt,
-            lib::forward<Args>(args)...);
+            std::forward<Args>(args)...);
 
         if (offset < (PRINTK_LINE_MAX - 1) && (offset == 0 || buf[offset-1] != '\n')) {
             buf[offset++] = '\n';
@@ -287,14 +283,14 @@ namespace zxfoundation::sys::printk {
         printk_commit(buf, offset, cpu);
     }
 
-    template <typename... Args> auto pemerg(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::EMERG,  fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto palert(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ALERT,  fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pcrit(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::CRIT,   fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto perr(lib::string_view fmt, Args&&... args) noexcept -> void   { printk(log_level::ERROR,  fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pwarn(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::WARN,   fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pnotice(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::NOTICE, fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pinfo(lib::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::INFO,   fmt, lib::forward<Args>(args)...); }
-    template <typename... Args> auto pverbose(lib::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::VERBOSE,  fmt, lib::forward<Args>(args)...); }
+    template <typename... Args> auto pemerg(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::EMERG,  fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto palert(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ALERT,  fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pcrit(std::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::CRIT,   fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto perr(std::string_view fmt, Args&&... args) noexcept -> void   { printk(log_level::ERROR,  fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pwarn(std::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::WARN,   fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pnotice(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::NOTICE, fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pinfo(std::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::INFO,   fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pverbose(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::VERBOSE,  fmt, std::forward<Args>(args)...); }
 
 } // namespace zxfoundation::sys::printk
 

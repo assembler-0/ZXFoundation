@@ -7,8 +7,7 @@ import zxfoundation.sys.syschk_types;
 import zxfoundation.sys.syschk_core;
 import lib.error;
 import lib.format;
-import lib.span;
-import lib.string_view;
+import std;
 
 export {
 
@@ -33,8 +32,8 @@ namespace zxfoundation::sys::syschk {
         Args&&...         args
     ) noexcept -> void {
         char buf[ZX_CRASH_MSG_LEN];
-        lib::format::format_to(lib::span(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
-        system_check(err, syschk_severity::fatal, lib::string_view(buf), fl.loc);
+        lib::format::format_to(std::span(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::fatal, std::string_view(buf), fl.loc);
         __builtin_unreachable();
     }
 
@@ -52,8 +51,8 @@ namespace zxfoundation::sys::syschk {
         Args&&...         args
     ) noexcept -> void {
         char buf[ZX_CRASH_MSG_LEN];
-        lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
-        system_check(err, syschk_severity::critical, lib::string_view(buf), fl.loc);
+        lib::format::format_to(std::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::critical, std::string_view(buf), fl.loc);
         __builtin_unreachable();
     }
 
@@ -71,8 +70,8 @@ namespace zxfoundation::sys::syschk {
         Args&&...         args
     ) noexcept -> void {
         char buf[ZX_CRASH_MSG_LEN];
-        lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
-        system_check(err, syschk_severity::warning, lib::string_view(buf), fl.loc);
+        lib::format::format_to(std::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::warning, std::string_view(buf), fl.loc);
     }
 
     /// @brief Issue a notice-level system check with a formatted message.
@@ -89,8 +88,8 @@ namespace zxfoundation::sys::syschk {
         Args&&...         args
     ) noexcept -> void {
         char buf[ZX_CRASH_MSG_LEN];
-        lib::format::format_to(lib::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
-        system_check(err, syschk_severity::notice, lib::string_view(buf), fl.loc);
+        lib::format::format_to(std::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::notice, std::string_view(buf), fl.loc);
     }
 
 } // namespace zxfoundation::sys::syschk

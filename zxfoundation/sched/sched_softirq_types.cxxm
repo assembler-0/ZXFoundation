@@ -4,7 +4,7 @@
 
 export module zxfoundation.sched.sched_softirq_types;
 import zxfoundation.base.types;
-import arch.s390x.lib.atomic;
+import std;
 import lib.cpumask;
 
 export {
@@ -28,14 +28,14 @@ namespace zxfoundation::sched::softirq_bal {
     /// @brief Per-CPU softirq balancer state carried by @c run_queue.
     struct balance_req {
         /// @brief Kind of balancing requested by the most recent raise.
-        arch::s390x::lib::atomic::atomic<u8> kind{0U};
+        std::atomic<u8> kind{0U};
         /// @brief Counter bumped each time a balance request is queued.
-        arch::s390x::lib::atomic::atomic<u32> request_count{0U};
+        std::atomic<u32> request_count{0U};
         /// @brief Counter bumped each time the balancer actually runs.
-        arch::s390x::lib::atomic::atomic<u32> completion_count{0U};
+        std::atomic<u32> completion_count{0U};
         /// @brief Set to 1 when an active-balance migration succeeded
         ///        on this CPU recently; cleared on the next pass.
-        arch::s390x::lib::atomic::atomic<u32> last_migration_ok{0U};
+        std::atomic<u32> last_migration_ok{0U};
     };
 
     static_assert(sizeof(balance_req) <= 24U,

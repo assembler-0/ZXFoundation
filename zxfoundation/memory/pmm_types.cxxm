@@ -7,8 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.numa_types;
-import lib.util;
-import arch.s390x.lib.atomic;
+import std;
 
 export {
 
@@ -17,8 +16,6 @@ namespace zxfoundation::memory::pmm {
     using base::lifecycle_state;
     using base::typestate;
 
-    constexpr u32 PAGE_SHIFT    = 12;
-    constexpr u32 PAGE_SIZE     = 1U << PAGE_SHIFT;   ///< 4 KiB
     constexpr u32 MAX_ORDER     = 10;                  ///< Largest block: 2^10 pages = 4 MiB
 
     /// @brief Maximum order served by the per-CPU page cache (2^3 pages = 32 KiB).
@@ -60,6 +57,12 @@ namespace zxfoundation::memory::pmm {
         heap       = 5,
         slab       = 6, ///< Slab cache backing pages.
         frame_desc = 7, ///< The frame_desc table itself.
+        file_cache = 8, ///< Page-cache resident frame.
+        /// @brief Reserved slot — was @c swap_cache.  The naive swap layer
+        ///        was deleted; this purpose is reserved for when the
+        ///        ES/XPDSIZE or VFS-backed swap provider lands
+        ///        (see docs/MEMORY_REFACTOR_TODO).
+        reserved_swap = 9,
     };
 
     template <purpose P> constexpr zone purpose_zone = zone::normal;
@@ -80,6 +83,10 @@ namespace zxfoundation::memory::pmm {
         page_table = 5, ///< A page table frame.
         stack      = 6, ///< Kernel stack.
         device     = 7, ///< DMA / device buffer.
+        /// @brief Reserved: a frame currently backing a SCOMS memory_object
+        ///        of view_kind @c vm_region / @c kmem_cache / @c device_binding,
+        ///        consulted via @ref frame_desc::object_id.
+        reserved_typed_view = 8,
     };
 
     /// @brief Per-frame status flags.
@@ -88,36 +95,70 @@ namespace zxfoundation::memory::pmm {
         ff_suspect = 1U << 0, ///< MCCK corrected error; still usable.
         ff_offline = 1U << 1, ///< MCCK uncorrected; frame excluded from merging and allocation.
         ff_zeroed  = 1U << 2, ///< Contents are known-zero (set by page_init::zeroed path).
-        ff_shared  = 1U << 3, ///< refcount > 1 (future CoW / file cache).
+        ff_shared  = 1U << 3, ///< refcount > 1 (CoW / file cache / shared grant).
+        /// @brief Frame is the head of a compound (multi-page) allocation
+        ///        of order > 0.  Tail frames carry the same @c object_id
+        ///        but only the head exposes the order to the allocator.
+        ff_head    = 1U << 4,
     };
 
-    /// @brief 16-byte per-physical-frame metadata record.
+    /// @brief Compact per-physical-frame metadata record.
+    ///
+    /// @note This struct is intentionally thin: it holds the *physical*
+    ///       reality of a frame (order/owner/refcount/NUMA node/flags) and
+    ///       ONE back-pointer — @ref object_id — into the SCOMS spine.
+    ///       All authority metadata (storage key, owner domain, DGP
+    ///       generation, swap slot, rights, ...) is recovered by resolving
+    ///       @ref object_id through @ref zxfoundation::memory::objects.
+    ///       THERE IS NO parallel memo-pad of any of those fields here —
+    ///       that duplication pattern was the disease the unified-memory
+    ///       refactor removed.
     struct frame_desc {
-        arch::s390x::lib::atomic::atomic<u8> order_owner{0};
-        u8  flags{0};
+        std::atomic<u8> order_owner{0};
+        std::atomic<u8> flags{0};
         u8  numa_node{0};   ///< NUMA node that owns this frame for free, rollback, and PCP placement.
         u8  _r0{0};
-        arch::s390x::lib::atomic::atomic<u16> refcount{0};    ///< Accessed exclusively via __atomic_* builtins in pmm.cxxm.
+        std::atomic<u16> refcount{0};    ///< Accessed exclusively via __atomic* builtins in pmm.cxxm.
         u16 _r1{0};
-        u64 storage_key{0}; ///< Reserved for future s390x storage-key / protection use.
+        /// @brief SCOMS id of the memory_object that authorizes this frame.
+        ///        @ref KOBJECT_ID_INVALID when the frame is buddy-owned or
+        ///        reserved.  Set when the frame is committed to a mapping,
+        ///        slab cache, or device binding.  Recovered via
+        ///        @ref objects::memory_object_resolve_id.
+        std::atomic<u32> object_id{KOBJECT_ID_INVALID};
+        /// @brief SCOMS generation paired with @ref object_id.
+        std::atomic<u32> object_generation{0};
 
         [[nodiscard]] auto order() const noexcept -> u8 {
-            const u8 val = order_owner.load(arch::s390x::lib::atomic::memory_order::acquire);
+            const u8 val = order_owner.load(std::memory_order::acquire);
             return static_cast<u8>(val >> 4);
         }
         [[nodiscard]] auto owner() const noexcept -> frame_owner {
-            const u8 val = order_owner.load(arch::s390x::lib::atomic::memory_order::acquire);
+            const u8 val = order_owner.load(std::memory_order::acquire);
             return static_cast<frame_owner>(val & 0x0FU);
         }
         auto set_order(u8 o) noexcept -> void {
-            const u8 cur = order_owner.load(arch::s390x::lib::atomic::memory_order::relaxed);
+            const u8 cur = order_owner.load(std::memory_order::relaxed);
             order_owner.store(static_cast<u8>((o << 4) | (cur & 0x0FU)),
-                              arch::s390x::lib::atomic::memory_order::release);
+                              std::memory_order::release);
         }
         auto set_owner(frame_owner ow) noexcept -> void {
-            const u8 cur = order_owner.load(arch::s390x::lib::atomic::memory_order::relaxed);
+            const u8 cur = order_owner.load(std::memory_order::relaxed);
             order_owner.store(static_cast<u8>((cur & 0xF0U) | static_cast<u8>(ow)),
-                              arch::s390x::lib::atomic::memory_order::release);
+                              std::memory_order::release);
+        }
+
+        /// Atomically OR bits into flags (used for MCCK ff_offline / ff_suspect).
+        auto or_flags(u8 bits) noexcept -> void {
+            flags.fetch_or(bits, std::memory_order::acq_rel);
+        }
+        /// Atomically read flags.
+        [[nodiscard]] auto load_flags(std::memory_order mo = std::memory_order::acquire) const noexcept -> u8 {
+            return flags.load(mo);
+        }
+        /// Atomically write flags (used by set() and paths that already hold the zone lock).
+        auto store_flags(u8 val, std::memory_order mo = std::memory_order::release) noexcept -> void {
+            flags.store(val, mo);
         }
 
         /// @brief Initialize all fields in one call.
@@ -132,19 +173,24 @@ namespace zxfoundation::memory::pmm {
         ///        not been published to another CPU.
         auto set(u8 o, frame_owner ow, u8 numa = 0, u8 fl = ff_none) noexcept -> void {
             order_owner.store(static_cast<u8>((o << 4) | static_cast<u8>(ow)),
-                              arch::s390x::lib::atomic::memory_order::release);
-            flags       = fl;
+                              std::memory_order::release);
+            flags.store(fl, std::memory_order::release);
             numa_node   = numa;
             _r0         = 0;
-            refcount.store(0, arch::s390x::lib::atomic::memory_order::release);
+            refcount.store(0, std::memory_order::release);
             _r1         = 0;
-            storage_key = 0;
+            object_id.store(KOBJECT_ID_INVALID, std::memory_order::release);
+            object_generation.store(0U, std::memory_order::release);
         }
     };
 
-    static_assert(sizeof(frame_desc) == 16, "frame_desc must be exactly 16 bytes");
-    static_assert(__builtin_offsetof(frame_desc, refcount)    ==  4);
-    static_assert(__builtin_offsetof(frame_desc, storage_key) ==  8);
+    static_assert(sizeof(frame_desc) == 16, "frame_desc must remain thin and stable");
+    static_assert(__builtin_offsetof(frame_desc, refcount)  ==  4,
+        "refcount must remain at offset 4 — PMM atomics depend on it");
+    static_assert(__builtin_offsetof(frame_desc, object_id) ==  8,
+        "object_id must remain at offset 8 — fault/allocators depend on it");
+    static_assert(__builtin_offsetof(frame_desc, object_generation) == 12,
+        "object_generation must remain adjacent to object_id");
 
     /// @brief One order-specific free list within the PCP.
     struct pcp_list {
@@ -217,7 +263,7 @@ namespace zxfoundation::memory::pmm {
 
         /// @brief Convert the result into an embryo folio typestate value.
         /// @return Embryo folio carrying the physical allocation represented by this result.
-        /// @note The result object remains a scalar record so it can be transported by `lib::expected` without copying a typestate object.
+        /// @note The result object remains a scalar record so it can be transported by `std::expected` without copying a typestate object.
         [[nodiscard]] auto into_folio() const noexcept -> folio_embryo {
             return folio_embryo{phys_base, order, use, mem_zone};
         }

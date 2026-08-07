@@ -49,6 +49,8 @@
     .equ IO_UNBIND,            (4 << 5) | 1    // 129
     .equ IO_SUBMIT,            (4 << 5) | 2    // 130
     .equ IO_IRQ_BIND,          (4 << 5) | 3    // 131
+    .equ IO_DMA_EXTENT,        (4 << 5) | 4    // 132
+    .equ IO_COMPLETION_DEQUEUE,(4 << 5) | 5    // 133
 
     .equ SGN_REGISTER,         (5 << 5) | 0    // 160
     .equ SGN_POLL,             (5 << 5) | 1    // 161
@@ -70,6 +72,15 @@
     .equ SVC_REGISTER,         (7 << 5) | 4    // 228
     .equ SVC_LOOKUP,           (7 << 5) | 5    // 229
     .equ SVC_UNREGISTER,       (7 << 5) | 6    // 230
+    .equ IPC_ENDPOINT_CREATE,  (7 << 5) | 7    // 231
+    .equ IPC_ENDPOINT_DESTROY, (7 << 5) | 8    // 232
+    .equ IPC_SEND,             (7 << 5) | 9    // 233
+    .equ IPC_RECEIVE,          (7 << 5) | 10   // 234
+    .equ SHM_EXPORT,           (7 << 5) | 11   // 235
+    .equ SHM_IMPORT,           (7 << 5) | 12   // 236
+    .equ SHM_MAP,              (7 << 5) | 13   // 237
+    .equ POLICY_REGISTER,      (7 << 5) | 14   // 238
+    .equ POLICY_UNREGISTER,    (7 << 5) | 15   // 239
 
     .equ ERR_SENTINEL,  -1       // ~0ULL
     .equ PAGE_SIZE,     4096
@@ -291,7 +302,7 @@ _start:
     CHECK_OK t15_fail
     cghi    %r2, 0
     je      t15_fail
-    lgr     %r12, %r2               // r12 = now timestamp
+    lgr     %r13, %r2               // r13 = now timestamp; preserve admin source in r12
     PRINT   t_pass
     aghi    %r9, 1
 
@@ -302,7 +313,7 @@ _start:
     lgfi    %r2, 1000000
     NCALL   SYS_DEADLINE
     CHECK_OK t16_fail
-    cgr     %r2, %r12
+    cgr     %r2, %r13
     jle     t16_fail                 // deadline must be > now
     PRINT   t_pass
     aghi    %r9, 1
@@ -317,12 +328,11 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 18: cap::acquire(domain, self_id, admin)  
+    // Test 18: cap::acquire(admin_token, admin)
     
     PRINT   t18_name
-    lghi    %r2, 1                  // cap_type::domain = 1
-    lgr     %r3, %r8                // self domain_id
-    lghi    %r4, 0x20               // cap_rights::admin = 0x20
+    lgr     %r2, %r10               // bootstrap-issued source token
+    lghi    %r3, 0x20               // cap_rights::admin = 0x20
     NCALL   CAP_ACQUIRE
     CHECK_OK t18_fail
     lgr     %r12, %r2               // r12 = admin cap token
@@ -367,12 +377,11 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 22: cap::acquire(domain, self_id, map)  
+    // Test 22: cap::acquire(admin_token, map)
     
     PRINT   t22_name
-    lghi    %r2, 1                  // cap_type::domain
-    lgr     %r3, %r8                // self domain_id
-    lghi    %r4, 0x40               // cap_rights::map = 0x40
+    lgr     %r2, %r10               // bootstrap-issued source token
+    lghi    %r3, 0x40               // cap_rights::map = 0x40
     NCALL   CAP_ACQUIRE
     CHECK_OK t22_fail
     lgr     %r11, %r2               // r11 = map cap token
@@ -380,13 +389,12 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 23: cap::acquire(domain, self_id, delegate)  
+    // Test 23: cap::acquire(admin_token, delegate)
     //   (Re-acquired and released later in the mem::share test)
     
     PRINT   t23_name
-    lghi    %r2, 1                  // cap_type::domain
-    lgr     %r3, %r8                // self domain_id
-    lghi    %r4, 0x10               // cap_rights::delegate = 0x10
+    lgr     %r2, %r10               // bootstrap-issued source token
+    lghi    %r3, 0x10               // cap_rights::delegate = 0x10
     NCALL   CAP_ACQUIRE
     CHECK_OK t23_fail
     // Release immediately — not needed until share test (which re-acquires)
@@ -455,16 +463,21 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 29: portal::create(target=child, va_start=0, va_end=PAGE_SIZE,
-    //                         prot=rw=3) (cross: PC)
-    //   Uses child domain (r13) as target.
+    // Test 29: portal::create a read-only self portal over a resident page.
     
     PRINT   t29_name
+    lghi    %r2, PAGE_SIZE
+    NCALL   MEM_ALLOC
+    CHECK_OK t29_fail
+    lgr     %r7, %r2
+    lghi    %r1, 0x33
+    stc     %r1, 0(%r7)
     lgr     %r2, %r12               // a0 = admin cap token
-    lgr     %r3, %r13               // a1 = target = child domain_id
-    lghi    %r4, 0                  // a2 = va_start = 0
-    lghi    %r5, PAGE_SIZE          // a3 = va_end = 4096
-    lghi    %r6, 3                  // a4 = prot = rw
+    lgr     %r3, %r8                // a1 = target = self domain_id
+    lgr     %r4, %r7                // a2 = source va_start
+    lgr     %r5, %r7
+    aghi    %r5, PAGE_SIZE          // a3 = source va_end
+    lghi    %r6, 1                  // a4 = prot = read
     NCALL   PORTAL_CREATE
     CHECK_OK t29_fail
     lgr     %r11, %r2               // r11 = portal_id
@@ -479,40 +492,119 @@ _start:
     lgr     %r3, %r11               // a1 = portal_id
     NCALL   PORTAL_DESTROY
     CHECK_OK t30_fail
+    lgr     %r2, %r7
+    lghi    %r3, PAGE_SIZE
+    NCALL   MEM_FREE
+    CHECK_OK t30_fail
     PRINT   t_pass
     aghi    %r9, 1
 
     
-    // Test 31: io::bind(dev_no=0)  
+    // Test 31: DMA extent, verified NOP submission, completion, and unmap.
     
     PRINT   t31_name
-    lghi    %r2, 0                  // a0 = dev_no = 0
+    lghi    %r2, 9                  // a0 = configured 3215 console device
     NCALL   IO_BIND
-    lgr     %r0, %r2                // r0 = io token (or error)
+    CHECK_OK t31_fail
+    lgr     %r11, %r2               // r11 = I/O binding token
+    lgr     %r2, %r11
+    NCALL   IO_DMA_EXTENT
+    CHECK_OK t31_fail
+    lgr     %r7, %r2                // r7 = DMA extent capability
+    lgfi    %r0, 0x20000000         // known-free user VA
+    lgr     %r2, %r7                // a0 = extent cap
+    lgr     %r3, %r0                // a1 = VA
+    lghi    %r4, 0                  // a2 = extent offset
+    lghi    %r5, PAGE_SIZE          // a3 = map one page
+    lghi    %r6, 3                  // a4 = RW
+    NCALL   MEM_MAP
+    CHECK_OK t31_fail
+    lgr     %r6, %r0                 // r6 = mapped VA; r0 is not an RX base register
+    lgfi    %r1, 0x5a5a             // verify the DMA extent is user-accessible
+    st      %r1, 0(%r6)
+    l       %r2, 0(%r6)
+    cgr     %r2, %r1
+    jne     t31_fail
+
+    // io_ccw at DMA offset 0: NOP, no data transfer.
+    lghi    %r1, 3
+    stc     %r1, 0(%r6)
+    lghi    %r1, 0
+    stc     %r1, 1(%r6)
+    sth     %r1, 2(%r6)
+    st      %r1, 4(%r6)
+
+    // io_request at DMA offset 0x100: request_id=1, CCW offset=0, count=1.
+    lghi    %r1, 1
+    stg     %r1, 0x100(%r6)
+    lghi    %r1, 0
+    st      %r1, 0x108(%r6)
+    lghi    %r1, 1
+    sth     %r1, 0x10c(%r6)
+    lghi    %r1, 0
+    stc     %r1, 0x10e(%r6)
+    stc     %r1, 0x10f(%r6)
+
+    lgr     %r2, %r11               // a0 = I/O binding token
+    la      %r3, 0x100(%r6)         // a1 = io_request
+    NCALL   IO_SUBMIT
+    CHECK_OK t31_fail
+
+    lghi    %r5, 256                // bounded completion polling
+.Lt31_wait_completion:
+    lgr     %r2, %r11               // a0 = I/O binding token
+    la      %r3, 0x200(%r6)         // a1 = io_completion output
+    NCALL   IO_COMPLETION_DEQUEUE
+    lghi    %r1, ERR_SENTINEL
+    cgr     %r2, %r1
+    jne     .Lt31_completion_ready
+    aghi    %r5, -1
+    cghi    %r5, 0
+    je      t31_fail
+    lghi    %r2, 0
+    NCALL   SYS_YIELD
+    j       .Lt31_wait_completion
+.Lt31_completion_ready:
+    lg      %r1, 0x200(%r6)         // completion.request_id must match
+    lghi    %r2, 1
+    cgr     %r1, %r2
+    jne     t31_fail
+
+    lgfi    %r2, 0x20000000
+    lghi    %r3, PAGE_SIZE
+    NCALL   MEM_UNMAP
+    CHECK_OK t31_fail
+    lgr     %r2, %r7
+    NCALL   CAP_RELEASE
+    CHECK_OK t31_fail
     PRINT   t_pass
     aghi    %r9, 1
 
     
-    // Test 32: io::unbind(token_or_error) (cross: PC)
+    // Test 32: io::unbind
     
     PRINT   t32_name
-    lgr     %r2, %r0                // a0 = io token
+    lgr     %r2, %r11               // a0 = I/O binding token
     NCALL   IO_UNBIND
+    CHECK_OK t32_fail
     PRINT   t_pass
     aghi    %r9, 1
 
     
-    // Test 33: io::submit(bogus, null)  
+    // Test 33: io::submit(bogus token) must reject before request access.
     
     PRINT   t33_name
     lghi    %r2, ERR_SENTINEL       // bogus token
-    lghi    %r3, 0                  // null orb
+    lghi    %r3, 0                  // null request
     NCALL   IO_SUBMIT
+    lghi    %r1, ERR_SENTINEL
+    cgr     %r2, %r1
+    jne     t33_fail
     PRINT   t_pass
     aghi    %r9, 1
 
     
-    // Test 34: io::irq_bind(bogus, gate=0)  
+    // Test 34: io::irq_bind(gate=0) must be denied by DGP metadata validation.
     
     PRINT   t34_name
     lghi    %r2, ERR_SENTINEL
@@ -540,13 +632,12 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 36: mem::map  
+    // Test 36: raw mem::map must reject non-extent arguments.
     
     PRINT   t36_name
     // Acquire map cap
-    lghi    %r2, 1
-    lgr     %r3, %r8
-    lghi    %r4, 0x40               // map right
+    lgr     %r2, %r10               // bootstrap-issued source token
+    lghi    %r3, 0x40               // map right
     NCALL   CAP_ACQUIRE
     CHECK_OK t36_fail
     lgr     %r7, %r2                // r7 = map cap (r1 corrupted by SAVE_FRAME)
@@ -561,11 +652,10 @@ _start:
     lghi    %r5, PAGE_SIZE          // a3 = size
     lghi    %r6, 3                  // a4 = prot (RW)
     NCALL   MEM_MAP
-    // Accept either success or failure
-    // Unmap the target VA (cleanup)
-    lgr     %r2, %r0
-    lghi    %r3, PAGE_SIZE
-    NCALL   MEM_UNMAP
+    // Raw physical map arguments are not a memory-extent capability.
+    lghi    %r1, ERR_SENTINEL
+    cgr     %r2, %r1
+    jne     t36_fail
     // Release map cap
     lgr     %r2, %r7
     NCALL   CAP_RELEASE
@@ -573,13 +663,11 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 37: mem::share  
-    //   Acquire delegate cap, call mem_share with child domain_id.
+    // Test 37: legacy range-less mem::share must reject.
     
     PRINT   t37_name
-    lghi    %r2, 1
-    lgr     %r3, %r8
-    lghi    %r4, 0x10               // delegate right
+    lgr     %r2, %r10               // bootstrap-issued source token
+    lghi    %r3, 0x10               // delegate right
     NCALL   CAP_ACQUIRE
     CHECK_OK t37_fail
     lgr     %r7, %r2                // r7 = delegate cap (r1 corrupted by SAVE_FRAME)
@@ -652,7 +740,7 @@ _start:
     llilf   %r1, 0xffffffff         // invalid kobject-id sentinel
     cgr     %r2, %r1
     je      t41_fail
-    lgr     %r10, %r2               // r10 = first created strand id
+    lgr     %r7, %r2                // r7 = first created strand id
     PRINT   t_pass
     aghi    %r9, 1
 
@@ -668,7 +756,7 @@ _start:
     llilf   %r1, 0xffffffff
     cgr     %r2, %r1
     je      t42_fail
-    cgr     %r2, %r10
+    cgr     %r2, %r7
     je      t42_fail                // strand IDs must be distinct
     lgr     %r11, %r2               // r11 = second created strand id
     PRINT   t_pass
@@ -731,11 +819,17 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 47: cap::release(admin_token)  
+    // Test 47: cap::release(admin_token), then reacquire it for later admin calls.
     
     PRINT   t47_name
     lgr     %r2, %r12
     NCALL   CAP_RELEASE
+    CHECK_OK t47_fail
+    lgr     %r2, %r10               // bootstrap-issued source token
+    lghi    %r3, 0x20               // cap_rights::admin
+    NCALL   CAP_ACQUIRE
+    CHECK_OK t47_fail
+    lgr     %r12, %r2
     PRINT   t_pass
     aghi    %r9, 1
 
@@ -821,12 +915,14 @@ _start:
     aghi    %r9, 1
 
     
-    // Test 55: sgn::poll — should report the timer bit pending (1 << 1 = 2)
+    // Test 55: sgn::poll — the timer bit must be pending; I/O may also be pending.
     
     PRINT   t55_name
     NCALL   SGN_POLL
     lghi    %r1, 2
-    CHECK_EQ %r1, t55_fail
+    ngr     %r2, %r1
+    cgr     %r2, %r1
+    jne     t55_fail
     PRINT   t_pass
     aghi    %r9, 1
 
@@ -867,6 +963,168 @@ _start:
     lghi    %r4, 1                  // sched_mask bits = CPU 0 only
     NCALL   DOM_STRAND_SET_AFFIN
     CHECK_OK t58_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 59: ipc::endpoint_create(self)
+
+    PRINT   t59_name
+    lgr     %r2, %r8                // peer = self domain
+    NCALL   IPC_ENDPOINT_CREATE
+    CHECK_OK t59_fail
+    lgr     %r13, %r2               // endpoint id
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 60: ipc::send(endpoint, request)
+
+    PRINT   t60_name
+    lghi    %r2, PAGE_SIZE
+    NCALL   MEM_ALLOC
+    CHECK_OK t60_fail
+    lgr     %r6, %r2                // writable IPC request/result page
+    larl    %r4, ipc_payload
+    stg     %r4, 0(%r6)             // request.payload
+    lghi    %r4, 0
+    stg     %r4, 8(%r6)             // request.capabilities
+    stg     %r4, 16(%r6)            // request.grants
+    lghi    %r4, 4
+    st      %r4, 24(%r6)            // request.length
+    lghi    %r4, 0
+    sth     %r4, 28(%r6)            // request.capability_count
+    sth     %r4, 30(%r6)            // request.grant_count
+    lgr     %r2, %r13
+    lgr     %r3, %r6
+    NCALL   IPC_SEND
+    CHECK_OK t60_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 61: ipc::receive(endpoint, payload, result) and verify payload.
+
+    PRINT   t61_name
+    lgr     %r3, %r6
+    aghi    %r3, 64                 // receive payload buffer
+    lgr     %r4, %r6
+    aghi    %r4, 320                // user_message_result
+    stg     %r3, 0(%r4)
+    lghi    %r5, 0
+    stg     %r5, 8(%r4)
+    stg     %r5, 16(%r4)
+    stg     %r5, 24(%r4)
+    lgr     %r2, %r13
+    NCALL   IPC_RECEIVE
+    lghi    %r1, 4
+    CHECK_EQ %r1, t61_fail
+    llgc    %r4, 64(%r6)
+    lghi    %r1, 0x49              // 'I'
+    cgr     %r4, %r1
+    jne     t61_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 62: policy::register(pager, endpoint)
+
+    PRINT   t62_name
+    lghi    %r2, 0                 // policy::server_kind::pager
+    lgr     %r3, %r13
+    NCALL   POLICY_REGISTER
+    CHECK_OK t62_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 63: policy::unregister(pager)
+
+    PRINT   t63_name
+    lghi    %r2, 0                 // policy::server_kind::pager
+    NCALL   POLICY_UNREGISTER
+    CHECK_OK t63_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 64: ipc::endpoint_destroy(endpoint)
+
+    PRINT   t64_name
+    lgr     %r2, %r13
+    NCALL   IPC_ENDPOINT_DESTROY
+    CHECK_OK t64_fail
+    lgr     %r2, %r6
+    lghi    %r3, PAGE_SIZE
+    NCALL   MEM_FREE
+    CHECK_OK t64_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 65: shm::export a resident anonymous page to this domain.
+
+    PRINT   t65_name
+    lghi    %r2, PAGE_SIZE
+    NCALL   MEM_ALLOC
+    CHECK_OK t65_fail
+    lgr     %r11, %r2               // source VA
+    lghi    %r3, 0x5a
+    stc     %r3, 0(%r11)            // make the source page resident
+    lgr     %r2, %r11
+    lghi    %r3, PAGE_SIZE
+    lgr     %r4, %r8                // target = self domain
+    NCALL   SHM_EXPORT
+    CHECK_OK t65_fail
+    lgr     %r7, %r2                // exported opaque memory token
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 66: shm::import returns the AR binding for the fixed portal VA.
+
+    PRINT   t66_name
+    lgr     %r2, %r7
+    lgfi    %r3, 0x20000000
+    lghi    %r4, PAGE_SIZE
+    NCALL   SHM_IMPORT
+    CHECK_OK t66_fail
+    cghi    %r2, 1
+    jne     t66_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 67: shm::map assigns the next AR to a second portal VA.
+
+    PRINT   t67_name
+    lgr     %r2, %r7
+    lgfi    %r3, 0x20002000
+    lghi    %r4, PAGE_SIZE
+    NCALL   SHM_MAP
+    CHECK_OK t67_fail
+    cghi    %r2, 2
+    jne     t67_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 68: both portals access the source page through their assigned AR.
+
+    PRINT   t68_name
+    lgfi    %r1, 0x20000000          // r1 selects AR1
+    llgc    %r4, 0(%r1)
+    lghi    %r1, 0x5a
+    cgr     %r4, %r1
+    jne     t68_fail
+    lgfi    %r2, 0x20002000          // r2 selects AR2
+    llgc    %r4, 0(%r2)
+    cgr     %r4, %r1
+    jne     t68_fail
+    PRINT   t_pass
+    aghi    %r9, 1
+
+    // Test 69: release the exported token and source region. Portal AR views
+    // remain live until domain teardown revokes them.
+
+    PRINT   t69_name
+    lgr     %r2, %r7
+    NCALL   CAP_RELEASE
+    CHECK_OK t69_fail
+    lgr     %r2, %r11
+    lghi    %r3, PAGE_SIZE
+    NCALL   MEM_FREE
+    CHECK_OK t69_fail
     PRINT   t_pass
     aghi    %r9, 1
 
@@ -932,6 +1190,17 @@ t55_fail:  PRINT t55_fail_msg;  j .Lexit
 t56_fail:  PRINT t56_fail_msg;  j .Lexit
 t57_fail:  PRINT t57_fail_msg;  j .Lexit
 t58_fail:  PRINT t58_fail_msg;  j .Lexit
+t59_fail:  PRINT t59_fail_msg;  j .Lexit
+t60_fail:  PRINT t60_fail_msg;  j .Lexit
+t61_fail:  PRINT t61_fail_msg;  j .Lexit
+t62_fail:  PRINT t62_fail_msg;  j .Lexit
+t63_fail:  PRINT t63_fail_msg;  j .Lexit
+t64_fail:  PRINT t64_fail_msg;  j .Lexit
+t65_fail:  PRINT t65_fail_msg;  j .Lexit
+t66_fail:  PRINT t66_fail_msg;  j .Lexit
+t67_fail:  PRINT t67_fail_msg;  j .Lexit
+t68_fail:  PRINT t68_fail_msg;  j .Lexit
+t69_fail:  PRINT t69_fail_msg;  j .Lexit
 
 // Data
 
@@ -953,6 +1222,8 @@ msg_newline:   .ascii "\n"
 name_child:    .asciz "test/child"
 	.align 2
 name_service:  .asciz "zx.test"
+	.align 8
+ipc_payload:   .ascii "IPC!"
 
 t_pass:        .ascii "PASS\n"
     .equ t_pass_len, . - t_pass
@@ -1043,7 +1314,7 @@ t29_fail_msg:  .ascii "FAIL: portal::create failed\n"
 t30_fail_msg:  .ascii "FAIL: portal::destroy failed\n"
     .equ t30_fail_msg_len, . - t30_fail_msg
 	.align 2
-t31_fail_msg:  .ascii "FAIL: io::bind failed\n"
+t31_fail_msg:  .ascii "FAIL: DMA map or CCW completion failed\n"
     .equ t31_fail_msg_len, . - t31_fail_msg
 	.align 2
 t32_fail_msg:  .ascii "FAIL: io::unbind failed\n"
@@ -1126,6 +1397,39 @@ t57_fail_msg:  .ascii "FAIL: dom::strand_query_state returned wrong substate\n"
 	.align 2
 t58_fail_msg:  .ascii "FAIL: dom::strand_set_affinity failed\n"
     .equ t58_fail_msg_len, . - t58_fail_msg
+	.align 2
+t59_fail_msg:  .ascii "FAIL: ipc::endpoint_create failed\n"
+    .equ t59_fail_msg_len, . - t59_fail_msg
+	.align 2
+t60_fail_msg:  .ascii "FAIL: ipc::send failed\n"
+    .equ t60_fail_msg_len, . - t60_fail_msg
+	.align 2
+t61_fail_msg:  .ascii "FAIL: ipc::receive payload mismatch\n"
+    .equ t61_fail_msg_len, . - t61_fail_msg
+	.align 2
+t62_fail_msg:  .ascii "FAIL: policy::register failed\n"
+    .equ t62_fail_msg_len, . - t62_fail_msg
+	.align 2
+t63_fail_msg:  .ascii "FAIL: policy::unregister failed\n"
+    .equ t63_fail_msg_len, . - t63_fail_msg
+	.align 2
+t64_fail_msg:  .ascii "FAIL: ipc::endpoint_destroy failed\n"
+    .equ t64_fail_msg_len, . - t64_fail_msg
+	.align 2
+t65_fail_msg:  .ascii "FAIL: shm::export failed\n"
+    .equ t65_fail_msg_len, . - t65_fail_msg
+	.align 2
+t66_fail_msg:  .ascii "FAIL: shm::import failed\n"
+    .equ t66_fail_msg_len, . - t66_fail_msg
+	.align 2
+t67_fail_msg:  .ascii "FAIL: shm::map failed\n"
+    .equ t67_fail_msg_len, . - t67_fail_msg
+	.align 2
+t68_fail_msg:  .ascii "FAIL: shm imported data mismatch\n"
+    .equ t68_fail_msg_len, . - t68_fail_msg
+	.align 2
+t69_fail_msg:  .ascii "FAIL: shm cleanup failed\n"
+    .equ t69_fail_msg_len, . - t69_fail_msg
 
 // Test names
     .align 8
@@ -1189,19 +1493,19 @@ t29_name:  .ascii "[init] Test 29: portal::create .................. "; .equ t29
 	.align 2
 t30_name:  .ascii "[init] Test 30: portal::destroy ................. "; .equ t30_name_len, . - t30_name
 	.align 2
-t31_name:  .ascii "[init] Test 31: io::bind ........................ "; .equ t31_name_len, . - t31_name
+t31_name:  .ascii "[init] Test 31: DMA map + CCW completion ........ "; .equ t31_name_len, . - t31_name
 	.align 2
 t32_name:  .ascii "[init] Test 32: io::unbind ...................... "; .equ t32_name_len, . - t32_name
 	.align 2
-t33_name:  .ascii "[init] Test 33: io::submit ...................... "; .equ t33_name_len, . - t33_name
+t33_name:  .ascii "[init] Test 33: io::submit(bogus)->ERR .......... "; .equ t33_name_len, . - t33_name
 	.align 2
-t34_name:  .ascii "[init] Test 34: io::irq_bind .................... "; .equ t34_name_len, . - t34_name
+t34_name:  .ascii "[init] Test 34: io::irq_bind(gate=0)->ERR ....... "; .equ t34_name_len, . - t34_name
 	.align 2
 t35_name:  .ascii "[init] Test 35: mem::unmap ...................... "; .equ t35_name_len, . - t35_name
 	.align 2
-t36_name:  .ascii "[init] Test 36: mem::map ........................ "; .equ t36_name_len, . - t36_name
+t36_name:  .ascii "[init] Test 36: raw mem::map -> ERR ............. "; .equ t36_name_len, . - t36_name
 	.align 2
-t37_name:  .ascii "[init] Test 37: mem::share ...................... "; .equ t37_name_len, . - t37_name
+t37_name:  .ascii "[init] Test 37: legacy mem::share -> ERR ........ "; .equ t37_name_len, . - t37_name
 	.align 2
 t38_name:  .ascii "[init] Test 38: service::register ............... "; .equ t38_name_len, . - t38_name
 	.align 2
@@ -1244,5 +1548,27 @@ t56_name:  .ascii "[init] Test 56: sgn::ack clears timer bit ........... "; .equ
 t57_name:  .ascii "[init] Test 57: dom::strand_query_state ............ "; .equ t57_name_len, . - t57_name
 	.align 2
 t58_name:  .ascii "[init] Test 58: dom::strand_set_affinity ........... "; .equ t58_name_len, . - t58_name
+	.align 2
+t59_name:  .ascii "[init] Test 59: ipc::endpoint_create .............. "; .equ t59_name_len, . - t59_name
+	.align 2
+t60_name:  .ascii "[init] Test 60: ipc::send ........................ "; .equ t60_name_len, . - t60_name
+	.align 2
+t61_name:  .ascii "[init] Test 61: ipc::receive ..................... "; .equ t61_name_len, . - t61_name
+	.align 2
+t62_name:  .ascii "[init] Test 62: policy::register .................. "; .equ t62_name_len, . - t62_name
+	.align 2
+t63_name:  .ascii "[init] Test 63: policy::unregister ................ "; .equ t63_name_len, . - t63_name
+	.align 2
+t64_name:  .ascii "[init] Test 64: ipc::endpoint_destroy ............. "; .equ t64_name_len, . - t64_name
+	.align 2
+t65_name:  .ascii "[init] Test 65: shm::export ....................... "; .equ t65_name_len, . - t65_name
+	.align 2
+t66_name:  .ascii "[init] Test 66: shm::import ....................... "; .equ t66_name_len, . - t66_name
+	.align 2
+t67_name:  .ascii "[init] Test 67: shm::map .......................... "; .equ t67_name_len, . - t67_name
+	.align 2
+t68_name:  .ascii "[init] Test 68: shm data visibility ................ "; .equ t68_name_len, . - t68_name
+	.align 2
+t69_name:  .ascii "[init] Test 69: shm cleanup ........................ "; .equ t69_name_len, . - t69_name
 
     .section .note.GNU-stack, "", @progbits

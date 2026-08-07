@@ -1,7 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/io.cxxm
-/// @brief I/O binding lifecycle — bind, unbind, submit channel programs,
-///        and manage I/O interrupt routing for user-domain device drivers.
+/// @file io.cxxm
+/// @brief Capability-bound CSS I/O, DMA authority, and completion delivery.
 
 export module zxfoundation.sys.io;
 import zxfoundation.sys.io_types;
@@ -9,19 +8,30 @@ import zxfoundation.base.types;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.scoms.scoms_ref;
+import zxfoundation.scoms.scoms_object_core;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.memory.memory_objects;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.memory_contract;
+import zxfoundation.domain.domain;
+import zxfoundation.domain.domain_types;
+import zxfoundation.domain.signal;
+import zxfoundation.domain.signal_types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
 import zxfoundation.base.typestate;
 import zxfoundation.sys.transaction;
 import arch.s390x.css.css;
 import arch.s390x.css.css_types;
+import arch.s390x.cpu.skey;
+import arch.s390x.cpu.sync;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 import lib.format;
 
 export {
@@ -30,87 +40,317 @@ namespace zxfoundation::sys::io {
 
     using namespace zxfoundation::scoms;
     using namespace zxfoundation::sys::cap;
-    using namespace zxfoundation::sys::printk;
-    using namespace arch::s390x::css;
 
-    /// @brief Initialize the I/O binding subsystem.
     auto io_init() noexcept -> void;
 
-    /// @brief Bind an I/O device to a domain.
-    /// @param[in]  dev_no    Device number (opaque handle, CSS-IO boundary).
-    /// @param[in]  domain_id Domain to bind the device to.
-    /// @param[out] out_token Capability token for the binding.
-    /// @return  Success, or kernel_error on failure.
     [[nodiscard]] auto io_bind(
-        u16           dev_no,
-        u32           domain_id,
-        cap_token&    out_token
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
+        u16 dev_no, u32 domain_id, cap_token& out_token
+    ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    /// @brief Unbind a device from a domain.
-    /// @param[in]  token  Capability token for the binding.
-    /// @return  Success, or kernel_error on failure.
     [[nodiscard]] auto io_unbind(
-        cap_token token
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
+        cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    // ── Channel program submission ──────────────────────────────────────
+    [[nodiscard]] auto io_dma_extent(
+        cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error>;
 
-    /// @brief Submit a channel program (CCW chain) for execution.
-    /// @param[in]  token    Capability token for the binding.
-    /// @param[in]  orb_ptr  Pointer to the user_orb structure in kernel space.
-    /// @return  Success, or kernel_error on failure.
-    /// @note  The caller (nucleus handler) should copy the user_orb from
-    ///        user space before calling this function.
+    /// @brief Submit a DMA-relative, verified format-1 CCW request.
     [[nodiscard]] auto io_submit(
-        cap_token    token,
-        const user_orb* orb_ptr
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
+        cap_token token, u32 owner_domain, const io_request& request
+    ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    // ── I/O interrupt binding ──────────────────────────────────────────
+    /// @brief Dequeue one kernel-owned CSS completion record.
+    [[nodiscard]] auto io_completion_dequeue(
+        cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<io_completion, lib::kernel_error>;
 
-    /// @brief Route I/O interrupts for a bound device to a gate.
-    /// @param[in]  token    Capability token for the binding.
-    /// @param[in]  gate_id  Gate to invoke on I/O completion.
-    /// @return  Success, or kernel_error on failure.
+    /// @brief Retired: hard IRQs never invoke user gates.
     [[nodiscard]] auto io_irq_bind(
-        cap_token token,
-        u32       gate_id
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
+        cap_token token, u32 owner_domain, u32 retired_gate_id
+    ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    // ── DMA memory allocation ───────────────────────────────────────────
+    auto io_destroy_for_domain(u32 domain_id) noexcept -> void;
 
-    /// @brief Allocate DMA-able memory for I/O operations.
-    /// @param[in]  size     Requested size (will be page-aligned).
-    /// @param[out] out_phys Physical address of the allocated buffer.
-    /// @param[out] out_virt Virtual address of the allocated buffer.
-    /// @return  Success, or kernel_error on failure.
-    [[nodiscard]] auto io_dma_alloc(
-        u64   size,
-        u64&  out_phys,
-        void*& out_virt
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
-
-    // ── Utility ─────────────────────────────────────────────────────────
-
-    /// @brief Return the number of active I/O bindings.
     [[nodiscard]] auto io_binding_count() noexcept -> u32;
-
-    /// @brief Find an I/O binding by object ID.
-    /// @param[in]  id  SCOMS object ID.
-    /// @return  Pointer to the io_binding, or nullptr if not found.
     [[nodiscard]] auto io_binding_find(u32 id) noexcept -> io_binding*;
 
 } // namespace zxfoundation::sys::io
 
 } // end export
 
-// ── Internal implementation ────────────────────────────────────────────────
-
 namespace zxfoundation::sys::io::_internal {
+
+    using namespace zxfoundation::memory;
+    using namespace arch::s390x::css;
 
     static kobject_table<io_binding, MAX_IO_BINDINGS> g_io_table{};
     static bool g_io_initialized{false};
+
+    static constexpr u32 DMA_ORDER = 2U;
+    static constexpr u64 DMA_BYTES = PAGE_SIZE << DMA_ORDER;
+    static constexpr u32 CCW_STAGE_OFFSET = 0U;
+    static constexpr u32 DRIVER_DMA_OFFSET = PAGE_SIZE;
+    static constexpr u64 DRIVER_DMA_BYTES = DMA_BYTES - DRIVER_DMA_OFFSET;
+    static constexpr u32 IO_FENCE_POLL_LIMIT = 65'536U;
+    static constexpr u8 CCW_USER_FLAGS = CCW_FLAG_CD | CCW_FLAG_CC | CCW_FLAG_SLI |
+        CCW_FLAG_SKIP | CCW_FLAG_PCI | CCW_FLAG_SUSPEND;
+
+    [[nodiscard]] auto lookup_binding(
+        u32 id, u32 generation
+    ) noexcept -> kobject_ref<io_binding, lifecycle_state::active> {
+        auto ref = g_io_table.acquire_ref<lifecycle_state::active>(id);
+        if (!ref || ref->ko.generation != generation) return {};
+        return ref;
+    }
+
+    [[nodiscard]] auto binding_for_owner(
+        cap_token token, cap_rights rights, u32 owner_domain
+    ) noexcept -> std::expected<io_binding*, lib::kernel_error> {
+        if (!token || token.type() != cap_type::io_device) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        auto owner = cap_validate_generic_for(token, rights, owner_domain);
+        if (!owner) return std::unexpected(owner.error());
+        auto resolved = cap_resolve(token, rights);
+        if (!resolved) return std::unexpected(resolved.error());
+        auto* binding = reinterpret_cast<io_binding*>(*resolved);
+        if (binding->owner_domain != owner_domain ||
+            binding->ko.state != lifecycle_state::active) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        return binding;
+    }
+
+    [[nodiscard]] auto validate_dma_authority(
+        const io_binding& binding
+    ) noexcept -> std::expected<objects::memory_object*, lib::kernel_error> {
+        auto storage_result = objects::memory_object_resolve(binding.dma_storage);
+        if (!storage_result) return std::unexpected(storage_result.error());
+        auto* storage = *storage_result;
+        if (storage->owner_domain != binding.owner_domain ||
+            storage->storage_key != binding.storage_key ||
+            storage->storage_key_generation != binding.storage_key_generation ||
+            storage->range_start != binding.dma_base ||
+            storage->range_length != binding.dma_size) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        auto extent_result = objects::memory_object_resolve(binding.dma_extent);
+        if (!extent_result || (*extent_result)->owner_domain != binding.owner_domain ||
+            (*extent_result)->range_start != binding.dma_base + DRIVER_DMA_OFFSET ||
+            (*extent_result)->range_length != DRIVER_DMA_BYTES ||
+            (*extent_result)->storage_key != binding.storage_key ||
+            (*extent_result)->storage_key_generation != binding.storage_key_generation) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        auto frame_result = pmm::frame_validate_mapping(
+            (*extent_result)->range_start, (*extent_result)->range_length,
+            binding.dma_extent.id, binding.dma_extent.generation);
+        if (!frame_result) return std::unexpected(frame_result.error());
+        return storage;
+    }
+
+    auto clear_dma_frame_authority(u64 phys_base, u64 size) noexcept -> void {
+        for (u64 phys = phys_base; phys < phys_base + size; phys += PAGE_SIZE) {
+            discard_value pmm::frame_clear_mapping_metadata(phys);
+            arch::s390x::cpu::skey::sske(phys,
+                arch::s390x::cpu::skey::make_skey(0U, false));
+        }
+    }
+
+    [[nodiscard]] auto verify_and_stage_ccws(
+        const io_binding& binding, const io_request& request
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (request.request_id == 0U || request.ccw_count == 0U ||
+            request.ccw_count > IO_MAX_CCWS || request.flags != 0U ||
+            (request.ccw_offset & (alignof(io_ccw) - 1U)) != 0U) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+
+        const u64 chain_bytes = static_cast<u64>(request.ccw_count) * sizeof(io_ccw);
+        if (request.ccw_offset + chain_bytes < request.ccw_offset ||
+            request.ccw_offset + chain_bytes > DRIVER_DMA_BYTES) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        }
+
+        const auto* source = reinterpret_cast<const io_ccw*>(
+            hhdm::phys_to_virt(
+                binding.dma_base + DRIVER_DMA_OFFSET + request.ccw_offset));
+        auto* staged = reinterpret_cast<ccw1*>(
+            hhdm::phys_to_virt(binding.dma_base + CCW_STAGE_OFFSET));
+
+        for (u16 i = 0U; i < request.ccw_count; ++i) {
+            const io_ccw ccw = source[i];
+            if ((ccw.flags & ~CCW_USER_FLAGS) != 0U ||
+                (ccw.flags & (CCW_FLAG_IDA | CCW_FLAG_MIDA)) != 0U ||
+                ccw.cmd == CCW_CMD_TIC) {
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::capability_invalid));
+            }
+
+            const bool transfers_data = ccw.count != 0U &&
+                (ccw.flags & CCW_FLAG_SKIP) == 0U && ccw.cmd != CCW_CMD_NOP;
+            if (transfers_data) {
+                if (ccw.data_offset + ccw.count < ccw.data_offset ||
+                    static_cast<u64>(ccw.data_offset) + ccw.count > DRIVER_DMA_BYTES) {
+                    return std::unexpected(lib::kernel_error::from_memory(
+                        lib::memory_error::invalid_address));
+                }
+            } else if (ccw.data_offset != 0U) {
+                return std::unexpected(lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+            }
+
+            staged[i] = ccw1{
+                .cmd = ccw.cmd,
+                .flags = ccw.flags,
+                .count = ccw.count,
+                .data_addr = transfers_data
+                    ? static_cast<u32>(binding.dma_base + DRIVER_DMA_OFFSET + ccw.data_offset)
+                    : 0U,
+            };
+        }
+        return {};
+    }
+
+    [[nodiscard]] auto enqueue_completion(
+        io_binding& binding, const irb& status
+    ) noexcept -> bool {
+        const locking::irq_lock_guard guard{binding.ko.lock};
+        if (binding.ko.state != lifecycle_state::active ||
+            binding.pending_request_id == 0U ||
+            (binding.op_state != io_substate::pending &&
+             binding.op_state != io_substate::revoking)) return false;
+
+        io_completion completion{
+            .request_id = binding.pending_request_id,
+            .residual_count = status.scsw_data.count,
+            .device_status = status.scsw_data.dev_status,
+            .subchannel_status = status.scsw_data.sch_status,
+            .flags = status.scsw_data.has_error() ? u16{1} : u16{0},
+        };
+        if (binding.completion_count == IO_COMPLETION_DEPTH) {
+            binding.completion_head =
+                (binding.completion_head + 1U) % IO_COMPLETION_DEPTH;
+            --binding.completion_count;
+            ++binding.completion_dropped;
+        }
+        binding.completions[binding.completion_tail] = completion;
+        binding.completion_tail =
+            (binding.completion_tail + 1U) % IO_COMPLETION_DEPTH;
+        ++binding.completion_count;
+        binding.pending_request_id = 0U;
+        if (!binding.teardown_started) {
+            binding.op_state = status.scsw_data.has_error()
+                ? io_substate::error : io_substate::bound;
+        }
+        return true;
+    }
+
+    auto css_completion_sink(
+        u32 sch_index, u32 binding_id, u32 binding_generation,
+        const irb& status
+    ) noexcept -> void {
+        discard_value sch_index;
+        auto binding = lookup_binding(binding_id, binding_generation);
+        if (!binding) return;
+        const u32 owner = binding->owner_domain;
+        if (!enqueue_completion(*binding, status)) return;
+        if (auto* domain = zxfoundation::domain::domain_find(owner)) {
+            zxfoundation::domain::signal::signal_enqueue(
+                *domain, zxfoundation::domain::signal::signal_kind::io,
+                binding_id);
+        }
+    }
+
+    [[nodiscard]] auto fence_binding_io(io_binding& binding) noexcept
+        -> std::expected<void, lib::kernel_error> {
+        {
+            const locking::irq_lock_guard guard{binding.ko.lock};
+            if (binding.pending_request_id == 0U) return {};
+        }
+
+        auto halt = css_halt_io(binding.sch_index);
+        if (!halt && halt.error().category != lib::error_category::driver) {
+            return std::unexpected(halt.error());
+        }
+        auto clear = css_clear_io(binding.sch_index);
+        if (!clear && clear.error().category != lib::error_category::driver) {
+            return std::unexpected(clear.error());
+        }
+
+        for (u32 attempt = 0U; attempt < IO_FENCE_POLL_LIMIT; ++attempt) {
+            irb status{};
+            auto test = css_test_io(binding.sch_index, status);
+            if (!test) return std::unexpected(test.error());
+            if (*test == 0U &&
+                (status.scsw_data.actl() & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0U) {
+                discard_value enqueue_completion(binding, status);
+                return {};
+            }
+            if (auto* entry = css_get_entry(binding.sch_index);
+                entry && entry->state == subchannel_state::idle) {
+                return {};
+            }
+            arch::s390x::cpu::sync::cpu_relax();
+        }
+        return std::unexpected(lib::kernel_error::from_driver(
+            lib::driver_error::timeout));
+    }
+
+    class io_bind_txn : public zxfoundation::transaction<io_bind_txn> {
+        pmm::folio_embryo m_dma{};
+        bool m_dma_valid{false};
+        objects::memory_object_ref m_storage{};
+        objects::memory_object_ref m_extent{};
+        kobject_ref<io_binding, lifecycle_state::embryo> m_ref{};
+        bool m_ref_valid{false};
+        bool m_css_claimed{false};
+
+    public:
+        auto take_dma(pmm::folio_embryo&& folio) noexcept -> void {
+            m_dma = std::move(folio);
+            m_dma_valid = true;
+        }
+        auto take_ref(kobject_ref<io_binding, lifecycle_state::embryo>&& ref) noexcept -> void {
+            m_ref = std::move(ref);
+            m_ref_valid = true;
+        }
+        auto take_storage(objects::memory_object_ref ref) noexcept -> void { m_storage = ref; }
+        auto take_extent(objects::memory_object_ref ref) noexcept -> void { m_extent = ref; }
+        auto mark_css_claimed() noexcept -> void { m_css_claimed = true; }
+        [[nodiscard]] auto dma_phys() const noexcept -> u64 { return m_dma.phys_base; }
+        [[nodiscard]] auto dma_size() const noexcept -> u64 { return m_dma.size_bytes(); }
+        [[nodiscard]] auto binding() noexcept -> io_binding& { return *m_ref; }
+        [[nodiscard]] auto activate_binding() noexcept
+            -> std::expected<void, lib::kernel_error> {
+            if (!m_ref_valid || !m_ref->ko.transition(lifecycle_state::active)) {
+                return std::unexpected(lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+            }
+            return {};
+        }
+
+        auto on_rollback() noexcept -> void {
+            if (m_css_claimed && m_ref_valid) {
+                discard_value css_release_binding(
+                    m_ref->sch_index, m_ref->ko.id, m_ref->ko.generation);
+            }
+            if (m_extent) discard_value objects::memory_object_destroy(m_extent);
+            if (m_storage) discard_value objects::memory_object_destroy(m_storage);
+            if (m_ref_valid) discard_value g_io_table.release(m_ref.id());
+            if (m_dma_valid) {
+                clear_dma_frame_authority(m_dma.phys_base, m_dma.size_bytes());
+                pmm::free(std::move(m_dma).make_active());
+            }
+        }
+    };
 
 } // namespace zxfoundation::sys::io::_internal
 
@@ -121,345 +361,297 @@ namespace zxfoundation::sys::io {
     auto io_init() noexcept -> void {
         using namespace _internal;
         if (g_io_initialized) return;
-
         g_io_table.init(scoms::kobject_type::io_binding);
-        g_io_initialized = true;
-
-        discard_value register_lookup(
-            cap_type::io_device,
+        auto sink_result = css_install_completion_sink(css_completion_sink);
+        if (!sink_result) __builtin_trap();
+        discard_value register_lookup(cap_type::io_device,
             [](u16 obj_id) noexcept -> scoms::kobject* {
-                auto* b = io_binding_find(static_cast<u32>(obj_id));
-                return b ? &b->ko : nullptr;
+                auto* binding = io_binding_find(static_cast<u32>(obj_id));
+                return binding ? &binding->ko : nullptr;
             });
-
-        pinfo("io: binding subsystem initialized ({} slots)", MAX_IO_BINDINGS);
+        g_io_initialized = true;
+        sys::printk::pinfo("io: capability-bound CSS/DMA subsystem initialized");
     }
 
-    class io_bind_txn : public zxfoundation::transaction<io_bind_txn> {
-        memory::pmm::folio_embryo   m_dma{};
-        bool                          m_dma_valid{false};
-        kobject_ref<io_binding, lifecycle_state::embryo> m_ref{};
-        bool                          m_ref_valid{false};
-
-    public:
-        io_bind_txn() noexcept = default;
-
-        auto take_dma(memory::pmm::folio_embryo&& folio) noexcept -> void {
-            m_dma = static_cast<memory::pmm::folio_embryo&&>(folio);
-            m_dma_valid = true;
-        }
-
-        auto take_ref(
-            kobject_ref<io_binding, lifecycle_state::embryo>&& ref
-        ) noexcept -> void {
-            m_ref = static_cast<
-                kobject_ref<io_binding, lifecycle_state::embryo>&&
-            >(ref);
-            m_ref_valid = true;
-        }
-
-        [[nodiscard]] auto dma_phys() const noexcept -> u64 {
-            return m_dma.phys_base;
-        }
-
-        [[nodiscard]] auto dma_size() const noexcept -> u64 {
-            return m_dma.size_bytes();
-        }
-
-        [[nodiscard]] auto binding() noexcept -> io_binding& {
-            return *m_ref;
-        }
-
-        auto finalize() noexcept -> void {
-            auto active = static_cast<
-                kobject_ref<io_binding, lifecycle_state::embryo>&&
-            >(m_ref).activate();
-            discard_value active;
-            m_ref_valid = false;
-        }
-
-        auto on_rollback() noexcept -> void {
-            using namespace memory;
-            if (m_ref_valid) {
-                m_ref_valid = false;
-            }
-            if (m_dma_valid) {
-                auto active_folio = static_cast<memory::pmm::folio_embryo&&>(m_dma).make_active();
-                pmm::free(static_cast<memory::pmm::folio_active&&>(active_folio));
-                m_dma_valid = false;
-            }
-        }
-    };
-
     [[nodiscard]] auto io_bind(
-        u16           dev_no,
-        u32           domain_id,
-        cap_token&    out_token
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        u16 dev_no, u32 domain_id, cap_token& out_token
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         using namespace _internal;
-        using namespace memory;
+        auto* domain = zxfoundation::domain::domain_find(domain_id);
+        if (!domain || domain->ko.state != lifecycle_state::active) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+        }
 
-        // Construct internal CSS subchannel_id from the opaque dev_no handle.
-        const auto sch_id = subchannel_id::from_parts(0, 0, dev_no);
-
-        // Look up the subchannel table index for this sch_id.
-        u16 found_index = 0xFFFF;
-        const u32 count = css_subchannel_count();
-        for (u32 i = 0; i < count; ++i) {
+        u16 sch_index = 0xFFFFU;
+        for (u32 i = 0U; i < css_subchannel_count(); ++i) {
             auto* entry = css_get_entry(i);
-            if (entry && entry->schid.sch_no() == sch_id.sch_no()
-                     && entry->schid.ssid() == sch_id.ssid()) {
-                found_index = static_cast<u16>(i);
+            if (entry && entry->devno == dev_no) {
+                sch_index = static_cast<u16>(i);
                 break;
             }
         }
-        if (found_index == 0xFFFF) {
-            return lib::unexpected(
-                lib::kernel_error::from_driver(lib::driver_error::not_found));
+        if (sch_index == 0xFFFFU) {
+            return std::unexpected(lib::kernel_error::from_driver(
+                lib::driver_error::not_found));
         }
 
-        // RAII transaction — if we return early without commit(),
-        // the destructor rolls back DMA + SCOMS slot automatically.
         io_bind_txn txn{};
+        auto dma_result = pmm::alloc(DMA_ORDER, pmm::zone::dma31,
+            pmm::purpose::device_dma, pmm::page_init::zeroed);
+        if (!dma_result) return std::unexpected(dma_result.error());
+        txn.take_dma(std::move(*dma_result));
 
-        // Allocate DMA memory first (2 pages = 8 KiB).
-        auto dma_result = pmm::alloc(
-            2, pmm::zone::dma31, pmm::purpose::device_dma, pmm::page_init::zeroed);
-        if (!dma_result) {
-            return lib::unexpected(dma_result.error());
-        }
-        txn.take_dma(static_cast<pmm::folio_embryo&&>(*dma_result));
-
-        // Allocate SCOMS slot — if this fails, the transaction destructor
-        // frees the DMA folio.
-        auto result = g_io_table.alloc();
-        if (!result) {
-            return lib::unexpected(result.error());
-        }
-        txn.take_ref(static_cast<
-            kobject_ref<io_binding, lifecycle_state::embryo>&&
-        >(result.value()));
-
-        io_binding& binding = txn.binding();
-        binding.dev_no       = dev_no;
-        binding.sch_index    = found_index;
+        auto binding_result = g_io_table.alloc();
+        if (!binding_result) return std::unexpected(binding_result.error());
+        txn.take_ref(std::move(*binding_result));
+        auto& binding = txn.binding();
+        binding.dev_no = dev_no;
+        binding.sch_index = sch_index;
         binding.owner_domain = domain_id;
-        binding.op_state = io_substate::bound;
-        binding.dma_base     = txn.dma_phys();
-        binding.dma_size     = txn.dma_size();
+        binding.dma_base = txn.dma_phys();
+        binding.dma_size = txn.dma_size();
+        binding.storage_key = domain->storage_key;
+        binding.storage_key_generation = domain->storage_key_generation;
+        binding.allowed_lpm = css_available_lpm(sch_index);
+        if (binding.allowed_lpm == 0U) {
+            return std::unexpected(lib::kernel_error::from_driver(
+                lib::driver_error::not_ready));
+        }
 
-        // Activate the binding — promotes embryo → active.
-        txn.finalize();
+        auto owner_result = scoms::object_core::set_owner(binding.ko, domain_id);
+        if (!owner_result) return std::unexpected(owner_result.error());
+        auto attach_result = scoms::object_core::attach(binding.ko, domain->ko);
+        if (!attach_result) return std::unexpected(attach_result.error());
 
-        // Create a capability token for the binding.
-        const u16 obj_id = static_cast<u16>(binding.ko.id);
-        const u16 gen    = static_cast<u16>(binding.ko.generation);
-        out_token = cap_token::make(
-            cap_type::io_device, obj_id, gen,
-            cap_rights::read | cap_rights::write | cap_rights::exec | cap_rights::destroy);
+        zxfoundation::memory::objects::memory_object_policy policy{
+            .storage_key = binding.storage_key,
+            .storage_key_generation = binding.storage_key_generation,
+            .numa_node = domain->numa_node,
+            .dgp_scope = dgp::memory_scope::private_domain,
+            .dgp_access = dgp::memory_access::read | dgp::memory_access::write,
+            .dgp_rights = dgp::isolation_rights::map,
+            .invalidate = dgp::invalidation_scope::address_space,
+            .mapping_generation = 1U,
+        };
+        auto storage = zxfoundation::memory::objects::memory_object_create(
+            scoms::kobject_type::storage, domain_id, &binding.ko,
+            binding.dma_base, binding.dma_size, dgp::isolation_rights::map, policy);
+        if (!storage) return std::unexpected(storage.error());
+        binding.dma_storage = zxfoundation::memory::objects::memory_object_ref_of(**storage);
+        txn.take_storage(binding.dma_storage);
 
+        auto extent = zxfoundation::memory::objects::memory_object_create(
+            scoms::kobject_type::memory_extent, domain_id, &(*storage)->ko,
+            binding.dma_base + DRIVER_DMA_OFFSET, DRIVER_DMA_BYTES,
+            dgp::isolation_rights::map, policy);
+        if (!extent) return std::unexpected(extent.error());
+        binding.dma_extent = zxfoundation::memory::objects::memory_object_ref_of(**extent);
+        txn.take_extent(binding.dma_extent);
+
+        for (u64 phys = binding.dma_base; phys < binding.dma_base + binding.dma_size;
+             phys += PAGE_SIZE) {
+            const auto authority = phys < binding.dma_base + DRIVER_DMA_OFFSET
+                ? binding.dma_storage : binding.dma_extent;
+            auto metadata = pmm::frame_set_mapping_metadata(
+                phys, authority.id, authority.generation, true);
+            if (!metadata) return std::unexpected(metadata.error());
+            arch::s390x::cpu::skey::sske(phys,
+                arch::s390x::cpu::skey::make_skey(binding.storage_key, false));
+        }
+
+        auto claim = css_claim_binding(
+            binding.sch_index, binding.ko.id, binding.ko.generation);
+        if (!claim) return std::unexpected(claim.error());
+        txn.mark_css_claimed();
+
+        auto activate = txn.activate_binding();
+        if (!activate) return std::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::invalid_arg));
+
+        auto token = cap_issue(cap_type::io_device,
+            static_cast<u16>(binding.ko.id),
+            cap_rights::read | cap_rights::write | cap_rights::exec | cap_rights::destroy,
+            domain_id);
+        if (!token) return std::unexpected(token.error());
+        out_token = *token;
         txn.commit();
-
-        pinfo("io: bound device dev_no={:#06x} to domain {} id={} dma={:#x}",
-              dev_no, domain_id, binding.ko.id, binding.dma_base);
-
+        sys::printk::pinfo("io: bound dev_no={:#06x} domain={} binding={} dma={:#x}",
+            dev_no, domain_id, binding.ko.id, binding.dma_base);
         return {};
     }
 
     [[nodiscard]] auto io_unbind(
-        cap_token token
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         using namespace _internal;
-        using namespace memory;
+        auto binding_result = binding_for_owner(token, cap_rights::destroy, owner_domain);
+        if (!binding_result) return std::unexpected(binding_result.error());
+        auto* binding = *binding_result;
+        const u16 dev_no = binding->dev_no;
+        const u32 binding_id = binding->ko.id;
+        const u32 binding_generation = binding->ko.generation;
+        bool resume_teardown{false};
+        io_substate prior_state{};
 
-        if (!token || token.type() != cap_type::io_device) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        {
+            const locking::irq_lock_guard guard{binding->ko.lock};
+            if (binding->teardown_started) {
+                if (binding->op_state != io_substate::revoking) {
+                    return std::unexpected(lib::kernel_error::from_driver(
+                        lib::driver_error::busy));
+                }
+                resume_teardown = true;
+            } else {
+                prior_state = binding->op_state;
+                binding->teardown_started = true;
+                binding->op_state = io_substate::revoking;
+            }
         }
 
-        auto* binding = g_io_table.find_raw(static_cast<u32>(token.object_id()));
-        if (!binding) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        if (!resume_teardown) {
+            auto retire = zxfoundation::memory::objects::memory_extent_retire(binding->dma_extent);
+            if (!retire) {
+                const locking::irq_lock_guard guard{binding->ko.lock};
+                binding->teardown_started = false;
+                binding->op_state = prior_state;
+                return std::unexpected(retire.error());
+            }
         }
+        auto fence = fence_binding_io(*binding);
+        if (!fence) return std::unexpected(fence.error());
+        auto release_css = css_release_binding(
+            binding->sch_index, binding_id, binding_generation);
+        if (!release_css) return std::unexpected(release_css.error());
 
-        if (binding->ko.generation != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::internal_error));
-        }
+        auto revoke_binding = cap_revoke_target(binding->ko);
+        if (!revoke_binding) return std::unexpected(revoke_binding.error());
+        auto extent_result = zxfoundation::memory::objects::memory_object_resolve(binding->dma_extent);
+        if (!extent_result) return std::unexpected(extent_result.error());
+        auto revoke_extent = cap_revoke_target(
+            (*extent_result)->ko);
+        if (!revoke_extent) return std::unexpected(revoke_extent.error());
+        auto destroy_extent = zxfoundation::memory::objects::memory_object_destroy(binding->dma_extent);
+        if (!destroy_extent) return std::unexpected(destroy_extent.error());
+        auto destroy_storage = zxfoundation::memory::objects::memory_object_destroy(binding->dma_storage);
+        if (!destroy_storage) return std::unexpected(destroy_storage.error());
 
-        // Free DMA memory.
-        if (binding->dma_base != 0) {
-            pmm::folio_active dma_folio{
-                binding->dma_base, 2, pmm::purpose::device_dma, pmm::zone::dma31};
-            pmm::free(static_cast<pmm::folio_active&&>(dma_folio));
-        }
-
-        const auto result = g_io_table.release(binding->ko.id);
-        if (!result) {
-            return lib::unexpected(result.error());
-        }
-
-        pinfo("io: unbound device dev_no={:#06x}",
-              binding->dev_no);
-
+        clear_dma_frame_authority(binding->dma_base, binding->dma_size);
+        pmm::free(pmm::folio_active{
+            binding->dma_base, DMA_ORDER, pmm::purpose::device_dma, pmm::zone::dma31});
+        auto release = g_io_table.release(binding_id);
+        if (!release) return std::unexpected(release.error());
+        sys::printk::pinfo("io: unbound dev_no={:#06x}", dev_no);
         return {};
     }
 
-} // namespace zxfoundation::sys::io
-
-} // end export
-
-// ── cap_validate specialization for io_binding (must precede its first use) ──
-
-namespace zxfoundation::sys::cap {
-
-    template <>
-    [[nodiscard]] auto cap_validate<zxfoundation::sys::io::io_binding>(
-        cap_token token, cap_rights needed
-    ) noexcept -> lib::expected<zxfoundation::sys::io::io_binding*, lib::kernel_error> {
-
-        if (!token) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+    [[nodiscard]] auto io_dma_extent(
+        cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
+        auto binding_result = _internal::binding_for_owner(
+            token, cap_rights::read, owner_domain);
+        if (!binding_result) return std::unexpected(binding_result.error());
+        {
+            const locking::irq_lock_guard guard{(*binding_result)->ko.lock};
+            if ((*binding_result)->teardown_started) {
+                return std::unexpected(lib::kernel_error::from_driver(
+                    lib::driver_error::busy));
+            }
         }
-        if (token.type() != cap_type::io_device) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        auto authority = _internal::validate_dma_authority(**binding_result);
+        if (!authority) return std::unexpected(authority.error());
+        auto extent = zxfoundation::memory::objects::memory_object_resolve(
+            (*binding_result)->dma_extent);
+        if (!extent || (*extent)->owner_domain != owner_domain ||
+            (*extent)->storage_key_generation != (*binding_result)->storage_key_generation) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
         }
-        if ((token.rights() & needed) == cap_rights::none) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
-
-        auto* b = zxfoundation::sys::io::io_binding_find(static_cast<u32>(token.object_id()));
-        if (!b) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (b->ko.generation != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (b->ko.state == base::lifecycle_state::dying) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_supported));
-        }
-        return b;
+        return cap_issue(cap_type::memory_extent, static_cast<u16>((*extent)->ko.id),
+            cap_rights::read | cap_rights::write | cap_rights::map, owner_domain);
     }
-
-} // namespace zxfoundation::sys::cap
-
-export {
-
-namespace zxfoundation::sys::io {
 
     [[nodiscard]] auto io_submit(
-        cap_token        token,
-        const user_orb*  orb_ptr
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        using namespace _internal;
+        cap_token token, u32 owner_domain, const io_request& request
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto binding_result = _internal::binding_for_owner(
+            token, cap_rights::exec, owner_domain);
+        if (!binding_result) return std::unexpected(binding_result.error());
+        auto* binding = *binding_result;
+        auto authority = _internal::validate_dma_authority(*binding);
+        if (!authority) return std::unexpected(authority.error());
 
-        if (!token || !orb_ptr) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        arch::s390x::css::orb kernel_orb{};
+        {
+            // Serializing staging and SSCH against unbind closes the interval
+            // where a teardown could clear the subchannel before it is started.
+            const locking::irq_lock_guard guard{binding->ko.lock};
+            if (binding->teardown_started || binding->op_state != io_substate::bound) {
+                return std::unexpected(lib::kernel_error::from_driver(
+                    lib::driver_error::busy));
+            }
+            auto staged = _internal::verify_and_stage_ccws(*binding, request);
+            if (!staged) return std::unexpected(staged.error());
+
+            binding->op_state = io_substate::pending;
+            binding->pending_request_id = request.request_id;
+            kernel_orb.intparm = binding->ko.id;
+            kernel_orb.set_format1();
+            kernel_orb.set_key(binding->storage_key);
+            kernel_orb.set_cpa(static_cast<u32>(binding->dma_base + _internal::CCW_STAGE_OFFSET));
+            kernel_orb.set_lpm(binding->allowed_lpm);
+            auto start = arch::s390x::css::css_start_io(binding->sch_index, kernel_orb);
+            if (!start) {
+                binding->op_state = io_substate::bound;
+                binding->pending_request_id = 0U;
+                return std::unexpected(start.error());
+            }
         }
-
-        auto result = cap_validate<io_binding>(token, cap_rights::exec);
-        if (!result) {
-            return lib::unexpected(result.error());
-        }
-
-        io_binding* binding = *result;
-        if (binding->op_state == io_substate::error) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::internal_error));
-        }
-
-        binding->op_state = io_substate::pending;
-
-        // Build the hardware ORB from the user-provided ORB data.
-        orb hw_orb{};
-        hw_orb.intparm = orb_ptr->param;
-        hw_orb.set_format1();
-        hw_orb.set_key(static_cast<u8>(orb_ptr->key & 0x0FU));
-        hw_orb.set_cpa(orb_ptr->cpa);
-        hw_orb.set_lpm(static_cast<u8>(orb_ptr->lpm & 0xFFU));
-
-        auto css_result = css_start_io(binding->sch_index, hw_orb);
-        if (!css_result) {
-            binding->op_state = io_substate::error;
-            return lib::unexpected(css_result.error());
-        }
-
-        binding->op_state = io_substate::bound;
-
         return {};
+    }
+
+    [[nodiscard]] auto io_completion_dequeue(
+        cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<io_completion, lib::kernel_error> {
+        auto binding_result = _internal::binding_for_owner(
+            token, cap_rights::read, owner_domain);
+        if (!binding_result) return std::unexpected(binding_result.error());
+        auto* binding = *binding_result;
+        const locking::irq_lock_guard guard{binding->ko.lock};
+        if (binding->completion_count == 0U) {
+            return std::unexpected(lib::kernel_error::from_driver(
+                lib::driver_error::not_ready));
+        }
+        const io_completion result = binding->completions[binding->completion_head];
+        binding->completion_head =
+            (binding->completion_head + 1U) % IO_COMPLETION_DEPTH;
+        --binding->completion_count;
+        return result;
     }
 
     [[nodiscard]] auto io_irq_bind(
-        cap_token token,
-        u32       gate_id
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        using namespace _internal;
-
-        if (!token) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
-
-        auto result = cap_validate<io_binding>(token, cap_rights::write);
-        if (!result) {
-            return lib::unexpected(result.error());
-        }
-
-        io_binding* binding = *result;
-        binding->irq_gate_id = gate_id;
-
-        // Record the owning domain in the CSS subchannel entry for IRQ routing.
-        auto* entry = css_get_entry(binding->sch_index);
-        if (entry) {
-            entry->owner_domain = binding->owner_domain;
-        }
-
-        return {};
+        cap_token token, u32 owner_domain, u32 retired_gate_id
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        discard_value token;
+        discard_value owner_domain;
+        discard_value retired_gate_id;
+        return std::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::not_supported));
     }
 
-    [[nodiscard]] auto io_dma_alloc(
-        u64    size,
-        u64&   out_phys,
-        void*& out_virt
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        using namespace memory;
-
-        // Round up to page size and compute order.
-        const u64 aligned = (size + pmm::PAGE_SIZE - 1) & ~(pmm::PAGE_SIZE - 1);
-        u32 order = 0;
-        while ((static_cast<u64>(pmm::PAGE_SIZE) << order) < aligned
-               && order <= pmm::MAX_ORDER) {
-            ++order;
+    auto io_destroy_for_domain(u32 domain_id) noexcept -> void {
+        for (u32 id = 0U; id < MAX_IO_BINDINGS; ++id) {
+            auto* binding = io_binding_find(id);
+            if (!binding || binding->owner_domain != domain_id) continue;
+            auto token = cap_issue(cap_type::io_device, static_cast<u16>(id),
+                cap_rights::destroy, domain_id);
+            if (token) discard_value io_unbind(*token, domain_id);
         }
-
-        auto result = pmm::alloc(
-            order, pmm::zone::dma31, pmm::purpose::device_dma, pmm::page_init::zeroed);
-        if (!result) {
-            return lib::unexpected(result.error());
-        }
-
-        out_phys = result->phys_base;
-        out_virt = reinterpret_cast<void*>(hhdm::phys_to_virt(out_phys));
-
-        return {};
     }
 
-    auto io_binding_count() noexcept -> u32 {
-        using namespace _internal;
-        return g_io_table.count();
-    }
-
+    auto io_binding_count() noexcept -> u32 { return _internal::g_io_table.count(); }
     auto io_binding_find(u32 id) noexcept -> io_binding* {
-        using namespace _internal;
-        return g_io_table.find_raw(id);
+        return _internal::g_io_table.find_raw(id);
     }
 
 } // namespace zxfoundation::sys::io

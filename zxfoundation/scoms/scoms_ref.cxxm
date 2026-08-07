@@ -30,13 +30,13 @@ namespace zxfoundation::scoms {
 
         /// @brief Acquire a reference to an existing object.
         explicit kobject_ref(T* p) noexcept : ptr_(p) {
-            if (ptr_) ptr_->ko.ref.get();
+            if (ptr_ && !ptr_->ko.try_get()) ptr_ = nullptr;
         }
 
         /// @brief Release the reference.
         ~kobject_ref() noexcept {
             if (ptr_) {
-                discard_value ptr_->ko.ref.put();
+                ptr_->ko.put();
             }
         }
 
@@ -48,7 +48,7 @@ namespace zxfoundation::scoms {
 
         auto operator=(kobject_ref&& other) noexcept -> kobject_ref& {
             if (this != &other) {
-                if (ptr_) discard_value ptr_->ko.ref.put();
+                if (ptr_) ptr_->ko.put();
                 ptr_ = other.ptr_;
                 other.ptr_ = nullptr;
             }
@@ -59,14 +59,14 @@ namespace zxfoundation::scoms {
         kobject_ref(const kobject_ref& other) noexcept
             : ptr_(other.ptr_)
         {
-            if (ptr_) ptr_->ko.ref.get();
+            if (ptr_ && !ptr_->ko.try_get()) ptr_ = nullptr;
         }
 
         auto operator=(const kobject_ref& other) noexcept -> kobject_ref& {
             if (this != &other) {
-                if (ptr_) discard_value ptr_->ko.ref.put();
+                if (ptr_) ptr_->ko.put();
                 ptr_ = other.ptr_;
-                if (ptr_) ptr_->ko.ref.get();
+                if (ptr_ && !ptr_->ko.try_get()) ptr_ = nullptr;
             }
             return *this;
         }
@@ -76,7 +76,7 @@ namespace zxfoundation::scoms {
             -> kobject_ref<T, lifecycle_state::active>
             requires (State == lifecycle_state::embryo)
         {
-            ptr_->ko.state = lifecycle_state::active;
+            if (!ptr_->ko.transition(lifecycle_state::active)) return {};
             auto result = kobject_ref<T, lifecycle_state::active>::from_raw_noref(ptr_);
             ptr_ = nullptr;
             return result;
@@ -87,7 +87,7 @@ namespace zxfoundation::scoms {
             -> kobject_ref<T, lifecycle_state::sealed>
             requires (State == lifecycle_state::embryo)
         {
-            ptr_->ko.state = lifecycle_state::sealed;
+            if (!ptr_->ko.transition(lifecycle_state::sealed)) return {};
             auto result = kobject_ref<T, lifecycle_state::sealed>::from_raw_noref(ptr_);
             ptr_ = nullptr;
             return result;
@@ -98,7 +98,7 @@ namespace zxfoundation::scoms {
             -> kobject_ref<T, lifecycle_state::active>
             requires (State == lifecycle_state::sealed)
         {
-            ptr_->ko.state = lifecycle_state::active;
+            if (!ptr_->ko.transition(lifecycle_state::active)) return {};
             auto result = kobject_ref<T, lifecycle_state::active>::from_raw_noref(ptr_);
             ptr_ = nullptr;
             return result;
@@ -109,7 +109,7 @@ namespace zxfoundation::scoms {
             -> kobject_ref<T, lifecycle_state::suspended>
             requires (State == lifecycle_state::active)
         {
-            ptr_->ko.state = lifecycle_state::suspended;
+            if (!ptr_->ko.transition(lifecycle_state::suspended)) return {};
             auto result = kobject_ref<T, lifecycle_state::suspended>::from_raw_noref(ptr_);
             ptr_ = nullptr;
             return result;
@@ -120,7 +120,7 @@ namespace zxfoundation::scoms {
             -> kobject_ref<T, lifecycle_state::active>
             requires (State == lifecycle_state::suspended)
         {
-            ptr_->ko.state = lifecycle_state::active;
+            if (!ptr_->ko.transition(lifecycle_state::active)) return {};
             auto result = kobject_ref<T, lifecycle_state::active>::from_raw_noref(ptr_);
             ptr_ = nullptr;
             return result;
@@ -132,7 +132,7 @@ namespace zxfoundation::scoms {
             requires (State == lifecycle_state::active ||
                       State == lifecycle_state::suspended)
         {
-            ptr_->ko.state = lifecycle_state::dying;
+            if (!ptr_->ko.transition(lifecycle_state::dying)) return {};
             auto result = kobject_ref<T, lifecycle_state::dying>::from_raw_noref(ptr_);
             ptr_ = nullptr;
             return result;
@@ -143,7 +143,7 @@ namespace zxfoundation::scoms {
             -> kobject_ref<T, lifecycle_state::dying>
             requires (State == lifecycle_state::embryo)
         {
-            ptr_->ko.state = lifecycle_state::dying;
+            if (!ptr_->ko.transition(lifecycle_state::dying)) return {};
             auto result = kobject_ref<T, lifecycle_state::dying>::from_raw_noref(ptr_);
             ptr_ = nullptr;
             return result;
@@ -200,32 +200,7 @@ namespace zxfoundation::scoms {
     /// @return true if the transition was valid and performed.
     template <typename T>
     [[nodiscard]] auto swap_state_to(::zxfoundation::base::lifecycle_state target, T* obj) noexcept -> bool {
-        using s = ::zxfoundation::base::lifecycle_state;
-        const auto current = obj->ko.state;
-        switch (target) {
-            case s::embryo:    // only allowed from destroyed (table reset)
-                if (current == s::destroyed) { obj->ko.state = s::embryo; return true; }
-                return false;
-            case s::sealed:    // only from embryo
-                if (current == s::embryo)    { obj->ko.state = s::sealed; return true; }
-                return false;
-            case s::active:    // from embryo, sealed, or suspended
-                if (current == s::embryo || current == s::sealed || current == s::suspended)
-                    { obj->ko.state = s::active; return true; }
-                return false;
-            case s::suspended: // only from active
-                if (current == s::active)    { obj->ko.state = s::suspended; return true; }
-                return false;
-            case s::dying:     // from active, suspended, or embryo
-                if (current == s::active || current == s::suspended || current == s::embryo)
-                    { obj->ko.state = s::dying; return true; }
-                return false;
-            case s::destroyed: // from dying only
-                if (current == s::dying)     { obj->ko.state = s::destroyed; return true; }
-                return false;
-            default:
-                return false;
-        }
+        return obj != nullptr && obj->ko.transition(target);
     }
 
     /// @brief Convenience: write dying with validation.

@@ -4,7 +4,7 @@
 
 export module zxfoundation.base.typestate;
 import zxfoundation.base.types;
-import lib.string_view;
+import std;
 
 export {
 
@@ -65,7 +65,7 @@ namespace zxfoundation::base {
         (static_cast<u8>(T::state) >= static_cast<u8>(S));
 
     /// @brief Return the ASCII name of a lifecycle_state value.
-    [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept -> lib::string_view
+    [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept -> std::string_view
     {
         switch (s) {
             case lifecycle_state::embryo:    return "embryo";

@@ -1,0 +1,213 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/clock.cxxm
+/// @brief z/Architecture TOD clock instructions — STCK, STCKF, STCKE.
+
+export module arch.s390x.cpu.clock;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::clock {
+
+    union tod_clock {
+        u128 val{};
+        struct {
+            u8  epoch_idx;
+            u64 tod;
+            bitrsvd(60);
+            u16 programmable_field;
+        };
+        struct {
+            bitsfield(72, epoch_index_tod);
+            bitrsvd(56);
+        };
+        struct {
+            bitsfield(60, microsecond);
+            bitsfield(12, sub_microsecond);
+            bitrsvd(56);
+        };
+    };
+
+    /// @name PERFORM TIMING FACILITY FUNCTION
+    /// @{
+
+    enum class ptff_fc : u8 {
+        qaf   = 0x00,
+        qto   = 0x01,
+        qsi   = 0x02,
+        qpt   = 0x03,
+        qui   = 0x04,
+        qtou  = 0x05,
+        qtse  = 0x06,
+        qsie  = 0x0a,
+        qtoue = 0x0d,
+        ato   = 0x40, //?
+        sto   = 0x41,
+        sfs   = 0x42, //?
+        sgs   = 0x43, //?
+        stou  = 0x45,
+        stoe  = 0x49,
+        stoue = 0x4d,
+    };
+
+    struct [[gnu::packed]] ptff_qaf_pb {
+        u128 status{};
+    };
+
+    struct [[gnu::packed]] ptff_qto_pb {
+        u64 phys_clock{};
+        u64 tod_offset{};
+        u64 logical_tod_offset{};
+        u64 tod_epoch_difference{};
+    };
+
+    struct [[gnu::packed]] ptff_qsi_pb {
+        u64 physical_clock{};
+        u64 old_start_time{};
+        u64 old_base_offset{};
+        u32 old_fine_steering_rate{};
+        u32 old_gross_steering_rate{};
+        u64 new_start_time{};
+        u64 new_base_offset{};
+        u32 new_fine_steering_rate{};
+        u32 new_gross_steering_rate{};
+    };
+
+    struct [[gnu::packed]] ptff_uib {
+        bitsfield(4, tm){};
+        bitsfield(4, ts){};
+        bitrsvd(24){};
+        bytersvd(4){};
+        u64 leap_event{};
+        u16 old_leap{};
+        u16 new_leap{};
+        bytersvd(4){};
+        u64 prt[5]{};
+        u64 cst[3]{};
+        u32 skew{};
+        bytersvd(160){};
+    };
+
+    struct [[gnu::packed]] ptff_qui_pb {
+        ptff_uib uib;
+        bytersvd(1){};
+    };
+
+    struct [[gnu::packed]] ptff_qtou_pb {
+        u64 physical_clock{};
+        u64 tod_offset{};
+        u64 logical_tod_offset{};
+        u64 tod_epoch_difference{};
+        u64 tod_user_specified_epoch_difference{};
+    };
+
+    struct [[gnu::packed]] ptff_qtse_pb {
+        u64 port0_tse{};
+        u64 port1_tse{};
+    };
+
+    struct [[gnu::packed]] ptff_qsie {
+        u128 physical_clock{};
+        u128 old_start_time{};
+        u128 old_base_offset{};
+        u32 old_fine_steering_rate{};
+        u32 old_gross_steering_rate{};
+        u32 new_fine_steering_rate{};
+        u32 new_gross_steering_rate{};
+        u128 new_start_time{};
+        u128 new_base_offset{};
+    };
+
+    struct [[gnu::packed]] ptff_qtoe_pb {
+        u128 physical_clock{};
+        u128 tod_clock{};
+        u128 logical_tod_offset{};
+        u128 tod_epoch_difference{};
+        u128 tod_user_specified_epoch_difference{};
+    };
+
+    struct [[gnu::packed]] ptff_sto_pb {
+        u64 new_tod_epoch_difference{};
+    };
+
+    struct [[gnu::packed]] ptff_stou_pb {
+        u64 new_tod_user_specified_epoch_difference{};
+    };
+
+    struct [[gnu::packed]] ptff_stoe_pb {
+        u128 new_tod_epoch_difference{};
+    };
+
+    struct [[gnu::packed]] ptff_stoue_pb {
+        u128 new_tod_user_specified_epoch_difference{};
+    };
+
+    template <ptff_fc Fc> struct ptff_pb;
+    template <> struct ptff_pb<ptff_fc::qaf>       { static constexpr usize value = 16; };
+    template <> struct ptff_pb<ptff_fc::qto>       { static constexpr usize value = 32; };
+    template <> struct ptff_pb<ptff_fc::qsi>       { static constexpr usize value = 56; };
+    template <> struct ptff_pb<ptff_fc::qpt>       { static constexpr usize value = 8;  };
+    template <> struct ptff_pb<ptff_fc::qui>       { static constexpr usize value = 256;};
+    template <> struct ptff_pb<ptff_fc::qtou>      { static constexpr usize value = 40; };
+    template <> struct ptff_pb<ptff_fc::qtse>      { static constexpr usize value = 16; };
+    template <> struct ptff_pb<ptff_fc::qsie>      { static constexpr usize value = 96; };
+    template <> struct ptff_pb<ptff_fc::qtoue>     { static constexpr usize value = 80; };
+    template <> struct ptff_pb<ptff_fc::ato>       { static constexpr usize value = 0;  };
+    template <> struct ptff_pb<ptff_fc::sto>       { static constexpr usize value = 8;  };
+    template <> struct ptff_pb<ptff_fc::sfs>       { static constexpr usize value = 0;  };
+    template <> struct ptff_pb<ptff_fc::sgs>       { static constexpr usize value = 0;  };
+    template <> struct ptff_pb<ptff_fc::stou>      { static constexpr usize value = 8;  };
+    template <> struct ptff_pb<ptff_fc::stoe>      { static constexpr usize value = 16; };
+    template <> struct ptff_pb<ptff_fc::stoue>     { static constexpr usize value = 16; };
+    template <ptff_fc Fc> inline constexpr usize ptff_pb_v = ptff_pb<Fc>::value;
+    template <ptff_fc Fc, typename Pb> concept ptff_pb_for = sizeof(Pb) == ptff_pb_v<Fc>;
+
+    template <ptff_fc Fc, typename Pb>
+        requires ptff_pb_for<Fc, Pb>
+    auto ptff(Pb& pb) noexcept -> condition_code {
+        condition_code cc;
+        __asm__ volatile(
+            "   lgr  0,%[r0]\n"
+            "   lgr  1,%[r1]\n"
+            "   ptff\n"
+            "	ipm	%[cc]\n"
+            "   srl  %[cc],28\n\t"
+            : [cc] "=d" (cc), "+m" (pb)
+            : [r0] "i" (Fc), [r1] "d" (&pb)
+            : "cc", "0", "1"
+        );
+        return cc;
+    }
+
+    /// @}
+
+    /// @brief Store Clock (STCK) — stores the 64-bit TOD clock value.
+    /// @return 64-bit TOD clock value.
+    /// @note   STCK sets CC=1 if the clock is non-operational.  We ignore CC here;
+    ///         callers that need error handling should use stckf().
+     auto stck() noexcept -> u64;
+
+    /// @brief Store Clock Fast (STCKF) — stores the 64-bit TOD clock value.
+    /// @return 64-bit TOD clock value.
+    /// @note   Falls back to STCK when facility bit 34 (GEN_INST) is absent.
+    ///         The check uses the kernel's cached facility list (features module).
+     auto stckf() noexcept -> u64;
+
+    /// @brief Store Clock Extended (STCKE) — stores 128-bit TOD clock + epoch index.
+    /// @return 128-bit extended TOD value.
+     auto stcke() noexcept -> tod_clock;
+
+    /// @brief Load a new value into the clock comparator register (SCKC).
+    /// @param[in] time  Absolute TOD clock value at which to fire.
+     auto sckc(u64 time) noexcept -> void;
+
+    /// @brief Read the current clock comparator value (STCKC).
+    /// @return The 64-bit TOD value currently loaded in the comparator.
+    [[nodiscard]]  auto stckc() noexcept -> u64;
+
+    /// @brief Set Clock Programmable Field (SCKPF)
+     auto sckpf(u16 val) noexcept -> void;
+
+} // namespace arch::s390x::cpu::clock
+
+} // end export

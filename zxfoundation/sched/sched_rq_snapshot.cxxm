@@ -5,29 +5,37 @@
 export module zxfoundation.sched.sched_rq_snapshot;
 import zxfoundation.sched.sched_entity_types;
 import zxfoundation.domain.domain_types;
-import zxfoundation.smp.smp;
-import zxfoundation.smp.smp_types;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import lib.expected;
+import std;
 import lib.error;
-import arch.s390x.lib.atomic;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu_types;
 
 export {
 
 namespace zxfoundation::sched::rq_snap {
 
-    using this_rq_accessor_fn = auto (*)() noexcept -> zxfoundation::domain::run_queue&;
+    using rq_accessor_fn = auto (*)(u16) noexcept -> zxfoundation::domain::run_queue&;
 
     namespace _internal {
-        this_rq_accessor_fn s_this_rq_accessor{nullptr};
+        rq_accessor_fn s_rq_accessor{nullptr};
     }
 
-    /// @brief Inject the @c this_rq() accessor — called by @c sched_init.
-    auto set_this_rq_accessor(this_rq_accessor_fn fn) noexcept -> void {
-        _internal::s_this_rq_accessor = fn;
+    /// @brief Inject the CPU run-queue accessor — called by @c sched_init.
+    auto set_rq_accessor(rq_accessor_fn fn) noexcept -> void {
+        _internal::s_rq_accessor = fn;
+    }
+
+    /// @brief Publish the run-queue fields used by remote balancers.
+    /// @pre The caller owns @p rq.lock, or is publishing during CPU setup.
+    auto publish(zxfoundation::domain::run_queue& rq) noexcept -> void {
+        rq.balance_min_vruntime.store(rq.min_vruntime, std::memory_order::release);
+        rq.balance_cfs_load_avg.store(rq.cfs_avg.load_avg, std::memory_order::release);
+        rq.balance_cfs_util_avg.store(rq.cfs_avg.util_avg, std::memory_order::release);
+        rq.balance_cfs_runnable_avg.store(rq.cfs_avg.runnable_avg, std::memory_order::release);
+        rq.balance_nr_running.store(rq.nr_running, std::memory_order::release);
+        rq.balance_cpu_capacity_curr.store(rq.cpu_capacity_curr, std::memory_order::release);
+        rq.balance_online.store(rq.online.load(std::memory_order::relaxed), std::memory_order::release);
     }
 
     /// @brief Snapshot of a remote @c run_queue's balancer-relevant fields.
@@ -49,52 +57,34 @@ namespace zxfoundation::sched::rq_snap {
     static_assert(sizeof(rq_snapshot) <= 64U,
         "rq_snapshot fits one cache line — important for cross-CPU csd copy");
 
-    /// @brief Collector callback invoked on the @e target CPU via the CSD
-    ///        framework.  Reads fields from @c this_rq() into the
-    ///        producer-supplied snapshot pointer.
-    /// @param[in] info Unused — supplied as @c 0; the producer's @c data
-    ///            pointer carries the snapshot output.
-    /// @param[in] data Pointer to an @c rq_snapshot in the producer's stack.
-    auto rq_snapshot_collect(u64 info, void* data) noexcept -> void {
-        discard_value info;
-        if (!data) return;
-        auto* out = static_cast<rq_snapshot*>(data);
-        if (!_internal::s_this_rq_accessor) return;
-        auto& rq = _internal::s_this_rq_accessor();
-        out->target_cpu         = rq.cpu_id;
-        out->min_vruntime       = rq.min_vruntime;
-        out->cfs_load_avg       = rq.cfs_avg.load_avg;
-        out->cfs_util_avg       = rq.cfs_avg.util_avg;
-        out->cfs_runnable_avg  = rq.cfs_avg.runnable_avg;
-        out->nr_running        = rq.nr_running;
-        out->cpu_capacity_curr = rq.cpu_capacity_curr;
-        out->online           = rq.online.load(
-            arch::s390x::lib::atomic::memory_order::acquire);
-        if (const auto* pcp = arch::s390x::cpu::lowcore::cpu_percpu(rq.cpu_id)) {
-            out->attached_dgp_state = pcp->attached_dgp_state;
-            out->attached_domain_id = pcp->attached_domain_id;
-            out->attached_asce      = pcp->attached_asce;
-        } else {
-            out->attached_dgp_state = 0U;
-            out->attached_domain_id = 0U;
-            out->attached_asce      = 0U;
-        }
-    }
-
-    /// @brief Collect a snapshot of @c cpu's run-queue state via the CSD
-    ///        function-call IPI — blocks until the target CPU completes.
+    /// @brief Collect a lockless advisory snapshot of @c cpu's run queue.
     /// @param[in]  cpu Target CPU id (may equal this_cpu — handled inline).
     /// @param[out] out Snapshot filled by the target CPU.
     /// @return Success, or @c invalid_arg on bad CPU id.
     [[nodiscard]] auto collect(u16 cpu, rq_snapshot& out) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-        return zxfoundation::smp::smp_call_function_single_sync(
-            cpu, rq_snapshot_collect, &out, 0U);
+        if (!_internal::s_rq_accessor) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::uninitialized));
+        }
+        auto& rq = _internal::s_rq_accessor(cpu);
+        out.target_cpu = cpu;
+        out.min_vruntime = rq.balance_min_vruntime.load(std::memory_order::acquire);
+        out.cfs_load_avg = rq.balance_cfs_load_avg.load(std::memory_order::acquire);
+        out.cfs_util_avg = rq.balance_cfs_util_avg.load(std::memory_order::acquire);
+        out.cfs_runnable_avg = rq.balance_cfs_runnable_avg.load(std::memory_order::acquire);
+        out.nr_running = rq.balance_nr_running.load(std::memory_order::acquire);
+        out.cpu_capacity_curr = rq.balance_cpu_capacity_curr.load(std::memory_order::acquire);
+        out.online = rq.balance_online.load(std::memory_order::acquire);
+        out.attached_asce = rq.balance_attached_asce.load(std::memory_order::acquire);
+        out.attached_domain_id = rq.balance_attached_domain_id.load(std::memory_order::acquire);
+        out.attached_dgp_state = rq.balance_attached_dgp_state.load(std::memory_order::acquire);
+        return {};
     }
 
 } // namespace zxfoundation::sched::rq_snap

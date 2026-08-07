@@ -18,7 +18,7 @@ namespace zxfoundation::gate::dispatch_table {
         none        = 0, ///< No capability check — self-domain, time, console.
         capability  = 1, ///< Capability token required in a0.
         admin       = 2, ///< Admin-level capability required.
-        domain_map  = 3, ///< Domain capability with map right required.
+        domain_map  = 3, ///< Legacy domain capability with map right required.
         storage_key = 4, ///< Storage-key match required between caller and target.
         io          = 5, ///< I/O authority required (a0 is op-specific, not a cap).
         signal      = 6, ///< Signal-send right required (a0 = target domain id).

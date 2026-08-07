@@ -13,15 +13,18 @@ import zxfoundation.sys.timer_types;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.service;
+import zxfoundation.sys.ipc;
+import zxfoundation.sys.ipc_types;
+import zxfoundation.policy.policy;
+import zxfoundation.policy.policy_types;
+import zxfoundation.memory.memory_objects;
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
 import lib.error;
-import lib.expected;
-import lib.algorithm;
-import lib.string_view;
+import std;
 
 static constexpr u64 NC_SYS_ERROR = ~0ULL;
 
@@ -39,6 +42,10 @@ namespace __sys_detail {
     auto copy_from_user(void* dst, u64 src, u64 len, domain* d) noexcept -> i32 {
         return arch::s390x::cpu::uaccess::copy_from_user(
             dst, src, len, d->root_phys);
+    }
+
+    auto copy_to_user(u64 dst, const void* src, u64 len, domain* d) noexcept -> i32 {
+        return arch::s390x::cpu::uaccess::copy_to_user(dst, src, len, d->root_phys);
     }
 
     auto nc_time_yield(u64, u64, u64, u64, u64) noexcept -> u64 {
@@ -104,7 +111,7 @@ namespace __sys_detail {
         }
 
         zxfoundation::sys::printk::pinfo("console_write: {}",
-            lib::string_view{kbuf, static_cast<usize>(user_len)});
+            std::string_view{kbuf, static_cast<usize>(user_len)});
 
         return 0;
     }
@@ -181,7 +188,7 @@ namespace __sys_detail {
         }
         name_buf[63] = '\0';
 
-        auto result = service_lookup(name_buf);
+        auto result = service_lookup(name_buf, d->ko.id);
         if (!result) {
             zxfoundation::sys::printk::perr("service_lookup: \"{}\" not found", name_buf);
             return NC_SYS_ERROR;
@@ -219,6 +226,126 @@ namespace __sys_detail {
         return 0;
     }
 
+    auto nc_ipc_endpoint_create(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) return NC_SYS_ERROR;
+        auto result = zxfoundation::ipc::endpoint_create(*d, static_cast<u32>(a0));
+        return result ? static_cast<u64>(*result) : NC_SYS_ERROR;
+    }
+
+    auto nc_ipc_endpoint_destroy(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) return NC_SYS_ERROR;
+        auto result = zxfoundation::ipc::endpoint_destroy(*d, static_cast<u32>(a0));
+        return result ? 0U : NC_SYS_ERROR;
+    }
+
+    auto nc_ipc_send(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d || !a1) return NC_SYS_ERROR;
+        zxfoundation::ipc::user_message_request request{};
+        if (copy_from_user(&request, a1, sizeof(request), d) != 0 ||
+            request.length > zxfoundation::ipc::IPC_MESSAGE_BYTES ||
+            request.capability_count > zxfoundation::ipc::IPC_MESSAGE_CAPS ||
+            request.grant_count > zxfoundation::ipc::IPC_MESSAGE_GRANTS) return NC_SYS_ERROR;
+        u8 payload[zxfoundation::ipc::IPC_MESSAGE_BYTES]{};
+        zxfoundation::sys::cap::cap_token caps[zxfoundation::ipc::IPC_MESSAGE_CAPS]{};
+        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::ipc::IPC_MESSAGE_GRANTS]{};
+        if (request.length && (!request.payload ||
+            copy_from_user(payload, request.payload, request.length, d) != 0))
+            return NC_SYS_ERROR;
+        if (request.capability_count && (!request.capabilities ||
+            copy_from_user(caps, request.capabilities,
+                request.capability_count * sizeof(caps[0]), d) != 0))
+            return NC_SYS_ERROR;
+        if (request.grant_count && (!request.grants ||
+            copy_from_user(grants, request.grants,
+                request.grant_count * sizeof(grants[0]), d) != 0))
+            return NC_SYS_ERROR;
+        auto result = zxfoundation::ipc::message_send(*d, static_cast<u32>(a0), payload, request.length,
+            caps, request.capability_count, grants, request.grant_count);
+        return result ? 0U : NC_SYS_ERROR;
+    }
+
+    auto nc_ipc_receive(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d || !a1) return NC_SYS_ERROR;
+        u8 payload[zxfoundation::ipc::IPC_MESSAGE_BYTES]{};
+        zxfoundation::sys::cap::cap_token caps[zxfoundation::ipc::IPC_MESSAGE_CAPS]{};
+        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::ipc::IPC_MESSAGE_GRANTS]{};
+        u32 length = zxfoundation::ipc::IPC_MESSAGE_BYTES;
+        u32 cap_count = 0;
+        u32 grant_count = 0;
+        zxfoundation::ipc::user_message_result requested{};
+        if (!a2) {
+            // Attachments are capabilities, not discardable message metadata.
+            // Require a result descriptor whenever the caller may receive them.
+            return NC_SYS_ERROR;
+        }
+        if (copy_from_user(&requested, a2, sizeof(requested), d) != 0)
+            return NC_SYS_ERROR;
+        cap_count = requested.capability_count;
+        grant_count = requested.grant_count;
+        if (cap_count > zxfoundation::ipc::IPC_MESSAGE_CAPS ||
+            grant_count > zxfoundation::ipc::IPC_MESSAGE_GRANTS)
+            return NC_SYS_ERROR;
+        auto result = zxfoundation::ipc::message_receive(*d, static_cast<u32>(a0), payload,
+            zxfoundation::ipc::IPC_MESSAGE_BYTES, length, caps, cap_count, grants, grant_count);
+        if (!result) return NC_SYS_ERROR;
+        if (copy_to_user(a1, payload, length, d) != 0) return NC_SYS_ERROR;
+        if (cap_count && (!requested.capabilities || copy_to_user(
+                requested.capabilities, caps,
+                cap_count * sizeof(caps[0]), d) != 0)) return NC_SYS_ERROR;
+        if (grant_count && (!requested.grants || copy_to_user(
+                requested.grants, grants,
+                grant_count * sizeof(grants[0]), d) != 0)) return NC_SYS_ERROR;
+        requested.payload = a1;
+        requested.length = length;
+        requested.capability_count = static_cast<u16>(cap_count);
+        requested.grant_count = static_cast<u16>(grant_count);
+        if (copy_to_user(a2, &requested, sizeof(requested), d) != 0)
+            return NC_SYS_ERROR;
+        return length;
+    }
+
+    auto nc_shm_export(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) return NC_SYS_ERROR;
+        auto result = zxfoundation::ipc::shm_export(*d, a0, a1, static_cast<u32>(a2));
+        return result ? result->raw : NC_SYS_ERROR;
+    }
+
+    auto nc_shm_import(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) return NC_SYS_ERROR;
+        auto result = zxfoundation::ipc::shm_import(*d,
+            zxfoundation::sys::cap::cap_token{a0}, a1, a2);
+        return result ? static_cast<u64>(result->ar_num) : NC_SYS_ERROR;
+    }
+
+    auto nc_shm_map(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        return nc_shm_import(a0, a1, a2, 0, 0);
+    }
+
+    auto nc_policy_register(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) return NC_SYS_ERROR;
+        auto result = zxfoundation::policy::register_server(
+            *d,
+            static_cast<zxfoundation::policy::server_kind>(a0),
+            static_cast<u32>(a1));
+        return result ? static_cast<u64>(*result) : NC_SYS_ERROR;
+    }
+
+    auto nc_policy_unregister(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) return NC_SYS_ERROR;
+        auto result = zxfoundation::policy::unregister_server(
+            *d,
+            static_cast<zxfoundation::policy::server_kind>(a0));
+        return result ? 0U : NC_SYS_ERROR;
+    }
+
 } // namespace __sys_detail
 
 export {
@@ -243,6 +370,24 @@ namespace zxfoundation::gate::nc_sys {
             return __sys_detail::nc_service_lookup(a0, a1, a2, a3, a4);
         case sys_op::service_unregister:
             return __sys_detail::nc_service_unregister(a0, a1, a2, a3, a4);
+        case sys_op::ipc_endpoint_create:
+            return __sys_detail::nc_ipc_endpoint_create(a0, a1, a2, a3, a4);
+        case sys_op::ipc_endpoint_destroy:
+            return __sys_detail::nc_ipc_endpoint_destroy(a0, a1, a2, a3, a4);
+        case sys_op::ipc_send:
+            return __sys_detail::nc_ipc_send(a0, a1, a2, a3, a4);
+        case sys_op::ipc_receive:
+            return __sys_detail::nc_ipc_receive(a0, a1, a2, a3, a4);
+        case sys_op::shm_export:
+            return __sys_detail::nc_shm_export(a0, a1, a2, a3, a4);
+        case sys_op::shm_import:
+            return __sys_detail::nc_shm_import(a0, a1, a2, a3, a4);
+        case sys_op::shm_map:
+            return __sys_detail::nc_shm_map(a0, a1, a2, a3, a4);
+        case sys_op::policy_register:
+            return __sys_detail::nc_policy_register(a0, a1, a2, a3, a4);
+        case sys_op::policy_unregister:
+            return __sys_detail::nc_policy_unregister(a0, a1, a2, a3, a4);
         default:
             zxfoundation::sys::printk::perr("nc_sys::dispatch: unknown op {}", op);
             return NC_SYS_ERROR;

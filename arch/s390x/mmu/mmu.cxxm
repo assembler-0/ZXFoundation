@@ -15,9 +15,7 @@ import arch.s390x.cpu.features;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.ctlreg;
 import lib.error;
-import lib.expected;
-import lib.util;
-import lib.placementnew;
+import std;
 
 namespace arch::s390x::mmu::_internal {
 
@@ -42,28 +40,28 @@ namespace arch::s390x::mmu::_internal {
     [[nodiscard]] auto alloc_table_with_policy(
         dat_level lvl,
         const pmm::allocation_request& policy
-    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
         pmm::allocation_request request = policy;
         request.order = (lvl == dat_level::page) ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
         request.mem_zone = pmm::zone::normal;
         request.use = pmm::purpose::page_table;
 
         auto result = pmm::alloc(request);
-        if (!result) return ::lib::unexpected(result.error());
+        if (!result) return ::std::unexpected(result.error());
         return result->phys_base;
     }
 
     /// @brief Fill a freshly-allocated table with empty (invalid) entries.
-    [[nodiscard]] auto init_table(dat_level lvl, u64 phys) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    [[nodiscard]] auto init_table(dat_level lvl, u64 phys) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         const u64 table_bytes = (lvl == dat_level::page)
             ? static_cast<u64>(PAGE_ENTRIES) * sizeof(u64)
             : static_cast<u64>(CRST_ENTRIES) * sizeof(u64);
-        if ((phys & (static_cast<u64>(pmm::PAGE_SIZE) - 1U)) != 0U) {
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+        if ((phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U) {
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::alignment_error));
         }
         if (!hhdm::phys_range_is_mapped(phys, table_bytes)) {
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::hhdm_init_failed));
         }
 
@@ -88,7 +86,7 @@ namespace arch::s390x::mmu::_internal {
         const u64 table_bytes = (lvl == dat_level::page)
             ? static_cast<u64>(PAGE_ENTRIES) * sizeof(u64)
             : static_cast<u64>(CRST_ENTRIES) * sizeof(u64);
-        if ((phys & (static_cast<u64>(pmm::PAGE_SIZE) - 1U)) != 0U) return false;
+        if ((phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U) return false;
         return hhdm::phys_range_is_mapped(phys, table_bytes);
     }
 
@@ -113,7 +111,7 @@ namespace arch::s390x::mmu::_internal {
             for (u32 i = 0; i < count; ++i) {
                 pmm::folio_active f{entries[i].phys, entries[i].order,
                                    pmm::purpose::page_table, pmm::zone::normal};
-                pmm::free(::lib::move(f));
+                pmm::free(::std::move(f));
             }
             count = 0;
         }
@@ -136,7 +134,7 @@ namespace arch::s390x::mmu::_internal {
         u64       phys,
         page_prot prot,
         const pmm::allocation_request& table_policy
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         level_state states[4]{};
         alloc_stack allocs{};
         u32 depth = 0;
@@ -152,7 +150,7 @@ namespace arch::s390x::mmu::_internal {
             // Fail closed if this table's physical page is not HHDM-backed.
             if (!table_is_mapped(current, lvl)) [[unlikely]] {
                 allocs.rollback();
-                return ::lib::unexpected(::lib::kernel_error::from_memory(
+                return ::std::unexpected(::lib::kernel_error::from_memory(
                     ::lib::memory_error::code::hhdm_init_failed));
             }
 
@@ -167,15 +165,15 @@ namespace arch::s390x::mmu::_internal {
                 auto result = alloc_table_with_policy(child_lvl, table_policy);
                 if (!result) [[unlikely]] {
                     allocs.rollback();
-                    return ::lib::unexpected(result.error());
+                    return ::std::unexpected(result.error());
                 }
                 const u64 child_phys = *result;
                 auto init_result = init_table(child_lvl, child_phys);
                 if (!init_result) [[unlikely]] {
                     pmm::folio_active f{child_phys, order, pmm::purpose::page_table, pmm::zone::normal};
-                    pmm::free(::lib::move(f));
+                    pmm::free(::std::move(f));
                     allocs.rollback();
-                    return ::lib::unexpected(init_result.error());
+                    return ::std::unexpected(init_result.error());
                 }
                 allocs.push(child_phys, order);
                 states[depth].alloc_phys = child_phys;
@@ -185,14 +183,14 @@ namespace arch::s390x::mmu::_internal {
                 if (lvl == dat_level::segment && seg_is_large(entry))
                     [[unlikely]] {
                     allocs.rollback();
-                    return ::lib::unexpected(::lib::kernel_error::from_memory(
+                    return ::std::unexpected(::lib::kernel_error::from_memory(
                         ::lib::memory_error::code::region_overlap));
                 }
                 // Region-3 large page blocks everything beneath it.
                 if (lvl == dat_level::region_3 && r3_is_large(entry))
                     [[unlikely]] {
                     allocs.rollback();
-                    return ::lib::unexpected(::lib::kernel_error::from_memory(
+                    return ::std::unexpected(::lib::kernel_error::from_memory(
                         ::lib::memory_error::code::region_overlap));
                 }
                 current = rste_origin(entry);
@@ -202,14 +200,14 @@ namespace arch::s390x::mmu::_internal {
         // Check PTE slot.
         if (!table_is_mapped(current, dat_level::page)) [[unlikely]] {
             allocs.rollback();
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::hhdm_init_failed));
         }
         auto* pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
         const u32 pte_idx = virt_index_rt(dat_level::page, virt);
         if (!pte_is_invalid(pte_table[pte_idx])) [[unlikely]] {
             allocs.rollback();
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::region_overlap));
         }
 
@@ -237,58 +235,98 @@ namespace arch::s390x::mmu::_internal {
         return {};
     }
 
+    [[nodiscard]] auto table_is_empty(dat_level level, u64 phys) noexcept -> bool {
+        auto* table = reinterpret_cast<const u64*>(hhdm::phys_to_virt(phys));
+        const u32 entries = level == dat_level::page ? PAGE_ENTRIES : CRST_ENTRIES;
+        for (u32 i = 0; i < entries; ++i) {
+            const bool invalid = level == dat_level::page
+                ? pte_is_invalid(table[i])
+                : rste_is_invalid(table[i]);
+            if (!invalid) return false;
+        }
+        return true;
+    }
+
+    auto table_free_level(dat_level level, u64 phys) noexcept -> void {
+        const u32 order = level == dat_level::page
+            ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
+        pmm::folio_active f{
+            phys, order, pmm::purpose::page_table, pmm::zone::normal};
+        pmm::free(::std::move(f));
+    }
+
     /// @brief Unmap whatever exists at @p virt (4 KiB, 1 MiB, or 2 GiB).
-    /// @return  Size of the mapping removed (PAGE_SIZE_4K / SEGMENT_SIZE /
-    ///          REGION3_SIZE), or kernel_error if nothing was mapped.
+    /// @return Size of the mapping removed, or kernel_error if nothing was mapped.
     auto unmap_at_impl(
         u64       root_phys,
         dat_level root_level,
         u64       virt
-    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
+        u64 tables[4]{};
+        u32 indices[4]{};
+        u32 depth = 0;
         u64 current = root_phys;
+        dat_level current_level = root_level;
+        u64 unmapped_size = PAGE_SIZE_4K;
 
-        for (auto lvl = root_level; lvl != dat_level::page;
-             lvl = next_level(lvl)) {
+        for (; current_level != dat_level::page;
+             current_level = next_level(current_level)) {
             auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
-            const u32 idx = virt_index_rt(lvl, virt);
-            const u64 entry = table[idx];
-
-            if (rste_is_invalid(entry))
-                return ::lib::unexpected(::lib::kernel_error::from_memory(
+            const u32 index = virt_index_rt(current_level, virt);
+            const u64 entry = table[index];
+            if (rste_is_invalid(entry)) {
+                return ::std::unexpected(::lib::kernel_error::from_memory(
                     ::lib::memory_error::code::invalid_address));
+            }
 
-            // Large page at segment level.
-            if (lvl == dat_level::segment && seg_is_large(entry)) {
-                table[idx] = rste_empty_rt(lvl);
-                return SEGMENT_SIZE;
+            if ((current_level == dat_level::segment && seg_is_large(entry)) ||
+                (current_level == dat_level::region_3 && r3_is_large(entry))) {
+                table[index] = rste_empty_rt(current_level);
+                unmapped_size = current_level == dat_level::segment
+                    ? SEGMENT_SIZE : REGION3_SIZE;
+                break;
             }
-            // Large page at region-3 level.
-            if (lvl == dat_level::region_3 && r3_is_large(entry)) {
-                table[idx] = rste_empty_rt(lvl);
-                return REGION3_SIZE;
-            }
+
+            tables[depth] = current;
+            indices[depth] = index;
+            ++depth;
             current = rste_origin(entry);
         }
 
-        // At page table level.
-        auto* pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
-        const u32 pte_idx = virt_index_rt(dat_level::page, virt);
-        if (pte_is_invalid(pte_table[pte_idx]))
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
-                ::lib::memory_error::code::invalid_address));
+        if (current_level == dat_level::page) {
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u32 index = virt_index_rt(dat_level::page, virt);
+            if (pte_is_invalid(table[index])) {
+                return ::std::unexpected(::lib::kernel_error::from_memory(
+                    ::lib::memory_error::code::invalid_address));
+            }
+            tlb_invalidate_pte(current, virt);
+            table[index] = PTE_EMPTY;
+        }
 
-        // IPTE: atomically invalidate PTE and flush TLB on all CPUs.
-        tlb_invalidate_pte(current, virt);
-        // Clear the entry fully.
-        pte_table[pte_idx] = PTE_EMPTY;
-        return PAGE_SIZE_4K;
+        // The root belongs to the address space.  Only free children reached
+        // through an RSTE, from the leaf table upward.
+        for (u32 step = depth; step > 0; --step) {
+            const u32 parent_step = step - 1U;
+            if (!table_is_empty(current_level, current)) break;
+
+            const dat_level parent_level = level_at_depth(root_level, parent_step);
+            auto* parent = reinterpret_cast<u64*>(
+                hhdm::phys_to_virt(tables[parent_step]));
+            parent[indices[parent_step]] = rste_empty_rt(parent_level);
+            table_free_level(current_level, current);
+            current = tables[parent_step];
+            current_level = parent_level;
+        }
+
+        return unmapped_size;
     }
 
     auto walk_impl(
         u64       root_phys,
         dat_level root_level,
         u64       virt
-    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
         u64 current = root_phys;
 
         for (auto lvl = root_level; lvl != dat_level::page;
@@ -298,7 +336,7 @@ namespace arch::s390x::mmu::_internal {
             const u64 entry = table[idx];
 
             if (rste_is_invalid(entry))
-                return ::lib::unexpected(::lib::kernel_error::from_memory(
+                return ::std::unexpected(::lib::kernel_error::from_memory(
                     ::lib::memory_error::code::invalid_address));
 
             // 1 MiB large page → resolve directly.
@@ -318,7 +356,7 @@ namespace arch::s390x::mmu::_internal {
         const u32 pte_idx = virt_index_rt(dat_level::page, virt);
         const u64 pte_val = pte_table[pte_idx];
         if (pte_is_invalid(pte_val))
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::invalid_address));
         return pte_frame(pte_val) | (virt & (PAGE_SIZE_4K - 1));
     }
@@ -328,7 +366,7 @@ namespace arch::s390x::mmu::_internal {
         dat_level root_level,
         u64       virt,
         page_prot new_prot
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         u64 current = root_phys;
 
         for (auto lvl = root_level; lvl != dat_level::page;
@@ -338,7 +376,7 @@ namespace arch::s390x::mmu::_internal {
             const u64 entry = table[idx];
 
             if (rste_is_invalid(entry))
-                return ::lib::unexpected(::lib::kernel_error::from_memory(
+                return ::std::unexpected(::lib::kernel_error::from_memory(
                     ::lib::memory_error::code::invalid_address));
 
             // Large pages: re-protect in place.
@@ -362,7 +400,7 @@ namespace arch::s390x::mmu::_internal {
         const u64 old_pte = pte_table[pte_idx];
 
         if (pte_is_invalid(old_pte))
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::invalid_address));
 
         const u64 frame = pte_frame(old_pte);
@@ -382,7 +420,7 @@ namespace arch::s390x::mmu::_internal {
         u64       virt,
         u64       phys,
         page_prot prot
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         // Walk from root to segment level, allocating intermediates.
         alloc_stack allocs{};
         level_state states[3]{};   // At most 3 levels above segment (R1,R2,R3).
@@ -404,15 +442,15 @@ namespace arch::s390x::mmu::_internal {
                     order, pmm::zone::normal, pmm::purpose::page_table);
                 if (!result) [[unlikely]] {
                     allocs.rollback();
-                    return ::lib::unexpected(result.error());
+                    return ::std::unexpected(result.error());
                 }
                 const u64 child_phys = result->phys_base;
                 auto init_result = init_table(child_lvl, child_phys);
                 if (!init_result) [[unlikely]] {
                     pmm::folio_active f{child_phys, order, pmm::purpose::page_table, pmm::zone::normal};
-                    pmm::free(::lib::move(f));
+                    pmm::free(::std::move(f));
                     allocs.rollback();
-                    return ::lib::unexpected(init_result.error());
+                    return ::std::unexpected(init_result.error());
                 }
                 allocs.push(child_phys, order);
                 states[depth].alloc_phys = child_phys;
@@ -421,7 +459,7 @@ namespace arch::s390x::mmu::_internal {
                 if (lvl == dat_level::region_3 && r3_is_large(entry))
                     [[unlikely]] {
                     allocs.rollback();
-                    return ::lib::unexpected(::lib::kernel_error::from_memory(
+                    return ::std::unexpected(::lib::kernel_error::from_memory(
                         ::lib::memory_error::code::region_overlap));
                 }
                 current = rste_origin(entry);
@@ -433,7 +471,7 @@ namespace arch::s390x::mmu::_internal {
         const u32 seg_idx = virt_index_rt(dat_level::segment, virt);
         if (!rste_is_invalid(seg_table[seg_idx])) [[unlikely]] {
             allocs.rollback();
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::region_overlap));
         }
 
@@ -467,7 +505,7 @@ namespace arch::s390x::mmu::_internal {
         u64       virt,
         u64       phys,
         page_prot prot
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         alloc_stack allocs{};
         level_state states[2]{};   // At most R1,R2 above R3.
         u32 depth = 0;
@@ -487,15 +525,15 @@ namespace arch::s390x::mmu::_internal {
                     CRST_ALLOC_ORDER, pmm::zone::normal, pmm::purpose::page_table);
                 if (!result) [[unlikely]] {
                     allocs.rollback();
-                    return ::lib::unexpected(result.error());
+                    return ::std::unexpected(result.error());
                 }
                 const u64 child_phys = result->phys_base;
                 auto init_result = init_table(child_lvl, child_phys);
                 if (!init_result) [[unlikely]] {
                     pmm::folio_active f{child_phys, CRST_ALLOC_ORDER, pmm::purpose::page_table, pmm::zone::normal};
-                    pmm::free(::lib::move(f));
+                    pmm::free(::std::move(f));
                     allocs.rollback();
-                    return ::lib::unexpected(init_result.error());
+                    return ::std::unexpected(init_result.error());
                 }
                 allocs.push(child_phys, CRST_ALLOC_ORDER);
                 states[depth].alloc_phys = child_phys;
@@ -510,7 +548,7 @@ namespace arch::s390x::mmu::_internal {
         const u32 r3_idx = virt_index_rt(dat_level::region_3, virt);
         if (!rste_is_invalid(r3_table[r3_idx])) [[unlikely]] {
             allocs.rollback();
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::region_overlap));
         }
 
@@ -547,14 +585,14 @@ namespace arch::s390x::mmu::_internal {
         dat_level lvl,
         u64       hhdm_start,
         u64       hhdm_end
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         if (table_phys < hhdm_start || table_phys >= hhdm_end) {
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::hhdm_init_failed));
         }
 
         if (g_preinit_table_count >= PREINIT_MAX_TABLES) {
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::out_of_memory));
         }
 
@@ -631,14 +669,14 @@ namespace arch::s390x::mmu {
     template <dat_level Level>
         requires (Level != dat_level::page)
     [[nodiscard]] auto crst_alloc() noexcept
-        -> ::lib::expected<dat_table<Level>, ::lib::kernel_error>
+        -> ::std::expected<dat_table<Level>, ::lib::kernel_error>
     {
         auto result = zxfoundation::memory::pmm::alloc(
             CRST_ALLOC_ORDER,
             zxfoundation::memory::pmm::zone::normal,
             zxfoundation::memory::pmm::purpose::page_table);
         if (!result) [[unlikely]]
-            return ::lib::unexpected(result.error());
+            return ::std::unexpected(result.error());
         const u64 phys = result->phys_base;
         auto init_result = _internal::init_table(Level, phys);
         if (!init_result) [[unlikely]] {
@@ -647,22 +685,22 @@ namespace arch::s390x::mmu {
                 CRST_ALLOC_ORDER,
                 zxfoundation::memory::pmm::purpose::page_table,
                 zxfoundation::memory::pmm::zone::normal};
-            zxfoundation::memory::pmm::free(::lib::move(f));
-            return ::lib::unexpected(init_result.error());
+            zxfoundation::memory::pmm::free(::std::move(f));
+            return ::std::unexpected(init_result.error());
         }
         return dat_table<Level>(phys);
     }
 
     /// @brief Allocate and initialize a page table.
     [[nodiscard]] auto pte_table_alloc() noexcept
-        -> ::lib::expected<dat_table<dat_level::page>, ::lib::kernel_error>
+        -> ::std::expected<dat_table<dat_level::page>, ::lib::kernel_error>
     {
         auto result = zxfoundation::memory::pmm::alloc(
             PTE_ALLOC_ORDER,
             zxfoundation::memory::pmm::zone::normal,
             zxfoundation::memory::pmm::purpose::page_table);
         if (!result) [[unlikely]]
-            return ::lib::unexpected(result.error());
+            return ::std::unexpected(result.error());
         const u64 phys = result->phys_base;
         auto init_result = _internal::init_table(dat_level::page, phys);
         if (!init_result) [[unlikely]] {
@@ -671,8 +709,8 @@ namespace arch::s390x::mmu {
                 PTE_ALLOC_ORDER,
                 zxfoundation::memory::pmm::purpose::page_table,
                 zxfoundation::memory::pmm::zone::normal};
-            zxfoundation::memory::pmm::free(::lib::move(f));
-            return ::lib::unexpected(init_result.error());
+            zxfoundation::memory::pmm::free(::std::move(f));
+            return ::std::unexpected(init_result.error());
         }
         return dat_table<dat_level::page>(phys);
     }
@@ -687,7 +725,7 @@ namespace arch::s390x::mmu {
             tbl.origin_phys, order,
             zxfoundation::memory::pmm::purpose::page_table,
             zxfoundation::memory::pmm::zone::normal};
-        zxfoundation::memory::pmm::free(::lib::move(f));
+        zxfoundation::memory::pmm::free(::std::move(f));
     }
 
     /// @brief Build a typed ASCE for a kernel address space.
@@ -708,7 +746,7 @@ namespace arch::s390x::mmu {
         u64             virt,
         u64             phys,
         page_prot       prot
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         const auto table_policy = _internal::default_table_request();
         auto result = _internal::map_page_impl(
             root.origin_phys, Root, virt, phys, prot, table_policy);
@@ -730,7 +768,7 @@ namespace arch::s390x::mmu {
         u64             phys,
         page_prot       prot,
         const zxfoundation::memory::pmm::allocation_request& table_policy
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         auto result = _internal::map_page_impl(
             root.origin_phys, Root, virt, phys, prot, table_policy);
         return result;
@@ -743,19 +781,66 @@ namespace arch::s390x::mmu {
     [[nodiscard]] auto unmap_page(
         dat_table<Root> root,
         u64             virt
-    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
         // First resolve the physical address (walk).
         auto phys_result = _internal::walk_impl(
             root.origin_phys, Root, virt);
         if (!phys_result)
-            return ::lib::unexpected(phys_result.error());
+            return ::std::unexpected(phys_result.error());
         const u64 old_phys = *phys_result;
         // Now unmap.
         auto size_result = _internal::unmap_at_impl(
             root.origin_phys, Root, virt);
         if (!size_result)
-            return ::lib::unexpected(size_result.error());
+            return ::std::unexpected(size_result.error());
         return old_phys;
+    }
+
+    /// @brief Runtime-dispatched unmap keyed on an ASCE value.
+    ///
+    /// Decodes the ASCE designation-type (DT) bits to choose the
+    /// corresponding root DAT level and forwards to the templated
+    /// @ref unmap_page.  Lets callers that hold an ASCE opaque value
+    /// (e.g. recovered from @c vm_space::asce_val) unmap a page
+    /// without knowing the root level at compile time — required by
+    /// the rmap peer-walk in @c zxfoundation::memory::rmap.
+    ///
+    /// The IPTE that clears the PTE is a globally-broadcast hardware
+    /// operation on z/Architecture: every CPU's TLB entry for that
+    /// vaddr is invalidated synchronously by the IPTE instruction.
+    /// No IPI is needed.
+    ///
+    /// @param[in] asce_val ASCE value (root table + type + length).
+    /// @param[in] virt     Virtual address whose PTE to invalidate.
+    /// @return The physical address of the unmapped frame, or
+    ///         kernel_error (not_present if the address was already
+    ///         unmapped, invalid_address if the root level is bogus).
+    [[nodiscard]] auto unmap_page_dispatch(
+        u64 asce_val, u64 virt
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
+        const u64 root_phys = asce_val & ASCE_ORIGIN_MASK;
+        const u64 dt        = asce_val & ASCE_TYPE_MASK;
+
+        // DT=00 means segment-as-root (real-space / 1-level).  We do
+        // not support that configuration for vm_spaces (the kernel
+        // always uses region_1-rooted user address spaces); reject
+        // callers that pass such an ASCE rather than silently doing
+        // the wrong thing.
+        if (dt == ASCE_TYPE_R1) {
+            const dat_table<dat_level::region_1> root{root_phys};
+            return unmap_page(root, virt);
+        }
+        if (dt == ASCE_TYPE_R2) {
+            const dat_table<dat_level::region_2> root{root_phys};
+            return unmap_page(root, virt);
+        }
+        if (dt == ASCE_TYPE_R3) {
+            const dat_table<dat_level::region_3> root{root_phys};
+            return unmap_page(root, virt);
+        }
+        (void)root_phys; (void)virt; // DT was not r1/r2/r3
+        return ::std::unexpected(::lib::kernel_error::from_memory(
+            ::lib::memory_error::code::invalid_address));
     }
 
     /// @brief Walk the page tables to resolve virt → phys.
@@ -764,7 +849,7 @@ namespace arch::s390x::mmu {
     [[nodiscard]] auto walk(
         dat_table<Root> root,
         u64             virt
-    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
         return _internal::walk_impl(root.origin_phys, Root, virt);
     }
 
@@ -775,7 +860,7 @@ namespace arch::s390x::mmu {
         dat_table<Root> root,
         u64             virt,
         page_prot       new_prot
-    ) noexcept -> ::lib::expected<void, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         return _internal::protect_impl(
             root.origin_phys, Root, virt, new_prot);
     }
@@ -852,7 +937,7 @@ namespace arch::s390x::mmu {
         u64             phys,
         u64             len,
         page_prot       prot
-    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
         const u64 asce_val = asce_build(root).raw();
         mmu_transaction txn(root.origin_phys, Root, asce_val, virt);
 
@@ -871,7 +956,7 @@ namespace arch::s390x::mmu {
                 auto r = _internal::map_large_2g_impl(
                     root.origin_phys, Root, va, pa, prot);
                 if (!r)
-                    return ::lib::unexpected(r.error());
+                    return ::std::unexpected(r.error());
                 step = REGION3_SIZE;
             }
             // Try 1 MiB large page (EDAT-1).
@@ -882,7 +967,7 @@ namespace arch::s390x::mmu {
                 auto r = _internal::map_large_1m_impl(
                     root.origin_phys, Root, va, pa, prot);
                 if (!r)
-                    return ::lib::unexpected(r.error());
+                    return ::std::unexpected(r.error());
                 step = SEGMENT_SIZE;
             }
             // Fall back to 4 KiB.
@@ -890,7 +975,7 @@ namespace arch::s390x::mmu {
                 auto r = _internal::map_page_impl(
                     root.origin_phys, Root, va, pa, prot);
                 if (!r)
-                    return ::lib::unexpected(r.error());
+                    return ::std::unexpected(r.error());
                 step = PAGE_SIZE_4K;
             }
 
@@ -912,7 +997,7 @@ namespace arch::s390x::mmu {
         dat_table<Root> root,
         u64             virt,
         u64             len
-    ) noexcept -> ::lib::expected<u64, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<u64, ::lib::kernel_error> {
         u64 va = virt;
         u64 remaining = len;
         u64 unmapped = 0;
@@ -944,16 +1029,16 @@ namespace arch::s390x::mmu {
 
     /// @brief Validate the loader-installed DAT map before PMM init.
     [[nodiscard]] auto validate_preinit_dat() noexcept
-        -> ::lib::expected<u32, ::lib::kernel_error>
+        -> ::std::expected<u32, ::lib::kernel_error>
     {
         if (_internal::g_initialized) {
-            return ::lib::unexpected(::lib::kernel_error::from_generic(
+            return ::std::unexpected(::lib::kernel_error::from_generic(
                 ::lib::generic_error::invalid_arg));
         }
 
         const u64 cr1 = _internal::read_cr1();
         if (cr1 == 0) {
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::invalid_address));
         }
 
@@ -970,7 +1055,7 @@ namespace arch::s390x::mmu {
         } else if (asce_type == ASCE_TYPE_SEG) {
             root_level = dat_level::segment;
         } else {
-            return ::lib::unexpected(::lib::kernel_error::from_memory(
+            return ::std::unexpected(::lib::kernel_error::from_memory(
                 ::lib::memory_error::code::invalid_address));
         }
 
@@ -980,7 +1065,7 @@ namespace arch::s390x::mmu {
 
         auto walk_result = _internal::validate_table_walk(root_phys, root_level, 0, hhdm_end);
         if (!walk_result)
-            return ::lib::unexpected(walk_result.error());
+            return ::std::unexpected(walk_result.error());
         return static_cast<u32>(_internal::g_preinit_table_count);
     }
 

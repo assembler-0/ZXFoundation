@@ -4,9 +4,8 @@
 
 export module zxfoundation.locking.lock;
 import zxfoundation.base.types;
-import arch.s390x.cpu.irq_types;
-import lib.concepts;
-import lib.optional;
+import arch.s390x.cpu.irq;
+import std;
 
 export {
 
@@ -15,16 +14,16 @@ namespace zxfoundation::locking {
     /// @brief Concept for basic lockable types.
     template <typename L>
     concept lockable = requires(L& l) {
-        { l.lock()      } noexcept -> lib::same_as<void>;
-        { l.try_lock()  } noexcept -> lib::same_as<bool>;
-        { l.unlock()    } noexcept -> lib::same_as<void>;
+        { l.lock()      } noexcept -> std::same_as<void>;
+        { l.try_lock()  } noexcept -> std::same_as<bool>;
+        { l.unlock()    } noexcept -> std::same_as<void>;
     };
 
     /// @brief Concept for lockable types that handle IRQ state.
     template <typename L>
     concept irq_lockable = requires(L& l, const irqflags& flags) {
-        { l.lock_irqsave()      } noexcept -> lib::same_as<irqflags>;
-        { l.unlock_irqrestore(flags) } noexcept -> lib::same_as<void>;
+        { l.lock_irqsave()      } noexcept -> std::same_as<irqflags>;
+        { l.unlock_irqrestore(flags) } noexcept -> std::same_as<void>;
     };
 
     /// @name RAII scoped lock guards

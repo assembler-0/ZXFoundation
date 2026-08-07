@@ -3,13 +3,11 @@
 /// @brief basic iterator types
 
 export module lib.iterator;
-import lib.concepts;
-import lib.type_traits;
 import zxfoundation.base.types;
 
 export {
 
-namespace lib {
+namespace std {
 
     template <typename I>
     concept iterator = requires(I it) {

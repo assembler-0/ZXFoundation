@@ -1,0 +1,146 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/features.cxxm
+/// @brief Centralized CPU facility registry — every facility bit the kernel
+///        cares about, cached from STFLE and queryable via has() / has_raw().
+
+export module arch.s390x.cpu.features;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace arch::s390x::cpu::features {
+
+    /// @brief Named CPU facility identifiers — STFLE bit numbers per
+    ///        IBM z/Architecture PoP Appendix B (Figure 4-36).
+    enum class facility : u32 {
+        n3                          = 0,   ///< N3 instructions installed.
+        zarch_installed             = 1,   ///< z/Architecture architectural mode installed.
+        zarch_active                = 2,   ///< z/Architecture architectural mode active.
+        dat_enhancement             = 3,   ///< DAT-enhancement (IDTE, CSPG).
+        idte_segment_clear          = 4,   ///< IDTE selectively clears seg-table entries.
+        idte_region_clear           = 5,   ///< IDTE selectively clears region-table entries.
+        asn_lx_reuse                = 6,   ///< ASN-and-LX-Reuse (PC/PT).
+        stfle                       = 7,   ///< STFLE instruction.
+        edat1                       = 8,   ///< Enhanced-DAT-1 (1 MiB large pages).
+        sense_run_status            = 9,   ///< Sense-Running-Status facility.
+        cond_sske                   = 10,  ///< Conditional-SSKE facility.
+        configuration_topology      = 11,  ///< Configuration-topology facility.
+        ipte_range                  = 13,  ///< IPTE-range facility.
+        nonquiescing_key_setting    = 14,  ///< Nonquiescing-key-setting facility.
+        ap_query_info               = 12,  ///< AP Query Configuration Information
+        ap_facility_test            = 15,  ///< AP Facilities Test
+        msa                         = 17,  ///< Message-Security-Assist (KIMD/KLMD/KM).
+        long_displacement           = 18,  ///< Long-displacement facility.
+        hfp_madd_sub                = 20,  ///< HFP-multiply-and-add/subtract.
+        eimm                        = 21,  ///< Extended-immediate facility.
+        extended_translation_3      = 22,  ///< Extended-translation facility 3.
+        hfp_unnorm_ext              = 23,  ///< HFP-unnormalized-extension facility.
+        store_clock_fast            = 25,  ///< Store-clock-fast (STCKF).
+        tod_clock_steering          = 28,  ///< TOD-clock-steering facility.
+        mvcos                       = 27,  ///< Move-with-Optional-Specifications.
+        cmp_swap_and_store          = 32,  ///< Compare-and-Swap-and-Store facility.
+        cmp_swap_and_store_2        = 33,  ///< Compare-and-Swap-and-Store facility 2.
+        gen_inst_ext                = 34,  ///< General-instructions-extension facility.
+        execute_ext                 = 35,  ///< Execute-extensions facility.
+        fp_extension                = 37,  ///< Floating-point-extension facility.
+        load_program_params         = 40,  ///< Load-program-parameters facility.
+        fp_support_enh              = 41,  ///< Floating-point-support-enhancement facilities.
+        dfp                         = 42,  ///< DFP (decimal-floating-point) facility.
+        dfp_high_performance        = 43,  ///< DFP facility has high performance.
+        pfpo                        = 44,  ///< PFPO instruction.
+        distinct_operands           = 45,  ///< Distinct-operands, fast-BCR, highword, popcount, interlocked-access 1, load/store-on-cond 1.
+        misc_inst_ext1              = 49,  ///< Miscellaneous-instruction-extensions 1 (exec-hint, load-and-trap, PAI).
+        constr_te                   = 50,  ///< Constrained Transactional-Execution.
+        local_tlb_clearing          = 51,  ///< Local-TLB-clearing facility.
+        interlocked_access_2        = 52,  ///< Interlocked-Access facility 2.
+        load_store_on_cond_2        = 53,  ///< Load/store-on-condition 2 + load-and-zero-rightmost-byte.
+        msa_ext5                    = 57,  ///< MSA extension 5.
+        misc_inst_ext2              = 58,  ///< Miscellaneous-instruction-extensions 2.
+        misc_inst_ext3              = 61,  ///< Miscellaneous-instruction-extensions 3.
+        cpu_meas_counter            = 67,  ///< CPU-measurement counter facility.
+        cpu_meas_sampling           = 68,  ///< CPU-measurement sampling facility.
+        transactional_exec          = 73,  ///< Transactional-Execution.
+        store_hypervisor_info       = 74,  ///< Store-hypervisor-information facility.
+        access_exc_fetch_store_ind  = 75,  ///< Access-exception-fetch/store indication
+        msa_ext3                    = 76,  ///< MSA extension 3.
+        msa_ext4                    = 77,  ///< MSA extension 4.
+        edat2                       = 78,  ///< Enhanced-DAT-2 (2 GiB large pages).
+        dfp_packed_conversion       = 80,  ///< Decimal-floating-point packed-conversion facility.
+        ppa_in_order                = 81,  ///< PPA-in-order facility.
+        misc_inst_ext4              = 84,  ///< Miscellaneous-instruction-extensions 4.
+        vector                      = 129, ///< Vector facility for z/Architecture.
+        instruction_exec_protection = 130, ///< Instruction-Execution-Protection facility
+        side_effect_access          = 131, ///< Side-Effect-Access facility.
+        guarded_storage             = 133, ///< Guarded-storage facility.
+        vector_packed_decimal       = 134, ///< Vector-Packed-Decimal facility (implies 129).
+        vector_enh1                 = 135, ///< Vector-Enhancements facility 1 (implies 129).
+        config_zarch_arch_mode      = 138, ///< Configuration-z/Architecture-architectural-mode.
+        multiple_epoch              = 139, ///< Multiple-epoch facility (implies 25, 28).
+        store_cpu_counter_multiple  = 142, ///< Store-CPU-counter-multiple facility.
+        test_pending_ext_int        = 144, ///< Test-pending-external-interruption facility.
+        vector_enh2                 = 148, ///< Vector-Enhancements facility 2 (implies 129, 135).
+        move_page_and_set_key       = 149, ///< Move-Page-and-Set-Key facility (implies bit 14).
+        enhanced_sort               = 150, ///< Enhanced sort facility.
+        deflate_conversion          = 151, ///< DEFLATE-conversion facility.
+        vector_packed_decimal_enh   = 152, ///< Vector-Packed-Decimal-Enhancement (implies 129, 134).
+        msa_ext9                    = 155, ///< MSA extension 9 (implies 76, 77).
+        etoken                      = 156, ///< etoken
+        nnpa                        = 165, ///< Neural-Network-Processing-Assist.
+        esa390_compat_mode          = 168, ///< ESA/390-Compatibility-Mode facility.
+        ineff_nonconstrained_transaction = 170, ///< Ineffective-nonconstrained-transaction facility
+        bear                        = 193, ///< Bare enhancement facility.
+        rdp                         = 194, ///< Rdp enhancement facility.
+        proc_activity_inst          = 196, ///< Processor-Activity-Instrumentation facility.
+        proc_activity_inst_ext1     = 197, ///< Processor-Activity-Instrumentation-Extension 1 facility.
+        concurrent_funcs            = 201, ///< concurrent-functions facility.
+    };
+
+    constexpr auto STFLE_MAX_DWORDS = 32;
+
+    /// @brief Detect CPU facilities using STFLE.
+    /// @param fac_list   A span pointing to the output buffer.
+    /// @return Actual number of doublewords stored, or a kernel error.
+    template <usize Extent = STFLE_MAX_DWORDS>
+        requires (Extent > 0 && Extent <= STFLE_MAX_DWORDS)
+    auto detect(std::span<u64, Extent> fac_list) noexcept -> std::expected<u32, lib::kernel_error> {
+
+        std::fill(fac_list.begin(), fac_list.end(), 0ULL);
+
+        register u64 r0   __asm__("0") = fac_list.size() - 1U;
+        register u64 r1   __asm__("1") = reinterpret_cast<u64>(fac_list.data());
+        condition_code cc;
+
+        __asm__ volatile (
+            "   .insn   s,0xb2b00000,0(%[addr])\n"
+            "   ipm     %[cc]\n"
+            "   srl     %[cc],28\n"
+            : [cc] "=d" (cc), "+d" (r0)
+            : [addr] "a" (r1)
+            : "cc", "memory"
+        );
+
+        if (cc == 3) [[unlikely]] {
+            return std::unexpected(lib::kernel_error::from_arch(lib::arch_error::code::stfle_failed));
+        }
+
+        return static_cast<u32>(r0 + 1U);
+    }
+
+    /// @brief Initialize the CPU features cache.
+    /// @param[in] stfle_fac  Pointer to the STFLE doubleword array
+    auto init(std::optional<const u64*> stfle_fac) noexcept -> void;
+
+    /// @brief Query whether a specific named facility is available.
+    [[nodiscard]] auto has(facility f) noexcept -> bool;
+
+    /// @brief Query a raw STFLE bit by number (for facility bits not in the enum).
+    [[nodiscard]] auto has_raw(u32 bit) noexcept -> bool;
+
+    /// @brief Enable hardware facilities (AFP, Vector) in CR0 for the current CPU.
+    auto enable_hardware_facilities() noexcept -> void;
+
+} // namespace arch::s390x::cpu::features
+
+} // end export

@@ -1,0 +1,660 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file memory_objects.cxxm
+/// @brief Unified SCOMS-backed memory object hierarchy.
+
+export module zxfoundation.memory.memory_objects;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.scoms_ref;
+import zxfoundation.scoms.scoms_table;
+import zxfoundation.scoms.scoms_object_core;
+import zxfoundation.dgp.memory_contract;
+import zxfoundation.dgp.isolation_types;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::objects {
+
+    inline constexpr u32 MAX_MEMORY_OBJECTS = 8192U;
+
+    /// @brief Discriminator for the typed views layered on top of a
+    ///        memory_object.  By SCOMS convention this is redundant with
+    ///        @c scoms::kobject_type but it reflects the *memory*
+    ///        classification specifically.  Any SCOMS kobject can be a
+    ///        memory authority; this enum narrows the closed C++ union
+    ///        of bodies interpretable as @c memory_object views today.
+    enum class memory_view_kind : u8 {
+        /// @brief No typed view layered over this object — the body union
+        ///        is unused.  Used by anonymous grants, mappings,
+        ///        address-spaces and other pure-authority objects.
+        none              = 0,
+        /// @brief A VM mapping authority backed by demand paged memory.
+        ///        Interpreted via @c vm_region_view (placed in @c body).
+        vm_region         = 1,
+        /// @brief A SLUB slab-cache descriptor.
+        ///        Interpreted via @c kmem_cache_view.
+        kmem_cache        = 2,
+        /// @brief A registered policy plane provider.
+        ///        Interpreted via @c policy_server_view.
+        policy_server     = 3,
+        /// @brief A registry entry for a named kernel service.
+        ///        Interpreted via @c service_entry_view.
+        service_entry     = 4,
+        /// @brief Reserved: an MMIO / CCW device binding.  Will hold a
+        ///        pointer to the device-binding descriptor when the
+        ///        driver framework lands (see docs/MEMORY_REFACTOR_TODO).
+        device_binding    = 5,
+        /// @brief Reserved: a VFS dataset extent (file/sequential/DASD).
+        ///        Populated when VFS becomes SCOMS-backed.
+        dataset_extent    = 6,
+    };
+
+    struct memory_object;
+
+    /// @brief Generation-checked identity used across memory-object APIs.
+    /// @note @c type is preserved as @c scoms::kobject_type for compatibility
+    ///       with SCOMS path interop — but @c view_kind (in the object body)
+    ///       carries the *memory* classification.
+    struct memory_object_ref {
+        scoms::kobject_type type{scoms::kobject_type::none};
+        u32 id{scoms::KOBJECT_ID_INVALID};
+        u32 generation{0};
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return type != scoms::kobject_type::none &&
+                   id != scoms::KOBJECT_ID_INVALID && generation != 0U;
+        }
+    };
+
+    /// @brief Immutable policy stamped into a memory authority at creation.
+    /// VM/DGP callers create authorities from this complete record instead of
+    /// publishing default metadata and trying to repair it afterwards.
+    struct memory_object_policy {
+        u8 storage_key{0};
+        u32 storage_key_generation{0};
+        u8 numa_node{0};
+        dgp::memory_scope dgp_scope{dgp::memory_scope::private_domain};
+        dgp::memory_access dgp_access{dgp::memory_access::none};
+        dgp::isolation_rights dgp_rights{dgp::isolation_rights::none};
+        dgp::invalidation_scope invalidate{dgp::invalidation_scope::none};
+        u64 dgp_generation{0};
+        u64 mapping_generation{0};
+    };
+
+    /// @brief Tagged body for the typed views over a memory_object.
+    ///
+    /// Each non-@c none variant is a pointer into a separately-allocated
+    /// descriptor object owned by its own subsystem — but the SCOMS
+    /// identity, lifecycle, refcount, owner, rights and DGP generation
+    /// remain in the unified @c memory_object below.  This is the
+    /// *unification* primitive: every representation of a memory
+    /// authority in the kernel MUST layer under one of these variants
+    /// (or be @c none for an authority-only object), with no parallel
+    /// SCOMS table.
+    union view_body {
+        void* generic{nullptr};       ///< @c none — unused, or opaque pointer.
+        void* vm_region;              ///< @c vm_region — @c vm::vm_region*.
+        void* kmem_cache;             ///< @c kmem_cache — @c slub::kmem_cache*.
+        void* policy_server;          ///< @c policy_server — @c policy::policy_server*.
+        void* service_entry;          ///< @c service_entry — @c sys::service::service_entry*.
+        void* device_binding;         ///< @c device_binding — reserved.
+        void* dataset_extent;         ///< @c dataset_extent — reserved.
+    };
+
+    /// @brief THE single authority representation for any memory-bearing
+    ///        resource in the kernel.  Reachable by SCOMS identity id
+    ///        or by physical @ref frame_desc::object_id back-pointer.
+    ///
+    /// @note Range fields (radius) are descriptive metadata.  The only
+    ///       per-frame link is the reverse pointer in @c frame_desc.
+    ///       Physical and VA realities belong to @c frame_desc and
+    ///       @c vm_region respectively — NOT to this object.
+    struct memory_object {
+        scoms::kobject ko{};
+        memory_view_kind view_kind{memory_view_kind::none};
+        u8 _pad0[3]{};
+        u64 range_start{0};
+        u64 range_length{0};
+        u32 owner_domain{scoms::KOBJECT_ID_INVALID};
+        scoms::kobject_type related_type{scoms::kobject_type::none};
+        u8 _pad_related[3]{};
+        u32 related_id{scoms::KOBJECT_ID_INVALID};
+        u32 related_generation{0};
+        dgp::isolation_rights authority_rights{dgp::isolation_rights::none};
+        u8  storage_key{0};
+        u32 storage_key_generation{0};
+        u8  numa_node{0};
+        dgp::memory_scope     dgp_scope{dgp::memory_scope::private_domain};
+        dgp::memory_access    dgp_access{dgp::memory_access::none};
+        dgp::isolation_rights dgp_rights{dgp::isolation_rights::none};
+        dgp::invalidation_scope invalidate{dgp::invalidation_scope::none};
+        u64 dgp_generation{0};
+        u64 mapping_generation{0};
+        std::atomic<u32> active_mappings{0};
+        std::atomic_bool extent_retiring{false};
+        view_body body{};
+
+        memory_object() noexcept = default;
+        memory_object(const memory_object&) = delete;
+        auto operator=(const memory_object&) = delete;
+    };
+
+    static_assert(__builtin_offsetof(memory_object, ko) == 0);
+
+    auto memory_objects_init() noexcept -> void;
+
+    [[nodiscard]] auto memory_object_ref_of(
+        const memory_object& object
+    ) noexcept -> memory_object_ref;
+
+    [[nodiscard]] auto memory_object_resolve(
+        memory_object_ref ref
+    ) noexcept -> std::expected<memory_object*, lib::kernel_error>;
+
+    /// @brief Resolve by raw SCOMS object id (used by frame back-pointer).
+    /// @return Pointer, or nullptr when the slot does not hold an active
+    ///         memory authority object of the requested view.
+    [[nodiscard]] auto memory_object_resolve_id(
+        u32 id, memory_view_kind expected_kind = memory_view_kind::none
+    ) noexcept -> memory_object*;
+
+    [[nodiscard]] auto memory_object_create(
+        scoms::kobject_type type,
+        u32 owner_domain,
+        scoms::kobject* parent = nullptr,
+        u64 range_start = 0,
+        u64 range_length = 0,
+        dgp::isolation_rights authority_rights = dgp::isolation_rights::none,
+        memory_object_policy policy = {}
+    ) noexcept -> std::expected<memory_object*, lib::kernel_error>;
+
+    /// @brief Attach a typed view descriptor to an existing object.
+    /// @param[in] ref   Authority object to enrich.
+    /// @param[in] kind  Which body discriminant is being attached.
+    /// @param[in] body  Subsystem-owned descriptor pointer to attach.
+    /// @return Success or invalid-argument when @p kind is @c none or
+    ///         @p ref does not resolve to an active object.
+    /// @note The owning subsystem retains lifecycle and storage responsibility
+    ///       for @p body.  This call only stamps the discriminator so callers
+    ///       such as @c handle_page_fault can @c memory_object_resolve_id
+    ///       and reach the right view.
+    [[nodiscard]] auto memory_object_attach_view(
+        memory_object_ref ref,
+        memory_view_kind kind, void* body
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Detach the typed view descriptor from an object, leaving
+    ///        it as a pure authority.  The owning subsystem is still
+    ///        responsible for freeing @c body's pointed-to storage.
+    [[nodiscard]] auto memory_object_detach_view(
+        memory_object_ref ref
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_delegate(
+        memory_object_ref source, u32 caller_domain,
+        u32 owner_domain, dgp::isolation_rights authority_rights
+    ) noexcept -> std::expected<memory_object_ref, lib::kernel_error>;
+
+    /// @brief Recover the policy published by one authority object.
+    /// Storage policy describes backing allocation. Mapping policy describes
+    /// one address-space view and may diverge after a partial mprotect.
+    [[nodiscard]] auto memory_object_policy_for(
+        memory_object_ref ref
+    ) noexcept -> std::expected<memory_object_policy, lib::kernel_error>;
+
+    /// @brief Replace the complete policy record on mutable memory authority.
+    /// @note Storage and mapping objects carry mutable policy. Grants are
+    /// immutable authority ceilings. Policy changes are whole-record
+    /// publications; callers must not mutate individual metadata fields after
+    /// object activation.
+    [[nodiscard]] auto memory_object_update_policy(
+        memory_object_ref storage, const memory_object_policy& policy
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_destroy(u32 id) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_destroy(
+        memory_object_ref ref
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_link(
+        memory_object& object, const memory_object& related
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_update_range(
+        memory_object_ref ref, u64 range_start, u64 range_length
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Retain/release one live VMA reference to a physical extent.
+    [[nodiscard]] auto memory_extent_acquire_mapping(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+    [[nodiscard]] auto memory_extent_release_mapping(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+    [[nodiscard]] auto memory_extent_mapping_count(
+        memory_object_ref extent
+    ) noexcept -> std::expected<u32, lib::kernel_error>;
+    /// @brief Prevent new VMA references after confirming the extent is idle.
+    [[nodiscard]] auto memory_extent_retire(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_find(u32 id) noexcept -> memory_object*;
+
+} // namespace zxfoundation::memory::objects
+
+} // end export
+
+namespace zxfoundation::memory::objects::_internal {
+
+static scoms::kobject_table<memory_object, MAX_MEMORY_OBJECTS> g_table{};
+static bool g_initialized{false};
+
+[[nodiscard]] auto policy_from(const memory_object& object) noexcept
+    -> memory_object_policy {
+    return memory_object_policy{
+        .storage_key = object.storage_key,
+        .storage_key_generation = object.storage_key_generation,
+        .numa_node = object.numa_node,
+        .dgp_scope = object.dgp_scope,
+        .dgp_access = object.dgp_access,
+        .dgp_rights = object.dgp_rights,
+        .invalidate = object.invalidate,
+        .dgp_generation = object.dgp_generation,
+        .mapping_generation = object.mapping_generation,
+    };
+}
+
+auto assign_policy(memory_object& object, const memory_object_policy& policy)
+    noexcept -> void {
+    object.storage_key = policy.storage_key;
+    object.storage_key_generation = policy.storage_key_generation;
+    object.numa_node = policy.numa_node;
+    object.dgp_scope = policy.dgp_scope;
+    object.dgp_access = policy.dgp_access;
+    object.dgp_rights = policy.dgp_rights;
+    object.invalidate = policy.invalidate;
+    object.dgp_generation = policy.dgp_generation != 0U
+        ? policy.dgp_generation
+        : zxfoundation::dgp::memory_contract_generation();
+    object.mapping_generation = policy.mapping_generation;
+}
+
+[[nodiscard]] auto valid_memory_type(scoms::kobject_type type) noexcept -> bool {
+    switch (type) {
+        case scoms::kobject_type::memory_resource:
+        case scoms::kobject_type::memory_extent:
+        case scoms::kobject_type::memory_folio:
+        case scoms::kobject_type::page:
+        case scoms::kobject_type::storage:
+        case scoms::kobject_type::grant:
+        case scoms::kobject_type::mapping:
+        case scoms::kobject_type::address_space:
+        case scoms::kobject_type::page_table:
+        case scoms::kobject_type::key:
+        case scoms::kobject_type::vm_region:
+        case scoms::kobject_type::kmem_cache:
+        case scoms::kobject_type::policy_server:
+        case scoms::kobject_type::service_entry:
+        case scoms::kobject_type::device_binding:
+        case scoms::kobject_type::dataset_extent:
+            return true;
+        default:
+            return false;
+    }
+}
+
+} // namespace zxfoundation::memory::objects::_internal
+
+export {
+
+namespace zxfoundation::memory::objects {
+
+    auto memory_objects_init() noexcept -> void {
+        if (_internal::g_initialized) return;
+        _internal::g_table.init(scoms::kobject_type::none);
+        _internal::g_initialized = true;
+    }
+
+    [[nodiscard]] auto memory_object_ref_of(
+        const memory_object& object
+    ) noexcept -> memory_object_ref {
+        return memory_object_ref{object.ko.type, object.ko.id, object.ko.generation};
+    }
+
+    [[nodiscard]] auto memory_object_resolve(
+        memory_object_ref ref
+    ) noexcept -> std::expected<memory_object*, lib::kernel_error> {
+        auto* object = _internal::g_table.find_raw(ref.id);
+        if (!object || object->ko.type != ref.type ||
+            object->ko.generation != ref.generation ||
+            object->ko.state == base::lifecycle_state::dying ||
+            object->ko.state == base::lifecycle_state::destroyed) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+        }
+        return object;
+    }
+
+    [[nodiscard]] auto memory_object_resolve_id(
+        u32 id, memory_view_kind expected_kind
+    ) noexcept -> memory_object* {
+        auto* object = _internal::g_table.find_raw(id);
+        if (!object ||
+            object->ko.state == base::lifecycle_state::dying ||
+            object->ko.state == base::lifecycle_state::destroyed) {
+            return nullptr;
+        }
+        if (expected_kind != memory_view_kind::none &&
+            object->view_kind != expected_kind) return nullptr;
+        return object;
+    }
+
+    [[nodiscard]] auto memory_object_create(
+        scoms::kobject_type type,
+        u32 owner_domain,
+        scoms::kobject* parent,
+        u64 range_start,
+        u64 range_length,
+        dgp::isolation_rights authority_rights,
+        memory_object_policy policy
+    ) noexcept -> std::expected<memory_object*, lib::kernel_error> {
+        if (!_internal::g_initialized || !_internal::valid_memory_type(type)) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        if (type == scoms::kobject_type::memory_extent &&
+            (range_start == 0U || range_length == 0U ||
+             (range_start & (PAGE_SIZE - 1U)) != 0U ||
+             (range_length & (PAGE_SIZE - 1U)) != 0U ||
+             range_start + range_length < range_start)) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        }
+
+        auto result = _internal::g_table.alloc(type);
+        if (!result) return std::unexpected(result.error());
+        auto embryo_ref = static_cast<
+            scoms::kobject_ref<memory_object, base::lifecycle_state::embryo>&&
+        >(result.value());
+        auto& object = *embryo_ref;
+        object.view_kind = memory_view_kind::none;
+        object.body = {};
+        object.owner_domain = owner_domain;
+        object.range_start = range_start;
+        object.range_length = range_length;
+        object.related_type = scoms::kobject_type::none;
+        object.related_id = scoms::KOBJECT_ID_INVALID;
+        object.related_generation = 0U;
+        object.authority_rights = authority_rights;
+        _internal::assign_policy(object, policy);
+
+        auto owner_result = scoms::object_core::set_owner(object.ko, owner_domain);
+        if (!owner_result) {
+            discard_value _internal::g_table.release(object.ko.id);
+            return std::unexpected(owner_result.error());
+        }
+        if (parent) {
+            auto attach_result = scoms::object_core::attach(object.ko, *parent);
+            if (!attach_result) {
+                discard_value scoms::object_core::detach(object.ko);
+                discard_value _internal::g_table.release(object.ko.id);
+                return std::unexpected(attach_result.error());
+            }
+            object.related_type = parent->type;
+            object.related_id = parent->id;
+            object.related_generation = parent->generation;
+        }
+
+        auto active_ref = static_cast<
+            scoms::kobject_ref<memory_object, base::lifecycle_state::embryo>&&
+        >(embryo_ref).activate();
+        if (!active_ref) {
+            discard_value scoms::object_core::detach(object.ko);
+            discard_value _internal::g_table.release(object.ko.id);
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        return &object;
+    }
+
+    [[nodiscard]] auto memory_object_attach_view(
+        memory_object_ref ref,
+        memory_view_kind kind, void* body
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (kind == memory_view_kind::none || !body) return std::unexpected(
+            lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        auto r = memory_object_resolve(ref);
+        if (!r) return std::unexpected(r.error());
+        auto& obj = **r;
+        const locking::irq_lock_guard guard{obj.ko.lock};
+        if (obj.view_kind != memory_view_kind::none) return std::unexpected(
+            lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        obj.view_kind = kind;
+        switch (kind) {
+            case memory_view_kind::vm_region:      obj.body.vm_region = body;      break;
+            case memory_view_kind::kmem_cache:       obj.body.kmem_cache = body;     break;
+            case memory_view_kind::policy_server:    obj.body.policy_server = body;  break;
+            case memory_view_kind::service_entry:    obj.body.service_entry = body;  break;
+            case memory_view_kind::device_binding:   obj.body.device_binding = body; break;
+            case memory_view_kind::dataset_extent:   obj.body.dataset_extent = body; break;
+            default: break;
+        }
+        return {};
+    }
+
+    [[nodiscard]] auto memory_object_detach_view(
+        memory_object_ref ref
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto r = memory_object_resolve(ref);
+        if (!r) return std::unexpected(r.error());
+        auto& obj = **r;
+        const locking::irq_lock_guard guard{obj.ko.lock};
+        obj.view_kind = memory_view_kind::none;
+        obj.body = {};
+        return {};
+    }
+
+    [[nodiscard]] auto memory_object_link(
+        memory_object& object, const memory_object& related
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (object.ko.state != base::lifecycle_state::active ||
+            related.ko.state != base::lifecycle_state::active) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        const locking::irq_lock_guard guard{object.ko.lock};
+        object.related_type = related.ko.type;
+        object.related_id = related.ko.id;
+        object.related_generation = related.ko.generation;
+        return {};
+    }
+
+    [[nodiscard]] auto memory_object_destroy(u32 id) noexcept
+        -> std::expected<void, lib::kernel_error> {
+        auto* object = _internal::g_table.find_raw(id);
+        if (!object) return std::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::not_found));
+        bool extent_was_retiring = false;
+        if (object->ko.type == scoms::kobject_type::memory_extent) {
+            const locking::irq_lock_guard guard{object->ko.lock};
+            if (object->active_mappings.load(std::memory_order::acquire) != 0U) {
+                return std::unexpected(lib::kernel_error::from_driver(
+                    lib::driver_error::busy));
+            }
+            extent_was_retiring = object->extent_retiring.exchange(
+                true, std::memory_order::acq_rel);
+        }
+        if (scoms::object_core::has_dependents(object->ko)) {
+            if (object->ko.type == scoms::kobject_type::memory_extent &&
+                !extent_was_retiring) {
+                object->extent_retiring.store(false, std::memory_order::release);
+            }
+            return std::unexpected(lib::kernel_error::from_driver(
+                lib::driver_error::busy));
+        }
+        auto result = _internal::g_table.release(id);
+        if (!result && object->ko.type == scoms::kobject_type::memory_extent &&
+            !extent_was_retiring) {
+            object->extent_retiring.store(false, std::memory_order::release);
+        }
+        return result;
+    }
+
+    [[nodiscard]] auto memory_object_delegate(
+        memory_object_ref source, u32 caller_domain,
+        u32 owner_domain, dgp::isolation_rights authority_rights
+    ) noexcept -> std::expected<memory_object_ref, lib::kernel_error> {
+        auto source_result = memory_object_resolve(source);
+        if (!source_result) return std::unexpected(source_result.error());
+        auto& original = **source_result;
+        if (original.ko.type != scoms::kobject_type::grant ||
+            caller_domain != original.owner_domain ||
+            owner_domain == caller_domain ||
+            authority_rights == dgp::isolation_rights::none ||
+            !dgp::has_all_rights(original.authority_rights, authority_rights) ||
+            !dgp::has_all_rights(original.authority_rights,
+                dgp::isolation_rights::delegate)) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        auto policy = memory_object_policy_for(source);
+        if (!policy) return std::unexpected(policy.error());
+        auto delegated = memory_object_create(
+            scoms::kobject_type::grant, owner_domain, &original.ko,
+            original.range_start, original.range_length, authority_rights, *policy);
+        if (!delegated) return std::unexpected(delegated.error());
+        return memory_object_ref_of(**delegated);
+    }
+
+    [[nodiscard]] auto memory_object_policy_for(
+        memory_object_ref ref
+    ) noexcept -> std::expected<memory_object_policy, lib::kernel_error> {
+        auto object_result = memory_object_resolve(ref);
+        if (!object_result) return std::unexpected(object_result.error());
+        auto& object = **object_result;
+        const locking::irq_lock_guard guard{object.ko.lock};
+        return _internal::policy_from(object);
+    }
+
+    [[nodiscard]] auto memory_object_update_policy(
+        memory_object_ref storage, const memory_object_policy& policy
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto object_result = memory_object_resolve(storage);
+        if (!object_result) return std::unexpected(object_result.error());
+        auto& object = **object_result;
+        if (object.ko.type != scoms::kobject_type::storage &&
+            object.ko.type != scoms::kobject_type::mapping) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        const locking::irq_lock_guard guard{object.ko.lock};
+        _internal::assign_policy(object, policy);
+        return {};
+    }
+
+    [[nodiscard]] auto memory_object_destroy(
+        memory_object_ref ref
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto object_result = memory_object_resolve(ref);
+        if (!object_result) return std::unexpected(object_result.error());
+        return memory_object_destroy((*object_result)->ko.id);
+    }
+
+    [[nodiscard]] auto memory_object_update_range(
+        memory_object_ref ref, u64 range_start, u64 range_length
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto object_result = memory_object_resolve(ref);
+        if (!object_result) return std::unexpected(object_result.error());
+        auto& object = **object_result;
+        object.range_start = range_start;
+        object.range_length = range_length;
+        return {};
+    }
+
+    [[nodiscard]] auto memory_extent_acquire_mapping(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto object_result = memory_object_resolve(extent);
+        if (!object_result) return std::unexpected(object_result.error());
+        auto& object = **object_result;
+        if (object.ko.type != scoms::kobject_type::memory_extent) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        const locking::irq_lock_guard guard{object.ko.lock};
+        if (object.ko.state != base::lifecycle_state::active ||
+            object.extent_retiring.load(std::memory_order::acquire)) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+        }
+        object.active_mappings.fetch_add(1U, std::memory_order::acq_rel);
+        return {};
+    }
+
+    [[nodiscard]] auto memory_extent_release_mapping(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto object_result = memory_object_resolve(extent);
+        if (!object_result) return std::unexpected(object_result.error());
+        auto& object = **object_result;
+        if (object.ko.type != scoms::kobject_type::memory_extent) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        u32 current = object.active_mappings.load(std::memory_order::acquire);
+        while (current != 0U) {
+            if (object.active_mappings.compare_exchange_weak(
+                    current, current - 1U, std::memory_order::acq_rel,
+                    std::memory_order::acquire)) return {};
+        }
+        return std::unexpected(lib::kernel_error::from_memory(
+            lib::memory_error::purpose_mismatch));
+    }
+
+    [[nodiscard]] auto memory_extent_mapping_count(
+        memory_object_ref extent
+    ) noexcept -> std::expected<u32, lib::kernel_error> {
+        auto object_result = memory_object_resolve(extent);
+        if (!object_result) return std::unexpected(object_result.error());
+        auto& object = **object_result;
+        if (object.ko.type != scoms::kobject_type::memory_extent) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        return object.active_mappings.load(std::memory_order::acquire);
+    }
+
+    [[nodiscard]] auto memory_extent_retire(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto object_result = memory_object_resolve(extent);
+        if (!object_result) return std::unexpected(object_result.error());
+        auto& object = **object_result;
+        if (object.ko.type != scoms::kobject_type::memory_extent) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+        const locking::irq_lock_guard guard{object.ko.lock};
+        if (object.active_mappings.load(std::memory_order::acquire) != 0U ||
+            object.extent_retiring.exchange(true, std::memory_order::acq_rel)) {
+            return std::unexpected(lib::kernel_error::from_driver(
+                lib::driver_error::busy));
+        }
+        return {};
+    }
+
+    [[nodiscard]] auto memory_object_find(u32 id) noexcept -> memory_object* {
+        return _internal::g_table.find_raw(id);
+    }
+
+} // namespace zxfoundation::memory::objects
+
+} // end export

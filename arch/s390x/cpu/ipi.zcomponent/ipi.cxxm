@@ -1,0 +1,49 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ipi.cxxm
+/// @brief Leaf IPI send primitives for s390x.
+
+export module arch.s390x.cpu.ipi;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+
+export {
+
+namespace arch::s390x::cpu::ipi {
+
+    /// @brief Site-targeted helper: fetch-or a bit into the target's ec_bits
+    ///        and (if newly set) punch a SIGP to deliver the IPI.
+    auto send_bit_punch(u16 target_cpu_id, u64 bit_mask, u8 sigp_order) noexcept -> void;
+
+    /// @brief Send an external-call IPI with a single soft-IPI bit.
+    auto send_extcall(u16 target_cpu_id, u64 ec_bit_mask) noexcept -> void;
+
+    /// @brief Send an emergency-signal IPI (for panic / halt paths only).
+    auto send_emergency(u16 target_cpu_id, u64 ec_bit_mask) noexcept -> void;
+
+    /// @brief Send a self-IPI via external call (MCCK deferred work, irq_work).
+    auto send_self_extcall(u64 ec_bit_mask) noexcept -> void;
+
+    /// @brief Convenience: request a remote CPU to reschedule.
+    auto send_reschedule(u16 target_cpu_id) noexcept -> void;
+
+    /// @brief Convenience: request a remote CPU to stop.
+    auto send_stop_cpu(u16 target_cpu_id) noexcept -> void;
+
+    auto send_call_function(u16 target_cpu_id) noexcept -> void;
+
+    auto send_irq_work(u16 target_cpu_id) noexcept -> void;
+
+    auto send_mcck_pending(u16 target_cpu_id) noexcept -> void;
+
+    /// @brief Send a halt IPI to a logical CPU
+    auto send_halt_ipi(u16 target_cpu_id) noexcept -> void;
+
+    auto handle_ipi(
+        u16 irq,
+        irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void;
+
+} // namespace arch::s390x::cpu::ipi
+
+} // end export

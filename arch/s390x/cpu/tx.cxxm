@@ -1,56 +1,107 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/tx.cxxm
-/// @brief z/Architecture transactional execution (TBEGIN, TEND, TABORT, NTSTG, ETND).
-///        Requires facility bits 50 (constrained-TE) and 73 (transactional-execution).
+/// @brief Verified z/Architecture transactional execution primitives.
 
 export module arch.s390x.cpu.tx;
 import zxfoundation.base.types;
+import arch.s390x.cpu.features;
+import arch.s390x.cpu.ctlreg;
+import lib.bit;
 
 export {
 
 namespace arch::s390x::cpu::tx {
 
-    /// @brief Transaction Diagnostic Block (TDB) — 256 bytes, 256-byte aligned.
-    /// Filled by the CPU on transaction abort when a TDB address was supplied to TBEGIN.
-    struct alignas(256) [[gnu::packed]] tdb {
-        u64 data[32]{};
+    /// @brief PoP format-1 Transaction Diagnostic Block.
+    struct alignas(256) tdb {
+        u8  format{0};
+        u8  flags{0};
+        u8  reserved_02[4]{};
+        u16 nesting_depth{0};
+        u64 transaction_abort_code{0};
+        u64 conflict_token_value{0};
+        u64 aborted_instruction_address{0};
+        u8  exception_access_id{0};
+        u8  data_exception_code{0};
+        u8  reserved_42[2]{};
+        u32 program_interruption_id{0};
+        u64 translation_exception_id{0};
+        u64 breaking_event_address{0};
+        u8  reserved_38[72]{};
+        u64 saved_registers[16]{};
 
         /// @brief Abort code (format-dependent, see PoP Chapter 5).
-        [[nodiscard]] auto abort_code() const noexcept -> u64 { return data[0]; }
+        [[nodiscard]] auto abort_code() const noexcept -> u64 {
+            return transaction_abort_code;
+        }
 
         /// @brief Conflict token — virtual address of the conflicting operand.
-        [[nodiscard]] auto conflict_token() const noexcept -> u64 { return data[1]; }
+        [[nodiscard]] auto conflict_token() const noexcept -> u64 {
+            return conflict_token_value;
+        }
 
-        /// @brief PSW mask at time of abort.
-        [[nodiscard]] auto abort_psw_mask() const noexcept -> u64 { return data[2]; }
+        /// @brief Aborted-transaction instruction address.
+        [[nodiscard]] auto abort_instruction_address() const noexcept -> u64 {
+            return aborted_instruction_address;
+        }
 
-        /// @brief PSW instruction address at time of abort.
-        [[nodiscard]] auto abort_psw_addr() const noexcept -> u64 { return data[3]; }
+        /// @brief Whether this block contains PoP format-1 data.
+        [[nodiscard]] auto valid() const noexcept -> bool { return format == 1U; }
+
+        /// @brief Whether the conflict token is valid for this abort.
+        [[nodiscard]] auto conflict_token_valid() const noexcept -> bool {
+            return valid() && (flags & 0x01U) != 0U;
+        }
     };
+
+    static_assert(sizeof(tdb) == 256, "TX TDB must be exactly 256 bytes");
+    static_assert(__builtin_offsetof(tdb, nesting_depth) == 6);
+    static_assert(__builtin_offsetof(tdb, transaction_abort_code) == 8);
+    static_assert(__builtin_offsetof(tdb, conflict_token_value) == 16);
+    static_assert(__builtin_offsetof(tdb, aborted_instruction_address) == 24);
+    static_assert(__builtin_offsetof(tdb, saved_registers) == 128);
 
     /// @brief CC values returned by tbegin() / tbeginc().
     constexpr i32 TX_CC_SUCCESS          = 0; ///< Transaction initiated.
     constexpr i32 TX_CC_INDETERMINATE    = 1; ///< Indeterminate condition abort.
     constexpr i32 TX_CC_TRANSIENT        = 2; ///< Transient abort (retry may succeed).
     constexpr i32 TX_CC_PERSISTENT       = 3; ///< Persistent abort (retry will not help).
+    constexpr i32 TX_CC_UNAVAILABLE      = -1; ///< Facility or CR0.TXC disabled.
 
-    /// @brief Default GR save mask: save r1-r15 (bits 1-15 of I2), no AR/FP mods.
+    /// @brief Default GR save mask: save register pairs 2-15, no AR/FP mods.
     constexpr u16 TBEGIN_GRSM_DEFAULT   = 0xFE00;
 
     /// @brief GR save mask that also saves r0 (bits 0-15 of I2).
     constexpr u16 TBEGIN_GRSM_ALL       = 0xFF00;
 
-    /// @brief Allow AR modification (PoP I2 bit 12 — u16 mask 0x0008).
+    /// @brief Allow AR modification in the I2 control field.
     constexpr u16 TBEGIN_AR_ALLOWED     = 0x0008;
 
-    /// @brief Allow floating-point/vector operation (PoP I2 bit 13 — u16 mask 0x0004).
+    /// @brief Allow floating-point/vector operation in the I2 control field.
     constexpr u16 TBEGIN_FLOAT_ALLOWED  = 0x0004;
+
+    /// @brief Check that TX is installed and enabled for this CPU.
+    [[nodiscard]] inline auto available() noexcept -> bool {
+        if (!features::has(features::facility::transactional_exec)) return false;
+        u64 cr0{0};
+        ctlreg::ctl_store<0, 0>(cr0);
+        return lib::bit_test_msb(cr0, 8);
+    }
+
+    /// @brief Check that constrained TX is installed and TX is enabled.
+    [[nodiscard]] inline auto constrained_available() noexcept -> bool {
+        return available() && features::has(features::facility::constr_te);
+    }
 
     /// @brief Begin a non-constrained transaction (no TDB).
     /// @tparam Ctrl  I2 control field (GRSM | A | F | PIFC).
     /// @return CC: 0=started, 1=indeterminate abort, 2=transient abort.
     template <u16 Ctrl = TBEGIN_GRSM_DEFAULT>
     [[nodiscard]] inline auto tbegin() noexcept -> condition_code {
+        if (!available()) return TX_CC_UNAVAILABLE;
+        // I2 bits 8-11 are reserved; PIFC=3 is reserved as well.
+        if ((Ctrl & 0x00F0U) != 0U || (Ctrl & 0x0003U) == 0x0003U)
+            return TX_CC_UNAVAILABLE;
         condition_code cc;
         __asm__ volatile(
             "   .insn   sil,0xe56000000000,0,%[ctrl]\n"
@@ -67,6 +118,10 @@ namespace arch::s390x::cpu::tx {
     /// @param tdb_ref  Reference to a 256-byte-aligned TDB.
     template <u16 Ctrl = TBEGIN_GRSM_DEFAULT>
     [[nodiscard]] inline auto tbegin(tdb& tdb_ref) noexcept -> condition_code {
+        if (!available() || (Ctrl & 0x00F0U) != 0U ||
+            (Ctrl & 0x0003U) == 0x0003U ||
+            (reinterpret_cast<u64>(&tdb_ref) & 0x7U) != 0U)
+            return TX_CC_UNAVAILABLE;
         condition_code cc;
         __asm__ volatile(
             "   .insn   sil,0xe56000000000,0(%[tdb]),%[ctrl]\n"
@@ -83,6 +138,7 @@ namespace arch::s390x::cpu::tx {
     /// Hardware guarantees eventual completion — no fallback path required.
     /// @return CC value: 0 = started (first attempt), 2 = restarted after abort.
     [[nodiscard]] inline auto tbeginc() noexcept -> i32 {
+        if (!constrained_available()) return TX_CC_UNAVAILABLE;
         i32 cc;
         __asm__ volatile(
             // TBEGINC 0,I2 — opcode 0xE561, TDB address must be 0
@@ -97,17 +153,23 @@ namespace arch::s390x::cpu::tx {
     }
 
     /// @brief Commit the innermost transaction.
-    inline auto tend() noexcept -> void {
+    /// @return false when TX is unavailable; true after issuing TEND.
+    [[nodiscard]] inline auto tend() noexcept -> bool {
+        if (!available()) return false;
         __asm__ volatile(
             // TEND — opcode 0xB2F8
             "   .insn   s,0xb2f80000,0\n"
             ::: "cc", "memory"
         );
+        return true;
     }
 
     /// @brief Abort the current transaction with the given abort code.
     /// Control returns to the instruction after the outermost TBEGIN with CC != 0.
+    [[nodiscard]] inline auto depth() noexcept -> u32;
+
     [[noreturn]] inline auto tabort(u64 code) noexcept -> void {
+        if (!available() || depth() == 0U || code < 256U) __builtin_trap();
         __asm__ volatile(
             // TABORT D2(B2) — opcode 0xB2FC, abort code = address
             "   .insn   s,0xb2fc0000,0(%[code])\n"
@@ -119,7 +181,8 @@ namespace arch::s390x::cpu::tx {
 
     /// @brief Nontransactional store — writes a 64-bit value outside the
     ///        transaction's isolation domain (useful for abort counters, logs).
-    inline auto nontx_store(u64* addr, u64 value) noexcept -> void {
+    [[nodiscard]] inline auto nontx_store(u64* addr, u64 value) noexcept -> bool {
+        if (!available() || !addr) return false;
         __asm__ volatile(
             // NTSTG R1,D2(X2,B2) — opcode 0xE325
             "   .insn   rxy,0xe30000000025,%[val],0(%[addr])\n"
@@ -127,11 +190,13 @@ namespace arch::s390x::cpu::tx {
             : [val] "d" (value), [addr] "a" (addr)
             : "memory"
         );
+        return true;
     }
 
     /// @brief Extract Transaction Nesting Depth (ETND).
     /// @return Current nesting depth (0 = not in a transaction).
     [[nodiscard]] inline auto depth() noexcept -> u32 {
+        if (!available()) return 0U;
         u32 d;
         __asm__ volatile(
             // ETND — opcode 0xB2EC

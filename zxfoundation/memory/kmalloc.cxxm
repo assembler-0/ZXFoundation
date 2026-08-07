@@ -9,7 +9,7 @@ import zxfoundation.sys.syschk;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.error;
-import lib.expected;
+import std;
 
 namespace zxfoundation::memory::kmalloc::_internal {
 
@@ -126,3 +126,11 @@ namespace zxfoundation::memory::kmalloc {
 } // namespace zxfoundation::memory::kmalloc
 
 } // end export
+
+__external__ auto __raw_alloc(u64 size) noexcept -> void* {
+    return zxfoundation::memory::kmalloc::kmalloc(size);
+}
+
+__external__ auto __raw_free(void* ptr) noexcept -> void {
+    zxfoundation::memory::kmalloc::kfree(ptr);
+}

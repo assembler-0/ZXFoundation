@@ -5,8 +5,7 @@
 export module zxfoundation.sys.syschk_types;
 import zxfoundation.base.types;
 import lib.error;
-import lib.source_location;
-import lib.string_view;
+import std;
 
 export {
 
@@ -61,8 +60,8 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Bundle carrying a format-string and its call-site source location.
     struct fmt_loc {
-        lib::string_view     fmt;  ///< The format string.
-        lib::source_location loc;  ///< Call-site source location.
+        std::string_view     fmt;  ///< The format string.
+        std::source_location loc;  ///< Call-site source location.
 
         /// @brief Construct from a NUL-terminated string literal.
         /// @param[in] f    Format string literal.
@@ -70,7 +69,7 @@ namespace zxfoundation::sys::syschk {
         template <usize N>
         consteval fmt_loc(
             const char (&f)[N],
-            lib::source_location l = lib::source_location::current()
+            std::source_location l = std::source_location::current()
         ) noexcept
             : fmt(f, N - 1), loc(l) {}
 
@@ -80,8 +79,8 @@ namespace zxfoundation::sys::syschk {
         /// @warning        Using a runtime string_view loses the call-site
         ///                 guarantee; l defaults to the caller's site.
         consteval fmt_loc(
-            lib::string_view sv,
-            lib::source_location l = lib::source_location::current()
+            std::string_view sv,
+            std::source_location l = std::source_location::current()
         ) noexcept
             : fmt(sv), loc(l) {}
     };

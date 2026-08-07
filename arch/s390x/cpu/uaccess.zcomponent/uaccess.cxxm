@@ -1,0 +1,85 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/uaccess.cxxm
+/// @brief z/Architecture user-space access
+
+export module arch.s390x.cpu.uaccess;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::uaccess {
+
+    constexpr u64 MVCOS_MAX_CHUNK = 4096ULL;
+
+    /// @brief Execute a single MVCS instruction with exception-table fixup.
+    /// @tparam FixupType  EX_TYPE_UA_MVCOS_TO (4) or EX_TYPE_UA_MVCOS_FROM (5).
+    template <u16 FixupType>
+    [[gnu::always_inline]] auto mvcos(void* dst, const void* src,
+                                        u64& len, u64 oac) noexcept -> condition_code {
+        condition_code cc;
+        if constexpr (FixupType == EX_TYPE_UA_MVCOS_FROM) {
+            __asm__ volatile(
+                "   lgr   0,%[oac]\n"
+                "0: .insn ssf,0xc80000000000,%[dst],%[src],%[len]\n"
+                "1: ipm   %[cc]\n"
+                "   srl   %[cc],28\n"
+                EX_TABLE(0b, 1b, EX_TYPE_UA_MVCOS_FROM, 3)
+                : [cc]  "=d" (cc),
+                  [len] "+d" (len),
+                  [dst] "+Q" (*(static_cast<char*>(dst)))
+                : [src] "Q"  (*(static_cast<const char*>(src))),
+                  [oac] "d"  (oac)
+                : "cc", "0", "memory"
+            );
+        } else if constexpr (FixupType == EX_TYPE_UA_MVCOS_TO) {
+            __asm__ volatile(
+                "   lgr   0,%[oac]\n"
+                "0: .insn ssf,0xc80000000000,%[dst],%[src],%[len]\n"
+                "1: ipm   %[cc]\n"
+                "   srl   %[cc],28\n"
+                EX_TABLE(0b, 1b, EX_TYPE_UA_MVCOS_TO, 3)
+                : [cc]  "=d" (cc),
+                  [len] "+d" (len),
+                  [dst] "+Q" (*(static_cast<char*>(dst)))
+                : [src] "Q" (*(static_cast<const char*>(src))),
+                  [oac] "d"  (oac)
+                : "cc", "0", "memory"
+            );
+        }
+        return cc;
+    }
+
+    /// @brief Copy len bytes using MVCO with a given OAC pair.
+    ///        Loops in 4 KiB chunks when len > 4096 (CC 3 path).
+    /// @return 0 on success, -1 on access exception.
+    template <u16 FixupType>
+    [[nodiscard]] auto mvcos_copy(void* dst, const void* src,
+                                  u64 len, u64 oac) noexcept -> i32 {
+        auto* d = static_cast<u8*>(dst);
+        auto* s = static_cast<const u8*>(src);
+        while (len > 0) {
+            u64 chunk = len;
+            const condition_code cc = mvcos<FixupType>(d, s, chunk, oac);
+            if (cc == 0) break;
+            if (cc == 3) {
+                d += MVCOS_MAX_CHUNK;
+                s += MVCOS_MAX_CHUNK;
+                len = chunk;
+                continue;
+            }
+            return -1;
+        }
+        return 0;
+    }
+
+    /// @brief Copy from user space (PRIMARY) to kernel space (HOME).
+    [[nodiscard]] auto copy_from_user(void* dst, u64 src, u64 len,
+                                             u64 root_phys) noexcept -> i32;
+
+    /// @brief Copy from kernel space (HOME) to user space (PRIMARY).
+    [[nodiscard]] auto copy_to_user(u64 dst, const void* src, u64 len,
+                                           u64 root_phys) noexcept -> i32;
+
+} // namespace arch::s390x::cpu::uaccess
+
+} // end export

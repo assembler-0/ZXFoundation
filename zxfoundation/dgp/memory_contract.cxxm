@@ -6,16 +6,23 @@ export module zxfoundation.dgp.memory_contract;
 import zxfoundation.base.types;
 import zxfoundation.dgp.isolation_types;
 import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.mmu_const;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 
 export {
 
 namespace zxfoundation::dgp {
 
-    /// @brief Granularity used by the DGP memory contract.
-    inline constexpr u64 DGP_PAGE_SIZE = 4096ULL;
+    namespace _internal {
+        /// @brief Live monotonic generation.
+        inline std::atomic<u64> g_generation{1ULL};
+    }
+
+    /// @brief Advance the global memory-contract generation.
+    inline auto generation_bump() noexcept -> u64 {
+        return _internal::g_generation.fetch_add(1ULL, std::memory_order::acq_rel) + 1ULL;
+    }
 
     /// @brief Access intent for a DGP-validated memory operation.
     enum class memory_access : u32 {
@@ -115,7 +122,7 @@ namespace zxfoundation::dgp {
     /// @param[in] address Address to check.
     /// @return true when the low page-offset bits are zero.
     [[nodiscard]] constexpr auto memory_contract_is_page_aligned(u64 address) noexcept -> bool {
-        return (address & (DGP_PAGE_SIZE - 1ULL)) == 0ULL;
+        return (address & (PAGE_SIZE - 1ULL)) == 0ULL;
     }
 
     /// @brief Validate a virtual address range before a VM or portal operation.
@@ -127,13 +134,13 @@ namespace zxfoundation::dgp {
     [[nodiscard]] auto memory_contract_validate_range(
         u64 va_start,
         u64 va_end
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (va_end == 0ULL || va_start >= va_end) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         if (!memory_contract_is_page_aligned(va_start) || !memory_contract_is_page_aligned(va_end)) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
         }
 
         return {};
@@ -146,9 +153,13 @@ namespace zxfoundation::dgp {
     /// @warning This check does not allocate, reserve, or release a key.
     [[nodiscard]] auto memory_contract_validate_storage_key(
         u8 storage_key
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (storage_key == STORAGE_KEY_AUTO) {
+            return {};
+        }
+
         if (storage_key >= STORAGE_KEY_COUNT) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::out_of_range));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::out_of_range));
         }
 
         return {};
@@ -161,28 +172,32 @@ namespace zxfoundation::dgp {
     /// @warning This adapter performs no allocation and installs no mapping.
     [[nodiscard]] auto memory_contract_validate_request(
         const memory_contract_request& request
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         auto range_result = memory_contract_validate_range(request.va_start, request.va_end);
         if (!range_result) {
-            return lib::unexpected(range_result.error());
+            return std::unexpected(range_result.error());
         }
 
         if (request.length == 0ULL || request.length != (request.va_end - request.va_start)) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        if ((request.prot.raw() & arch::s390x::mmu::PTE_NOEXEC) == 0ULL
+            && (request.prot.raw() & arch::s390x::mmu::PTE_PROTECT) == 0ULL) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
         }
 
         if (request.phys_start != 0ULL && !memory_contract_is_page_aligned(request.phys_start)) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
         }
 
         return memory_contract_validate_storage_key(request.storage_key);
     }
 
     /// @brief Return the current DGP memory-policy generation.
-    /// @return Monotonic generation attached to authorization results.
-    /// @note Hotplug, storage-key revocation, and CPU-ASCE tracking waves may advance this value later.
-    [[nodiscard]] auto memory_contract_generation() noexcept -> u64 {
-        return 1ULL;
+    [[nodiscard]] inline auto memory_contract_generation() noexcept -> u64 {
+        return _internal::g_generation.load(std::memory_order::acquire);
     }
 
     /// @brief Translate an access mask into isolation rights required by the DGP policy plane.
@@ -206,13 +221,14 @@ namespace zxfoundation::dgp {
     /// @return Concrete architected storage-key access-control value.
     [[nodiscard]] auto memory_contract_resolve_storage_key(
         u8 storage_key
-    ) noexcept -> lib::expected<u8, lib::kernel_error> {
+    ) noexcept -> std::expected<u8, lib::kernel_error> {
+        auto key_result = memory_contract_validate_storage_key(storage_key);
+        if (!key_result) return std::unexpected(key_result.error());
+
         if (storage_key == STORAGE_KEY_AUTO) {
             return 0U;
         }
 
-        auto key_result = memory_contract_validate_storage_key(storage_key);
-        if (!key_result) return lib::unexpected(key_result.error());
         return storage_key;
     }
 
@@ -223,18 +239,24 @@ namespace zxfoundation::dgp {
     /// @warning This function authorizes policy only; it does not allocate frames or install DAT entries.
     [[nodiscard]] auto memory_contract_authorize_mapping(
         const memory_contract_request& request
-    ) noexcept -> lib::expected<memory_contract_result, lib::kernel_error> {
+    ) noexcept -> std::expected<memory_contract_result, lib::kernel_error> {
         auto validate_result = memory_contract_validate_request(request);
-        if (!validate_result) return lib::unexpected(validate_result.error());
+        if (!validate_result) return std::unexpected(validate_result.error());
 
         if (request.scope == memory_scope::portal_shared
             && !memory_access_has(request.access, memory_access::share)) {
-            return lib::unexpected(lib::kernel_error::from_memory(
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
+        }
+
+        if ((request.prot.raw() & arch::s390x::mmu::PTE_NOEXEC) == 0ULL
+            && (request.prot.raw() & arch::s390x::mmu::PTE_PROTECT) == 0ULL) {
+            return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
 
         auto key = memory_contract_resolve_storage_key(request.storage_key);
-        if (!key) return lib::unexpected(key.error());
+        if (!key) return std::unexpected(key.error());
 
         return memory_contract_result{
             .storage_key = *key,
@@ -258,9 +280,9 @@ namespace zxfoundation::dgp {
     [[nodiscard]] auto memory_contract_authorize_protect(
         const memory_contract_request& request,
         arch::s390x::mmu::page_prot old_prot
-    ) noexcept -> lib::expected<memory_contract_result, lib::kernel_error> {
+    ) noexcept -> std::expected<memory_contract_result, lib::kernel_error> {
         auto result = memory_contract_authorize_mapping(request);
-        if (!result) return lib::unexpected(result.error());
+        if (!result) return std::unexpected(result.error());
 
         result->invalidate = (old_prot.raw() == request.prot.raw())
             ? invalidation_scope::none
@@ -275,9 +297,9 @@ namespace zxfoundation::dgp {
     /// @warning This function does not perform teardown; it only selects policy metadata.
     [[nodiscard]] auto memory_contract_authorize_unmap(
         const memory_contract_request& request
-    ) noexcept -> lib::expected<memory_contract_result, lib::kernel_error> {
+    ) noexcept -> std::expected<memory_contract_result, lib::kernel_error> {
         auto result = memory_contract_authorize_mapping(request);
-        if (!result) return lib::unexpected(result.error());
+        if (!result) return std::unexpected(result.error());
 
         result->invalidate = memory_access_has(request.access, memory_access::share)
             ? invalidation_scope::alb_global
@@ -288,7 +310,6 @@ namespace zxfoundation::dgp {
     static_assert(sizeof(memory_access) == sizeof(u32), "DGP memory access mask must remain 32-bit");
     static_assert(sizeof(memory_scope) == sizeof(u8), "DGP memory scope must remain byte-sized");
     static_assert(sizeof(invalidation_scope) == sizeof(u8), "DGP invalidation scope must remain byte-sized");
-    static_assert(DGP_PAGE_SIZE == 4096ULL, "DGP initial contract assumes the z/Architecture 4 KiB page granule");
 
 } // namespace zxfoundation::dgp
 

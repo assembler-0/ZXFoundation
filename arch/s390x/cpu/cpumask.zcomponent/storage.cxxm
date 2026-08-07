@@ -1,0 +1,15 @@
+export module arch.s390x.cpu.cpumask:storage;
+export import lib.cpumask;
+
+export namespace _internal {
+
+    /// @brief CPUs that physically exist in this configuration (set at boot,
+    ///        stable thereafter).  Populated from the loader cpu_map.
+    lib::cpumask g_possible_mask{};
+
+    /// @brief CPUs that are fully initialized and may be targeted by any
+    ///        cross-CPU operation.  A CPU's online bit is the single source of
+    ///        truth for "is this slot safe to touch."
+    lib::cpumask g_online_mask{};
+
+}

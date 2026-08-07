@@ -12,16 +12,12 @@ import zxfoundation.sys.printk;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
-import arch.s390x.cpu.processor;
+import arch.s390x.cpu.sync;
 import arch.s390x.cpu.irq;
-import arch.s390x.lib.atomic;
 import arch.s390x.cpu.clock;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 import lib.format;
-import lib.algorithm;
-import lib.util;
 
 export {
 
@@ -41,20 +37,18 @@ namespace arch::s390x::css::ccw_io {
         [[maybe_unused]] u32 ccw_count,
         u8 key = 0,
         u64 timeout_us = 5'000'000
-    ) noexcept -> ::lib::expected<irb, ::lib::kernel_error> {
+    ) noexcept -> ::std::expected<irb, ::lib::kernel_error> {
         using namespace zxfoundation::sys::printk;
         using namespace zxfoundation::memory::hhdm;
-        namespace proc = cpu::processor;
 
         // Validate the subchannel entry.
         auto* entry = css_get_entry(sch_index);
         if (!entry) {
-            return ::lib::unexpected(
+            return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
 
         namespace irqctl = cpu::irq;
-        namespace atomic = arch::s390x::lib::atomic;
 
         // Drain any stale status left from a prior operation before arming.
         {
@@ -62,7 +56,7 @@ namespace arch::s390x::css::ccw_io {
             discard_value tsch(entry->schid, discard);
         }
 
-        entry->io_done.store(0, atomic::memory_order::seq_cst);
+        entry->io_done.store(0, std::memory_order::seq_cst);
         orb o{};
         o.set_format1();
         o.set_key(key);
@@ -97,7 +91,7 @@ namespace arch::s390x::css::ccw_io {
                   ::lib::format::hex{static_cast<u64>(schib_diag.scsw_data.sch_status), 2, true});
 
             if (retry + 1 == MAX_START_RETRIES) {
-                return ::lib::unexpected(
+                return ::std::unexpected(
                     ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
             }
 
@@ -111,9 +105,9 @@ namespace arch::s390x::css::ccw_io {
         const u64 deadline  = start_tod + (timeout_us * 4096ULL);
 
         while (true) {
-            if (entry->io_done.load(atomic::memory_order::seq_cst) != 0) {
+            if (entry->io_done.load(std::memory_order::seq_cst) != 0) {
                 irb result_irb{};
-                ::lib::copy_n(reinterpret_cast<const u8*>(&entry->last_irb), sizeof(irb), reinterpret_cast<u8*>(&result_irb));
+                ::std::copy_n(reinterpret_cast<const u8*>(&entry->last_irb), sizeof(irb), reinterpret_cast<u8*>(&result_irb));
 
                 if (result_irb.scsw_data.has_error()) {
                     pwarn("ccw_io: I/O error sch={} dev_status={} sch_status={} residual={}",
@@ -121,7 +115,7 @@ namespace arch::s390x::css::ccw_io {
                           ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.dev_status), 2, true},
                           ::lib::format::hex{static_cast<u64>(result_irb.scsw_data.sch_status), 2, true},
                           ::lib::format::dec{static_cast<u64>(result_irb.scsw_data.count)});
-                    return ::lib::unexpected(
+                    return ::std::unexpected(
                         ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
                 }
                 return result_irb;
@@ -130,12 +124,12 @@ namespace arch::s390x::css::ccw_io {
             if (cpu::clock::stck() > deadline) {
                const auto saved_irq = irqctl::irq_save_disable();
 
-                if (entry->io_done.load(atomic::memory_order::seq_cst) != 0) {
+                if (entry->io_done.load(std::memory_order::seq_cst) != 0) {
                     irb result_irb{};
-                    ::lib::copy_n(reinterpret_cast<const u8*>(&entry->last_irb), sizeof(irb), reinterpret_cast<u8*>(&result_irb));
+                    ::std::copy_n(reinterpret_cast<const u8*>(&entry->last_irb), sizeof(irb), reinterpret_cast<u8*>(&result_irb));
                     irqctl::irq_restore(saved_irq);
                     if (result_irb.scsw_data.has_error())
-                        return ::lib::unexpected(
+                        return ::std::unexpected(
                             ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
                     return result_irb;
                 }
@@ -147,11 +141,11 @@ namespace arch::s390x::css::ccw_io {
                     const u8 ac = result_irb.scsw_data.actl();
                     if ((sc & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0 &&
                         (ac & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
-                        ::lib::copy_n(reinterpret_cast<const u8*>(&result_irb), sizeof(irb), reinterpret_cast<u8*>(&entry->last_irb));
+                        ::std::copy_n(reinterpret_cast<const u8*>(&result_irb), sizeof(irb), reinterpret_cast<u8*>(&entry->last_irb));
                         entry->state = subchannel_state::idle;
                         irqctl::irq_restore(saved_irq);
                         if (result_irb.scsw_data.has_error())
-                            return ::lib::unexpected(
+                            return ::std::unexpected(
                                 ::lib::kernel_error::from_driver(::lib::driver_error::io_error));
                         return result_irb;
                     }
@@ -162,11 +156,11 @@ namespace arch::s390x::css::ccw_io {
                 discard_value tsch(entry->schid, discard);
                 entry->state = subchannel_state::idle;
                 irqctl::irq_restore(saved_irq);
-                return ::lib::unexpected(
+                return ::std::unexpected(
                     ::lib::kernel_error::from_driver(::lib::driver_error::timeout));
             }
 
-            proc::cpu_relax();
+            cpu::sync::cpu_relax();
         }
     }
 
@@ -174,7 +168,7 @@ namespace arch::s390x::css::ccw_io {
     /// @param sch_index Index into the subchannel table.
     /// @return senseid_data on success, kernel_error on failure.
     [[nodiscard]] auto css_sense_id(u32 sch_index) noexcept
-        -> ::lib::expected<senseid_data, ::lib::kernel_error>
+        -> ::std::expected<senseid_data, ::lib::kernel_error>
     {
         using namespace zxfoundation::memory::pmm;
         using namespace zxfoundation::memory::hhdm;
@@ -182,10 +176,10 @@ namespace arch::s390x::css::ccw_io {
         // Allocate one DMA31 page for CCW + data buffer.
         auto page_r = alloc(0, zone::dma31, purpose::device_dma, page_init::zeroed);
         if (!page_r) {
-            return ::lib::unexpected(page_r.error());
+            return ::std::unexpected(page_r.error());
         }
 
-        auto page = ::lib::move(*page_r);
+        auto page = ::std::move(*page_r);
         const u64 phys = page.phys_base;
         const u64 vaddr = phys_to_virt(phys);
 
@@ -202,13 +196,13 @@ namespace arch::s390x::css::ccw_io {
 
         senseid_data result{};
         if (io_r) {
-            ::lib::copy_n(reinterpret_cast<const u8*>(buf), sizeof(senseid_data), reinterpret_cast<u8*>(&result));
+            ::std::copy_n(reinterpret_cast<const u8*>(buf), sizeof(senseid_data), reinterpret_cast<u8*>(&result));
         }
 
-        free(::lib::move(page).make_active());
+        free(::std::move(page).make_active());
 
         if (!io_r) {
-            return ::lib::unexpected(io_r.error());
+            return ::std::unexpected(io_r.error());
         }
 
         return result;
@@ -243,7 +237,7 @@ namespace arch::s390x::css::ccw_io {
             if (!entry) continue;
 
             // Store the sense data in the subchannel table entry.
-            ::lib::copy_n(reinterpret_cast<const u8*>(&(*sense_r)), sizeof(senseid_data), reinterpret_cast<u8*>(&entry->sense));
+            ::std::copy_n(reinterpret_cast<const u8*>(&(*sense_r)), sizeof(senseid_data), reinterpret_cast<u8*>(&entry->sense));
             ++identified;
 
             const u16 dev_type = sense_r->dev_type;

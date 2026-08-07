@@ -14,13 +14,16 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.gate.gate_types;
 import zxfoundation.portal.portal_types;
 import zxfoundation.memory.vm_types;
+import zxfoundation.memory.memory_objects;
 import zxfoundation.sys.io_types;
 import zxfoundation.sys.printk;
+import zxfoundation.locking.qspinlock;
+import zxfoundation.locking.lock;
+import zxfoundation.memory.kmalloc;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 import lib.format;
-import lib.pair;
+import std;
 
 export {
 
@@ -29,22 +32,39 @@ namespace zxfoundation::sys::cap {
     using namespace zxfoundation::scoms;
     using namespace zxfoundation::sys::printk;
 
-    // ── Forward declarations ─────────────────────────────────────────────
-
-    /// @brief Acquire a capability token for a given resource.
-    /// @param[in]  type     Resource type to acquire.
-    /// @param[in]  obj_id   Object ID in the type's SCOMS table.
-    /// @param[in]  rights   Desired access rights.
+    /// @brief Acquire a private capability derived from an owned capability.
+    /// @param[in]  source   Capability owned by @p owner_domain.
+    /// @param[in]  rights   Rights to retain from @p source.
+    /// @param[in]  owner_domain Domain receiving the new capability.
     /// @return  cap_token on success, kernel_error on failure.
-    /// @note  The returned token includes the current generation counter of
-    ///        the object, which prevents use-after-free (ABA) races.
-    /// @note  This function increments the object's reference count. Call
-    ///        cap_release to decrement.
     [[nodiscard]] auto cap_acquire(
-        cap_type   type,
-        u16        obj_id,
-        cap_rights rights
-    ) noexcept -> lib::expected<cap_token, lib::kernel_error>;
+        cap_token  source,
+        cap_rights rights,
+        u32        owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error>;
+
+    /// @brief Issue a capability from nucleus-owned object authority.
+    /// @param[in] type Resource type.
+    /// @param[in] obj_id SCOMS object ID.
+    /// @param[in] rights Rights granted to the recipient.
+    /// @param[in] owner_domain Domain receiving the capability.
+    [[nodiscard]] auto cap_issue(
+        cap_type type, u16 obj_id, cap_rights rights, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error>;
+
+    /// @brief Duplicate a capability for a new owner from kernel policy code.
+    /// @param[in] source Existing capability.
+    /// @param[in] rights Rights to retain.
+    /// @param[in] owner_domain Domain receiving the capability.
+    [[nodiscard]] auto cap_duplicate(
+        cap_token source, cap_rights rights, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error>;
+
+    /// @brief Duplicate a capability after checking its current owner.
+    [[nodiscard]] auto cap_duplicate_for(
+        cap_token source, cap_rights rights, u32 source_domain,
+        u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error>;
 
     /// @brief Release a previously acquired capability.
     /// @param[in]  token  The capability token to release.
@@ -56,24 +76,16 @@ namespace zxfoundation::sys::cap {
     ///           and returns an error.  The kernel does not trap on double-
     ///           release — it returns an error code.
     [[nodiscard]] auto cap_release(cap_token token) noexcept
-        -> lib::expected<void, lib::kernel_error>;
+        -> std::expected<void, lib::kernel_error>;
 
     /// @brief Validate a capability token and return the underlying object.
     /// @tparam     T      Expected kobject type (domain, gate_desc, etc.).
     /// @param[in]  token  The capability token to validate.
     /// @param[in]  needed Rights required for the intended operation.
     /// @return  Pointer to the validated object, or kernel_error.
-    /// @note  This is the hot path: called on every gate/portal/memory operation.
-    ///        It checks:
-    ///          - Token type matches T's kobject_type.
-    ///          - Generation matches the object's current generation.
-    ///          - Object state is not dying.
-    ///          - Token has the required rights.
-    /// @note  Does NOT increment the refcount — the caller already holds a
-    ///        reference via cap_acquire.
     template <typename T>
     [[nodiscard]] auto cap_validate(cap_token token, cap_rights needed) noexcept
-        -> lib::expected<T*, lib::kernel_error>;
+        -> std::expected<T*, lib::kernel_error>;
 
     /// @brief Validate a capability token without a concrete type parameter
     ///        (for user-facing nc_cap_validate).  Checks:
@@ -86,7 +98,23 @@ namespace zxfoundation::sys::cap {
     [[nodiscard]] auto cap_validate_generic(
         cap_token   token,
         cap_rights  needed
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Validate a capability against its owning domain.
+    /// @param[in] token Capability supplied by the caller.
+    /// @param[in] needed Rights required by the operation.
+    /// @param[in] owner_domain Domain making the call.
+    [[nodiscard]] auto cap_validate_generic_for(
+        cap_token token, cap_rights needed, u32 owner_domain
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Resolve a validated capability to its SCOMS object.
+    /// @param[in] token Capability supplied by a caller.
+    /// @param[in] needed Rights required by the operation.
+    /// @return Referenced SCOMS object, or an authorization error.
+    [[nodiscard]] auto cap_resolve(
+        cap_token token, cap_rights needed
+    ) noexcept -> std::expected<scoms::kobject*, lib::kernel_error>;
 
     /// @brief Revoke a capability token administratively.
     /// @param[in] token   Capability token marking the object to revoke.
@@ -95,9 +123,22 @@ namespace zxfoundation::sys::cap {
     /// @return Success, or kernel_error if the token is null or the object
     ///         vanished before we could bump its generation.
     [[nodiscard]] auto cap_revoke(cap_token token) noexcept
-        -> lib::expected<void, lib::kernel_error>;
+        -> std::expected<void, lib::kernel_error>;
 
-    // ── Lookup registry (callback-based to avoid import cycles) ───────────
+    /// @brief Revoke every capability owned by or targeting a domain.
+    /// @param[in] domain_id Domain entering teardown.
+    /// @return Number of revoked capability slots, or an error.
+    [[nodiscard]] auto cap_revoke_for_domain(
+        u32 domain_id
+    ) noexcept -> std::expected<u32, lib::kernel_error>;
+
+    /// @brief Revoke all slots referring to a SCOMS object.
+    /// @param[in] target Object being destroyed.
+    /// @return Number of revoked slots, or an error.
+    [[nodiscard]] auto cap_revoke_target(
+        scoms::kobject& target
+    ) noexcept -> std::expected<u32, lib::kernel_error>;
+
 
     /// @brief Callback signature for looking up a kobject by object ID.
     /// @param[in] obj_id  Object ID (u16 from capability token).
@@ -117,21 +158,42 @@ namespace zxfoundation::sys::cap {
     [[nodiscard]] auto register_lookup(
         cap_type   type,
         lookup_fn  fn
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
+    ) noexcept -> std::expected<void, lib::kernel_error>;
 
 } // namespace zxfoundation::sys::cap
 
 } // end export
 
-// ── Implementation ──────────────────────────────────────────────────────────
-
 namespace zxfoundation::sys::cap::_internal {
 
     /// @brief Maximum number of lookup table entries (must exceed largest cap_type).
     static constexpr u32 LOOKUP_TABLE_SIZE = 16;
+    static constexpr u32 MAX_CAPABILITIES = 1024;
+
+    struct capability_slot {
+        scoms::kobject* target{nullptr};
+        cap_type        type{cap_type::none};
+        cap_rights      rights{cap_rights::none};
+        u32             owner_domain{~0U};
+        u32             target_generation{0};
+        u16             generation{1};
+        bool            active{false};
+    };
+
+    static capability_slot* s_capabilities{nullptr};
+    static locking::qspinlock::qspinlock s_capability_lock{};
 
     /// @brief Callback table indexed by cap_type.
     static lookup_fn s_lookup_table[LOOKUP_TABLE_SIZE]{};
+
+    [[nodiscard]] auto ensure_capabilities_locked() noexcept -> bool {
+        if (s_capabilities) return true;
+        s_capabilities = static_cast<capability_slot*>(
+            memory::kmalloc::kmalloc(sizeof(capability_slot) * MAX_CAPABILITIES));
+        if (!s_capabilities) return false;
+        for (u32 i = 0; i < MAX_CAPABILITIES; ++i) s_capabilities[i] = {};
+        return true;
+    }
 
     /// @brief Retrieve a kobject* and its generation via the callback table.
     /// @param[in]  type    cap_type discriminator.
@@ -139,31 +201,108 @@ namespace zxfoundation::sys::cap::_internal {
     /// @return  Pair of (kobject*, generation) or error.
     [[nodiscard]] auto lookup_kobject(
         cap_type type, u16 obj_id
-    ) noexcept -> lib::expected<lib::pair<kobject*, u32>, lib::kernel_error> {
+    ) noexcept -> std::expected<std::pair<kobject*, u32>, lib::kernel_error> {
 
         const auto idx = static_cast<u32>(type);
         if (idx >= LOOKUP_TABLE_SIZE || !s_lookup_table[idx]) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_supported));
         }
 
         auto* ko = s_lookup_table[idx](obj_id);
         if (!ko) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
-        return lib::pair<kobject*, u32>{ko, ko->generation};
+        return std::pair<kobject*, u32>{ko, ko->generation};
     }
 
     /// @brief Validate that the token's type has sufficient rights for an operation.
     [[nodiscard]] auto check_rights(cap_token token, cap_rights needed) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (needed != cap_rights::none &&
-            (token.rights() & needed) == cap_rights::none) {
-            return lib::unexpected(
+            (token.rights() & needed) != needed) {
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
+        return {};
+    }
+
+    [[nodiscard]] auto slot_for(cap_token token) noexcept -> capability_slot* {
+        if (!s_capabilities) return nullptr;
+        if (!token || token.object_id() == 0U ||
+            static_cast<u32>(token.object_id()) >= MAX_CAPABILITIES) {
+            return nullptr;
+        }
+        auto& slot = s_capabilities[token.object_id()];
+        if (!slot.active || slot.generation != token.generation() ||
+            slot.type != token.type() || slot.rights != token.rights()) {
+            return nullptr;
+        }
+        return &slot;
+    }
+
+    [[nodiscard]] auto issue_locked(
+        cap_type type, u16 obj_id, cap_rights rights, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
+        if (!ensure_capabilities_locked()) return std::unexpected(
+            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        auto result = lookup_kobject(type, obj_id);
+        if (!result) return std::unexpected(result.error());
+
+        u32 slot_id = 0;
+        for (u32 i = 1; i < MAX_CAPABILITIES; ++i) {
+            if (!s_capabilities[i].active) {
+                slot_id = i;
+                break;
+            }
+        }
+        if (slot_id == 0U) {
+            return std::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        }
+
+        auto& slot = s_capabilities[slot_id];
+        auto [target, generation] = *result;
+        if (target->state != lifecycle_state::active) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_supported));
+        }
+        if (!target->try_get()) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+        }
+        slot.target = target;
+        slot.type = type;
+        slot.rights = rights;
+        slot.owner_domain = owner_domain;
+        slot.target_generation = generation;
+        slot.active = true;
+
+        return cap_token::make(
+            type, static_cast<u16>(slot_id), slot.generation, rights);
+    }
+
+    [[nodiscard]] auto validate_slot(
+        cap_token token, cap_rights needed, u32 owner_domain, bool check_owner,
+        scoms::kobject*& target
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto* slot = slot_for(token);
+        if (!slot || !slot->target ||
+            slot->target->generation != slot->target_generation ||
+            slot->target->state == lifecycle_state::dying ||
+            slot->target->state == lifecycle_state::destroyed) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (check_owner && slot->owner_domain != owner_domain) {
+            return std::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::capability_invalid));
+        }
+        auto rights_result = check_rights(token, needed);
+        if (!rights_result) return std::unexpected(rights_result.error());
+        target = slot->target;
         return {};
     }
 
@@ -173,62 +312,78 @@ export {
 
 namespace zxfoundation::sys::cap {
 
+    [[nodiscard]] auto cap_issue(
+        cap_type type, u16 obj_id, cap_rights rights, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        return _internal::issue_locked(type, obj_id, rights, owner_domain);
+    }
+
+    [[nodiscard]] auto cap_duplicate(
+        cap_token source, cap_rights rights, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* target = nullptr;
+        auto valid = _internal::validate_slot(
+            source, rights, owner_domain, true, target);
+        if (!valid) return std::unexpected(valid.error());
+        auto* slot = _internal::slot_for(source);
+        return _internal::issue_locked(
+            slot->type, static_cast<u16>(target->id), rights, owner_domain);
+    }
+
     [[nodiscard]] auto cap_acquire(
-        cap_type   type,
-        u16        obj_id,
-        cap_rights rights
-    ) noexcept -> lib::expected<cap_token, lib::kernel_error> {
+        cap_token source, cap_rights rights, u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* target = nullptr;
+        auto valid = _internal::validate_slot(
+            source, rights, owner_domain, true, target);
+        if (!valid) return std::unexpected(valid.error());
+        auto* slot = _internal::slot_for(source);
+        return _internal::issue_locked(
+            slot->type, static_cast<u16>(target->id), rights, owner_domain);
+    }
 
-        auto result = _internal::lookup_kobject(type, obj_id);
-        if (!result) {
-            perr("cap_acquire: type={} id={} not found",
-                 cap_type_name(type), static_cast<u32>(obj_id));
-            return lib::unexpected(result.error());
+    [[nodiscard]] auto cap_duplicate_for(
+        cap_token source, cap_rights rights, u32 source_domain,
+        u32 owner_domain
+    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* target = nullptr;
+        auto valid = _internal::validate_slot(
+            source, rights, source_domain, true, target);
+        if (!valid) return std::unexpected(valid.error());
+        auto* slot = _internal::slot_for(source);
+        if (owner_domain != source_domain
+            && (slot->rights & cap_rights::delegate) != cap_rights::delegate) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
         }
-
-        auto [ko, gen] = *result;
-
-        // Increment the reference count.
-        ko->ref.get();
-
-        const cap_token token = cap_token::make(type, obj_id, static_cast<u16>(gen), rights);
-
-        pverbose("cap_acquire: type={} id={} gen={} rights={:#x} token={:#016x}",
-               cap_type_name(type), static_cast<u32>(obj_id),
-               static_cast<u32>(gen), static_cast<u16>(rights), token.raw);
-
-        return token;
+        return _internal::issue_locked(
+            slot->type, static_cast<u16>(target->id), rights, owner_domain);
     }
 
     [[nodiscard]] auto cap_release(cap_token token) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (!token) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        // Look up the object to verify generation.
-        auto result = _internal::lookup_kobject(token.type(), token.object_id());
-        if (!result) {
-            perr("cap_release: type={} id={} — object not found",
-                 cap_type_name(token.type()), static_cast<u32>(token.object_id()));
-            return lib::unexpected(result.error());
-        }
-
-        auto [ko, gen] = *result;
-
-        // Generation mismatch: the object was recycled since the token was acquired.
-        if (gen != static_cast<u32>(token.generation())) {
-            perr("cap_release: type={} id={} — generation mismatch (token={}, actual={})",
-                 cap_type_name(token.type()), static_cast<u32>(token.object_id()),
-                 static_cast<u32>(token.generation()), gen);
-            return lib::unexpected(
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        auto* slot = _internal::slot_for(token);
+        if (!slot) {
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
-
-        // Decrement the reference count.
-        const bool last = ko->ref.put();
+        auto* ko = slot->target;
+        slot->active = false;
+        slot->target = nullptr;
+        slot->generation = static_cast<u16>(slot->generation + 1U);
+        const bool last = ko->ref.read() == 1U;
+        ko->put();
 
         pverbose("cap_release: type={} id={} gen={} last={}",
                cap_type_name(token.type()), static_cast<u32>(token.object_id()),
@@ -239,42 +394,43 @@ namespace zxfoundation::sys::cap {
 
     [[nodiscard]] auto cap_validate_generic(
         cap_token token, cap_rights needed
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
 
         if (!token) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        auto rights_check = _internal::check_rights(token, needed);
-        if (!rights_check) return lib::unexpected(rights_check.error());
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* target = nullptr;
+        return _internal::validate_slot(token, needed, 0, false, target);
+    }
 
-        auto result = _internal::lookup_kobject(token.type(), token.object_id());
-        if (!result) {
-            return lib::unexpected(result.error());
-        }
+    [[nodiscard]] auto cap_validate_generic_for(
+        cap_token token, cap_rights needed, u32 owner_domain
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* target = nullptr;
+        return _internal::validate_slot(token, needed, owner_domain, true, target);
+    }
 
-        auto [ko, gen] = *result;
-
-        if (gen != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (ko->state == lifecycle_state::dying) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_supported));
-        }
-
-        return {};
+    [[nodiscard]] auto cap_resolve(
+        cap_token token, cap_rights needed
+    ) noexcept -> std::expected<scoms::kobject*, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* target = nullptr;
+        auto result = _internal::validate_slot(token, needed, 0, false, target);
+        if (!result) return std::unexpected(result.error());
+        return target;
     }
 
     [[nodiscard]] auto register_lookup(
         cap_type   type,
         lookup_fn  fn
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         const auto idx = static_cast<u32>(type);
         if (idx >= _internal::LOOKUP_TABLE_SIZE) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_supported));
         }
         _internal::s_lookup_table[idx] = fn;
@@ -282,36 +438,66 @@ namespace zxfoundation::sys::cap {
     }
 
     [[nodiscard]] auto cap_revoke(cap_token token) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (!token) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        auto result = _internal::lookup_kobject(token.type(), token.object_id());
-        if (!result) {
-            perr("cap_revoke: type={} id={} — object not found",
-                 cap_type_name(token.type()), static_cast<u32>(token.object_id()));
-            return lib::unexpected(result.error());
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        auto* slot = _internal::slot_for(token);
+        if (!slot) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
-
-        auto [ko, gen] = *result;
-
-        if (ko->state == lifecycle_state::dying) {
-            pverbose("cap_revoke: type={} id={} already dying — no-op",
-                  cap_type_name(token.type()), static_cast<u32>(token.object_id()));
-            return {};
-        }
-
-        const u32 next_gen = gen + 1;
-        ko->generation = next_gen;
-
-        pverbose("cap_revoke: type={} id={} gen {}->{} (all prior tokens invalidated)",
-              cap_type_name(token.type()), static_cast<u32>(token.object_id()),
-              gen, next_gen);
-
+        slot->active = false;
+        auto* target = slot->target;
+        slot->target = nullptr;
+        slot->generation = static_cast<u16>(slot->generation + 1U);
+        target->put();
         return {};
+    }
+
+    [[nodiscard]] auto cap_revoke_for_domain(
+        u32 domain_id
+    ) noexcept -> std::expected<u32, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        if (!_internal::s_capabilities) return 0U;
+        u32 revoked = 0;
+        for (u32 i = 1; i < _internal::MAX_CAPABILITIES; ++i) {
+            auto& slot = _internal::s_capabilities[i];
+            const bool targets_domain = slot.active && slot.type == cap_type::domain &&
+                slot.target && slot.target->id == domain_id;
+            if (!slot.active ||
+                (slot.owner_domain != domain_id && !targets_domain)) {
+                continue;
+            }
+            auto* target = slot.target;
+            slot.active = false;
+            slot.target = nullptr;
+            slot.generation = static_cast<u16>(slot.generation + 1U);
+            if (target) target->put();
+            ++revoked;
+        }
+        return revoked;
+    }
+
+    [[nodiscard]] auto cap_revoke_target(
+        scoms::kobject& target
+    ) noexcept -> std::expected<u32, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        u32 revoked = 0;
+        for (u32 i = 1; i < _internal::MAX_CAPABILITIES; ++i) {
+            auto& slot = _internal::s_capabilities[i];
+            if (!slot.active || slot.target != &target) continue;
+            slot.active = false;
+            slot.target = nullptr;
+            slot.generation = static_cast<u16>(slot.generation + 1U);
+            target.put();
+            ++revoked;
+        }
+        return revoked;
     }
 
     // Template specialization for each supported concrete type.
@@ -319,146 +505,72 @@ namespace zxfoundation::sys::cap {
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::domain::domain>(
         cap_token token, cap_rights needed
-    ) noexcept -> lib::expected<zxfoundation::domain::domain*, lib::kernel_error> {
-
-        if (!token) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
+    ) noexcept -> std::expected<zxfoundation::domain::domain*, lib::kernel_error> {
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* ko = nullptr;
+        auto result = _internal::validate_slot(token, needed, 0, false, ko);
+        if (!result) return std::unexpected(result.error());
         if (token.type() != cap_type::domain) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-
-        auto rights_check = _internal::check_rights(token, needed);
-        if (!rights_check) return lib::unexpected(rights_check.error());
-
-        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::domain)](
-            token.object_id());
-        if (!ko) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        auto* d = reinterpret_cast<zxfoundation::domain::domain*>(ko);
-        if (d->ko.generation != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (d->ko.state == lifecycle_state::dying) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_supported));
-        }
-        return d;
+        return reinterpret_cast<zxfoundation::domain::domain*>(ko);
     }
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::gate::gate_desc>(
         cap_token token, cap_rights needed
-    ) noexcept -> lib::expected<zxfoundation::gate::gate_desc*, lib::kernel_error> {
+    ) noexcept -> std::expected<zxfoundation::gate::gate_desc*, lib::kernel_error> {
 
-        if (!token) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* ko = nullptr;
+        auto result = _internal::validate_slot(token, needed, 0, false, ko);
+        if (!result) return std::unexpected(result.error());
         if (token.type() != cap_type::gate) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-
-        auto rights_check = _internal::check_rights(token, needed);
-        if (!rights_check) return lib::unexpected(rights_check.error());
-
-        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::gate)](
-            token.object_id());
-        if (!ko) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        auto* g = reinterpret_cast<zxfoundation::gate::gate_desc*>(ko);
-        if (g->ko.generation != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (g->ko.state == lifecycle_state::dying) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_supported));
-        }
-        return g;
+        return reinterpret_cast<zxfoundation::gate::gate_desc*>(ko);
     }
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::portal::portal_desc>(
         cap_token token, cap_rights needed
-    ) noexcept -> lib::expected<zxfoundation::portal::portal_desc*, lib::kernel_error> {
+    ) noexcept -> std::expected<zxfoundation::portal::portal_desc*, lib::kernel_error> {
 
-        if (!token) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* ko = nullptr;
+        auto result = _internal::validate_slot(token, needed, 0, false, ko);
+        if (!result) return std::unexpected(result.error());
         if (token.type() != cap_type::portal) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-
-        auto rights_check = _internal::check_rights(token, needed);
-        if (!rights_check) return lib::unexpected(rights_check.error());
-
-        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::portal)](
-            token.object_id());
-        if (!ko) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        auto* p = reinterpret_cast<zxfoundation::portal::portal_desc*>(ko);
-        if (p->ko.generation != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (p->ko.state == lifecycle_state::dying) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_supported));
-        }
-        return p;
+        return reinterpret_cast<zxfoundation::portal::portal_desc*>(ko);
     }
 
 
 
     template <>
-    [[nodiscard]] auto cap_validate<zxfoundation::memory::vm::vm_region>(
+    [[nodiscard]] auto cap_validate<zxfoundation::memory::objects::memory_object>(
         cap_token token, cap_rights needed
-    ) noexcept -> lib::expected<zxfoundation::memory::vm::vm_region*, lib::kernel_error> {
+    ) noexcept -> std::expected<zxfoundation::memory::objects::memory_object*, lib::kernel_error> {
 
-        if (!token) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
+        const locking::irq_lock_guard guard{_internal::s_capability_lock};
+        scoms::kobject* ko = nullptr;
+        auto result = _internal::validate_slot(token, needed, 0, false, ko);
+        if (!result) return std::unexpected(result.error());
         if (token.type() != cap_type::memory) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-
-        auto rights_check = _internal::check_rights(token, needed);
-        if (!rights_check) return lib::unexpected(rights_check.error());
-
-        auto* ko = _internal::s_lookup_table[static_cast<u32>(cap_type::memory)](
-            token.object_id());
-        if (!ko) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        auto* object = reinterpret_cast<zxfoundation::memory::objects::memory_object*>(ko);
+        if (object->ko.type != zxfoundation::scoms::kobject_type::grant) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::capability_invalid));
         }
-        auto* r = reinterpret_cast<zxfoundation::memory::vm::vm_region*>(ko);
-        if (r->ko.generation != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (r->ko.state == lifecycle_state::dying) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_supported));
-        }
-        return r;
+        return object;
     }
-
-
 
 } // namespace zxfoundation::sys::cap
 

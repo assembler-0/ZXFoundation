@@ -20,8 +20,7 @@ import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 
 namespace zxfoundation::gate::dispatch_table::_internal {
     using zxfoundation::sys::cap::cap_token;
@@ -44,13 +43,6 @@ namespace zxfoundation::gate::dispatch_table::_internal {
 
     [[nodiscard]] auto acquire_caller_domain() noexcept
         -> zxfoundation::domain::domain * {
-        // Use current_domain_or_nucleus() so the dispatch layer never
-        // sees a null caller — nucleus is the kernel's own domain
-        // identity, present from boot onward and immutable thereafter.
-        // This was previously `lowcore::current_domain` cast directly,
-        // which returned null during boot (pre-first-user-domain) and
-        // silently made validate_call() fail every call.  Now those
-        // paths correctly attribute the call to the nucleus domain.
         return zxfoundation::domain::current_domain_or_nucleus();
     }
 
@@ -103,10 +95,7 @@ namespace zxfoundation::gate::dispatch_table::_internal {
     }
 
     /// @brief Resolve the *target* domain for an op (the domain being acted
-    ///        upon, distinct from the caller).  Domain id 0 reserves the
-    ///        nucleus domain — the kernel itself — and may be a valid
-    ///        target for inspection (domain_query) but never for life-
-    ///        cycle operations (domain_destroy refuses id 0).
+    ///        upon, distinct from the caller).
     [[nodiscard]] auto target_domain_for_op(
         zxfoundation::dgp::operation_kind op_kind,
         zxfoundation::domain::domain& caller,
@@ -130,10 +119,6 @@ namespace zxfoundation::gate::dispatch_table::_internal {
                 return zxfoundation::domain::domain_find(tid);
             }
             case operation_kind::domain_query: {
-                // Handler convention: a0==0 means "query self" — but
-                // once nucleus is reserved as a real domain, "self" for
-                // any user-space caller is *also* id 0 from the caller's
-                // perspective.  Match the handler's behaviour: 0 -> caller.
                 const auto tid = static_cast<zxfoundation::domain::domain_id>(a0);
                 if (tid == 0 || tid == caller.ko.id) return &caller;
                 return zxfoundation::domain::domain_find(tid);
@@ -177,6 +162,11 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             case operation_kind::portal_create: {
                 meta.target_va_start = a2;
                 meta.target_va_end   = a3;
+                break;
+            }
+            case operation_kind::shm_export: {
+                meta.target_va_start = a0;
+                meta.target_va_end   = a0 + a1;
                 break;
             }
 
@@ -249,8 +239,8 @@ namespace zxfoundation::gate::dispatch_table::_internal {
                 break;
 
             case gate_auth_level::capability: {
-                auto cap_r = sys::cap::cap_validate_generic(
-                    cap_token{a0}, cap_rights::none);
+                auto cap_r = sys::cap::cap_validate_generic_for(
+                    cap_token{a0}, cap_rights::none, caller->ko.id);
                 if (!cap_r) {
                     sys::printk::perr("dispatch: call {} — capability validation failed",
                                       packed_nr);
@@ -260,8 +250,8 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             }
 
             case gate_auth_level::admin: {
-                auto cap_r = sys::cap::cap_validate_generic(
-                    cap_token{a0}, cap_rights::admin);
+                auto cap_r = sys::cap::cap_validate_generic_for(
+                    cap_token{a0}, cap_rights::admin, caller->ko.id);
                 if (!cap_r) {
                     sys::printk::perr("dispatch: call {} — admin cap validation failed",
                                       packed_nr);
@@ -271,8 +261,8 @@ namespace zxfoundation::gate::dispatch_table::_internal {
             }
 
             case gate_auth_level::domain_map: {
-                auto cap_r = sys::cap::cap_validate_generic(
-                    cap_token{a0}, cap_rights::map);
+                auto cap_r = sys::cap::cap_validate_generic_for(
+                    cap_token{a0}, cap_rights::map, caller->ko.id);
                 if (!cap_r) {
                     sys::printk::perr("dispatch: call {} — domain_map cap validation failed",
                                       packed_nr);
@@ -283,10 +273,6 @@ namespace zxfoundation::gate::dispatch_table::_internal {
 
             case gate_auth_level::io:
             case gate_auth_level::signal:
-                // No additional capability check needed here — the DGP
-                // rights check above already enforced io / signal authority
-                // and the handler validates any capability tokens it
-                // requires (e.g. io_irq_bind's io_token) on its own.
                 break;
         }
 
@@ -312,20 +298,20 @@ export {
             u32 packed_nr,
             dispatch_handler handler,
             const dispatch_entry_meta &meta
-        ) noexcept -> lib::expected<void, lib::kernel_error> {
+        ) noexcept -> std::expected<void, lib::kernel_error> {
             if (packed_nr >= DISPATCH_TABLE_SIZE) {
-                return lib::unexpected(
+                return std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::out_of_range));
             }
             if (!handler) {
-                return lib::unexpected(
+                return std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
             }
 
             const locking::irq_lock_guard guard{_internal::s_lock};
 
             if (_internal::s_table[packed_nr].handler) {
-                return lib::unexpected(
+                return std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::internal_error));
             }
 
@@ -350,7 +336,7 @@ export {
             call_namespace ns,
             const registration_op ops[],
             u32 count
-        ) noexcept -> lib::expected<void, lib::kernel_error> {
+        ) noexcept -> std::expected<void, lib::kernel_error> {
             for (u32 i = 0; i < count; ++i) {
                 auto r = register_handler(
                     pack_index(ns, ops[i].operation_id),

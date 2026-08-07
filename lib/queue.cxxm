@@ -4,13 +4,11 @@
 
 export module lib.queue;
 import zxfoundation.base.types;
-import lib.concepts;
-import lib.util;
-import lib.optional;
+import std;
 
 export {
 
-namespace lib {
+namespace std {
 
     /// @brief A fixed-capacity FIFO queue (circular buffer).
     /// @tparam T Type of the elements.
@@ -56,21 +54,21 @@ namespace lib {
         /// @return true if successful, false if full.
         constexpr auto push(T&& value) noexcept -> bool {
             if (full()) return false;
-            storage[tail_idx] = lib::move(value);
+            storage[tail_idx] = std::move(value);
             tail_idx = (tail_idx + 1) % N;
             ++count_val;
             return true;
         }
 
         /// @brief Returns the first element of the queue.
-        [[nodiscard]] constexpr auto front() noexcept -> optional<T&> {
-            if (empty()) return nullopt;
+        [[nodiscard]] constexpr auto front() noexcept -> std::optional<T&> {
+            if (empty()) return std::nullopt;
             return storage[head_idx];
         }
 
         /// @brief Returns the first element of the queue (const).
-        [[nodiscard]] constexpr auto front() const noexcept -> optional<const T&> {
-            if (empty()) return nullopt;
+        [[nodiscard]] constexpr auto front() const noexcept -> std::optional<const T&> {
+            if (empty()) return std::nullopt;
             return storage[head_idx];
         }
 

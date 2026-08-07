@@ -7,7 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.cpumask;
 import lib.list;
-import arch.s390x.lib.atomic;
+import std;
 
 export {
 

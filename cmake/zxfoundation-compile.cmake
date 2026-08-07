@@ -29,6 +29,7 @@ macro(_zx_kernel_flags _tgt)
     target_include_directories(${_tgt} SYSTEM PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${LIBSTDCXX_INCLUDE}
     )
     target_compile_options(${_tgt} PRIVATE
         -include ${ZX_VALIDATE_HEADER}
@@ -59,6 +60,13 @@ else()
         PUBLIC FILE_SET CXX_MODULES TYPE CXX_MODULES
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${ZX_SOURCES_MODULES_64}
+    )
+    target_sources(core.zxfoundation.nucleus
+        PUBLIC
+            FILE_SET cxx_std_modules
+            TYPE CXX_MODULES
+            BASE_DIRS ${LIBSTDCXX_BASE}
+            FILES ${LIBSTDCXX_MODS}
     )
     _zx_kernel_flags(core.zxfoundation.nucleus)
 endif()

@@ -1,26 +1,13 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/processor.cxxm
-/// @brief z/Architecture CPU identification, serialisation, hypervisor
-///        detection, prefix register, and spin-loop primitives.
-///
-/// Clock/TOD  → arch.s390x.cpu.clock   (stck / stckf / stcke)
-/// DIAGNOSE   → arch.s390x.cpu.diag    (diag8 / diag288)
-/// CR ops     → arch.s390x.cpu.ctlreg  (ctl_store / ctl_load / set/clear_bit)
-/// Storage    → arch.s390x.cpu.storage (set_storage_key / pfmf)
+/// @brief some miscellaneous srtuff
 
 export module arch.s390x.cpu.processor;
-export import arch.s390x.cpu.processor_types;
+export import arch.s390x.cpu.types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.diag;
 import lib.bit;
-
-namespace {
-
-    /// @brief Hypervisor detection state machine.
-    alignas(64) u32 g_hypervisor_state{0};
-
-} // anonymous namespace
 
 export {
 
@@ -38,34 +25,12 @@ namespace arch::s390x::cpu::processor {
         __asm__ volatile("stidp %0" : "=m" (*id));
     }
 
-    /// @brief Compiler-only memory barrier — prevents compiler reordering.
-    inline auto barrier() noexcept -> void {
-        __asm__ volatile ("" ::: "memory");
-    }
-
     /// @brief Probe whether the kernel is running under a hypervisor.
     /// @return true if the kernel is running under a hypervisor.
     auto is_hypervisor() noexcept -> bool {
-        const u32 state = __atomic_load_n(&g_hypervisor_state, __ATOMIC_ACQUIRE);
-        if (state != 0U) [[likely]]
-            return state == 2U;
-
         cpuid id{};
         get_cpuid(&id);
-        const bool under_hv = (id.version == 0xFF);
-        __atomic_store_n(&g_hypervisor_state, under_hv ? 2U : 1U, __ATOMIC_SEQ_CST);
-        return under_hv;
-    }
-
-    /// @brief Spin-loop hint.
-    inline auto cpu_relax() noexcept -> void {
-        diag::diag44();
-    }
-
-    /// @brief Yield the virtual CPU timeslice to the hypervisor (if running under one).
-    /// @note  This is an alias for cpu_relax() provided for call-site clarity.
-    inline auto smp_yield() noexcept -> void {
-        cpu_relax();
+        return id.version == 0xff;
     }
 
     /// @brief Read the current stack pointer (r15).
@@ -96,11 +61,6 @@ namespace arch::s390x::cpu::processor {
         u16 addr;
         __asm__ volatile ("stap %0" : "=m" (addr));
         return addr;
-    }
-
-    /// @brief Full CPU serialisation (bcr 15,0).
-    auto sync() noexcept -> void {
-        __asm__ volatile("bcr 15,0" ::: "memory");
     }
 
 } // namespace arch::s390x::cpu::processor

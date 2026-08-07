@@ -1,0 +1,58 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/irq.cxxm
+/// @brief z/Architecture interrupt-mask control.
+
+module arch.s390x.cpu.irq;
+import arch.s390x.cpu.psw;
+import zxfoundation.base.types;
+import std;
+
+namespace arch::s390x::cpu::irq {
+
+    [[gnu::no_stack_protector]] auto irq_restore_mask_byte(const u8 byte0) noexcept -> void {
+        __asm__ volatile (
+            "stc %[byte0], %c[slot](0)\n\t"
+            "ssm %c[slot](0)\n\t"
+            :: [byte0] "d"(byte0), [slot] "i"(IRQ_RESTORE_MASK_LC)
+            : "memory", "cc"
+        );
+    }
+
+    [[nodiscard]] auto irq_save_disable() noexcept -> irqflags {
+        psw::epsw_words w{};
+        u8 dummy;
+        __asm__ volatile (
+            "epsw  %[hi], %[lo]\n\t"
+            "stnsm %[dummy], 0xFC\n\t"
+            : [hi] "=d"(w.hi), [lo] "=d"(w.lo), [dummy] "=Q"(dummy)
+            :: "memory", "cc"
+        );
+        return std::bit_cast<irqflags>(w);
+    }
+
+    /// @brief Restore PSW byte 0 from a saved irqflags.
+    /// PSW byte 0 = bits 0-7 of the mask word = hi_word >> 24.
+    auto irq_restore(const irqflags flags) noexcept -> void {
+        const auto w   = std::bit_cast<psw::epsw_words>(flags);
+        const u8 byte0 = static_cast<u8>(w.hi >> 24);
+        irq_restore_mask_byte(byte0);
+    }
+
+    auto irq_disable() noexcept -> void {
+        u8 dummy;
+        __asm__ volatile ("stnsm %[d], 0xFC\n\t" : [d] "=Q"(dummy) :: "memory");
+    }
+
+    auto irq_enable() noexcept -> void {
+        u8 dummy;
+        __asm__ volatile ("stosm %[d], 0x03\n\t" : [d] "=Q"(dummy) :: "memory");
+    }
+
+    [[nodiscard]] auto irqs_enabled() noexcept -> bool {
+        psw::epsw_words w{};
+        __asm__ volatile ("epsw %[hi], %[lo]\n\t"
+            : [hi] "=d"(w.hi), [lo] "=d"(w.lo) :: "cc");
+        return (w.hi & 0x03000000U) != 0;
+    }
+
+} // namespace arch::s390x::cpu::irq

@@ -1,0 +1,152 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/cpu_mf_types.cxxm
+/// @brief CPU Measurement Facility types and constants.
+
+export module arch.s390x.cpu.cpu_mf;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::cpu_mf {
+
+    constexpr u32 CPU_MF_INT_SF_IAE  = 1U << 31;
+    constexpr u32 CPU_MF_INT_SF_ISE  = 1U << 30;
+    constexpr u32 CPU_MF_INT_SF_PRA  = 1U << 29;
+    constexpr u32 CPU_MF_INT_SF_SACA = 1U << 23;
+    constexpr u32 CPU_MF_INT_SF_LSDA = 1U << 22;
+    constexpr u32 CPU_MF_INT_CF_MTDA = 1U << 15;
+    constexpr u32 CPU_MF_INT_CF_CACA = 1U << 7;
+    constexpr u32 CPU_MF_INT_CF_LCDA = 1U << 6;
+
+    constexpr u32 CPU_MF_INT_CF_MASK = CPU_MF_INT_CF_MTDA | CPU_MF_INT_CF_CACA | CPU_MF_INT_CF_LCDA;
+    constexpr u32 CPU_MF_INT_SF_MASK = CPU_MF_INT_SF_IAE  | CPU_MF_INT_SF_ISE  | CPU_MF_INT_SF_PRA | CPU_MF_INT_SF_SACA | CPU_MF_INT_SF_LSDA;
+    constexpr u32 CPU_MF_SF_RIBM_NOTAV = 0x1;
+
+    enum stcctm_ctr_set : u32 {
+        EXTENDED        = 0,
+        BASIC           = 1,
+        PROBLEM_STATE   = 2,
+        CRYPTO_ACTIVITY = 3,
+        MT_DIAG         = 5,
+        MT_DIAG_CLEARING = 9,
+    };
+
+#define ZX_DEFINE_QCTRI_CTL(type)				\
+	struct [[gnu::packed]] qctri_ctl_##type {	\
+		bitfield(coproc_cs_##type);				\
+		bitrsvd(9);								\
+		bitfield(mt_diagnostic_cs_##type);		\
+		bitrsvd(1);								\
+		bitfield(crypto_activity_cs_##type);	\
+		bitfield(problem_state_cs_##type);		\
+		bitfield(basic_cs_##type);				\
+		bitfield(extended_cs_##type);			\
+	};
+
+#define ZX_QCTRI_CONTROL_TYPES(X) \
+	X(authorization)              \
+	X(enable)                     \
+	X(activation)
+
+ZX_QCTRI_CONTROL_TYPES(ZX_DEFINE_QCTRI_CTL)
+
+#undef ZX_QCTRI_CONTROL_TYPES
+#undef ZX_DEFINE_QCTRI_CTL
+
+    struct [[gnu::packed]] cpumf_ctr_info {
+        u16 cfvn{};
+        union {
+        	qctri_ctl_authorization authorization_fields;
+			u16 auth_ctl;
+    	};
+        union {
+        	qctri_ctl_enable enable_fields;
+	        u16 enable_ctl;
+        };
+    	union {
+    		qctri_ctl_activation activation_fields;
+    		u16 activate_ctl;
+    	};
+        u16 max_cpu{};
+        u16 csvn{};
+        u16 max_cg{};
+    	bytersvd(50);
+    };
+
+	struct [[gnu::packed]] qsi_param_block {
+		union {
+			bitrsvd(14);
+			bitfield(basic_sampling_authorization);
+			bitfield(diagnostic_sampling_authorization);
+			bitrsvd(6);
+			bitfield(basic_sampling_enable);
+			bitfield(diagnostic_sampling_enable);
+			bitrsvd(6);
+			bitfield(basic_sampling_activation);
+			bitfield(diagnostic_sampling_activation);
+			u32 sampling_state_controls_raw;
+		};
+		u16 bsdes{};
+		u16 dsdes{};
+		u64 minimum_sampling_interval{};
+		u64 maximum_sampling_interval{};
+		u64 tear_contents{};
+		u64 dear_contents{};
+		bitrsvd(24);
+		bitsfield(8, ribm);
+		u32 cpu_speed{};
+		bytersvd(16);
+	};
+
+	struct [[gnu::packed]] lsctl_param_block {
+		bitfield(s);
+		bitfield(h);
+		bitrsvd(52);
+		bitfield(es);
+		bitfield(ed);
+		bitrsvd(6);
+		bitfield(cs);
+		bitfield(cd);
+		u64 sampling_interval{};
+		u64 tear_contents{};
+		u64 bear_contents{};
+		bytersvd(32){};
+	};
+
+	/// @brief Query Counter Information (QCTRI).
+    /// @param info Output info block.
+    /// @return 0 on success.
+    auto qctri(cpumf_ctr_info& info) noexcept -> i32;
+
+    /// @brief Query Sampling Information (QSI).
+    /// @param info Output info block.
+    /// @return 0 on success.
+    auto qsi(qsi_param_block& info) noexcept -> i32;
+
+    /// @brief Load CPU Counter-Set Controls (LCCTL).
+    /// @param ctl Control value.
+    /// @return Condition code (0 = success).
+    auto lcctl(u64 ctl) noexcept -> condition_code;
+
+    /// @brief Extract CPU Counter (ECCTR).
+    /// @param ctr Counter number.
+    /// @param val Output value.
+    /// @return Condition code (0 = success).
+    auto ecctr(u64 ctr, u64& val) noexcept -> condition_code;
+
+
+    /// @brief Store CPU Counter Multiple (STCCTM).
+    /// @param set Counter set selection.
+    /// @param range Number of counters.
+    /// @param dest Output buffer.
+    /// @return Condition code.
+    auto stcctm(stcctm_ctr_set set, u64 range, u64& dest) noexcept -> condition_code;
+
+	/// @brief Load Sampling Controls (LSCTL).
+	/// @param req LSCTL Parameter block.
+	/// @return Condition code.
+    auto lsctl(lsctl_param_block& req) -> condition_code;
+
+} // namespace arch::s390x::cpu::cpu_mf
+
+} // end export

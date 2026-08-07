@@ -1,0 +1,106 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file sigp.cxxm
+/// @brief SIGP (SIGnal Processor) API.
+
+export module arch.s390x.cpu.sigp;
+import zxfoundation.base.types;
+import std;
+
+export {
+
+namespace arch::s390x::cpu::sigp {
+
+    /// SIGP order codes (PoP SA22-7832 Chapter 4).
+    constexpr auto SIGP_SENSE                    = 0x01U;
+    constexpr auto SIGP_EXTERNAL_CALL            = 0x02U;
+    constexpr auto SIGP_EMERGENCY_SIGNAL         = 0x03U;
+    constexpr auto SIGP_START                    = 0x04U;
+    constexpr auto SIGP_STOP                     = 0x05U;
+    constexpr auto SIGP_RESTART                  = 0x06U;
+    constexpr auto SIGP_STOP_AND_STORE_STATUS    = 0x09U;
+    constexpr auto SIGP_INITIAL_CPU_RESET        = 0x0BU;
+    constexpr auto SIGP_SET_PREFIX               = 0x0DU;
+    constexpr auto SIGP_STORE_STATUS             = 0x0EU;
+    constexpr auto SIGP_SET_ARCHITECTURE         = 0x12U;
+    constexpr auto SIGP_SET_MULTI_THREADING      = 0x16U;
+    constexpr auto SIGP_STORE_STATUS_AT_ADDRESS  = 0x17U;
+
+    /// SIGP condition codes.
+    constexpr auto SIGP_CC_ORDER_CODE_ACCEPTED   = 0;
+    constexpr auto SIGP_CC_STATUS_STORED         = 1;
+    constexpr auto SIGP_CC_BUSY                  = 2;
+    constexpr auto SIGP_CC_NOT_OPERATIONAL       = 3;
+
+    /// SIGP status bits stored when the condition code is STATUS_STORED.
+    constexpr auto SIGP_STATUS_INVALID_ORDER     = 0x0000'0002U;
+    constexpr auto SIGP_STATUS_CHECK_STOP        = 0x0000'0010U;
+    constexpr auto SIGP_STATUS_STOPPED           = 0x0000'0040U;
+    constexpr auto SIGP_STATUS_EXT_CALL_PENDING  = 0x0000'0080U;
+    constexpr auto SIGP_STATUS_INVALID_PARAMETER = 0x0000'0100U;
+    constexpr auto SIGP_STATUS_INCORRECT_STATE   = 0x0000'0200U;
+    constexpr auto SIGP_STATUS_NOT_RUNNING       = 0x0000'0400U;
+
+    /// @brief SIGP retry backoff state.
+    struct sigp_backoff {
+        u64 min_tod;        ///< Initial delay in TOD units (~4096 per ms).
+        u64 max_tod;        ///< Cap delay.
+        u64 current_tod;    ///< Current delay.
+        u64 deadline;       ///< Absolute TOD deadline.
+
+        /// @brief Compute the next backoff delay.
+        /// @return Delay in TOD units.
+        auto next_delay() noexcept -> u64;
+
+        /// @brief Check whether the deadline has passed.
+        [[nodiscard]] auto expired() const noexcept -> bool;
+
+        /// @brief Busy-wait for current_tod units.
+        auto wait() noexcept -> void;
+    };
+
+    struct sigp_result {
+        u32 status{};
+        condition_code cc{};
+    };
+
+    /// @brief Build a sigp_backoff with default parameters.
+    /// @param[in] timeout_tod  Absolute TOD deadline.
+    /// @return Initialized backoff state.
+    [[nodiscard]] auto default_backoff(u64 timeout_tod) noexcept -> sigp_backoff;
+
+    /// @brief Issue a SIGP (Signal Processor) instruction.
+    auto issue(u16 addr, u8 order, u64 parm) -> sigp_result;
+
+    /// @brief Issue SIGP with exponential backoff until the target CPU
+    ///        is no longer busy (CC != 2) or the deadline expires.
+    /// @param[in] cpu_addr Target CPU address.
+    /// @param[in] order SIGP order code.
+    /// @param[in] parm Parameter value.
+    /// @param[in] backoff Retry state controlling delay and deadline.
+    /// @return condition_code and status pair
+    [[nodiscard]] auto issue_bounded(
+        u16 cpu_addr,
+        u8  order,
+        u32 parm,
+        sigp_backoff& backoff
+    ) noexcept -> sigp_result;
+
+    /// @brief Issue SIGP with exponential backoff until the target CPU
+    ///        is no longer busy (CC != 2) or the deadline expires.
+    /// @param[in] cpu_addr Target CPU address.
+    /// @param[in] order SIGP order code.
+    /// @param[in] parm Parameter value.
+    /// @return condition_code and status pair
+    [[nodiscard]] auto issue_bounded(
+        u16 cpu_addr,
+        u8  order,
+        u32 parm
+    ) noexcept -> sigp_result;
+
+    /// @brief Wait until a CPU is stopped, with check-stop recovery.
+    /// @param[in] cpu_addr Target CPU address.
+    [[nodiscard]] auto wait_cpu_stopped(u16 cpu_addr) noexcept -> sigp_result;
+
+} // namespace arch::s390x::cpu::sigp
+
+} // end export

@@ -114,6 +114,22 @@ namespace arch::s390x::cpu::skey {
         return (key & SKEY_CHANGE) != 0;
     }
 
-} // namespace arch::s390x::cpu::skey
+    /// @brief Set the access-control and fetch-protection bits of a frame's
+    ///        storage key
+    /// @param phys_addr  Real (absolute) address within the target frame.
+    /// @param acc        4-bit access control value (0-15).
+    /// @param fetch_protect  If true, set the fetch-protection bit.
+    inline auto sske_preserve_rc(u64 phys_addr, u8 acc, bool fetch_protect) noexcept -> void {
+        const u8 existing = iske(phys_addr);
+        const u8 preserved = existing & (SKEY_REF | SKEY_CHANGE);
+        const u8 key = static_cast<u8>(
+            ((acc & 0x0FU) << SKEY_ACC_SHIFT) |
+            (fetch_protect ? SKEY_FETCH_PROTECT : 0U) |
+            preserved
+        );
+        sske(phys_addr, key);
+    }
 
-} // end export
+    } // namespace arch::s390x::cpu::skey
+
+    } // end export

@@ -1,0 +1,3 @@
+[submodule "deps/libstdcxx"]
+	path = deps/libstdcxx
+	url = https://github.com/assembler-0/ZXFoundation-LIBSTDCXX

@@ -12,11 +12,8 @@ import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import lib.cpumask;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
-import arch.s390x.lib.atomic;
+import std;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.cpumask;
 
 export {
@@ -55,7 +52,7 @@ namespace zxfoundation::sched::smt {
                 const auto* yr = zxfoundation::sched::topology::record_for(y);
                 if (!yr) return;
                 if (yr->run_queue_load == 0U) {
-                    out_f.set(y, arch::s390x::lib::atomic::memory_order::relaxed);
+                    out_f.set(y, std::memory_order::relaxed);
                 }
             }
         );

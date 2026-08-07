@@ -7,12 +7,11 @@ import zxfoundation.base.types;
 import zxfoundation.sys.printk;
 import zxfoundation.sys.zxallsyms;
 import zxfoundation.sys.zxallsyms_types;
+import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
-import arch.s390x.cpu.processor_types;
-import arch.s390x.cpu.irq_frame;
+import arch.s390x.cpu.types;
 
 export {
 

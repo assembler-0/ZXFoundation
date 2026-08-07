@@ -8,10 +8,9 @@ import zxfoundation.locking.seqlock;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.irq;
-import arch.s390x.lib.atomic;
-import lib.expected;
+import std;
 import lib.error;
-import lib.compare;
+import std;
 
 namespace _internal {
     /// @brief Seqlock-protected wall-clock offset.
@@ -22,7 +21,7 @@ namespace _internal {
     static u64 g_boot_tod{0};
 
     /// @brief Monotonic tick counter — incremented by the clock comparator handler.
-    static arch::s390x::lib::atomic::atomic<u64> g_tick{0};
+    static std::atomic<u64> g_tick{0};
 }
 
 export {
@@ -107,9 +106,9 @@ namespace zxfoundation::sys::time {
     /// @brief Adjust the realtime clock (e.g., NTP steering).
     ///
     /// @param[in]  now  New absolute epoch-relative time.
-    /// @return  lib::expected<void, kernel_error>.
+    /// @return  std::expected<void, kernel_error>.
     [[nodiscard]] auto set_realtime(const instant now) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         const u64 raw_ns = duration::from_tod(
             arch::s390x::cpu::clock::stck()).count_ns();
@@ -131,7 +130,7 @@ namespace zxfoundation::sys::time {
     /// @param[in]  tick_ns  Duration of one tick in nanoseconds (10,000,000).
     auto tick_advance_wall(u64 tick_ns) noexcept -> void {
         discard_value _internal::g_tick.fetch_add(
-            1U, arch::s390x::lib::atomic::memory_order::relaxed);
+            1U, std::memory_order::relaxed);
         const u64 old_offset = _internal::g_wall_offset.read();
         _internal::g_wall_offset.write(old_offset + tick_ns);
     }
@@ -141,7 +140,7 @@ namespace zxfoundation::sys::time {
     /// Each tick represents one clock comparator interval (10 ms).
     /// Useful for lightweight timeouts before a full timer wheel is wired.
     [[nodiscard]] auto tick_count() noexcept -> u64 {
-        return _internal::g_tick.load(arch::s390x::lib::atomic::memory_order::relaxed);
+        return _internal::g_tick.load(std::memory_order::relaxed);
     }
 
 } // namespace zxfoundation::sys::time

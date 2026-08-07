@@ -7,50 +7,50 @@
 #define __stringify(x) #x
 #define stringify(x)   __stringify(x)
 
-#define FMT_MSG(m) "zxfoundation: precpp.hxx - " m
+#define __concat(x, y) x##y
+#define concat(x, y) __concat(x, y)
 
-#if !defined(__zxfoundation__)
-#error FMT_MSG("not compiling for ZXFoundation")
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
+#  if __BYTE_ORDER__ != __ORDER_BIG_ENDIAN__
+#    error "not compiling for big-endian"
+#  endif
+#elif defined(__BIG_ENDIAN__) || defined(_BIG_ENDIAN)
+#else
+#  error "not compiling for big-endian"
 #endif
 
-#if !defined(__s390__) || !defined(__s390x__) || !defined(__zarch__)
-#error FMT_MSG("not compiling for s390x/z/Arch")
+#if !defined(__zxfoundation__)
+#error "not compiling for ZXFoundation"
+#endif
+
+#if !defined(__s390__) && !defined(__s390x__) && !defined(__zarch__)
+#error "not compiling for s390x/z/Arch"
 #endif
 
 #if !defined(_LP64) || !defined(__LP64__)
-#error FMT_MSG("not compiling for LP64")
+#error "not compiling for LP64"
 #endif
-
-#undef FMT_MSG
 
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
     #define ZX_HAS_PRE 1
-    #define comply(expr) pre(expr)
 #else
-    #define comply(expr)
+    #define pre(expr)
 #endif
 
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
     #define ZX_HAS_POST 1
-    #define meet(expr) post(expr)
 #else
-    #define meet(expr)
+    #define post(expr)
 #endif
 
-/// @brief exception table: maps faulting instruction addresses
-///        to recovery labels for get_user/put_user/copy_from_user patterns.
-///        Type field encodes recovery action:
-///          0  EX_TYPE_FIXUP       — generic fixup (set PSW to fixup_addr)
-///          1  EX_TYPE_UA_LOAD_REG — load rN from fault_addr, N in data[15:12]
-///          2  EX_TYPE_UA_LOAD_RP  — load rN/rN+1 pair, N in data[15:12]
-///          3  EX_TYPE_UA_STORE    — zero rN, N in data[15:12]
-///          4  EX_TYPE_UA_MVCOS_TO — MVCOS copy-to-user; data = reg_rN<<12|len
-///          5  EX_TYPE_UA_MVCOS_FROM — MVCOS copy-from-user; data = reg_rN<<12|len
+
+/// @brief Exception table: maps faulting instruction addresses to recovery
+///        labels using signed PC-relative offsets.
 #define EX_TABLE(fault_label, fixup_label, type, data)                       \
     ".pushsection .ex_table, \"a\", @progbits\n"                             \
-    ".align  4\n"                                                            \
-    ".quad   " stringify(fault_label) "\n"                                   \
-    ".long   " stringify(fixup_label) "\n"                                   \
+    ".balign 4\n"                                                            \
+    ".long   (" stringify(fault_label) ") - .\n"                             \
+    ".long   (" stringify(fixup_label) ") - .\n"                             \
     ".short  " stringify(type) "\n"                                          \
     ".short  " stringify(data) "\n"                                          \
     ".popsection\n"
@@ -61,6 +61,12 @@
 #define EX_TYPE_UA_STORE     3   
 #define EX_TYPE_UA_MVCOS_TO  4   
 #define EX_TYPE_UA_MVCOS_FROM 5
+
+#define __internal__ static
+#define __external__ extern "C"
+
+#define __endian__(endian) \
+    static_assert(__BYTE_ORDER__ == concat(__ORDER_##endian,_ENDIAN__), stringify(__FILE_NAME__) ": requested endian " stringify(concat(__ORDER_##endian,_ENDIAN__)) " but got " stringify(__BYTE_ORDER__))
 
 #define __zinit__(c, p, entry, a)                                                 \
     extern "C" {                                                                  \
@@ -76,6 +82,14 @@
     }
 
 #define discard_value (void)
+
+#define bitsfield(size, name) ubit_int<size> name : (size)
+#define bitfield(name) bitsfield(1, name)
+#define bitrsvd(size) bitsfield(size, concat(__bitrsvd_, __COUNTER__))
+#define bytersvd(size) u8 concat(__bytersvd_, __COUNTER__)[size]
+
+#define assert_size(s, sz) \
+    static_assert(sizeof(s) == (sz), stringify(s) " != " stringify(sz));
 
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
     #define assert(expr) contract_assert(expr)

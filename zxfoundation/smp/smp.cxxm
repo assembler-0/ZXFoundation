@@ -4,44 +4,60 @@
 
 export module zxfoundation.smp.smp;
 import zxfoundation.smp.smp_types;
-import arch.s390x.lib.atomic;
-import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu_types;
-import arch.s390x.cpu.irq;
-import arch.s390x.cpu.ipi;
-import arch.s390x.cpu.cpumask;
-import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.rcu.rcu;
-import lib.cpumask;
-import lib.expected;
-import lib.error;
-import lib.placementnew;
-import lib.util;
 import zxfoundation.sys.printk;
 import zxfoundation.rcu.rcu_types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.ipi;
+import arch.s390x.cpu.sync;
+import arch.s390x.cpu.cpumask;
+import lib.cpumask;
+import lib.error;
+import std;
 
 namespace zxfoundation::smp::_internal {
 
-    using memory_order = arch::s390x::lib::atomic::memory_order;
+    using memory_order = std::memory_order;
 
     /// @brief Per-CPU LIFO head pointer — module-static, indexed by cpu_id.
     /// @note Matches the @c lib::softirq::g_per_cpu_state layout pattern.
-    alignas(64) arch::s390x::lib::atomic::atomic<call_single_data*> g_csd_head[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+    alignas(64) std::atomic<call_single_data*> g_csd_head[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
     /// @brief Per-CPU statistics, indexed by cpu_id.
     alignas(64) csd_stats g_csd_stats[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
-    /// @brief Memory barrier helper — wraps @c processor::barrier for brevity.
-    inline auto smp_wmb() noexcept -> void {
-        arch::s390x::cpu::processor::barrier();
+    /// @brief Per-CPU dispatch admission state.
+    /// @details A producer increments the low bits only while admission is
+    ///          enabled. CPU teardown clears the high bit, then waits for
+    ///          outstanding producers before halting the target.
+    constexpr u32 CSD_DISPATCH_DISABLED = 1U << 31;
+    constexpr u32 CSD_DISPATCH_COUNT_MASK = ~CSD_DISPATCH_DISABLED;
+    alignas(64) std::atomic<u32> g_csd_dispatch_state[
+        zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
+    [[nodiscard]] auto csd_dispatch_lease_try_acquire(u16 cpu) noexcept -> bool {
+        auto& state = g_csd_dispatch_state[cpu];
+        u32 observed = state.load(memory_order::acquire);
+        while ((observed & CSD_DISPATCH_DISABLED) == 0U) {
+            if ((observed & CSD_DISPATCH_COUNT_MASK) == CSD_DISPATCH_COUNT_MASK)
+                return false;
+            if (state.compare_exchange_weak(
+                    observed, observed + 1U,
+                    memory_order::acq_rel,
+                    memory_order::acquire))
+                return true;
+        }
+        return false;
+    }
+
+    auto csd_dispatch_lease_release(u16 cpu) noexcept -> void {
+        discard_value g_csd_dispatch_state[cpu].fetch_sub(1U, memory_order::release);
     }
 
     /// @brief Atomically push a csd onto a CPU's LIFO head (Treiber stack).
-    /// @return True when this push made an empty queue non-empty (caller
-    ///         should IPI the target); false when the queue was already
-    ///         non-empty (an in-flight IPI already covers it).
     [[nodiscard]] auto csd_queue_push(u16 cpu, call_single_data* csd) noexcept -> bool {
         auto& head = g_csd_head[cpu];
         call_single_data* expected = head.load(memory_order::relaxed);
@@ -59,8 +75,6 @@ namespace zxfoundation::smp::_internal {
 
     /// @brief Atomically pop the entire csd LIFO for the running CPU.
     /// @return The previous head (list to walk) or nullptr when empty.
-    /// @note This is @c exchange(nullptr) — a single atomic op drains the
-    ///       queue; new pushes during drain spin on the next IPI.
     [[nodiscard]] auto csd_queue_drain_all() noexcept -> call_single_data* {
         const u16 cpu = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
         auto& head = g_csd_head[cpu];
@@ -73,7 +87,7 @@ export {
 
 namespace zxfoundation::smp {
 
-    using memory_order = arch::s390x::lib::atomic::memory_order;
+    using memory_order = std::memory_order;
 
     /// @brief Initialise a csd before enqueue.
     /// @param[out] csd  CSD node to initialise.
@@ -82,8 +96,6 @@ namespace zxfoundation::smp {
     /// @param[in]  info Caller-supplied fixed-width word passed to @c func.
     /// @param[in]  flags One of @c SMP_CSD_F_SYNC / @c SMP_CSD_F_ASYNC, may
     ///             be ORed with @c SMP_CSD_F_RCU_FREE (async-only).
-    /// @note The csd is marked @c SMP_CSD_F_LOCKED during in-flight period
-    ///       so @c csd_lock_wait can detect completion.
     auto csd_init(call_single_data& csd, smp_csd_fn func, void* data,
                   u64 info, u32 flags) noexcept -> void {
         csd.next.store(nullptr, memory_order::relaxed);
@@ -97,13 +109,9 @@ namespace zxfoundation::smp {
 
     /// @brief Wait until the target CPU has completed dispatch of @c csd.
     /// @param[in] csd CSD node with @c SMP_CSD_F_SYNC set by the producer.
-    /// @note Spin-wait loop.  The dispatcher writes @c SMP_CSD_F_DONE on
-    ///       the csd's flags word (release); this loop observes it via the
-    ///       acquire load.  @c cpu_relax prevents the spin from becoming a
-    ///       hot bomber on the cache line.
     auto csd_lock_wait(const call_single_data& csd) noexcept -> void {
         while ((csd.flags.load(memory_order::acquire) & SMP_CSD_F_DONE) == 0U) {
-            arch::s390x::cpu::processor::cpu_relax();
+            arch::s390x::cpu::sync::cpu_relax();
         }
     }
 
@@ -117,9 +125,6 @@ namespace zxfoundation::smp {
     ///        @c SMP_CSD_F_RCU_FREE.
     /// @param[out] csd CSD node flagged @c SMP_CSD_F_RCU_FREE.
     /// @param[in]  fn  Callback invoked by @c call_rcu after a grace period.
-    ///                 Receives an @c rcu_head pointer that overlays the csd's
-    ///                 @c next/func/@c fields (the csd has been removed from the
-    ///                 target CPU's LIFO by then, so the @c next field is unused).
     auto csd_set_rcu_free(call_single_data& csd,
                           void (*fn)(rcu::rcu_head*) noexcept) noexcept -> void {
         csd.done_atm = reinterpret_cast<u64>(reinterpret_cast<void*>(fn));
@@ -154,6 +159,9 @@ namespace zxfoundation::smp {
                     ~(SMP_CSD_F_LOCKED | SMP_CSD_F_QUEUED),
                     memory_order::release);
             }
+            if (flags & SMP_CSD_F_DISPATCH_LEASE)
+                _internal::csd_dispatch_lease_release(
+                    arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id);
             ++_internal::g_csd_stats[arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id]
                  .dispatch_count;
             node = next;
@@ -163,17 +171,12 @@ namespace zxfoundation::smp {
     /// @brief Enqueue a pre-initialised csd onto a target CPU.
     /// @param[in] cpu  Target CPU id.
     /// @param[in] csd  CSD node, fully initialised via @c csd_init.
-    /// @return Success — caller MUST NOT free @c csd until @c csd_is_done
-    ///         returns true (or @c SMP_CSD_F_RCU_FREE schedules the free).
-    ///         @c invalid_arg when @c cpu is out of range or @c csd is
-    ///         nullptr; @c invalid_arg when the flags combination is
-    ///         invalid (both SYNC and ASYNC set, RCU_FREE without ASYNC).
     /// @note Suppresses self-IPI when @c cpu == this_cpu (caller-local pass).
     auto smp_call_function_single_async(u16 cpu, call_single_data* csd) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS || csd == nullptr) [[unlikely]] {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         const u32 flags = csd->flags.load(memory_order::relaxed);
@@ -181,16 +184,26 @@ namespace zxfoundation::smp {
         const bool is_async = (flags & SMP_CSD_F_ASYNC) != 0U;
         const bool is_rcu_free = (flags & SMP_CSD_F_RCU_FREE) != 0U;
         if (is_sync == is_async) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (is_rcu_free && !is_async) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
         ++_internal::g_csd_stats[self].csd_call_count;
+
+        if (cpu != self) {
+            if (!arch::s390x::cpu::cpumask::cpu_online(cpu) ||
+                !_internal::csd_dispatch_lease_try_acquire(cpu)) {
+                return std::unexpected(
+                    lib::kernel_error::from_arch(lib::arch_error::cpu_not_available));
+            }
+            discard_value csd->flags.fetch_or(
+                SMP_CSD_F_DISPATCH_LEASE, memory_order::release);
+        }
 
         const bool need_ipi = _internal::csd_queue_push(cpu, csd);
         discard_value csd->flags.fetch_or(SMP_CSD_F_QUEUED, memory_order::release);
@@ -205,6 +218,25 @@ namespace zxfoundation::smp {
         return {};
     }
 
+    /// @brief Prevent new remote CSD enqueues to @p cpu and wait until all
+    ///        already accepted callbacks have completed on the target.
+    /// @note CPU teardown keeps the target runnable until this wait completes.
+    auto smp_csd_disable_cpu(u16 cpu) noexcept -> void {
+        if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
+        auto& state = _internal::g_csd_dispatch_state[cpu];
+        const u32 old = state.fetch_or(
+            _internal::CSD_DISPATCH_DISABLED, memory_order::acq_rel);
+        while ((state.load(memory_order::acquire) & _internal::CSD_DISPATCH_COUNT_MASK) != 0U)
+            arch::s390x::cpu::sync::cpu_relax();
+        discard_value old;
+    }
+
+    /// @brief Allow remote CSD enqueues to @p cpu after it has been initialized.
+    auto smp_csd_enable_cpu(u16 cpu) noexcept -> void {
+        if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
+        _internal::g_csd_dispatch_state[cpu].store(0U, memory_order::release);
+    }
+
     /// @brief Synchronous single-CPU function-call IPI.
     /// @param[in] cpu   Target CPU id.
     /// @param[in] func  Callback invoked on the target CPU.
@@ -214,10 +246,10 @@ namespace zxfoundation::smp {
     ///         on bad CPU id or null callback.
     auto smp_call_function_single_sync(u16 cpu, smp_csd_fn func, void* data,
                                        u64 info) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (func == nullptr || cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         call_single_data csd;
@@ -233,38 +265,68 @@ namespace zxfoundation::smp {
         return {};
     }
 
-    /// @brief Fan-out a callback to many CPUs at once.
-    /// @param[in] mask  CPU mask of target CPUs (any online CPUs in mask
-    ///                  are dispatched; offline CPUs are skipped).
-    /// @param[in] func  Callback invoked on each target CPU.
-    /// @param[in] data  Opaque data shared by all target invocations — caller
-    ///                  MUST keep @c data alive until @c csd_is_done for every
-    ///                  target CPU's csd returns true.
-    /// @param[in] info  Fixed-width word shared by all target invocations.
-    /// @return Number of CPUs actually dispatched (skipped offline CPUs).
+    /// @brief Fan-out a synchronous callback to many CPUs at once.
+    /// @param[in] mask          CPU mask of target CPUs.
+    /// @param[in] func          Callback invoked on each target CPU.
+    /// @param[in] data          Opaque data shared by all target invocations.
+    /// @param[in] info          Fixed-width word shared by all target invocations.
+    /// @param[out] csd_pool     Caller-owned descriptors, one per remote CPU.
+    /// @param[in] pool_capacity Number of descriptors available in @p csd_pool.
+    /// @return Number of CPUs whose callbacks completed.
+    /// @note All remote callbacks are queued before any completion is waited
+    ///       on.  This avoids serialising the IPI round trips.
     auto smp_call_function_many(const ::lib::cpumask& mask, smp_csd_fn func,
                                 void* data, u64 info,
-                                call_single_data* csd_pool) noexcept
-        -> lib::expected<u32, lib::kernel_error>
+                                call_single_data* csd_pool,
+                                u32 pool_capacity) noexcept
+        -> std::expected<u32, lib::kernel_error>
     {
-        if (func == nullptr || csd_pool == nullptr) [[unlikely]] {
-            return lib::unexpected(
+        if (func == nullptr || csd_pool == nullptr || pool_capacity == 0U) [[unlikely]] {
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
         ++_internal::g_csd_stats[self].csd_call_many_count;
 
+        u32 remote_targets = 0U;
+        mask.for_each([&](u16 cpu) noexcept -> void {
+            if (cpu != self) ++remote_targets;
+        });
+        if (remote_targets > pool_capacity) [[unlikely]] {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+        }
+
         u32 queued = 0U;
+        bool local_invoked = false;
+        lib::kernel_error dispatch_error{};
+        bool failed = false;
         u32 idx = 0U;
         mask.for_each([&](u16 cpu) noexcept -> void {
-            if (cpu == self) return;
-            if (!arch::s390x::cpu::cpumask::cpu_online(cpu)) return;
-            csd_init(csd_pool[idx], func, data, info, SMP_CSD_F_SYNC);
-            discard_value smp_call_function_single_async(cpu, &csd_pool[idx]);
+            if (failed) return;
+            if (cpu == self) {
+                func(info, data);
+                local_invoked = true;
+                return;
+            }
+
+            auto& csd = csd_pool[idx++];
+            csd_init(csd, func, data, info, SMP_CSD_F_SYNC);
+            auto result = smp_call_function_single_async(cpu, &csd);
+            if (!result) {
+                if (!failed) dispatch_error = result.error();
+                failed = true;
+                return;
+            }
             ++queued;
-            ++idx;
         });
-        return queued;
+
+        for (u32 i = 0U; i < idx; ++i)
+            if (csd_pool[i].flags.load(memory_order::acquire) & SMP_CSD_F_QUEUED)
+            csd_lock_wait(csd_pool[i]);
+
+        if (failed) return std::unexpected(dispatch_error);
+        return queued + (local_invoked ? 1U : 0U);
     }
 
     /// @brief Test whether the running CPU has any pending csd nodes.

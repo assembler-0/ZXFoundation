@@ -11,8 +11,7 @@ import arch.s390x.cpu.clock;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.error;
-import lib.expected;
-import arch.s390x.lib.atomic;
+import std;
 
 export {
 

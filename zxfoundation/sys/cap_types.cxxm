@@ -2,19 +2,6 @@
 /// @file zxfoundation/sys/cap_types.cxxm
 /// @brief Capability system type definitions — opaque resource tokens for
 ///        the DGP kernel's capability-based authorization model.
-///
-/// Every resource in the system (domain, gate, portal, I/O binding, memory
-/// region, service entry) is identified by an opaque capability token.
-/// Tokens are unforgeable: they encode the object type, object ID, generation
-/// counter (ABA prevention), and a delegated-rights mask.
-///
-/// Token layout (64-bit):
-///
-///   63              48 47          32 31          16 15            0
-///   ┌─────────────────┬──────────────┬──────────────┬────────────────┐
-///   │     RIGHTS      │  GENERATION  │   OBJECT_ID  │     TYPE       │
-///   │     (16 bits)   │   (16 bits)  │   (16 bits)  │   (16 bits)    │
-///   └─────────────────┴──────────────┴──────────────┴────────────────┘
 
 export module zxfoundation.sys.cap_types;
 import zxfoundation.base.types;
@@ -23,8 +10,6 @@ export {
 
 namespace zxfoundation::sys::cap {
 
-    // ── Capability type discriminator ───────────────────────────────────
-
     /// @brief Discriminator for the kind of resource a capability token refers to.
     enum class cap_type : u16 {
         none       = 0,   ///< Invalid / null capability.
@@ -32,9 +17,10 @@ namespace zxfoundation::sys::cap {
         gate       = 2,   ///< Reference to a gate.
         portal     = 3,   ///< Reference to a portal.
         io_device  = 5,   ///< Reference to an I/O device binding.
-        memory     = 6,   ///< Reference to a VME memory region.
+        memory     = 6,   ///< Reference to a memory grant authority.
         service    = 7,   ///< Reference to a service registry entry.
         admin      = 8,   ///< Administrative authority (domain mgmt, etc.).
+        memory_extent = 9, ///< Exact physical range authorized for mapping.
     };
 
     /// @brief Return a human-readable label for a capability type.
@@ -48,11 +34,10 @@ namespace zxfoundation::sys::cap {
             case cap_type::memory:    return "memory";
             case cap_type::service:   return "service";
             case cap_type::admin:     return "admin";
+            case cap_type::memory_extent: return "memory_extent";
             default:                  return "unknown";
         }
     }
-
-    // ── Generic rights masks ─────────────────────────────────────────────
 
     /// @brief Standard access rights usable with any capability type.
     enum class cap_rights : u16 {
@@ -79,15 +64,7 @@ namespace zxfoundation::sys::cap {
         return static_cast<cap_rights>(~static_cast<u16>(r));
     }
 
-    // ── Capability token ────────────────────────────────────────────────
-
     /// @brief Opaque 64-bit capability token.
-    ///
-    /// A token is created by the nucleus and is unforgeable because:
-    ///   - The object generation is known only to the nucleus.
-    ///   - The token is constructed inside a nucleus call.
-    ///   - Domains can only pass existing tokens, never construct new ones.
-    ///
     /// @note  Tokens are value types (copyable, movable).
     struct cap_token {
         u64 raw{0};   ///< Raw 64-bit encoding.
@@ -97,7 +74,7 @@ namespace zxfoundation::sys::cap {
 
         /// @brief Construct a token from its components.
         /// @param[in] type     Resource type discriminator.
-        /// @param[in] obj_id   Object index in the type's SCOMS table.
+        /// @param[in] obj_id   Nucleus capability-slot index.
         /// @param[in] gen      Object generation counter.
         /// @param[in] rights   Delegated rights mask.
         static constexpr auto make(

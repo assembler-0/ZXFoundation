@@ -4,7 +4,7 @@
 
 export module zxfoundation.smp.smp_types;
 import zxfoundation.base.types;
-import arch.s390x.lib.atomic;
+import std;
 import zxfoundation.rcu.rcu_types;
 
 export {
@@ -26,15 +26,16 @@ namespace zxfoundation::smp {
     constexpr u32 SMP_CSD_F_RCU_FREE  = 1U << 3;  ///< Free via call_rcu on completion.
     constexpr u32 SMP_CSD_F_LOCKED    = 1U << 4;  ///< csd is in-flight (locked + pending).
     constexpr u32 SMP_CSD_F_QUEUED    = 1U << 5;  ///< csd is queued on a target CPU LIFO.
+    constexpr u32 SMP_CSD_F_DISPATCH_LEASE = 1U << 6; ///< Holds one target dispatch lease.
     /// @}
 
     /// @brief One cross-CPU function-call descriptor.
     struct call_single_data {
-        arch::s390x::lib::atomic::atomic<call_single_data*> next{nullptr};
+        std::atomic<call_single_data*> next{nullptr};
         smp_csd_fn                                                  func{nullptr};
         void*                                                       data{nullptr};
         u64                                                          info{0};
-        arch::s390x::lib::atomic::atomic<u32>                       flags{0};
+        std::atomic<u32>                       flags{0};
         /// @brief Completion scratch word.  For @c SMP_CSD_F_SYNC the
         ///        dispatcher writes @c SMP_CSD_F_DONE on @c flags (release);
         ///        the producer polls @c csd_lock_wait.

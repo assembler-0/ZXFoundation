@@ -5,7 +5,7 @@
 export module lib.idalloc;
 import zxfoundation.base.types;
 import lib.bitmap;
-import lib.optional;
+import std;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 
@@ -34,10 +34,10 @@ namespace lib {
 
         /// @brief Allocate the lowest available ID.
         /// @return The allocated ID, or nullopt if all IDs exhausted.
-        [[nodiscard]] auto alloc() noexcept -> optional<u32> {
+        [[nodiscard]] auto alloc() noexcept -> std::optional<u32> {
             const zxfoundation::locking::irq_lock_guard guard{m_lock};
             auto bit = m_bitmap.find_first_unset();
-            if (!bit) return nullopt;
+            if (!bit) return std::nullopt;
             m_bitmap.set_relaxed(*bit);
             ++m_count;
             return static_cast<u32>(*bit);

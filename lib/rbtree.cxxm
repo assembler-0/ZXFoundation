@@ -4,7 +4,8 @@
 
 export module lib.rbtree;
 import zxfoundation.base.types;
-import lib.util;
+import lib.container_of;
+import std;
 
 export {
 
@@ -74,13 +75,13 @@ namespace lib {
             constexpr explicit typed_iterator(rb_node* cur) noexcept : current(cur) {}
 
             [[nodiscard]] auto operator*() noexcept -> Owner& {
-                return *container_of<Owner, rb_node, member>(current);
+                return *lib::container_of<Owner, rb_node, member>(current);
             }
             [[nodiscard]] auto operator*() const noexcept -> const Owner& {
-                return *container_of<Owner, rb_node, member>(current);
+                return *lib::container_of<Owner, rb_node, member>(current);
             }
             [[nodiscard]] auto operator->() noexcept -> Owner* {
-                return container_of<Owner, rb_node, member>(current);
+                return lib::container_of<Owner, rb_node, member>(current);
             }
 
             auto operator++() noexcept -> typed_iterator&;    // defined after rb_next
@@ -493,6 +494,13 @@ namespace lib {
         return n;
     }
 
+    /// @brief O(1) begin for cached roots — returns the cached leftmost.
+    [[nodiscard]] inline auto rb_first_cached(
+        const rb_root_cached& tree
+    ) noexcept -> rb_node* {
+        return tree.leftmost;
+    }
+
     /// @brief Return the rightmost (maximum) node, or nullptr if empty.
     [[nodiscard]] inline auto rb_last(const rb_root& root) noexcept -> rb_node* {
         rb_node* n = root.node;
@@ -649,7 +657,7 @@ namespace lib {
     /// @return Pointer to the node, or nullptr when no exact match.
     template <typename Key, typename Cmp>
     [[nodiscard]] auto rb_find(const rb_root& root, const Key& key, Cmp&& cmp) noexcept -> rb_node* {
-        auto* lb = rb_lower_bound(root, key, lib::forward<Cmp>(cmp));
+        auto* lb = rb_lower_bound(root, key, std::forward<Cmp>(cmp));
         if (lb && cmp(lb, key) == 0) return lb;
         return nullptr;
     }

@@ -68,6 +68,11 @@ export {
             u32          alet{0};             ///< Access List Entry Token assigned to this portal.
             u8           ar_num{0};           ///< Access register number (0-15) in source domain.
             u8           _pad[3]{};
+            u32          aste_index{~0U};     ///< Global ASTE entry used by this portal.
+            u64          portal_root_phys{0}; ///< Dedicated exact-range portal DAT root.
+            u64          portal_asce{0};      ///< ASCE installed in the ASTE.
+            u32          pinned_pages{0};
+            u32          _pad2{0};
 
             portal_desc() noexcept = default;
 
@@ -78,6 +83,13 @@ export {
         };
 
         static_assert(__builtin_offsetof(portal_desc, ko) == 0);
+
+        /// @brief Result of an import that must be used with the returned AR.
+        struct portal_binding {
+            u8  ar_num{0};
+            u8  _pad[3]{};
+            u32 portal_id{~0U};
+        };
 
     } // namespace zxfoundation::portal
 

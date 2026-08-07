@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    psw.cxxm
+    psw.cxx
+}

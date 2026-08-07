@@ -14,7 +14,7 @@ import zxfoundation.sys.printk;
 import zxfoundation.domain.domain;
 import zxfoundation.sched.sched;
 import lib.error;
-import lib.expected;
+import std;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.ipi;
 

@@ -8,9 +8,8 @@ export module zxfoundation.base.cxxrtse.contracts;
 
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
-import lib.source_location;
+import std;
 import lib.error;
-import lib.string_view;
 
 namespace std::contracts {
 
@@ -82,10 +81,10 @@ namespace std::contracts {
         [[nodiscard]] detection_mode mode() const noexcept { return _M_detection_mode; }
         [[nodiscard]] const char *comment() const noexcept { return _M_comment; }
 
-        [[nodiscard]] lib::source_location location() const noexcept {
-            lib::source_location __loc;
+        [[nodiscard]] std::pair location() const noexcept {
+            std::pair __loc;
             __loc._M_impl
-                    = static_cast<const lib::source_location::__impl *>(_M_src_loc_ptr);
+                    = static_cast<const std::pair::__impl *>(_M_src_loc_ptr);
             return __loc;
         }
 

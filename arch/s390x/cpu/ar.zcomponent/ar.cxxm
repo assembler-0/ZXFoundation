@@ -1,0 +1,49 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ar.cxxm
+/// @brief z/Architecture access register operations (SAR, EAR, SAC, ALB purge).
+
+export module arch.s390x.cpu.ar;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::ar {
+
+    /// @brief ALET value 0 designates the primary address space.
+    constexpr u32 ALET_PRIMARY   = 0;
+
+    /// @brief ALET value 1 designates the secondary address space.
+    constexpr u32 ALET_SECONDARY = 1;
+
+    /// @brief ALET value 2 designates the home address space.
+    constexpr u32 ALET_HOME      = 2;
+
+    /// @brief Number of access registers on z/Architecture.
+    constexpr u32 AR_COUNT       = 16;
+
+    /// @brief Set access register @p ar_num to @p alet.
+    auto set_ar(u32 ar_num, u32 alet) noexcept -> void;
+
+    /// @brief Extract the value of access register @p ar_num.
+    /// @param ar_num  Access register number (0-15).
+    /// @return The 32-bit ALET value stored in the access register.
+    [[nodiscard]] auto get_ar(u32 ar_num) noexcept -> u32;
+
+    /// @brief Switch to primary address space mode (ASC = 00).
+    auto set_asc_primary() noexcept -> void;
+
+    /// @brief Switch to secondary address space mode (ASC = 01).
+    auto set_asc_secondary() noexcept -> void;
+
+    /// @brief Switch to access-register mode (ASC = 10).
+    auto set_asc_ar() noexcept -> void;
+
+    /// @brief Switch to home address space mode (ASC = 11).
+    auto set_asc_home() noexcept -> void;
+
+    /// @brief Purge the Access-List Buffer (ALB).
+    auto purge_alb() noexcept -> void;
+
+} // namespace arch::s390x::cpu::ar
+
+} // end export

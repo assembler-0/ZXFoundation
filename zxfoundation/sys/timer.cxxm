@@ -8,15 +8,13 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
-import arch.s390x.cpu.clkcomp;
 import arch.s390x.cpu.irq;
-import arch.s390x.cpu.irq_frame;
 import arch.s390x.cpu.lowcore;
 import zxfoundation.sys.irq.irqdesc;
 import lib.min_heap;
-import lib.expected;
 import lib.error;
 import lib.format;
+import std;
 
 namespace _internal {
 
@@ -31,7 +29,7 @@ namespace _internal {
         }
     };
 
-    static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
+    static std::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
         g_heaps[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
     /// @brief Subsystem initialization flag.
@@ -41,12 +39,12 @@ namespace _internal {
     auto rearm_comparator(u16 cpu_id) noexcept -> void {
         const auto* top = g_heaps[cpu_id].peek();
         if (top) {
-            arch::s390x::cpu::clkcomp::clkcomp_set(top->deadline_tod);
+            arch::s390x::cpu::clock::sckc(top->deadline_tod);
         } else {
             // Far future: current TOD + ~10 seconds.
             const u64 far_future = arch::s390x::cpu::clock::stck()
                                  + 40'960'000'000ULL;
-            arch::s390x::cpu::clkcomp::clkcomp_set(far_future);
+            arch::s390x::cpu::clock::sckc(far_future);
         }
     }
 
@@ -73,10 +71,10 @@ namespace zxfoundation::sys::timer {
 
     /// @brief Add a timer to the current CPU's heap and arm the clock comparator.
     [[nodiscard]] auto timer_add(kernel_timer& t) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (t.armed) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(
                     lib::generic_error::invalid_arg));
         }
@@ -88,7 +86,7 @@ namespace zxfoundation::sys::timer {
 
         if (!_internal::g_heaps[cpu_id].push(&t, _internal::timer_less{})) {
             arch::s390x::cpu::irq::irq_restore(flags);
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_memory(
                     lib::memory_error::out_of_memory));
         }
@@ -105,10 +103,10 @@ namespace zxfoundation::sys::timer {
 
     /// @brief Cancel an armed timer.
     [[nodiscard]] auto timer_cancel(kernel_timer& t) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         if (!t.armed) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(
                     lib::generic_error::invalid_arg));
         }
@@ -119,7 +117,7 @@ namespace zxfoundation::sys::timer {
             arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
         if (t.cpu != current_cpu) {
             arch::s390x::cpu::irq::irq_restore(flags);
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(
                     lib::generic_error::not_supported));
         }
@@ -188,7 +186,7 @@ namespace zxfoundation::sys::timer {
         discard_value irq; discard_value frame; discard_value data;
         const u64 far_future = arch::s390x::cpu::clock::stck()
                              + 40'960'000'000ULL;
-        arch::s390x::cpu::clkcomp::clkcomp_set(far_future);
+        arch::s390x::cpu::clock::sckc(far_future);
     }
 
     auto irq_handler_service_signal(

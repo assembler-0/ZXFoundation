@@ -14,7 +14,7 @@ import zxfoundation.dgp.isolation_types;
 import zxfoundation.sys.printk;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import lib.expected;
+import std;
 
 #define NC_ERROR ~0ULL
 
@@ -61,7 +61,7 @@ namespace __portal_detail {
         }
 
         auto result = zxfoundation::portal::portal_create(
-            d->ko.id, target_id, va_start, va_end, prot, ar_num);
+            d->ko.id, target_id, va_start, va_end, prot, ar_num, nullptr);
         if (!result) {
             zxfoundation::sys::printk::perr("portal_create: portal_create failed");
             return NC_ERROR;

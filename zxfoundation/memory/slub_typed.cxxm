@@ -6,8 +6,7 @@ export module zxfoundation.memory.slub_typed;
 import zxfoundation.memory.slub;
 import zxfoundation.memory.slub_types;
 import zxfoundation.base.types;
-import lib.placementnew;
-import lib.expected;
+import std;
 import lib.error;
 
 export {
@@ -44,14 +43,14 @@ namespace zxfoundation::memory::slub {
 
 
         /// @brief Allocate one uninitialized object of type T.
-        [[nodiscard]] auto alloc() noexcept -> lib::expected<T*, lib::kernel_error> {
+        [[nodiscard]] auto alloc() noexcept -> std::expected<T*, lib::kernel_error> {
             if (!valid()) [[unlikely]]
-                return lib::unexpected(
+                return std::unexpected(
                     lib::kernel_error::from_generic(
                         lib::generic_error::code::uninitialized));
             void* raw = kmem_alloc(*impl_);
             if (!raw) [[unlikely]]
-                return lib::unexpected(
+                return std::unexpected(
                     lib::kernel_error::from_memory(
                         lib::memory_error::code::out_of_memory));
             return static_cast<T*>(raw);
@@ -65,10 +64,10 @@ namespace zxfoundation::memory::slub {
         /// @brief Construct a T in a fresh slab slot and wrap it in slab_ptr.
         template<typename... Args>
         [[nodiscard]] auto make(Args&&... args) noexcept
-            -> lib::expected<slab_ptr<T>, lib::kernel_error>
+            -> std::expected<slab_ptr<T>, lib::kernel_error>
         {
             auto result = alloc();
-            if (!result) return lib::unexpected(result.error());
+            if (!result) return std::unexpected(result.error());
             T* obj = ::new(static_cast<void*>(*result)) T(
                 static_cast<Args&&>(args)...);
             return slab_ptr<T>(obj, impl_.raw());
@@ -81,14 +80,14 @@ namespace zxfoundation::memory::slub {
         [[nodiscard]] static auto create(
             const char* name,
             slub_flags  flags = slub_flags::none
-        ) noexcept -> lib::expected<typed_slab_cache<T>, lib::kernel_error>
+        ) noexcept -> std::expected<typed_slab_cache<T>, lib::kernel_error>
         {
             auto result = kmem_cache_create(
                 name,
                 static_cast<u32>(sizeof(T)),
                 static_cast<u32>(alignof(T)),
                 flags);
-            if (!result) return lib::unexpected(result.error());
+            if (!result) return std::unexpected(result.error());
             return typed_slab_cache<T>(*result);
         }
     };

@@ -18,7 +18,6 @@ import arch.s390x.cpu.clock;
 import arch.s390x.cpu.psw;
 import arch.s390x.trap.fixup;
 import lib.error;
-import lib.placementnew;
 
 namespace _internal {
 
@@ -29,9 +28,9 @@ namespace _internal {
 
     /// @brief Arm / re-ping the hypervisor watchdog.
     static auto harddog_ping() noexcept -> bool {
-        i32 rc = diag::diag288<diag::diag288_fn::change>(diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
+        i32 rc = diag::diag288(diag::diag288_fn::change, diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
         if (rc != 0) {
-            rc = diag::diag288<diag::diag288_fn::init>(diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
+            rc = diag::diag288(diag::diag288_fn::init, diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
         }
         return rc == 0;
     }
@@ -116,7 +115,7 @@ namespace zxfoundation::sys::watchdog {
 
         if (
             const condition_code rc =
-                diag::diag288<diag::diag288_fn::init>(diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
+                diag::diag288(diag::diag288_fn::init, diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
             rc != 0
         ) {
             pnotice("watchdog: harddog not available (rc={})",

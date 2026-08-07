@@ -5,23 +5,22 @@
 export module zxfoundation.rcu.rcu;
 import zxfoundation.rcu.rcu_types;
 import zxfoundation.sched.context;
-import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.lowcore_types;
-import arch.s390x.cpu.percpu_types;
-import arch.s390x.cpu.irq;
-import arch.s390x.cpu.processor;
-import arch.s390x.lib.atomic;
-import arch.s390x.cpu.cpumask;
-import lib.cpumask;
-import lib.placementnew;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.cpumask;
+import arch.s390x.cpu.sync;
+import arch.s390x.cpu.percpu;
+import lib.cpumask;
+import std;
 
 namespace zxfoundation::rcu::_internal {
 
-    using memory_order = arch::s390x::lib::atomic::memory_order;
-    using atomic_u64   = arch::s390x::lib::atomic::atomic<u64>;
-    using atomic_u32   = arch::s390x::lib::atomic::atomic<u32>;
+    using memory_order = std::memory_order;
+    using atomic_u64   = std::atomic<u64>;
+    using atomic_u32   = std::atomic<u32>;
 
     static atomic_u64 g_gp_seq{0};    ///< GP sequence counter. Even=idle, odd=active.
     static atomic_u32 g_gp_lock{0};   ///< BSP-side GP state lock.
@@ -35,7 +34,7 @@ namespace zxfoundation::rcu::_internal {
             expected, 1U, memory_order::acquire, memory_order::relaxed))
         {
             expected = 0;
-            arch::s390x::cpu::processor::cpu_relax();
+            arch::s390x::cpu::sync::cpu_relax();
         }
     }
 
@@ -92,13 +91,13 @@ namespace zxfoundation::rcu {
         sched::context::preempt_disable();
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         ++pcp.in_rcu_read_side;
-        arch::s390x::cpu::processor::barrier();
+        arch::s390x::cpu::sync::barrier();
     }
 
     /// @brief Exit an RCU read-side critical section.
     auto rcu_read_unlock() noexcept -> void {
         using namespace _internal;
-        arch::s390x::cpu::processor::barrier();
+        arch::s390x::cpu::sync::barrier();
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         if (pcp.in_rcu_read_side > 0) --pcp.in_rcu_read_side;
         sched::context::preempt_enable();
@@ -121,10 +120,10 @@ namespace zxfoundation::rcu {
     /// @brief Load a RCU-protected pointer with acquire semantics.
     template<typename T>
     [[nodiscard]] auto rcu_dereference(T* const& ptr) noexcept -> T* {
-        arch::s390x::cpu::processor::barrier();
+        arch::s390x::cpu::sync::barrier();
         T* v;
         __atomic_load(&ptr, &v,
-            static_cast<int>(arch::s390x::lib::atomic::memory_order::acquire));
+            static_cast<int>(std::memory_order::acquire));
         return v;
     }
 
@@ -132,7 +131,7 @@ namespace zxfoundation::rcu {
     template<typename T>
     auto rcu_assign_pointer(T*& ptr, T* v) noexcept -> void {
         __atomic_store(&ptr, &v,
-            static_cast<int>(arch::s390x::lib::atomic::memory_order::release));
+            static_cast<int>(std::memory_order::release));
     }
 
     /// @brief Enqueue a deferred callback after the next grace period.
@@ -170,7 +169,7 @@ namespace zxfoundation::rcu {
 
         const gp_seq_t target = seq + 1U;
         while (!gp_seq_after(g_gp_seq.load(memory_order::acquire), target - 1U))
-            arch::s390x::cpu::processor::cpu_relax();
+            arch::s390x::cpu::sync::cpu_relax();
     }
 
     /// @brief Wait until all enqueued call_rcu callbacks have fired.
@@ -180,7 +179,7 @@ namespace zxfoundation::rcu {
                 auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(cpu);
                 if (!lc) return;
                 while (lc->percpu.rcu_pending_count > 0U)
-                    arch::s390x::cpu::processor::cpu_relax();
+                    arch::s390x::cpu::sync::cpu_relax();
             });
     }
 

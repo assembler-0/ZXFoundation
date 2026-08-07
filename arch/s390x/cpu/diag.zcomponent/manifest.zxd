@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    diag.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
+    diag.cxx
+}

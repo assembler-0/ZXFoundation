@@ -14,6 +14,17 @@ namespace arch::s390x::cpu::vector {
     using v4u32  = u32 __attribute__((vector_size(16)));
     using v2u64  = u64 __attribute__((vector_size(16)));
 
+    struct [[gnu::packed]] alignas(16) vector128 {
+        union {
+            struct {
+                u64 high;
+                u64 low;
+            };
+
+            u32 u[4];
+        };
+    };
+
     /// VL: Vector Load (0xE706, RXE) — 16-byte aligned.
     [[nodiscard]] inline auto vl(const void* addr) noexcept -> v16u8 {
         v16u8 result;

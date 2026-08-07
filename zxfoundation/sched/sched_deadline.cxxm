@@ -16,12 +16,10 @@ import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.config;
 import lib.error;
-import lib.expected;
+import std;
 import lib.list;
-import lib.placementnew;
 import lib.cpumask;
 import arch.s390x.cpu.cpumask;
-import arch.s390x.lib.atomic;
 
 namespace _internal {
 
@@ -42,13 +40,13 @@ namespace _internal {
         domain& d,
         u64 runtime_ns,
         u64 period_ns
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (d.deadline_period_ns == 0U) d.deadline_period_ns = period_ns;
         if (d.deadline_budget_ns == 0U || period_ns != d.deadline_period_ns) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (runtime_ns > d.deadline_budget_ns || d.deadline_reserved_ns > d.deadline_budget_ns - runtime_ns) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         d.deadline_reserved_ns += runtime_ns;
         return {};
@@ -79,23 +77,23 @@ namespace zxfoundation::sched::deadline {
         domain& owner,
         strand& s,
         const sched_policy& policy
-    ) noexcept -> lib::expected<sched_admission_result, lib::kernel_error> {
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error> {
         if (!is_active_domain(owner) || is_idle_domain(owner)
             || policy.class_id != sched_class_id::deadline) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         auto dgp_result = zxfoundation::dgp::isolation_validate_scheduler_policy(
             owner.ko.state,
             policy,
             _internal::has_deadline_authority(owner));
-        if (!dgp_result) return lib::unexpected(dgp_result.error());
+        if (!dgp_result) return std::unexpected(dgp_result.error());
 
         auto reserve_result = _internal::reserve_domain_runtime(
             owner,
             dgp_result->admitted_runtime_ns,
             dgp_result->admitted_period_ns);
-        if (!reserve_result) return lib::unexpected(reserve_result.error());
+        if (!reserve_result) return std::unexpected(reserve_result.error());
 
         s.sched_policy = policy;
         s.sched_admission = *dgp_result;
@@ -147,11 +145,11 @@ namespace zxfoundation::sched::deadline {
     [[nodiscard]] auto enqueue(
         run_queue& rq,
         strand& s
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (s.sched_policy.class_id != sched_class_id::deadline
             || s.sched_admission.class_id != sched_class_id::deadline
             || s.sched_admission.admitted_runtime_ns == 0U) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (s.on_rq) return {};
         rq.deadline_queue.push_back(s.sched_link);
@@ -241,11 +239,11 @@ namespace zxfoundation::sched::deadline {
         ::lib::cpumask affinity{};
         if (earliest->sched_policy.allowed_cpus.bits == 0U) {
             for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i)
-                affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+                affinity.set(i, std::memory_order::relaxed);
         } else {
             u64 bits = earliest->sched_policy.allowed_cpus.bits;
             for (u32 i = 0; i < 64U && bits; ++i, bits >>= 1) {
-                if (bits & 1U) affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+                if (bits & 1U) affinity.set(i, std::memory_order::relaxed);
             }
         }
         return cpudl::cpudl_find_latest(affinity);

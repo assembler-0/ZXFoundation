@@ -20,8 +20,14 @@ void zxvl_verify_nucleus_checksums(uint64_t cksum_table) {
     if (tbl->magic != ZXVL_CKSUM_MAGIC)
         panic("zxvl: nucleus checksum table absent");
 
-    if (tbl->version != ZXVL_CKSUM_VERSION)
-        panic("zxvl: checksum table version mismatch");
+    if (tbl->version == 0)
+        panic("zxvl: checksum table version zero is reserved");
+
+    if (tbl->version > ZXVL_CKSUM_VERSION)
+        panic("zxvl: checksum table version newer than loader supports");
+
+    if (tbl->version < ZXVL_CKSUM_VERSION)
+        print("zxvl: warning: nucleus checksum table is older than loader — continuing with reduced checks\n");
 
     if (tbl->count == 0 || tbl->count > ZXVL_CKSUM_MAX_ENTRIES)
         panic("zxvl: checksum table corruption");

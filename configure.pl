@@ -187,7 +187,6 @@ sub build_toolchain_content {
             $tc .= "set(CMAKE_OBJCOPY $prefix-objcopy)\n";
             $tc .= "set(CMAKE_OBJDUMP $prefix-objdump)\n";
             $tc .= "set(ZX_NM $prefix-nm)\n";
-            $tc .= "set(ZX_CXXFILT $prefix-c++filt)\n";
         }
         else {
             $tc .= "set(CMAKE_LINKER ld)\n";
@@ -196,8 +195,8 @@ sub build_toolchain_content {
             $tc .= "set(CMAKE_OBJCOPY objcopy)\n";
             $tc .= "set(CMAKE_OBJDUMP objdump)\n";
             $tc .= "set(ZX_NM nm)\n";
-            $tc .= "set(ZX_CXXFILT c++filt)\n";
         }
+        $tc .= "set(ZX_CXXFILT c++filt)\n";
         $tc .= "set(ZX_HOST_CC $opts->{ZX_C_COMPILER})\n\n";
         $tc .= "set(COMPILER_ID \"$opts->{ZX_COMPILER_FAMILY}\")\n";
     }

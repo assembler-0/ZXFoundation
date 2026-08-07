@@ -3,11 +3,11 @@
 /// @brief ZXFoundationLoader boot protocol — kernel-side C++23 view.
 
 export module arch.s390x.init.zxfl.protocol;
-import arch.s390x.cpu.stfle_types;
+import arch.s390x.cpu.features;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import crypto.sha256_types;
-import lib.string_view;
+import std;
 
 export {
 
@@ -210,7 +210,7 @@ namespace arch::s390x::init::zxfl {
         u8  _pad3[3]{};
         u64 hhdm_phys_coverage_end{}; ///< Exclusive physical end covered by initial HHDM DAT.
 
-        u64 stfle_fac[cpu::stfle::STFLE_MAX_DWORDS]{};
+        u64 stfle_fac[cpu::features::STFLE_MAX_DWORDS]{};
         u32 stfle_count{};
         u32 _pad4{};
 
@@ -260,7 +260,7 @@ namespace arch::s390x::init::zxfl {
     };
 
     /// @brief Pretty-print a ZXFL memory region type.
-    [[nodiscard]] auto mem_type_str(u32 type) noexcept -> lib::string_view {
+    [[nodiscard]] auto mem_type_str(u32 type) noexcept -> std::string_view {
         switch (type) {
             case ZXFL_MEM_USABLE:   return "usable";
             case ZXFL_MEM_RESERVED: return "reserved";
@@ -271,7 +271,7 @@ namespace arch::s390x::init::zxfl {
     }
 
     /// @brief Pretty-print a ZXFL CPU state.
-    [[nodiscard]] auto cpu_state_str(u8 state) noexcept -> lib::string_view {
+    [[nodiscard]] auto cpu_state_str(u8 state) noexcept -> std::string_view {
         switch (state) {
             case ZXFL_CPU_ONLINE:  return "online";
             case ZXFL_CPU_STOPPED: return "stopped";
@@ -280,7 +280,7 @@ namespace arch::s390x::init::zxfl {
     }
 
     /// @brief Pretty-print a ZXFL CPU type.
-    [[nodiscard]] auto cpu_type_str(u8 type) noexcept -> lib::string_view {
+    [[nodiscard]] auto cpu_type_str(u8 type) noexcept -> std::string_view {
         switch (type) {
             case ZXFL_CPU_TYPE_CP:      return "CP";
             case ZXFL_CPU_TYPE_IFL:     return "IFL";
@@ -325,8 +325,6 @@ namespace arch::s390x::init::zxvl {
     constexpr auto ZXVL_PFLAGS_CKSUM      = 0x00200004U;
 
     /// @brief Expected SHA-256 digest of the authorized stage2 loader.
-    ///        The build system MUST override this with the actual digest.
-    ///        Zero digest (default) disables loader fingerprint verification.
     inline constexpr u8 ZXFL_EXPECTED_DIGEST[crypto::sha256::SHA256_DIGEST_SIZE]{};
     static_assert(sizeof(ZXFL_EXPECTED_DIGEST) == 32U,
         "ZXFL_EXPECTED_DIGEST must be exactly 32 bytes");

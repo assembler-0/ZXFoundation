@@ -11,10 +11,9 @@ import zxfoundation.dgp.isolation_types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.aste;
 import arch.s390x.cpu.psw;
-import arch.s390x.cpu.psw_types;
-import lib.util;
-import lib.algorithm;
+import std;
 
 extern "C" {
     /// @brief Assembly stub: sets r15 = frame_base, loads ARs/VRs, jumps to ret_to_user.
@@ -58,7 +57,7 @@ namespace zxfoundation::sched::domain_ctx {
         const u64 sp = ksp + SWITCH_FRAME_SIZE;
         const u64 gpr_area = sp + SF_GPRS;
 
-        lib::fill_n(reinterpret_cast<u8*>(ksp), SWITCH_FRAME_SIZE, u8{0});
+        std::fill_n(reinterpret_cast<u8*>(ksp), SWITCH_FRAME_SIZE, u8{0});
 
         auto* frame = reinterpret_cast<u64*>(gpr_area);
         frame[0] = reinterpret_cast<u64>(arg);                    // r6  = arg
@@ -95,10 +94,13 @@ namespace zxfoundation::sched::domain_ctx {
         lc->user_asce = d ? d->asce.val : 0;
         const u64 user_asce = d ? d->asce.val : 0;
         arch::s390x::cpu::ctlreg::ctl_load<1, 1>(user_asce);
+        if (d) arch::s390x::cpu::aste::art_context_load(d->art);
 
         if (d) {
             s->body->uregs.psw_mask |=
                 (static_cast<u64>(d->storage_key) << arch::s390x::cpu::psw::PSW_KEY_SHIFT);
+            s->body->uregs.psw_mask &= ~arch::s390x::cpu::psw::PSW_ASC_HOME;
+            s->body->uregs.psw_mask |= arch::s390x::cpu::psw::PSW_ASC_ACCREG;
         }
 
         static constexpr u64 RET_FRAME_SIZE = 0x90;

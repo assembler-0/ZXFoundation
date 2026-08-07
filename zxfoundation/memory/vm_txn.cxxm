@@ -9,16 +9,14 @@ import zxfoundation.sys.transaction;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.sys.syschk;
 import arch.s390x.mmu.mmu;
 import arch.s390x.mmu.mmu_types;
 import arch.s390x.mmu.mmu_const;
-import arch.s390x.lib.atomic;
 import zxfoundation.base.types;
 import lib.error;
-import lib.expected;
+import std;
 import lib.static_vector;
-import lib.util;
-import lib.placementnew;
 
 export {
 
@@ -52,25 +50,27 @@ namespace zxfoundation::memory::vm {
         /// @brief Physical address of the domain's region-1 DAT table.
         u64 m_root_phys{0};
 
-        /// @brief Rollback: free all allocated pages and remove the region.
+        /// @brief Rollback the mapping before returning its frames to PMM.
         auto on_rollback() noexcept -> void {
-            using namespace zxfoundation::memory;
-
-            // Free all allocated physical pages.
-            for (usize i = 0; i < m_pages.size(); ++i) {
-                const auto& rec = m_pages[i];
-                pmm::folio_active f{rec.phys, rec.order,
-                                    pmm::purpose::generic, pmm::zone::normal};
-                pmm::free(lib::move(f));
+            if (m_space && m_mapped_va != 0 && m_mapped_size != 0) {
+                // vm_unmap invalidates PTEs, drops rmap entries, and frees
+                // anonymous backing frames.  Returning m_pages first would
+                // leave live PTEs pointing at buddy-owned memory.
+                auto result = vm_unmap(*m_space, m_root_phys,
+                    m_mapped_va, m_mapped_size);
+                if (!result) {
+                    sys::syschk::syschk_fatal(result.error(),
+                        "vm: transaction rollback could not unmap its region");
+                }
+            } else {
+                for (usize i = 0; i < m_pages.size(); ++i) {
+                    const auto& rec = m_pages[i];
+                    pmm::folio_active f{rec.phys, rec.order,
+                                        pmm::purpose::generic, pmm::zone::normal};
+                    pmm::free(std::move(f));
+                }
             }
             m_pages.clear();
-
-            // Remove the inserted region.
-            if (m_space && m_mapped_va != 0 && m_mapped_size != 0) {
-                // Use vm_unmap to cleanly remove the region.
-                // Ignore errors during rollback — best effort.
-                discard_value vm_unmap(*m_space, m_root_phys, m_mapped_va, m_mapped_size);
-            }
 
             m_mapped_va   = 0;
             m_mapped_size = 0;
@@ -124,11 +124,11 @@ namespace zxfoundation::memory::vm {
             u64 size,
             vm_prot prot,
             vm_flags flags
-        ) noexcept -> lib::expected<u64, lib::kernel_error> {
+        ) noexcept -> std::expected<u64, lib::kernel_error> {
             m_space = &space;
 
             auto result = vm_map(space, size, prot, flags);
-            if (!result) return lib::unexpected(result.error());
+            if (!result) return std::unexpected(result.error());
 
             m_mapped_va   = *result;
             m_mapped_size = size;
@@ -149,91 +149,34 @@ namespace zxfoundation::memory::vm {
             u64 va, u64 size,
             vm_prot prot, vm_flags flags,
             vm_backing backing, u64 phys_base
-        ) noexcept -> lib::expected<void, lib::kernel_error> {
+        ) noexcept -> std::expected<void, lib::kernel_error> {
             m_space = &space;
 
             auto result = vm_map_fixed(space, va, size, prot, flags, backing, phys_base);
-            if (!result) return lib::unexpected(result.error());
+            if (!result) return std::unexpected(result.error());
 
             m_mapped_va   = va;
             m_mapped_size = size;
             return {};
         }
 
-        /// @brief Execute a full transactional anonymous map with physical
-        ///        page allocation and MMU mapping.
-        /// @param[in] space      The domain's VME space.
-        /// @param[in] root_phys  Physical address of the domain's region-1 table.
-        /// @param[in] size       Region size in bytes (page-aligned).
-        /// @param[in] prot       Access protection.
-        /// @param[in] flags      Mapping flags.
-        /// @return  The virtual address on success.
+        /// @brief Retired.  The prior implementation allocated physical
+        ///        frames and installed PTEs directly, bypassing VM slots,
+        ///        Rmap entries, and mapping pins — so vm_unmap, reclaim,
+        ///        and Rmap peer invalidation could never discover or
+        ///        release those frames.  It has no callers.  Kept as a
+        ///        fail-closed stub instead of being deleted so any future
+        ///        caller gets a compile-time-visible, safe rejection
+        ///        rather than silent residency corruption.  A correct
+        ///        replacement must record every allocated frame into the
+        ///        target vm_region's page map and Rmap before publishing
+        ///        its PTE, exactly as fault.cxxm and elf_loader.cxxm do.
+        /// @return  Always kernel_error::not_supported.
         [[nodiscard]] auto execute(
-            vm_space& space,
-            u64 root_phys,
-            u64 size,
-            vm_prot prot,
-            vm_flags flags
-        ) noexcept -> lib::expected<u64, lib::kernel_error> {
-            using namespace zxfoundation::memory;
-            using namespace arch::s390x::mmu;
-
-            // Step 1: Insert region.
-            auto map_result = map_anonymous(space, size, prot, flags);
-            if (!map_result) return lib::unexpected(map_result.error());
-
-            const u64 va = *map_result;
-
-            // Step 2: Allocate physical pages and map them.
-            const bool is_physical = !!(flags & vm_flags::physical);
-            if (is_physical) {
-                const dat_table<dat_level::region_1> root{root_phys};
-                const u64 num_pages = size >> 12;
-
-                // Convert VME protection to MMU page_prot.
-                const bool can_write = !!(prot & vm_prot::write);
-                const bool can_exec  = !!(prot & vm_prot::exec);
-                u64 prot_bits = 0;
-                if (!can_write) prot_bits |= PTE_PROTECT;
-                if (!can_exec)  prot_bits |= PTE_NOEXEC;
-                const page_prot pp{prot_bits};
-
-                for (u64 i = 0; i < num_pages; ++i) {
-                    auto alloc_r = pmm::alloc(0, pmm::zone::normal,
-                        pmm::purpose::generic, pmm::page_init::zeroed);
-                    if (!alloc_r) return lib::unexpected(alloc_r.error());
-
-                    auto embryo = lib::move(*alloc_r);
-                    const u64 phys = embryo.phys_base;
-                    auto active = lib::move(embryo).make_active();
-
-                    // Track for rollback.
-                    if (!record_page(phys, 0)) {
-                        pmm::free(lib::move(active));
-                        return lib::unexpected(lib::kernel_error::from_memory(
-                            lib::memory_error::code::out_of_memory));
-                    }
-
-                    // Map into the domain's page tables.
-                    const u64 page_va = va + (i << 12);
-                    auto map_r = map_page<dat_level::region_1>(root, page_va, phys, pp);
-                    if (!map_r) return lib::unexpected(map_r.error());
-                }
-
-                // Update the region's accounting.
-                auto* rgn = vm_find(space, va);
-                if (rgn) {
-                    rgn->committed.store(num_pages,
-                        arch::s390x::lib::atomic::memory_order::relaxed);
-                    rgn->resident.store(num_pages,
-                        arch::s390x::lib::atomic::memory_order::relaxed);
-                    space.total_committed += num_pages;
-                    space.total_resident  += num_pages;
-                }
-            }
-
-            // Caller must call commit() explicitly.
-            return va;
+            vm_space&, u64, u64, vm_prot, vm_flags
+        ) noexcept -> std::expected<u64, lib::kernel_error> {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_supported));
         }
     };
 

@@ -4,22 +4,19 @@
 
 export module lib.ring_buffer;
 import zxfoundation.base.types;
-import arch.s390x.lib.atomic;
-import lib.concepts;
-import lib.algorithm;
-import lib.span;
+import std;
 
 export {
 
-namespace lib {
+namespace std {
 
     /// @brief A lock-free byte-stream ring buffer (mirrors Linux kfifo).
     /// @tparam N Capacity of the buffer (MUST be a power of two).
     template <usize N>
         requires ((N > 0) && ((N & (N - 1)) == 0))
     class ring_buffer {
-        using atomic_usize = arch::s390x::lib::atomic::atomic<usize>;
-        using memory_order = arch::s390x::lib::atomic::memory_order;
+        using atomic_usize = std::atomic<usize>;
+        using memory_order = std::memory_order;
 
         u8 m_data[N]{};
         atomic_usize m_head{0}; // Read pointer
@@ -33,21 +30,21 @@ namespace lib {
         /// @return Number of bytes actually written.
         /// @note This implementation is lockless for single-producer.
         ///       For multiple producers, external locking is required.
-        auto push(span<const u8> buf) noexcept -> usize {
+        auto push(std::span<const u8> buf) noexcept -> usize {
             const usize head = m_head.load(memory_order::acquire);
             const usize tail = m_tail.load(memory_order::relaxed);
             
             const usize available = N - (tail - head);
-            const usize to_copy   = lib::min(buf.size(), available);
+            const usize to_copy   = std::min(buf.size(), available);
 
             if (to_copy == 0) return 0;
 
             const usize offset = tail & (N - 1);
-            const usize first_chunk = lib::min(to_copy, N - offset);
+            const usize first_chunk = std::min(to_copy, N - offset);
 
-            lib::copy(buf.begin(), buf.begin() + first_chunk, &m_data[offset]);
+            std::copy(buf.begin(), buf.begin() + first_chunk, &m_data[offset]);
             if (to_copy > first_chunk) {
-                lib::copy(buf.begin() + first_chunk, buf.begin() + to_copy, &m_data[0]);
+                std::copy(buf.begin() + first_chunk, buf.begin() + to_copy, &m_data[0]);
             }
 
             m_tail.store(tail + to_copy, memory_order::release);
@@ -57,21 +54,21 @@ namespace lib {
         /// @brief Pop data from the ring buffer.
         /// @param[out] buf Destination buffer.
         /// @return Number of bytes actually read.
-        auto pop(span<u8> buf) noexcept -> usize {
+        auto pop(std::span<u8> buf) noexcept -> usize {
             const usize tail = m_tail.load(memory_order::acquire);
             const usize head = m_head.load(memory_order::relaxed);
 
             const usize available = tail - head;
-            const usize to_copy   = lib::min(buf.size(), available);
+            const usize to_copy   = std::min(buf.size(), available);
 
             if (to_copy == 0) return 0;
 
             const usize offset = head & (N - 1);
-            const usize first_chunk = lib::min(to_copy, N - offset);
+            const usize first_chunk = std::min(to_copy, N - offset);
 
-            lib::copy(&m_data[offset], &m_data[offset + first_chunk], buf.begin());
+            std::copy(&m_data[offset], &m_data[offset + first_chunk], buf.begin());
             if (to_copy > first_chunk) {
-                lib::copy(&m_data[0], &m_data[to_copy - first_chunk], buf.begin() + first_chunk);
+                std::copy(&m_data[0], &m_data[to_copy - first_chunk], buf.begin() + first_chunk);
             }
 
             m_head.store(head + to_copy, memory_order::release);
@@ -89,23 +86,23 @@ namespace lib {
         }
 
         /// @brief Peek data without moving the head pointer.
-        [[nodiscard]] auto peek(span<u8> buf, usize start_offset = 0) const noexcept -> usize {
+        [[nodiscard]] auto peek(std::span<u8> buf, usize start_offset = 0) const noexcept -> usize {
             const usize tail = m_tail.load(memory_order::acquire);
             const usize head = m_head.load(memory_order::relaxed) + start_offset;
 
             if (head >= tail) return 0;
 
             const usize available = tail - head;
-            const usize to_copy   = lib::min(buf.size(), available);
+            const usize to_copy   = std::min(buf.size(), available);
 
             if (to_copy == 0) return 0;
 
             const usize offset = head & (N - 1);
-            const usize first_chunk = lib::min(to_copy, N - offset);
+            const usize first_chunk = std::min(to_copy, N - offset);
 
-            lib::copy(&m_data[offset], &m_data[offset + first_chunk], buf.begin());
+            std::copy(&m_data[offset], &m_data[offset + first_chunk], buf.begin());
             if (to_copy > first_chunk) {
-                lib::copy(&m_data[0], &m_data[to_copy - first_chunk], buf.begin() + first_chunk);
+                std::copy(&m_data[0], &m_data[to_copy - first_chunk], buf.begin() + first_chunk);
             }
 
             return to_copy;

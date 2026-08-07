@@ -1,0 +1,204 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/aste_types.cxxm
+/// @brief z/Architecture ASTE/ALE/ALT type definitions
+
+export module arch.s390x.cpu.aste;
+export import :common;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::aste {
+
+    /// @brief Maximum ASTE table entries (one per domain).
+    constexpr u32 MAX_ASTE_ENTRIES = 256;
+
+    /// @brief Maximum ALE entries in one domain's dispatchable-unit list.
+    /// AR0 always selects primary space, leaving AR1-AR15 for portal ALETs.
+    constexpr u32 MAX_ALE_ENTRIES = 16;
+
+    /// @brief ALETs 0–2 are architecturally reserved (primary, secondary, home).
+    constexpr u32 ALET_RESERVED_MAX = 2;
+
+    /// @brief Hardware ALET field masks in the 32-bit register image.
+    constexpr u32 ALET_RESERVED_MASK = 0xFE00'0000U;
+    constexpr u32 ALET_PRIMARY_LIST  = 0x0100'0000U;
+    constexpr u32 ALET_ALESN_MASK    = 0x00FF'0000U;
+    constexpr u32 ALET_ALEN_MASK     = 0x0000'FFFFU;
+
+    /// @brief Build a DUCT-selected ALET for an ALE slot and sequence.
+    [[nodiscard]] constexpr auto alet_make(u16 alen, u8 alesn) noexcept -> u32 {
+        return (static_cast<u32>(alesn) << 16) | static_cast<u32>(alen);
+    }
+
+    [[nodiscard]] constexpr auto alet_alen(u32 alet) noexcept -> u16 {
+        return static_cast<u16>(alet & ALET_ALEN_MASK);
+    }
+
+    [[nodiscard]] constexpr auto alet_alesn(u32 alet) noexcept -> u8 {
+        return static_cast<u8>((alet & ALET_ALESN_MASK) >> 16);
+    }
+
+    /// @brief Per-domain hardware ART state.  CR2 selects @c duct_phys while
+    /// AR-mode ALETs address @c ale_table_phys through DUALD at byte 16.
+    struct art_context {
+        u64 duct_phys{0};
+        u64 ale_table_phys{0};
+        u8  ale_sequence[MAX_ALE_ENTRIES]{};
+        u8  _pad[8]{};
+    };
+
+    /// @brief ASN Second Table Entry — 64 bytes, 64-byte aligned.
+    struct [[gnu::packed]] alignas(64) aste {
+        u64 words[8]{};
+
+        /// @brief Test the I-bit (invalid) in word 0.
+        [[nodiscard]] auto is_invalid() const noexcept -> bool;
+
+        /// @brief Set or clear the I-bit (invalid) in word 0.
+        auto set_invalid(bool inv) noexcept -> void;
+
+        /// @brief Return the target address space ASCE (word 1).
+        [[nodiscard]] auto asce() const noexcept -> u64;
+
+        /// @brief Set the target address space ASCE (word 1).
+        auto set_asce(u64 val) noexcept -> void;
+
+        /// @brief Return the Access-List Designation (word 2).
+        [[nodiscard]] auto ald() const noexcept -> u64;
+
+        /// @brief Set the Access-List Designation (word 2).
+        auto set_ald(u64 val) noexcept -> void;
+
+        /// @brief Return the Authorization Index (AX) from word 0 bits 32–47.
+        [[nodiscard]] auto authorization_index() const noexcept -> u16;
+
+        /// @brief Set the Authorization Index (AX) in word 0 bits 32–47.
+        auto set_authorization_index(u16 ax) noexcept -> void;
+
+        /// @brief Return the raw 32-bit Linkage-Table Designation (bytes 24-27).
+        [[nodiscard]] auto ltd_raw() const noexcept -> u32;
+
+        /// @brief Set the raw 32-bit Linkage-Table Designation (bytes 24-27).
+        auto set_ltd_raw(u32 ltd) noexcept -> void;
+
+        /// @brief Test the subsystem-linkage control bit (V, LTD bit 0).
+        /// Must be 1 for PC/PT instructions to proceed.
+        [[nodiscard]] auto ltd_valid() const noexcept -> bool;
+        /// @brief Set or clear the V bit in the LTD.
+        auto set_ltd_valid(bool v) noexcept -> void;
+
+        /// @brief Return the linkage-table origin as a 31-bit real address.
+        /// LTD bits 1-24 with 7 zeros appended on the right.
+        [[nodiscard]] auto ltd_origin() const noexcept -> u64;
+
+        /// @brief Set the linkage-table origin from a 128-byte-aligned real address.
+        /// @pre @p addr must be 128-byte aligned (low 7 bits zero).
+        auto set_ltd_origin(u64 addr) noexcept -> void;
+
+        /// @brief Return the linkage-table length (LTL, LTD bits 25-31, 7 bits).
+        /// Actual table length = (LTL + 1) × 128 bytes.
+        [[nodiscard]] auto ltd_length() const noexcept -> u8;
+
+        /// @brief Set the linkage-table length (LTL).
+        auto set_ltd_length(u8 ltl) noexcept -> void;
+
+        /// @brief Zero all words.
+        auto clear() noexcept -> void;
+    };
+
+    static_assert(sizeof(aste) == 64, "ASTE must be exactly 64 bytes (PoP §3.8.4)");
+    static_assert(alignof(aste) == 64, "ASTE must be 64-byte aligned");
+
+    /// @brief Access List Entry — 16 bytes.
+    struct [[gnu::packed]] ale {
+        u64 words[2]{};
+
+        /// @brief Test the I-bit (invalid) in word 0.
+        [[nodiscard]] auto is_invalid() const noexcept -> bool;
+
+        /// @brief Set or clear the I-bit (invalid) in word 0.
+        auto set_invalid(bool inv) noexcept -> void;
+
+        /// @brief Return the real address of the referenced ASTE.
+        [[nodiscard]] auto aste_origin() const noexcept -> u64;
+
+        /// @brief Set the ASTE origin (must be 64-byte aligned).
+        auto set_aste_origin(u64 addr) noexcept -> void;
+
+        /// @brief Return the ALE sequence number used to validate an ALET.
+        [[nodiscard]] auto sequence() const noexcept -> u8;
+
+        /// @brief Set the ALE sequence number used to validate an ALET.
+        auto set_sequence(u8 val) noexcept -> void;
+
+        /// @brief Set whether the ALE prohibits store access.
+        auto set_fetch_only(bool fetch_only) noexcept -> void;
+
+        /// @brief Set the ASTE sequence number checked after ALE lookup.
+        auto set_aste_sequence(u32 val) noexcept -> void;
+
+        /// @brief Zero all words.
+        auto clear() noexcept -> void;
+    };
+
+    static_assert(sizeof(ale) == 16, "ALE must be exactly 16 bytes (PoP §3.8.3)");
+
+    /// @brief Initialize the ASTE/ALE subsystem.
+    auto aste_subsystem_init() noexcept -> void;
+
+    /// @brief Allocate the DUCT and dispatchable-unit access list for one
+    /// domain.  The caller owns @p context for the domain lifetime.
+    [[nodiscard]] auto art_context_init(art_context& context) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Release per-domain DUCT and access-list backing after every ALE
+    /// referring to it has been revoked.
+    auto art_context_destroy(art_context& context) noexcept -> void;
+
+    /// @brief Install a domain's DUCT in CR2 on the current CPU.
+    auto art_context_load(const art_context& context) noexcept -> void;
+
+    /// @brief Allocate an ASTE slot and populate it with a target ASCE.
+    /// @param target_asce  The Address Space Control Element of the target domain.
+    /// @param auth_index   Authorization Index (AX) for this ASTE.
+    /// @return The ASTE index on success, or an error.
+    [[nodiscard]] auto aste_alloc(
+        u64 target_asce,
+        u16 auth_index
+    ) noexcept -> ::std::expected<u32, ::lib::kernel_error>;
+
+    /// @brief Free an ASTE slot, marking it as invalid.
+    ///
+    /// @param aste_index  The ASTE slot index to release.
+    /// @return Success, or an error if the index is invalid.
+    [[nodiscard]] auto aste_free(
+        u32 aste_index
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Create an ALE in @p context that points to the given ASTE.
+    /// @param aste_index  The ASTE slot that this ALE will reference.
+    /// @return The ALET value (ALE slot index) on success, or an error.
+    [[nodiscard]] auto ale_create(
+        art_context& context,
+        u32 aste_index
+    ) noexcept -> ::std::expected<u32, ::lib::kernel_error>;
+
+    /// @brief Invalidate an ALE and purge the ALB.
+    ///
+    /// @param alet  The ALET value (ALE slot index) to destroy.
+    /// @return Success, or an error if the ALET is invalid.
+    [[nodiscard]] auto ale_destroy(
+        art_context& context,
+        u32 alet
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Return a pointer to the ASTE at the given index.
+    /// @param index  The ASTE slot index (0 to MAX_ASTE_ENTRIES-1).
+    /// @return Pointer to the ASTE, or nullptr if the index is out of range
+    ///         or the subsystem is not initialized.
+    [[nodiscard]] auto aste_find(u32 index) noexcept -> aste*;
+
+} // namespace arch::s390x::cpu::aste
+
+} // end export

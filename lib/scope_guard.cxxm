@@ -5,7 +5,7 @@ export module lib.scope_guard;
 
 export {
 
-namespace lib {
+namespace std {
 
     /// @brief RAII scope guard — calls @p fn on destruction unless dismissed.
     ///

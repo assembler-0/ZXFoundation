@@ -6,17 +6,17 @@ export module zxfoundation.scoms.scoms_types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.locking.qspinlock;
-import arch.s390x.lib.atomic;
-import lib.string_view;
+import std;
 
 export {
 
 namespace zxfoundation::scoms {
 
     using base::lifecycle_state;
-    using arch::s390x::lib::atomic::atomic;
-    using arch::s390x::lib::atomic::memory_order;
+    using std::atomic;
+    using std::memory_order;
 
+    using ::KOBJECT_ID_INVALID;
     /// @brief Discriminates the concrete type behind a kobject pointer.
     enum class kobject_type : u8 {
         none       = 0,
@@ -28,11 +28,41 @@ namespace zxfoundation::scoms {
         capability = 6,
         strand     = 7,
         irq_desc   = 8,
+        memory_resource = 9,
+        memory_extent   = 10,
+        memory_folio    = 11,
+        page            = 12,
+        storage         = 13,
+        grant           = 14,
+        mapping         = 15,
+        address_space   = 16,
+        page_table      = 17,
+        key             = 18,
+        endpoint        = 19,
+        message         = 20,
+        /// @brief Typed view over a memory_object: the slab-cache identity
+        ///        for the unified SLUB allocator.  Brings the allocator
+        ///        spine into SCOMS instead of a parallel static table.
+        kmem_cache      = 21,
+        /// @brief Typed view over a memory_object: a registered policy
+        ///        provider in the policy plane (pager/loader/vfs/...).
+        policy_server   = 22,
+        /// @brief Typed view over a memory_object: a kernel-service
+        ///        registry entry (zx.console, zx.test, ...).
+        service_entry   = 23,
+        /// @brief Typed view over a memory_object: an MMIO / CCW device
+        ///        binding.  Reserved by this refactor; populated when the
+        ///        driver framework is introduced (see MEMORY_REFACTOR_TODO).
+        device_binding  = 24,
+        /// @brief Typed view over a memory_object: a VFS dataset extent
+        ///        (file/sequential/dataset physical extent).  Reserved;
+        ///        populated when VFS becomes a SCOMS resource.
+        dataset_extent  = 25,
     };
 
     /// @brief ASCII name for each kobject type (debug/printk).
     [[nodiscard]] constexpr auto kobject_type_name(kobject_type t) noexcept
-        -> lib::string_view
+        -> std::string_view
     {
         switch (t) {
             case kobject_type::none:       return "none";
@@ -44,6 +74,23 @@ namespace zxfoundation::scoms {
             case kobject_type::capability: return "capability";
             case kobject_type::strand:     return "strand";
             case kobject_type::irq_desc:   return "irq_desc";
+            case kobject_type::memory_resource: return "memory_resource";
+            case kobject_type::memory_extent:   return "memory_extent";
+            case kobject_type::memory_folio:    return "memory_folio";
+            case kobject_type::page:            return "page";
+            case kobject_type::storage:         return "storage";
+            case kobject_type::grant:           return "grant";
+            case kobject_type::mapping:         return "mapping";
+            case kobject_type::address_space:   return "address_space";
+            case kobject_type::page_table:      return "page_table";
+            case kobject_type::key:             return "key";
+            case kobject_type::endpoint:         return "endpoint";
+            case kobject_type::message:          return "message";
+            case kobject_type::kmem_cache:        return "kmem_cache";
+            case kobject_type::policy_server:     return "policy_server";
+            case kobject_type::service_entry:    return "service_entry";
+            case kobject_type::device_binding:   return "device_binding";
+            case kobject_type::dataset_extent:   return "dataset_extent";
             default:                       return "unknown";
         }
     }
@@ -52,12 +99,18 @@ namespace zxfoundation::scoms {
     struct kref {
         atomic<u32> count{1};
 
-        /// @brief Increment the reference count.
-        auto get() noexcept -> void {
-            const u32 prev = count.fetch_add(1U, memory_order::relaxed);
-            // Overflow guard: if prev was already saturated, trap.
-            if (prev >= 0x7FFF'FFFEU) [[unlikely]] {
-                __builtin_trap();
+        /// @brief Acquire a reference only while the object remains live.
+        /// @return False when the last owner already released the object.
+        [[nodiscard]] auto try_get() noexcept -> bool {
+            u32 current = count.load(memory_order::acquire);
+            for (;;) {
+                if (current == 0U) return false;
+                if (current >= 0x7FFF'FFFEU) [[unlikely]] __builtin_trap();
+                if (count.compare_exchange_weak(
+                        current, static_cast<u32>(current + 1U),
+                        memory_order::acq_rel, memory_order::acquire)) {
+                    return true;
+                }
             }
         }
 
@@ -89,6 +142,12 @@ namespace zxfoundation::scoms {
 
     static_assert(sizeof(kref) == 4, "kref must be exactly 4 bytes");
 
+    struct kobject;
+    using kobject_finalizer_fn = void (*)(kobject&) noexcept;
+
+    /// @brief Install the SCOMS metadata finalizer used after the last put.
+    auto install_kobject_finalizer(kobject_finalizer_fn finalizer) noexcept -> void;
+
     /// @brief The kernel object header — embedded at offset 0 of every
     ///        SCOMS-managed resource.
     struct kobject {
@@ -99,9 +158,61 @@ namespace zxfoundation::scoms {
         kref                                 ref{};
         u32                                  generation{0};
         locking::qspinlock::qspinlock        lock{};
-        u32                                  _reserved{0};
+        u32                                  object_flags{0};
 
         kobject() noexcept = default;
+
+        /// @brief Validate and perform one canonical lifecycle transition.
+        [[nodiscard]] auto transition(lifecycle_state target) noexcept -> bool {
+            switch (target) {
+                case lifecycle_state::embryo:
+                    if (state != lifecycle_state::destroyed) return false;
+                    break;
+                case lifecycle_state::sealed:
+                    if (state != lifecycle_state::embryo) return false;
+                    break;
+                case lifecycle_state::active:
+                    if (state != lifecycle_state::embryo &&
+                        state != lifecycle_state::sealed &&
+                        state != lifecycle_state::suspended) return false;
+                    break;
+                case lifecycle_state::suspended:
+                    if (state != lifecycle_state::active) return false;
+                    break;
+                case lifecycle_state::dying:
+                    if (state != lifecycle_state::embryo &&
+                        state != lifecycle_state::active &&
+                        state != lifecycle_state::suspended) return false;
+                    break;
+                case lifecycle_state::destroyed:
+                    if (state != lifecycle_state::dying) return false;
+                    break;
+            }
+            state = target;
+            return true;
+        }
+
+        /// @brief Acquire a lifetime reference without resurrecting retirement.
+        [[nodiscard]] auto try_get() noexcept -> bool {
+            return ref.try_get();
+        }
+
+        /// @brief Drop a lifetime reference and reclaim on the final put.
+        auto put() noexcept -> void {
+            if (!ref.put()) return;
+            extern kobject_finalizer_fn g_kobject_finalizer;
+            if (!g_kobject_finalizer) __builtin_trap();
+            g_kobject_finalizer(*this);
+        }
+
+        /// @brief Reset identity and relationship metadata for a new slot use.
+        auto initialize(u32 object_id, kobject_type object_type) noexcept -> void {
+            id = object_id;
+            type = object_type;
+            state = lifecycle_state::embryo;
+            ref.count.store(1, memory_order::relaxed);
+            object_flags = 0;
+        }
 
         // Non-copyable, non-movable — identity object.
         kobject(const kobject&)            = delete;
@@ -110,7 +221,7 @@ namespace zxfoundation::scoms {
         auto operator=(kobject&&)          = delete;
     };
 
-    static_assert(sizeof(kobject) == 24, "kobject must be exactly 24 bytes");
+    static_assert(sizeof(kobject) == 24, "kobject ABI must remain exactly 24 bytes");
     static_assert(__builtin_offsetof(kobject, id)         ==  0);
     static_assert(__builtin_offsetof(kobject, type)       ==  4);
     static_assert(__builtin_offsetof(kobject, state)      ==  5);
@@ -118,9 +229,20 @@ namespace zxfoundation::scoms {
     static_assert(__builtin_offsetof(kobject, generation) == 12);
     static_assert(__builtin_offsetof(kobject, lock)       == 16);
 
-    /// @brief Sentinel value for an unassigned kobject slot.
-    constexpr u32 KOBJECT_ID_INVALID = ~0U;
-
 } // namespace zxfoundation::scoms
 
 } // end export
+
+namespace zxfoundation::scoms {
+
+    kobject_finalizer_fn g_kobject_finalizer{nullptr};
+
+    auto install_kobject_finalizer(kobject_finalizer_fn finalizer) noexcept -> void {
+        if (!finalizer) __builtin_trap();
+        if (g_kobject_finalizer && g_kobject_finalizer != finalizer) {
+            __builtin_trap();
+        }
+        g_kobject_finalizer = finalizer;
+    }
+
+} // namespace zxfoundation::scoms

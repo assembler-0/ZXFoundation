@@ -21,13 +21,6 @@ namespace zxfoundation::memory::numa {
     /// @brief Drawer identifier used when ZXFL could not provide drawer evidence.
     inline constexpr u8 NUMA_DRAWER_UNKNOWN = 0xFFU;
 
-    /// @brief Page shift used for topology accounting.
-    /// @note The z/Architecture DAT model uses 4 KiB page frames for base page translation.
-    inline constexpr u8 NUMA_PAGE_SHIFT = 12U;
-
-    /// @brief Page size used for topology accounting.
-    inline constexpr u64 NUMA_PAGE_SIZE = 1ULL << NUMA_PAGE_SHIFT;
-
     /// @brief Lifecycle state of a NUMA node record.
     enum class node_state : u8 {
         offline  = 0,
@@ -106,8 +99,6 @@ namespace zxfoundation::memory::numa {
         "initial NUMA topology table must preserve the planned 16-node storage budget");
     static_assert(NUMA_NODE_ANY == 0xFFU,
         "NUMA wildcard must remain outside the valid node table range");
-    static_assert(NUMA_PAGE_SIZE == 4096ULL,
-        "NUMA topology accounting assumes the z/Architecture base DAT page granule");
     static_assert(sizeof(node_state) == sizeof(u8),
         "NUMA node state must remain byte-sized for compact region metadata");
     static_assert(sizeof(fallback_mode) == sizeof(u8),

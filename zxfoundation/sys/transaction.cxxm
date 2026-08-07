@@ -3,7 +3,7 @@
 /// @brief Generic kernel transaction base (CRTP).
 
 export module zxfoundation.sys.transaction;
-import arch.s390x.lib.atomic;
+import std;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk;
 
@@ -13,8 +13,8 @@ namespace zxfoundation {
 
     template <typename Derived>
     class transaction {
-        using atomic_bool   = arch::s390x::lib::atomic::atomic<bool>;
-        using memory_order  = arch::s390x::lib::atomic::memory_order;
+        using atomic_bool   = std::atomic<bool>;
+        using memory_order  = std::memory_order;
 
         atomic_bool m_committed{false};
         atomic_bool m_rolled_back{false};

@@ -22,6 +22,13 @@ import zxfoundation.memory.slub;
 import zxfoundation.rcu.rcu;
 import zxfoundation.memory.kmalloc;
 import zxfoundation.memory.vm;
+import zxfoundation.memory.memory_objects;
+import zxfoundation.sys.cap;
+import zxfoundation.sys.cap_types;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.memory.rmap;
+import zxfoundation.memory.reclaim;
+import zxfoundation.sys.ipc;
 import zxfoundation.sched.sched;
 import zxfoundation.sched.sched_numa_distance;
 import zxfoundation.init.bootstrap;
@@ -32,9 +39,9 @@ import zxfoundation.gate.gate_registration;
 import zxfoundation.portal.portal;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
+import zxfoundation.policy.policy;
 import zxfoundation.base.cmdline;
 import arch.s390x.init.zxfl.protocol;
-import arch.s390x.cpu.stfle_types;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
@@ -49,10 +56,8 @@ import arch.s390x.css.ccw_io;
 import crypto.sha256_types;
 import crypto.sha256;
 import drivers.console.diag;
-import lib.span;
 import lib.error;
-import lib.format;
-import lib.string_view;
+import std;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
@@ -74,6 +79,12 @@ namespace _internal {
 
     using namespace zxfoundation::memory::hhdm;
     using namespace zxfoundation::sys::syschk;
+
+    [[nodiscard]] auto reclaim_for_pmm(u8 node, u32 target_pages) noexcept -> u32 {
+        auto reclaimed = zxfoundation::memory::reclaim::reclaim_node(
+            node, target_pages);
+        return reclaimed ? *reclaimed : 0U;
+    }
 
     /// @brief Verify the boot protocol magic and binding token.
     auto verify_protocol_integrity(const arch::s390x::init::zxfl::protocol& boot) -> void {
@@ -151,8 +162,8 @@ namespace _internal {
             if (size == 0U) continue;
 
             const u64 virt_seg = phys_to_virt(phys_start);
-            const lib::span data{reinterpret_cast<const u8*>(virt_seg), size};
-            const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
+            const std::span data{reinterpret_cast<const u8*>(virt_seg), size};
+            const std::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
                 expected{digest, crypto::sha256::SHA256_DIGEST_SIZE};
 
             if (const auto r = crypto::sha256::sha256_verify(data, expected); !r)
@@ -165,10 +176,10 @@ namespace _internal {
 
     /// @brief Verify loader identity fingerprint against the embedded expected digest.
     auto verify_loader_fingerprint(const arch::s390x::init::zxfl::protocol& boot) -> void {
-        const lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
+        const std::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
             claimed_digest(boot.loader_digest, crypto::sha256::SHA256_DIGEST_SIZE);
 
-        constexpr lib::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
+        constexpr std::span<const u8, crypto::sha256::SHA256_DIGEST_SIZE>
             expected_digest(arch::s390x::init::zxvl::ZXFL_EXPECTED_DIGEST,
                             crypto::sha256::SHA256_DIGEST_SIZE);
 
@@ -217,8 +228,20 @@ namespace _internal {
 
         const auto* map = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
             boot.mem_map_addr);
+        if (boot.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
+            || (boot.mem_map_count != 0U && !map)) [[unlikely]] {
+            syschk_fatal(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                "sys: invalid ZXFL memory-map descriptor");
+        }
         u64 highest_ram_end = 0U;
         for (u32 i = 0U; i < boot.mem_map_count; ++i) {
+            if (map[i].length != 0U
+                && map[i].base > ~0ULL - map[i].length) [[unlikely]] {
+                syschk_fatal(
+                    lib::kernel_error::from_init(lib::init_error::code::invalid_protocol),
+                    "sys: ZXFL memory-map range overflow at entry {}", i);
+            }
             if (const u64 region_end = map[i].base + map[i].length;
                 region_end > highest_ram_end) highest_ram_end = region_end;
         }
@@ -252,7 +275,8 @@ namespace _internal {
     auto launch_bootstrap_domain() -> void  {
         auto dom_r = zxfoundation::domain::domain_create("foundation/bootstrapd");
         if (!dom_r) {
-            zxfoundation::sys::printk::pcrit("sys: cannot launch bootstrap domain");
+            zxfoundation::sys::printk::pcrit(
+                "sys: cannot launch bootstrap domain: {}", dom_r.error());
             return;
         }
         auto* d = *dom_r;
@@ -281,6 +305,33 @@ namespace _internal {
         });
     }
 
+    auto cap_register_lookup() -> void {
+        discard_value zxfoundation::sys::cap::register_lookup(
+        zxfoundation::sys::cap::cap_type::memory_extent,
+        [](u16 object_id) noexcept -> zxfoundation::scoms::kobject* {
+            auto* object = zxfoundation::memory::objects::memory_object_resolve_id(
+                static_cast<u32>(object_id));
+            return object && object->ko.type == zxfoundation::scoms::kobject_type::memory_extent
+                ? &object->ko : nullptr;
+        });
+    }
+
+    auto rmap_init() -> void {
+        if (auto rmap_init = zxfoundation::memory::rmap::init(
+            zxfoundation::memory::pmm::max_pfn()); !rmap_init) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                rmap_init.error(), "sys: rmap initialization failed");
+        }
+    }
+
+    auto reclaim_entry_install() -> void {
+        if (auto reclaim_hook = zxfoundation::memory::pmm::install_allocation_retry(
+            _internal::reclaim_for_pmm); !reclaim_hook) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                reclaim_hook.error(), "sys: PMM reclaim retry initialization failed");
+        }
+    }
+
 } // namespace _internal
 
 /// @brief nucleus main entry point
@@ -306,7 +357,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     _internal::cmdline_init();
     _internal::banner();
 
-    arch::s390x::cpu::features::init(zxfoundation::init::boot_protocol.stfle_fac);
+    arch::s390x::cpu::features::init(std::nullopt);
     arch::s390x::cpu::features::enable_hardware_facilities();
     arch::s390x::cpu::lowcore::init_bsp(zxfoundation::init::boot_protocol);
     arch::s390x::cpu::percpu::init_bsp();
@@ -320,6 +371,13 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::memory::slub::slub_init();
     zxfoundation::memory::kmalloc::kmalloc_init();
     zxfoundation::memory::vm::vm_init();
+    zxfoundation::memory::objects::memory_objects_init();
+    _internal::cap_register_lookup();
+    zxfoundation::memory::slub::slub_attach_authorities();
+    _internal::rmap_init();
+    _internal::reclaim_entry_install();
+    zxfoundation::ipc::ipc_init();
+    zxfoundation::policy::policy_init();
 
     zxfoundation::dgp::isolation_init();
 
@@ -327,6 +385,8 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::sys::timer::timer_init();
 
     zxfoundation::rcu::rcu_init();
+    arch::s390x::cpu::aste::aste_subsystem_init();
+
     zxfoundation::domain::domain_init();
     discard_value zxfoundation::domain::domain_init_nucleus();
     zxfoundation::domain::strand_init();
@@ -334,8 +394,6 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::gate::gate_init();
     zxfoundation::gate::gate_registration::register_all_handlers();
     zxfoundation::portal::portal_init();
-
-    arch::s390x::cpu::aste::aste_subsystem_init();
 
     zxfoundation::sched::sched_init();
 

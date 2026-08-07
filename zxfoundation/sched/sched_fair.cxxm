@@ -10,9 +10,9 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.base.types;
 import lib.rbtree;
-import lib.util;
 import lib.error;
-import lib.expected;
+import lib.container_of;
+import std;
 
 export {
 
@@ -80,10 +80,10 @@ namespace zxfoundation::sched::fair {
     /// @note Phase 4.8 wiring: fair-class strands with @c sched_policy.allow_smt_sibling = false
     ///       SKIP this CPU when an SMT sibling is already running a different
     ///       isolation-sensitive DGP domain.
-    [[nodiscard]] inline auto enqueue(run_queue& rq, strand& s) noexcept -> lib::expected<void, lib::kernel_error> {
+    [[nodiscard]] inline auto enqueue(run_queue& rq, strand& s) noexcept -> std::expected<void, lib::kernel_error> {
         if (!s.sched_policy.allow_smt_sibling
             && zxfoundation::sched::smt::smt_isolation_violation(s, rq.cpu_id)) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (s.se.deadline == 0) {
             s.se.vruntime = rq.min_vruntime;

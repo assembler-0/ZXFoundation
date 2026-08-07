@@ -9,7 +9,7 @@ import zxfoundation.sched.sched_cbs;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
-import arch.s390x.lib.atomic;
+import std;
 import lib.rbtree;
 import lib.list;
 

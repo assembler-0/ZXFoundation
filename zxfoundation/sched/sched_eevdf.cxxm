@@ -4,8 +4,6 @@
 export module zxfoundation.sched.sched_eevdf;
 import zxfoundation.sched.sched_entity_types;
 import zxfoundation.base.types;
-import lib.util;
-import lib.algorithm;
 import lib.rbtree;
 
 export {

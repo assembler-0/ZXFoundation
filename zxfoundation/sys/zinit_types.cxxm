@@ -5,8 +5,7 @@
 export module zxfoundation.sys.zinit_types;
 import zxfoundation.base.types;
 import lib.error;
-import lib.expected;
-import lib.string_view;
+import std;
 
 export {
 
@@ -46,10 +45,10 @@ namespace zxfoundation::sys::zinit {
 
     struct zi_desc;
 
-    using zi_fn = auto (*)(const zi_desc&) -> lib::expected<void, lib::kernel_error>;
+    using zi_fn = auto (*)(const zi_desc&) -> std::expected<void, lib::kernel_error>;
 
     struct zi_desc {
-        lib::string_view name{}; ///< Name of the method
+        std::string_view name{}; ///< Name of the method
         zi_fn            init{}; ///< Function pointer
         zi_class          cls{}; ///< Class
         zi_prio          prio{}; ///< Prority

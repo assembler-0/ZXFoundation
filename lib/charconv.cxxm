@@ -3,7 +3,7 @@
 /// @brief raw EBCDIC <-> ASCII conversion table
 
 export module lib.charconv;
-import lib.span;
+import std;
 import zxfoundation.base.types;
 
 export {
@@ -90,12 +90,12 @@ namespace lib::charconv {
         return ascii_to_ebcdic_table[ascii];
     }
 
-    auto ebcdic_to_ascii(const span<char>& buff) -> void {
+    auto ebcdic_to_ascii(const std::span<char>& buff) -> void {
         for (char& c : buff)
             c = ebcdic_to_ascii(c);
     }
 
-    auto ascii_to_ebcdic(const span<char>& buff) -> void {
+    auto ascii_to_ebcdic(const std::span<char>& buff) -> void {
         for (char& c : buff)
             c = ascii_to_ebcdic(c);
     }

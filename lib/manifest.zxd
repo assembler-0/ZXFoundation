@@ -1,36 +1,22 @@
 !files : !compile_group -> [auto] {
-    algorithm.cxxm
-    array.cxxm
     bit.cxxm
     bitmap.cxxm
     charconv.cxxm
-    compare.cxxm
     cpumask.cxxm
     error.cxxm
     idalloc.cxxm
-    expected.cxxm
     format.cxxm
     list.cxxm
     rbtree.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-comments) ]
-    optional.cxxm
-    pair.cxxm
-    placementnew.cxxm
     queue.cxxm
     ring_buffer.cxxm
     softirq_types.cxxm
     softirq.cxxm
-    span.cxxm
     static_vector.cxxm
-    string_view.cxxm
     cstring.cxxm
-    util.cxxm
-    variant.cxxm !compile_options -> [ !compiler_id:clang(-Wno-unused-parameter) ]
     scope_guard.cxxm
-    source_location.cxxm
     string_parser.cxxm
     min_heap.cxxm
-    type_traits.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pragmas) ]
-    tuple_types.cxxm
-    concepts.cxxm
-    iterator.cxxm
+    container_of.cxxm
+    align.cxxm
 }

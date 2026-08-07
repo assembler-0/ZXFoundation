@@ -15,12 +15,10 @@ import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.config;
 import lib.error;
-import lib.expected;
+import std;
 import lib.list;
-import lib.placementnew;
 import lib.cpumask;
 import arch.s390x.cpu.cpumask;
-import arch.s390x.lib.atomic;
 
 namespace _internal {
 
@@ -64,16 +62,16 @@ namespace _internal {
         domain& d,
         u64 runtime_ns,
         u64 period_ns
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (d.rt_period_ns == 0U) d.rt_period_ns = period_ns;
         if (d.rt_budget_ns == 0U) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (period_ns != d.rt_period_ns) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (runtime_ns > d.rt_budget_ns || d.rt_reserved_ns > d.rt_budget_ns - runtime_ns) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         d.rt_reserved_ns += runtime_ns;
@@ -118,12 +116,12 @@ namespace zxfoundation::sched::rt {
         domain& owner,
         strand& s,
         const sched_policy& policy
-    ) noexcept -> lib::expected<sched_admission_result, lib::kernel_error> {
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error> {
         if (!is_active_domain(owner) || is_idle_domain(owner)) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (policy.class_id != sched_class_id::rt || !_internal::policy_matches_domain_masks(owner, policy)) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         auto dgp_result = zxfoundation::dgp::isolation_validate_scheduler_policy(
@@ -131,7 +129,7 @@ namespace zxfoundation::sched::rt {
             policy,
             _internal::has_rt_authority(owner));
         if (!dgp_result) {
-            return lib::unexpected(dgp_result.error());
+            return std::unexpected(dgp_result.error());
         }
 
         auto reserve_result = _internal::reserve_domain_runtime(
@@ -139,7 +137,7 @@ namespace zxfoundation::sched::rt {
             dgp_result->admitted_runtime_ns,
             dgp_result->admitted_period_ns);
         if (!reserve_result) {
-            return lib::unexpected(reserve_result.error());
+            return std::unexpected(reserve_result.error());
         }
 
         s.sched_policy = policy;
@@ -170,11 +168,11 @@ namespace zxfoundation::sched::rt {
     [[nodiscard]] auto enqueue(
         run_queue& rq,
         strand& s
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (s.sched_policy.class_id != sched_class_id::rt
             || s.sched_admission.class_id != sched_class_id::rt
             || s.sched_admission.admitted_runtime_ns == 0U) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (s.on_rq) return {};
 
@@ -182,7 +180,7 @@ namespace zxfoundation::sched::rt {
         // from a different DGP domain already occupy this CPU's SMT core.
         if (!s.sched_policy.allow_smt_sibling
             && zxfoundation::sched::smt::smt_isolation_violation(s, rq.cpu_id)) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         const u8 old_top = cpupri::cpupri_top(rq.cpu_id);
@@ -287,11 +285,11 @@ namespace zxfoundation::sched::rt {
         ::lib::cpumask affinity{};
         if (highest->sched_policy.allowed_cpus.bits == 0U) {
             for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i)
-                affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+                affinity.set(i, std::memory_order::relaxed);
         } else {
             u64 bits = highest->sched_policy.allowed_cpus.bits;
             for (u32 i = 0; i < 64U && bits; ++i, bits >>= 1) {
-                if (bits & 1U) affinity.set(i, arch::s390x::lib::atomic::memory_order::relaxed);
+                if (bits & 1U) affinity.set(i, std::memory_order::relaxed);
             }
         }
 

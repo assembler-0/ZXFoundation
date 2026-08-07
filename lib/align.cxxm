@@ -1,0 +1,19 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file util.cxxm
+/// @brief C++ utility
+
+export module lib.align;
+import zxfoundation.base.types;
+
+export {
+
+namespace lib {
+
+    /// @brief Align v up to the next multiple of alignment a (must be power of 2).
+    [[nodiscard]] constexpr auto align_up(u64 v, u64 a) noexcept -> u64 {
+        return (v + a - 1ULL) & ~(a - 1ULL);
+    }
+
+} // namespace lib
+
+} // end export

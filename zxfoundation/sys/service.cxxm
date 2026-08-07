@@ -9,16 +9,16 @@ import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.scoms.scoms_ref;
+import zxfoundation.scoms.scoms_object_core;
+import zxfoundation.memory.memory_objects;
 import zxfoundation.sys.cap_types;
 import zxfoundation.sys.cap;
 import zxfoundation.sys.printk;
+import zxfoundation.domain.domain;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
-import lib.algorithm;
-import lib.string_view;
+import std;
 import lib.cstring;
 
 export {
@@ -40,10 +40,10 @@ namespace zxfoundation::sys::service {
     /// Maps a human-readable name to a capability token.  The token can
     /// represent any resource type (gate, portal, domain, I/O binding).
     struct service_entry {
-        scoms::kobject  ko{};                                ///< SCOMS identity (offset 0).
-        char            name[SERVICE_NAME_MAX_LEN]{};        ///< NUL-terminated name string.
-        cap_token       token{};                             ///< Capability to access the service.
-        u32             owner_domain{~0U};                   ///< Domain that registered this entry.
+        scoms::kobject  ko{};
+        char            name[SERVICE_NAME_MAX_LEN]{};
+        cap_token       token{};
+        memory::objects::memory_object_ref authority{};
 
         service_entry() noexcept = default;
     };
@@ -52,6 +52,11 @@ namespace zxfoundation::sys::service {
 
     /// @brief Initialize the service registry.
     auto service_init() noexcept -> void;
+
+    /// @brief Remove service entries owned by a domain entering teardown.
+    auto service_destroy_for_domain(u32 domain_id) noexcept -> void;
+
+    auto register_service_cap_lookup() noexcept -> void;
 
     /// @brief Register a service.
     /// @param[in]  name       Service name (max 63 chars).
@@ -62,10 +67,10 @@ namespace zxfoundation::sys::service {
     /// @note  If a service with the same name already exists, the registration
     ///        fails with generic_error::already_exists.
     [[nodiscard]] auto service_register(
-        lib::string_view name,
+        std::string_view name,
         cap_token        token,
         u32              owner_id
-    ) noexcept -> lib::expected<u32, lib::kernel_error>;
+    ) noexcept -> std::expected<u32, lib::kernel_error>;
 
     /// @brief Look up a service by name.
     /// @param[in]  name  NUL-terminated service name.
@@ -75,8 +80,9 @@ namespace zxfoundation::sys::service {
     ///        registry entry.  The caller is responsible for releasing it
     ///        via cap_release().
     [[nodiscard]] auto service_lookup(
-        lib::string_view name
-    ) noexcept -> lib::expected<cap_token, lib::kernel_error>;
+        std::string_view name,
+        u32              caller_id
+    ) noexcept -> std::expected<cap_token, lib::kernel_error>;
 
     /// @brief Unregister a service.
     /// @param[in]  service_id  The service ID returned by service_register.
@@ -85,7 +91,7 @@ namespace zxfoundation::sys::service {
     [[nodiscard]] auto service_unregister(
         u32 service_id,
         u32 caller_id
-    ) noexcept -> lib::expected<void, lib::kernel_error>;
+    ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Return the number of currently registered services.
     [[nodiscard]] auto service_count() noexcept -> u32;
@@ -109,14 +115,16 @@ namespace zxfoundation::sys::service {
         using namespace _internal;
         if (g_service_initialized) return;
 
-        g_service_table.init(scoms::kobject_type::capability);
+        g_service_table.init(scoms::kobject_type::service_entry);
+        register_service_cap_lookup();
+        zxfoundation::domain::register_service_drain_cb(service_destroy_for_domain);
 
-        // Register well-known nucleus services.
         {
-            // Console service: points to domain 0 (nucleus)
-            auto d0_token = cap_token::make(
-                cap_type::domain, 0, 0, cap_rights::read | cap_rights::write);
-            discard_value service_register("zx.console", d0_token, 0);
+            auto d0_token = cap_issue(
+                cap_type::domain, 0, cap_rights::read | cap_rights::write, 0);
+            if (!d0_token) return;
+            discard_value service_register("zx.console", *d0_token, 0);
+            discard_value cap_release(*d0_token);
         }
 
         g_service_initialized = true;
@@ -124,34 +132,36 @@ namespace zxfoundation::sys::service {
     }
 
     [[nodiscard]] auto service_register(
-        lib::string_view name,
+        std::string_view name,
         cap_token        token,
         u32              owner_id
-    ) noexcept -> lib::expected<u32, lib::kernel_error> {
+    ) noexcept -> std::expected<u32, lib::kernel_error> {
         using namespace _internal;
 
         if (name.empty() || !token) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         if (name.size() >= SERVICE_NAME_MAX_LEN) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        // Check for duplicates.
+        auto token_result = cap_validate_generic_for(token, cap_rights::none, owner_id);
+        if (!token_result) return std::unexpected(token_result.error());
+
         for (u32 i = 0; i < MAX_SERVICES; ++i) {
             auto* existing = g_service_table.find_raw(i);
-            if (existing && lib::string_view(existing->name) == name) {
-                return lib::unexpected(
+            if (existing && std::string_view(existing->name) == name) {
+                return std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::internal_error));
             }
         }
 
         auto result = g_service_table.alloc();
         if (!result) {
-            return lib::unexpected(result.error());
+            return std::unexpected(result.error());
         }
 
         auto embryo_ref = static_cast<
@@ -159,13 +169,34 @@ namespace zxfoundation::sys::service {
         >(result.value());
 
         service_entry& entry = *embryo_ref;
+        auto owner_result = scoms::object_core::set_owner(entry.ko, owner_id);
+        if (!owner_result) {
+            discard_value g_service_table.release(entry.ko.id);
+            return std::unexpected(owner_result.error());
+        }
         lib::string_copy(entry.name, name);
-        entry.token       = token;
-        entry.owner_domain = owner_id;
+        auto stored_token = cap_duplicate(token, token.rights(), owner_id);
+        if (!stored_token) {
+            discard_value g_service_table.release(entry.ko.id);
+            return std::unexpected(stored_token.error());
+        }
+        entry.token       = *stored_token;
+
+        auto mo_result = memory::objects::memory_object_create(
+            scoms::kobject_type::service_entry, owner_id,
+            &entry.ko, 0, 0);
+        if (!mo_result) {
+            discard_value cap_release(*stored_token);
+            discard_value g_service_table.release(entry.ko.id);
+            return std::unexpected(mo_result.error());
+        }
+        entry.authority = memory::objects::memory_object_ref_of(**mo_result);
+        discard_value memory_object_attach_view(
+            entry.authority, memory::objects::memory_view_kind::service_entry, &entry);
 
         const u32 id = entry.ko.id;
 
-        auto active_ref = static_cast<
+        discard_value static_cast<
             kobject_ref<service_entry, lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
@@ -176,59 +207,86 @@ namespace zxfoundation::sys::service {
     }
 
     [[nodiscard]] auto service_lookup(
-        lib::string_view name
-    ) noexcept -> lib::expected<cap_token, lib::kernel_error> {
+        std::string_view name,
+        u32              caller_id
+    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
         using namespace _internal;
 
         if (name.empty()) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         for (u32 i = 0; i < MAX_SERVICES; ++i) {
             auto* entry = g_service_table.find_raw(i);
-            if (entry && lib::string_view(entry->name) == name) {
-                // Acquire a new capability from the entry's stored token.
-                auto cap_result = cap_acquire(
-                    entry->token.type(),
-                    entry->token.object_id(),
-                    entry->token.rights());
+            if (entry && std::string_view(entry->name) == name) {
+                auto* authority = memory::objects::memory_object_resolve_id(
+                    entry->authority.id);
+                if (!authority) {
+                    return std::unexpected(lib::kernel_error::from_generic(
+                        lib::generic_error::not_found));
+                }
+                auto cap_result = cap_duplicate_for(
+                    entry->token, entry->token.rights(), authority->owner_domain,
+                    caller_id);
                 if (!cap_result) {
-                    // The underlying object may have been destroyed.
-                    return lib::unexpected(cap_result.error());
+                    return std::unexpected(cap_result.error());
                 }
                 return *cap_result;
             }
         }
 
-        return lib::unexpected(
+        return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::not_found));
     }
 
     [[nodiscard]] auto service_unregister(
         u32 service_id,
         u32 caller_id
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         using namespace _internal;
 
         auto* entry = g_service_table.find_raw(service_id);
         if (!entry) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
 
-        if (entry->owner_domain != caller_id && caller_id != 0) {
-            return lib::unexpected(
+        auto* mo = memory::objects::memory_object_resolve_id(entry->authority.id);
+        if (!mo) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        if (mo->owner_domain != caller_id && caller_id != 0) {
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::internal_error));
         }
 
+        char name_copy[SERVICE_NAME_MAX_LEN]{};
+        lib::string_copy(name_copy, std::string_view{entry->name});
+        discard_value cap_release(entry->token);
+        discard_value memory_object_destroy(entry->authority);
+        entry->authority = {};
         const auto result = g_service_table.release(service_id);
         if (!result) {
-            return lib::unexpected(result.error());
+            return std::unexpected(result.error());
         }
 
-        pinfo("service: unregistered \"{}\" id={}", entry->name, service_id);
+        pinfo("service: unregistered \"{}\" id={}", name_copy, service_id);
         return {};
+    }
+
+    auto service_destroy_for_domain(u32 domain_id) noexcept -> void {
+        _internal::g_service_table.destroy_if(
+            [domain_id](const service_entry& entry) noexcept -> bool {
+                auto* mo = memory::objects::memory_object_resolve_id(entry.authority.id);
+                return mo && mo->owner_domain == domain_id;
+            },
+            [](service_entry& entry) noexcept -> void {
+                discard_value cap_release(entry.token);
+                discard_value memory_object_destroy(entry.authority);
+                entry.authority = {};
+            });
     }
 
     auto service_count() noexcept -> u32 {
@@ -264,37 +322,29 @@ namespace zxfoundation::sys::cap {
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::sys::service::service_entry>(
         cap_token token, cap_rights needed
-    ) noexcept -> lib::expected<zxfoundation::sys::service::service_entry*, lib::kernel_error> {
+    ) noexcept -> std::expected<zxfoundation::sys::service::service_entry*, lib::kernel_error> {
 
         if (!token) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (token.type() != cap_type::service) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         if ((token.rights() & needed) == cap_rights::none && needed != cap_rights::none) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        auto* e = zxfoundation::sys::service::service_entry_find_by_id(
-            static_cast<u32>(token.object_id()));
-        if (!e) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        auto result = zxfoundation::sys::cap::cap_resolve(token, needed);
+        if (!result) return std::unexpected(result.error());
+        if (token.type() != cap_type::service) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-        if (e->ko.generation != static_cast<u32>(token.generation())) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_found));
-        }
-        if (e->ko.state == lifecycle_state::dying) {
-            return lib::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::not_supported));
-        }
-        return e;
+        return reinterpret_cast<zxfoundation::sys::service::service_entry*>(*result);
     }
 
 } // namespace zxfoundation::sys::cap

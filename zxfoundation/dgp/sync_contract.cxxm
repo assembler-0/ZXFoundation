@@ -7,8 +7,7 @@ import zxfoundation.base.types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 
 export {
 
@@ -85,32 +84,59 @@ namespace zxfoundation::dgp {
     [[nodiscard]] auto sync_contract_validate_irq_state(
         const sync_contract_state& state,
         irq_contract contract
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (contract == irq_contract::must_be_disabled && !state.irqs_disabled) {
-            return lib::unexpected(lib::kernel_error::from_locking(lib::locking_error::not_locked));
+            return std::unexpected(lib::kernel_error::from_locking(lib::locking_error::not_locked));
         }
 
         if (contract == irq_contract::must_be_enabled && state.irqs_disabled) {
-            return lib::unexpected(lib::kernel_error::from_locking(lib::locking_error::already_locked));
+            return std::unexpected(lib::kernel_error::from_locking(lib::locking_error::already_locked));
         }
 
         return {};
     }
 
-    /// @brief Validate that a teardown operation follows the permitted phase order.
+    /// @brief Validate one exact teardown-phase transition.
     /// @param[in] current Current teardown phase.
     /// @param[in] requested Requested teardown phase.
-    /// @return Success when the requested phase does not move backward.
+    /// @return Success when @p requested is the immediate successor of @p current.
     /// @note Domain destruction must deny new entries before draining active gates and portals.
     /// @warning This helper does not wait for RCU grace periods or drain queues by itself.
     [[nodiscard]] auto sync_contract_validate_teardown_phase(
         teardown_phase current,
         teardown_phase requested
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (static_cast<u8>(requested) < static_cast<u8>(current)) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        const bool is_next =
+            (current == teardown_phase::none && requested == teardown_phase::deny_new_entries)
+            || (current == teardown_phase::deny_new_entries && requested == teardown_phase::drain_gates)
+            || (current == teardown_phase::drain_gates && requested == teardown_phase::drain_portals)
+            || (current == teardown_phase::drain_portals && requested == teardown_phase::release_memory)
+            || (current == teardown_phase::release_memory && requested == teardown_phase::release_identity);
+        if (!is_next) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
+        return {};
+    }
+
+    /// @brief Advance a domain-owned teardown phase by exactly one stage.
+    /// @param[in,out] current Stored phase owned by the domain being destroyed.
+    /// @param[in] expected Phase the domain must currently hold.
+    /// @param[in] requested Immediate phase to record.
+    /// @return Success when the stored phase was advanced.
+    /// @note Callers must serialize access to @p current with the domain lifecycle lock.
+    [[nodiscard]] auto sync_contract_advance_teardown_phase(
+        teardown_phase& current,
+        teardown_phase expected,
+        teardown_phase requested
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (current != expected) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto transition = sync_contract_validate_teardown_phase(expected, requested);
+        if (!transition) return std::unexpected(transition.error());
+        current = requested;
         return {};
     }
 
@@ -121,9 +147,9 @@ namespace zxfoundation::dgp {
     /// @warning This helper does not acquire RCU, qspinlock, or scheduler locks.
     [[nodiscard]] auto sync_contract_validate_authority_lookup(
         const sync_contract_state& state
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (state.context == lock_context::teardown && state.phase == teardown_phase::release_identity) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         return {};

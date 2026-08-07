@@ -4,11 +4,9 @@
 
 export module lib.cpumask;
 import lib.bitmap;
-import lib.optional;
-import lib.placementnew;
+import std;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import arch.s390x.lib.atomic;
 
 export {
 
@@ -20,7 +18,7 @@ namespace lib {
         static constexpr usize max_cpus =
             zxfoundation::base::config::CONFIG_ZX_MAX_CPUS;
 
-        using memory_order = arch::s390x::lib::atomic::memory_order;
+        using memory_order = std::memory_order;
 
         static_bitmap<max_cpus> m_bits{};
 
@@ -62,14 +60,14 @@ namespace lib {
 
         /// @brief Index of the lowest-numbered member.
         /// @return The CPU id, or nullopt if the set is empty.
-        [[nodiscard]] auto first_set() const noexcept -> optional<usize> {
+        [[nodiscard]] auto first_set() const noexcept -> std::optional<usize> {
             return m_bits.find_first_set();
         }
 
         /// @brief Index of the lowest-numbered member strictly after @p after.
         /// @param[in] after Index to search past (the result is always > after).
         /// @return The next member CPU id, or nullopt if none follows.
-        [[nodiscard]] auto next_set(usize after) const noexcept -> optional<usize> {
+        [[nodiscard]] auto next_set(usize after) const noexcept -> std::optional<usize> {
             return m_bits.find_next_set(after);
         }
 

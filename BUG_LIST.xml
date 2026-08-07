@@ -3,7 +3,7 @@
             xsi:noNamespaceSchemaLocation="scripts/schemas/BUG_HISTORY.xsd">
 
     <Title>ZXFoundation bug history</Title>
-    <LastUpdated>2026-07-26</LastUpdated>
+    <LastUpdated>2026-07-28</LastUpdated>
 
     <BugList>
 
@@ -148,6 +148,154 @@
             <FixedIn>
                 <Branch>26h2</Branch>
                 <Number>1879</Number>
+            </FixedIn>
+        </Bug>
+
+        <Bug id="BUG-005">
+            <FoundDate>2026-07-28</FoundDate>
+            <Severity>High</Severity>
+            <Description>
+                cap::acquire syscall retained the removed forgeable type/id ABI
+                instead of accepting a nucleus-issued source capability token
+            </Description>
+            <Behavior>
+                user/init passed cap_type, domain id, and requested rights to
+                cap::acquire. The nucleus interpreted the first argument as an
+                opaque token, so the reconstructed value failed capability-slot
+                generation and ownership validation.
+            </Behavior>
+            <Solution>
+                Bootstrap now supplies an all-rights nucleus-issued source token
+                through the preserved init ABI register. cap::acquire derives
+                only from that token, while the init tests use the opaque token
+                for admin, map, and delegate derivation.
+            </Solution>
+            <AffectedBuilds>
+                <Range>
+                    <From>
+                        <Branch>26h2</Branch>
+                        <Number>1???</Number>
+                    </From>
+                    <To>
+                        <Branch>26h2</Branch>
+                        <Number>1992</Number>
+                    </To>
+                </Range>
+            </AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn>
+                <Branch>26h2</Branch>
+                <Number>1993</Number>
+            </FixedIn>
+        </Bug>
+
+        <Bug id="BUG-006">
+            <FoundDate>2026-07-28</FoundDate>
+            <Severity>High</Severity>
+            <Description>
+                Domain names retained temporary user-buffer pointers and
+                secondary strands retained SCOMS parent dependencies during teardown
+            </Description>
+            <Behavior>
+                The domain-create syscall passed a stack-local copied name to
+                domain_create(), leaving domain::name dangling. Later teardown
+                logs printed empty or corrupted names. Domain destruction also
+                released secondary strand slots without detaching them from the
+                domain, so the final domain release could fail with live dependents.
+            </Behavior>
+            <Solution>
+                Domains now own a bounded inline name buffer and copy names into
+                it during creation. Secondary strand teardown detaches each
+                strand from its domain before releasing its SCOMS slot.
+            </Solution>
+            <AffectedBuilds>
+                <Range>
+                    <From>
+                        <Branch>26h2</Branch>
+                        <Number>1???</Number>
+                    </From>
+                    <To>
+                        <Branch>26h2</Branch>
+                        <Number>1993</Number>
+                    </To>
+                </Range>
+            </AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn>
+                <Branch>26h2</Branch>
+                <Number>1996</Number>
+            </FixedIn>
+        </Bug>
+
+        <Bug id="BUG-007">
+            <FoundDate>2026-07-28</FoundDate>
+            <Severity>High</Severity>
+            <Description>
+                Domain teardown discarded the VM address-space pointer before releasing its SCOMS object
+            </Description>
+            <Behavior>
+                vm_destroy_space() cleared vm_space.address_space_object after removing regions. domain_destroy()
+                therefore skipped the address-space object release, leaving the domain object with a live SCOMS
+                dependent and causing dom::destroy to return generic::invalid_arg.
+            </Behavior>
+            <Solution>
+                VM teardown now leaves the address-space object reference for domain_destroy() to release after all
+                region and memory-object children have been detached. Domain teardown also drains IPC endpoints,
+                policy registrations, and named services owned by the dying domain.
+            </Solution>
+            <AffectedBuilds>
+                <Range>
+                    <From>
+                        <Branch>26h2</Branch>
+                        <Number>1996</Number>
+                    </From>
+                    <To>
+                        <Branch>26h2</Branch>
+                        <Number>2012</Number>
+                    </To>
+                </Range>
+            </AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn>
+                <Branch>26h2</Branch>
+                <Number>2013</Number>
+            </FixedIn>
+        </Bug>
+
+        <Bug id="BUG-008">
+            <FoundDate>2026-07-29</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>
+                vm_region alloc_region double-constructed the slot, wiping the SCOMS id assigned by kobject_table::alloc
+            </Description>
+            <Behavior>
+                alloc_region() called ::new(static_cast<void*>(rgn)) vm_region{} after g_region_table.alloc() had already
+                default-constructed the slot and initialised ko.id via ko.initialize(slot, type). The placement-new
+                zero-initialised the storage, clearing ko.id back to ~0U. Capabilities issued against such a region
+                therefore failed lookup_kobject() (cap_issue returned generic::not_found) and every operation that
+                relied on a valid region ko.id — shm_export, lazy revocation, region teardown — was broken.
+            </Behavior>
+            <Solution>
+                Removed the redundant placement-new and the ko.type reassignment. alloc_region now only fills in
+                the user-visible fields (va_start, va_end, prot, flags, backing, phys_base) and activates the
+                embryo ref. ko.id and ko.type are preserved from kobject_table::alloc().
+            </Solution>
+            <AffectedBuilds>
+                <Range>
+                    <From>
+                        <Branch>26h2</Branch>
+                        <Number>9e1590b</Number>
+                    </From>
+                    <To>
+                        <Branch>26h2</Branch>
+                        <Number>2032</Number>
+                    </To>
+                </Range>
+            </AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn>
+                <Branch>26h2</Branch>
+                <Number>2033</Number>
             </FixedIn>
         </Bug>
 

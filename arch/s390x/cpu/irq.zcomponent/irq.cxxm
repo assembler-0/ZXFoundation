@@ -1,0 +1,92 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/irq_frame.cxxm
+/// @brief z/Architecture interrupt/trap frame layout.
+
+export module arch.s390x.cpu.irq;
+import zxfoundation.base.types;
+
+export {
+
+using irqflags = u64;
+
+namespace arch::s390x::cpu::irq {
+
+    /// @brief Offset of the GPR save area within the frame.
+    constexpr u32 IRQ_FRAME_GPRS      = 0x00U;
+
+    /// @brief Offset of the saved old PSW mask word within the frame.
+    constexpr u32 IRQ_FRAME_PSW_MASK  = 0x80U; ///< = 16 GPRs × 8 bytes = 128 = 0x80.
+
+    /// @brief Offset of the saved old PSW instruction address within the frame.
+    constexpr u32 IRQ_FRAME_PSW_ADDR  = 0x88U; ///< = IRQ_FRAME_PSW_MASK + 8.
+
+    /// @brief Offset of the access register save area within the frame.
+    constexpr u32 IRQ_FRAME_ARS       = 0x90U; ///< = IRQ_FRAME_PSW_ADDR + 8.
+
+    /// @brief Offset of the FPC save area within the frame.
+    constexpr u32 IRQ_FRAME_FPC       = 0xD0U; ///< = ARS + 64.
+
+    /// @brief Offset of the vector register save area (v0-v15) within the frame.
+    constexpr u32 IRQ_FRAME_VRS       = 0xD8U; ///< = FPC + 8 (incl pad).
+
+    /// @brief Total size of the interrupt frame in bytes.
+    /// 128 (GPRs) + 16 (PSW) + 64 (ARs) + 8 (FPC+pad) + 512 (VRs v0-v31) = 728 = 0x2D8.
+    constexpr u32 IRQ_FRAME_SIZE      = 0x02D8U;
+
+    /// @brief Interrupt frame saved by entry.S on every trap or interrupt.
+    /// Saves all 32 vector registers (v0-v31), all 16 access registers,
+    /// and the FPC (floating-point control register) per PoP §4-67.
+    struct [[gnu::packed]] alignas(8) irq_frame {
+        u64 gprs[16]{};      ///< General-purpose registers r0–r15 at interrupt time.
+        u64 psw_mask{};      ///< Old PSW mask word (hardware-saved in lowcore, copied here).
+        u64 psw_addr{};      ///< Old PSW instruction address (hardware-saved, copied here).
+        u32 access_regs[16]{}; ///< Access registers ar0-ar15 (PoP §2-6).
+        u32 fpc{};           ///< Floating point control register (PoP §4-67).
+        u32 pad{};           ///< Pad to 8-byte boundary
+        u64 vector_regs_lo[16][2]{}; ///< Vector registers v0-v15 (lower half).
+        u64 vector_regs_hi[16][2]{}; ///< Vector registers v16-v31 (upper half).
+    };
+
+    static_assert(sizeof(irq_frame) == IRQ_FRAME_SIZE,
+        "arch_s390x_irq_frame size must be IRQ_FRAME_SIZE (0x2D8 = 728 bytes)");
+    static_assert(__builtin_offsetof(irq_frame, psw_mask) == IRQ_FRAME_PSW_MASK,
+        "IRQ_FRAME_PSW_MASK offset mismatch");
+    static_assert(__builtin_offsetof(irq_frame, psw_addr) == IRQ_FRAME_PSW_ADDR,
+        "IRQ_FRAME_PSW_ADDR offset mismatch");
+    static_assert(__builtin_offsetof(irq_frame, access_regs) == IRQ_FRAME_ARS,
+        "IRQ_FRAME_ARS offset mismatch");
+    static_assert(__builtin_offsetof(irq_frame, fpc) == IRQ_FRAME_FPC,
+        "IRQ_FRAME_FPC offset mismatch");
+    static_assert(__builtin_offsetof(irq_frame, vector_regs_lo) == IRQ_FRAME_VRS,
+        "IRQ_FRAME_VRS offset mismatch for vector_regs_lo");
+    static_assert(__builtin_offsetof(irq_frame, vector_regs_hi) == IRQ_FRAME_VRS + 256,
+        "IRQ_FRAME_VRS + 256 offset mismatch for vector_regs_hi");
+
+    /// @brief Interrupt class tag — identifies which lowcore new-PSW slot fired.
+    enum irq_class : u8 {
+        ZX_IRQ_CLASS_PGM  = 0, ///< Program check (0x01D0).
+        ZX_IRQ_CLASS_EXT  = 1, ///< External interrupt (0x01B0).
+        ZX_IRQ_CLASS_IO   = 2, ///< I/O interrupt (0x01F0).
+        ZX_IRQ_CLASS_MCCK = 3, ///< Machine check (0x01E0).
+        ZX_IRQ_CLASS_SVC  = 4, ///< Supervisor call (0x01C0).
+    };
+
+    constexpr u64 IRQ_RESTORE_MASK_LC = 0x0200UL;
+
+    [[gnu::no_stack_protector]] auto irq_restore_mask_byte(u8 byte0) noexcept -> void;
+
+    [[nodiscard]] auto irq_save_disable() noexcept -> irqflags;
+
+    /// @brief Restore PSW byte 0 from a saved irqflags.
+    auto irq_restore(irqflags flags) noexcept -> void;
+
+    auto irq_disable() noexcept -> void;
+
+    auto irq_enable() noexcept -> void;
+
+    [[nodiscard]] auto irqs_enabled() noexcept -> bool;
+
+
+} // namespace arch::s390x::cpu::irq
+
+} // end export

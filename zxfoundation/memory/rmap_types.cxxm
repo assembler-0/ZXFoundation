@@ -1,0 +1,73 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file rmap_types.cxxm
+/// @brief Reverse-map (rmap) types — physical frame → list of referring
+///        VMA slots.  Used by CoW partner invalidation and unified
+///        reclaim to walk peer mappings of a shared physical page.
+
+export module zxfoundation.memory.rmap_types;
+import zxfoundation.base.types;
+import zxfoundation.memory.vm_types;
+
+export {
+
+namespace zxfoundation::memory::rmap {
+
+    /// @brief One reverse-map entry: identifies a single VMA slot that
+    ///        maps a given physical frame.
+    ///
+    /// @details
+    /// Stored in a per-PFN singly-linked intrusive list whose head lives
+    /// in @ref rmap_head (see rmap.cxxm).  The link pointer is stored
+    /// inside the @ref entry itself (intrusive) so the entry can be
+    /// allocated from a fixed-size pool indexed by nothing but its own
+    /// address.
+    ///
+    /// Lifetime:
+    ///  - @ref rmap_insert is called by the VM fault path immediately
+    ///    after a slot is populated with a non-empty state pointing at
+    ///    a shared frame (CoW, file_cache, IPC, portal).
+    ///  - @ref rmap_remove is called on slot.clear() (unmap, CoW copy,
+    ///    eviction, drain) before the slot is reset.
+    ///  - The walker @ref rmap_for_each_phys lets a caller invoke a
+    ///    function pointer on every VMA slot that currently references
+    ///    a given phys, enabling peer TLB shootdown on CoW and peer
+    ///    invalidation on reclaim.
+    struct entry {
+        vm::vm_region*   region{nullptr};
+        u32              slot_index{0};
+        entry*           next{nullptr};
+    };
+
+    /// @brief Visitor signature for @ref rmap_for_each_phys.
+    /// @param[in] rgn        The VMA owning the referring slot.
+    /// @param[in] phys       The physical frame being walked.
+    /// @param[in] slot_va    The virtual address of the slot (page-aligned).
+    /// @param[in] slot_index Index of the slot inside @c rgn.pages.slots[].
+    ///                       Lets the consumer directly index the slot
+    ///                       without re-walking the page map by va.
+    /// @return true to continue the walk, false to stop early.
+    using visitor = bool (*)(vm::vm_region& rgn, u64 phys,
+                              u64 slot_va, u32 slot_index) noexcept;
+
+    /// @brief Mutable record of one rmap entry observed during a walk.
+    /// @details
+    /// Returned by @ref collect_peers under the stripe lock.  Carrying
+    /// the @c slot_index field lets the caller clear the peer slot
+    /// from outside the stripe lock, which is required because slot
+    /// clear re-enters rmap via @ref remove, and re-entering the same
+    /// stripe lock would deadlock.
+    struct peer_ref {
+        vm::vm_region* region{nullptr};
+        u32            slot_index{0};
+        u64            slot_va{0};
+    };
+
+    /// @brief Effects of invalidating every peer of one reverse-mapped frame.
+    struct peer_invalidation_result {
+        u32 mappings_invalidated{0};
+        u32 frames_released{0};
+    };
+
+} // namespace zxfoundation::memory::rmap
+
+} // end export

@@ -4,8 +4,7 @@
 
 export module zxfoundation.base.types;
 
-export
-{
+export {
     // ZXFoundation types
 
     using i8 = __INT8_TYPE__;
@@ -46,18 +45,6 @@ export
     using wchar = __WCHAR_TYPE__;
     using uchar = unsigned char;
 
-    // linux/arch/s390/include/uapi/asm/types.h
-    struct [[gnu::packed]] alignas(4) vector128 {
-        union {
-            struct {
-                u64 high;
-                u64 low;
-            };
-
-            u32 u[4];
-        };
-    };
-
     using i8least = __INT_LEAST8_TYPE__;
     using i16least = __INT_LEAST16_TYPE__;
     using i32least = __INT_LEAST32_TYPE__;
@@ -96,10 +83,36 @@ export
     using ubit_int = unsigned _BitInt(N);
 #else
     template<u16 N>
-    using bit_int = i64;
+    using bit_int =
+         std::conditional_t<
+             N <= 8, i8,
+             std::conditional_t<
+                 N <= 16, i16,
+                 std::conditional_t<
+                     N <= 32, i32,
+                    std::conditional_t<
+                       N <= 64, i64,
+                       i128
+                    >
+                 >
+             >
+         >;
 
     template<u16 N>
-    using ubit_int = u64;
+    using ubit_int =
+        std::conditional_t<
+            N <= 8, u8,
+            std::conditional_t<
+                N <= 16, u16,
+                std::conditional_t<
+                    N <= 32, u32,
+                    std::conditional_t<
+                        N <= 64, u64,
+                        u128
+                    >
+                >
+            >
+        >;
 #endif
 
     // unethical/fun types
@@ -125,175 +138,19 @@ export
     using i4096 = bit_int<4096>;
     using u4096 = ubit_int<4096>;
 
-    // libstc++-v3 std::byte
-
-    enum class byte : uchar {
-    };
-
-    template<typename _IntegerType>
-    struct __byte_operand {
-    };
-
-    template<>
-    struct __byte_operand<bool> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<char> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<signed char> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<unsigned char> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<wchar_t> {
-        using __type = byte;
-    };
-    template<>
-    struct __byte_operand<char8_t> {
-        using __type = byte;
-    };
-    template<>
-    struct __byte_operand<char16_t> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<char32_t> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<short> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<unsigned short> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<int> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<unsigned int> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<long> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<unsigned long> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<long long> {
-        using __type = byte;
-    };
-
-    template<>
-    struct __byte_operand<unsigned long long> {
-        using __type = byte;
-    };
-    template<>
-    struct __byte_operand<i128> {
-        using __type = byte;
-    };
-    template<>
-    struct __byte_operand<u128> {
-        using __type = byte;
-    };
-    template<typename _IntegerType>
-    struct __byte_operand<const _IntegerType>
-            : __byte_operand<_IntegerType> {
-    };
-
-    template<typename _IntegerType>
-    struct __byte_operand<volatile _IntegerType>
-            : __byte_operand<_IntegerType> {
-    };
-
-    template<typename _IntegerType>
-    struct __byte_operand<const volatile _IntegerType>
-            : __byte_operand<_IntegerType> {
-    };
-
-    template<typename _IntegerType>
-    using __byte_op_t = typename __byte_operand<_IntegerType>::__type;
-
-    template<typename _IntegerType>
-    [[__gnu__::__always_inline__]]
-    constexpr __byte_op_t<_IntegerType>
-    operator<<(byte __b, _IntegerType __shift) noexcept
-    { return static_cast<byte>(static_cast<unsigned char>(static_cast<unsigned>(__b) << __shift)); }
-
-    template<typename _IntegerType>
-    [[__gnu__::__always_inline__]]
-    constexpr __byte_op_t<_IntegerType>
-    operator>>(byte __b, _IntegerType __shift) noexcept { return (byte) (unsigned char) ((unsigned) __b >> __shift); }
-
-    [[__gnu__::__always_inline__]]
-    constexpr byte
-    operator|(byte __l, byte __r) noexcept { return (byte) (unsigned char) ((unsigned) __l | (unsigned) __r); }
-
-    [[__gnu__::__always_inline__]]
-    constexpr byte
-    operator&(byte __l, byte __r) noexcept { return (byte) (unsigned char) ((unsigned) __l & (unsigned) __r); }
-
-    [[__gnu__::__always_inline__]]
-    constexpr byte
-    operator^(byte __l, byte __r) noexcept { return (byte) (unsigned char) ((unsigned) __l ^ (unsigned) __r); }
-
-    [[__gnu__::__always_inline__]]
-    constexpr byte
-    operator~(byte __b) noexcept { return (byte) (unsigned char) ~(unsigned) __b; }
-
-    template<typename _IntegerType>
-    [[__gnu__::__always_inline__]]
-    constexpr __byte_op_t<_IntegerType> &
-    operator<<=(byte &__b, _IntegerType __shift) noexcept { return __b = __b << __shift; }
-
-    template<typename _IntegerType>
-    [[__gnu__::__always_inline__]]
-    constexpr __byte_op_t<_IntegerType> &
-    operator>>=(byte &__b, _IntegerType __shift) noexcept { return __b = __b >> __shift; }
-
-    [[__gnu__::__always_inline__]]
-    constexpr byte &
-    operator|=(byte &__l, byte __r) noexcept { return __l = __l | __r; }
-
-    [[__gnu__::__always_inline__]]
-    constexpr byte &
-    operator&=(byte &__l, byte __r) noexcept { return __l = __l & __r; }
-
-    [[__gnu__::__always_inline__]]
-    constexpr byte &
-    operator^=(byte &__l, byte __r) noexcept { return __l = __l ^ __r; }
-
-    template<typename _IntegerType>
-    [[nodiscard,__gnu__::__always_inline__]]
-    constexpr _IntegerType
-    to_integer(__byte_op_t<_IntegerType> __b) noexcept { return _IntegerType(__b); }
-
     // misc.
 
     using condition_code = i32;
+
+    inline constexpr u32 PAGE_SHIFT = 12U;
+    inline constexpr u64 PAGE_SIZE  = 1ULL << PAGE_SHIFT;
+    inline constexpr u64 PAGE_MASK  = PAGE_SIZE - 1ULL;
+
+    /// @brief Page-frame number (physical address >> PAGE_SHIFT).
+    using pfn_t = u64;
+
+    /// @brief value for an unassigned kernel-object id.
+    inline constexpr u32 KOBJECT_ID_INVALID = ~0U;
 
     template<typename Derived, usize Size>
     struct FixedSizeBase {

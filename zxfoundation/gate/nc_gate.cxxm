@@ -13,7 +13,7 @@ import zxfoundation.dgp.isolation_types;
 import zxfoundation.sys.printk;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import lib.expected;
+import std;
 
 static constexpr u64 NC_GATE_ERROR = ~0ULL;
 

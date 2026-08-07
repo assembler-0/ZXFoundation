@@ -15,25 +15,32 @@ PHDRS {
 }
 
 nucleus_vma_base = 0xFFFF800000100000;
-BYTE = 8;
+PAGE = 4096;
 
 SECTIONS {
     . = nucleus_vma_base;
     __zx_vma_start = .;
 
-    .text.handshake : ALIGN(BYTE) {
+    . = ALIGN(PAGE);
+    .text.handshake : ALIGN(PAGE) {
         KEEP(*(.text.handshake))
+        . = ALIGN(PAGE);
     } :hs_seg
 
-    .text.entry : ALIGN(BYTE) {
+    . = ALIGN(PAGE);
+    .text.entry : ALIGN(PAGE) {
         KEEP(*(.text.__zx_start_kernel64))
+        . = ALIGN(PAGE);
     } :entry_seg
 
-    .text : ALIGN(BYTE) {
+    . = ALIGN(PAGE);
+    .text : ALIGN(PAGE) {
         *(.text .text.*)
+        . = ALIGN(PAGE);
     } :nucleus_text
 
-    .rodata : ALIGN(4096) {
+    . = ALIGN(PAGE);
+    .rodata : ALIGN(PAGE) {
         __rodata_start = .;
         *(.rodata .rodata.*)
         __rodata_end = .;
@@ -50,59 +57,67 @@ SECTIONS {
         __ex_table_end = .;
     } :nucleus_ro
 
-    .ctors ALIGN(BYTE) :
+    .ctors ALIGN(8) :
     {
         __ctors_start = .;
         KEEP(*(.ctors*))
-        . = ALIGN(BYTE);
+        . = ALIGN(8);
         __ctors_end = .;
     } :nucleus_ro
 
-	.dtors ALIGN(BYTE) :
-	{
-	    __dtors_start = .;
-	    KEEP(*(.dtors*))
-   	    . = ALIGN(BYTE);
-	    __dtors_end = .;
-	} :nucleus_ro
+    .dtors ALIGN(8) :
+    {
+        __dtors_start = .;
+        KEEP(*(.dtors*))
+        . = ALIGN(8);
+        __dtors_end = .;
+    } :nucleus_ro
 
-    .init_array ALIGN(BYTE) :
+    .init_array ALIGN(8) :
     {
         PROVIDE_HIDDEN(__init_array_start = .);
         KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) .init_array))
         PROVIDE_HIDDEN(__init_array_end   = .);
     } :nucleus_ro
 
-    .fini_array ALIGN(BYTE) :
+    .fini_array ALIGN(8) :
     {
         PROVIDE_HIDDEN(__fini_array_start = .);
         KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) .fini_array))
         PROVIDE_HIDDEN(__fini_array_end   = .);
     } :nucleus_ro
 
-    .data : ALIGN(4096) {
+    . = ALIGN(PAGE);
+    . = ALIGN(PAGE);
+    .data : ALIGN(PAGE) {
         __data_start = .;
         *(.data .data.*)
         __data_end = .;
+        . = ALIGN(PAGE);
     } :nucleus_data
 
-    .bss : ALIGN(4096) {
+    . = ALIGN(PAGE);
+    .bss : ALIGN(PAGE) {
         __bss_start = .;
         *(COMMON)
         *(.bss .bss.*)
-        . = ALIGN(BYTE);
+        . = ALIGN(PAGE);
         __bss_end = .;
     } :nucleus_bss
 
-    .zxfl_lock : ALIGN(4096) {
+    . = ALIGN(PAGE);
+    .zxfl_lock : ALIGN(PAGE) {
         LONG(0xCCBBCC35)
         LONG(0x5A58464C)
         . += 0x1000 - 8;
         LONG(0xE5664311)
+        . = ALIGN(PAGE);
     } :lock_seg
 
-    .zxvl_checksums : ALIGN(4096) {
+    . = ALIGN(PAGE);
+    .zxvl_checksums : ALIGN(PAGE) {
         KEEP(*(.zxvl_checksums))
+        . = ALIGN(PAGE);
     } :checksums_seg
 
     __zx_vma_end = .;
@@ -110,5 +125,5 @@ SECTIONS {
    /DISCARD/ : {
        *(.eh_frame)
        *(.eh_frame_hdr)
-   }
+    }
 }

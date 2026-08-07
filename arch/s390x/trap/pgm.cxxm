@@ -4,10 +4,9 @@
 
 export module arch.s390x.trap.pgm;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.lowcore_types;
-import arch.s390x.cpu.irq_frame;
 import arch.s390x.css.css;
-import arch.s390x.cpu.psw_types;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.psw;
 import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
@@ -21,10 +20,10 @@ import zxfoundation.domain.signal;
 import zxfoundation.sys.stacktrace;
 import arch.s390x.trap.fixup;
 import zxfoundation.scoms.scoms_ref;
-import arch.s390x.cpu.teid_types;
+import arch.s390x.cpu.teid;
 import arch.s390x.cpu.features;
 import lib.error;
-import lib.string_view;
+import std;
 
 extern "C" [[noreturn]] void sched_strand_trampoline_exit() noexcept;
 
@@ -49,7 +48,7 @@ namespace _internal {
     template <typename T>
     struct pgm_name_entry {
         T               code{};
-        lib::string_view name{};
+        std::string_view name{};
     };
 
     /// @brief Master program-interruption code names
@@ -118,7 +117,7 @@ namespace _internal {
     };
 
 
-    [[nodiscard]] constexpr auto master_pgm_name_for(const u16 code) noexcept -> lib::string_view {
+    [[nodiscard]] constexpr auto master_pgm_name_for(const u16 code) noexcept -> std::string_view {
         for (const auto& [c, name] : master_pgm_names) {
             if (c == code) return name;
         }
@@ -153,7 +152,7 @@ namespace _internal {
         { 0xFF, "compare-and-trap-instruction" },
     };
 
-    [[nodiscard]] constexpr auto dxc_pgm_name_for(const u8 code) noexcept -> lib::string_view {
+    [[nodiscard]] constexpr auto dxc_pgm_name_for(const u8 code) noexcept -> std::string_view {
         for (const auto& [c, name] : dxc_pgm_names) {
             if (c == code) return name;
         }
@@ -241,7 +240,7 @@ namespace arch::s390x::trap::pgm {
         const bool in_problem_state =
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
 
-        ::lib::string_view pgm_name = _internal::master_pgm_name_for(pgm_code);
+        ::std::string_view pgm_name = _internal::master_pgm_name_for(pgm_code);
 
         if (!in_problem_state) {
             if (pgm_code == PGM_ADDRESSING || pgm_code == PGM_PROTECTION ||
@@ -283,6 +282,16 @@ namespace arch::s390x::trap::pgm {
             pgm_code == PGM_ASCE_TYPE;
 
         if (is_translation_exception && d) {
+            const cpu::teid::teid teid{.val = trans_exc};
+            if (teid.asce_id() == cpu::teid::TEID_AS_AR) {
+                const u8 ar_num = lc->exc_access_id;
+                if (ar_num < 16U && frame->access_regs[ar_num] > 2U) {
+                    // AR-backed accesses must not fault into the caller's
+                    // primary vm_space.  The common signal path below kills
+                    // the faulting domain and retains the AR-specific TEID.
+                    goto portal_fault;
+                }
+            }
             const u64 fault_va = trans_exc & ~0xFFFULL;
             const bool is_write = (pgm_code == PGM_PROTECTION)
                 ? is_write_from_teid(trans_exc) : true;
@@ -298,6 +307,7 @@ namespace arch::s390x::trap::pgm {
             }
         }
 
+portal_fault:
         if (d) {
             zxfoundation::domain::signal::signal_enqueue(
                 *d, zxfoundation::domain::signal::signal_kind::fault,

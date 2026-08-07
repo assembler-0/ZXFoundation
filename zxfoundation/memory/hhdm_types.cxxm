@@ -4,7 +4,7 @@
 
 export module zxfoundation.memory.hhdm_types;
 import zxfoundation.base.types;
-import lib.compare;
+import std;
 
 export {
 

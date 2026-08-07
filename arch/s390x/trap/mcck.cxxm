@@ -3,13 +3,12 @@
 /// @brief Centralized Machine-Check (MCCK) dispatcher.
 
 export module arch.s390x.trap.mcck;
+import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.lowcore_types;
-import arch.s390x.cpu.irq_frame;
-import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.clock;
-import arch.s390x.cpu.psw_types;
+import arch.s390x.cpu.psw;
 import arch.s390x.css.css;
+import arch.s390x.cpu.percpu;
 import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
@@ -171,7 +170,7 @@ namespace arch::s390x::trap::mcck {
         if ((mcic & MCIC_PD) != 0ULL) {
             if ((mcic & MCIC_B) != 0ULL) {
                 auto& pcp = cpu::lowcore::this_cpu_percpu();
-                const u64 now = static_cast<u64>(cpu::clock::stcke());
+                const u64 now = static_cast<u64>(cpu::clock::stcke().tod);
                 if (_internal::ipd_window_expired(pcp, now)) {
                     pcp.ipd_count = 0U;
                     pcp.ipd_window_deadline = now + MAX_IPD_WINDOW_TOD;

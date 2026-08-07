@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    ar.cxxm
+    ar.cxx
+}

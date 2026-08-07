@@ -1,0 +1,95 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ptf.cxxm
+/// @brief PTF (PERFORM TOPOLOGY FUNCTION) kernel API.
+
+export module arch.s390x.cpu.ptf;
+import arch.s390x.cpu.features;
+import zxfoundation.base.types;
+import lib.bit;
+import std;
+
+export {
+
+namespace arch::s390x::cpu::ptf {
+
+    enum class polarization : u8 {
+        horizontal = 0,
+        vertical   = 1,
+    };
+
+    /// @brief Why a polarization request was rejected (CC 2 only --
+    ///        never constructed for any other outcome).
+    enum class rejection_reason : u8 {
+        unspecified       = 0,
+        already_polarized = 1,
+        change_in_process = 2,
+    };
+
+    namespace detail {
+
+        enum class function_code : u8 {
+            horizontal_polarization  = 0,
+            vertical_polarization    = 1,
+            check_topo_change_status = 2,
+        };
+
+        /// @brief Raw decoded PTF result. `rc` is only meaningful when
+        ///        `cc == 2`; callers must gate on `cc` before reading
+        ///        it, never read it unconditionally.
+        struct raw_result {
+            u8 cc;
+            u8 rc;
+        };
+
+        /// @brief Invoke PTF raw
+        template <function_code Fc>
+        [[nodiscard]] auto invoke() noexcept -> raw_result {
+            u64 r1{};
+            lib::bit_insert_msb<u64>(r1, 56, 63, std::to_underlying(Fc));
+
+            u64 cc_reg;
+            __asm__ volatile(
+                "   ptf %[r1]\n"
+                "   ipm %[cc]\n"
+                "   srl %[cc],28\n"
+                : [r1] "+r" (r1), [cc] "=d" (cc_reg)
+                :
+                : "cc", "memory"
+            );
+
+            return raw_result{
+                .cc = static_cast<u8>(cc_reg & 0b11), // only bits 34-35 (post-shift 0-1) are defined
+                .rc = static_cast<u8>(lib::bit_extract_msb<u64>(r1, 48, 55)),
+            };
+        }
+
+    } // namespace detail
+
+    /// @brief Request that all CPUs in the configuration be moved to
+    ///        the given polarization.
+    template <polarization Pol>
+    [[nodiscard]] auto set_polarization() noexcept
+        -> std::expected<void, rejection_reason> {
+        const auto result = detail::invoke<Pol>();
+        switch (result.cc) {
+            case 0:  return {};
+            case 2:  return std::unexpected(static_cast<rejection_reason>(result.rc));
+            default: std::unreachable(); // architecturally impossible for FC 0/1
+        }
+    }
+
+    /// @brief Check (and, if pending, consume) the topology-change-
+    ///        report-pending condition for this configuration.
+    [[nodiscard]] auto consume_topology_change_pending() noexcept -> bool {
+        if (features::has(features::facility::configuration_topology)) return false;
+        const auto result = detail::invoke<detail::function_code::check_topo_change_status>();
+        switch (result.cc) {
+            case 0:  return false;
+            case 1:  return true;
+            default: std::unreachable(); // architecturally impossible for FC 2
+        }
+    }
+
+} // namespace arch::s390x::cpu::ptf
+
+} // end export

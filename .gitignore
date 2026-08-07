@@ -16,4 +16,5 @@ doxygen-build/
 convert*.py
 build/
 docs/papers/
+docs/papers-vn/
 *.pm

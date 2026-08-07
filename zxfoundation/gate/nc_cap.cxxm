@@ -13,7 +13,7 @@ import zxfoundation.dgp.isolation_types;
 import zxfoundation.domain.domain_types;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import lib.expected;
+import std;
 
 static constexpr u64 NC_CAP_ERROR = ~0ULL;
 
@@ -27,7 +27,7 @@ namespace __cap_detail {
         return reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
     }
 
-    auto nc_cap_acquire(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+    auto nc_cap_acquire(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
         if (!d) [[unlikely]] return NC_CAP_ERROR;
 
@@ -40,14 +40,12 @@ namespace __cap_detail {
             return NC_CAP_ERROR;
         }
 
-        const auto type   = static_cast<cap_type>(a0 & 0xFFFFU);
-        const auto obj_id = static_cast<u16>(a1 & 0xFFFFU);
-        const auto rights = static_cast<cap_rights>(a2 & 0xFFFFU);
+        const cap_token source{a0};
+        const auto rights = static_cast<cap_rights>(a1 & 0xFFFFU);
 
-        auto result = cap_acquire(type, obj_id, rights);
+        auto result = cap_acquire(source, rights, d->ko.id);
         if (!result) {
-            zxfoundation::sys::printk::perr("cap_acquire: failed type={} id={}",
-                                            cap_type_name(type), static_cast<u32>(obj_id));
+            zxfoundation::sys::printk::perr("cap_acquire: source capability denied");
             return NC_CAP_ERROR;
         }
 
@@ -68,6 +66,12 @@ namespace __cap_detail {
         }
 
         const cap_token token{a0};
+        auto owner = zxfoundation::sys::cap::cap_validate_generic_for(
+            token, cap_rights::none, d->ko.id);
+        if (!owner) {
+            zxfoundation::sys::printk::perr("cap_release: ownership denied");
+            return NC_CAP_ERROR;
+        }
         auto result = cap_release(token);
         if (!result) {
             zxfoundation::sys::printk::perr("cap_release: failed");
@@ -93,7 +97,8 @@ namespace __cap_detail {
         const cap_token token{a0};
         const auto needed = static_cast<cap_rights>(a1 & 0xFFFFU);
 
-        auto result = zxfoundation::sys::cap::cap_validate_generic(token, needed);
+        auto result = zxfoundation::sys::cap::cap_validate_generic_for(
+            token, needed, d->ko.id);
         if (!result) {
             zxfoundation::sys::printk::perr("cap_validate: failed");
             return NC_CAP_ERROR;
@@ -118,6 +123,12 @@ namespace __cap_detail {
         }
 
         const cap_token token{a0};
+        auto owner = zxfoundation::sys::cap::cap_validate_generic_for(
+            token, cap_rights::none, d->ko.id);
+        if (!owner) {
+            zxfoundation::sys::printk::perr("cap_revoke: ownership denied");
+            return NC_CAP_ERROR;
+        }
         auto result = zxfoundation::sys::cap::cap_revoke(token);
         if (!result) {
             zxfoundation::sys::printk::perr("cap_revoke: failed");

@@ -75,8 +75,6 @@ namespace arch::s390x::cpu::ctlreg {
         };
     };
 
-
-
     /// @brief Store control registers [Low..High] into a storage area (STCTG).
     /// @tparam Low   Starting control register index (0–15).
     /// @tparam High  Ending control register index (0–15), must be ≥ Low.
@@ -119,7 +117,7 @@ namespace arch::s390x::cpu::ctlreg {
         static_assert(Reg <= 15, "s390x has only control registers 0–15");
         u64 reg;
         ctl_store<Reg, Reg>(reg);
-        ::lib::bit_set_msb(reg, bit);
+        lib::bit_set_msb(reg, bit);
         ctl_load<Reg, Reg>(reg);
     }
 
@@ -131,7 +129,7 @@ namespace arch::s390x::cpu::ctlreg {
         static_assert(Reg <= 15, "s390x has only control registers 0–15");
         u64 reg;
         ctl_store<Reg, Reg>(reg);
-        ::lib::bit_clear_msb(reg, bit);
+        lib::bit_clear_msb(reg, bit);
         ctl_load<Reg, Reg>(reg);
     }
 

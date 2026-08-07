@@ -1,0 +1,64 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/cpumask.cxxm
+/// @brief Canonical possible / online CPU registry for the s390x platform.
+
+export module arch.s390x.cpu.cpumask;
+export import :storage;
+import zxfoundation.base.types;
+import std;
+
+export {
+
+namespace arch::s390x::cpu::cpumask {
+
+    /// @brief Mark a CPU as possible (physically present).
+    /// @param[in] id CPU identifier from the boot cpu_map.
+    /// @note Called only during single-threaded boot setup.
+    auto cpu_set_possible(u16 id) noexcept -> void;
+
+    /// @brief Test whether a CPU is possible (physically present).
+    /// @param[in] id CPU identifier.
+    [[nodiscard]] auto cpu_possible(u16 id) noexcept -> bool;
+
+    /// @brief Publish a CPU as online (fully initialized, safe to target).
+    /// @param[in] id CPU identifier.
+    /// @note Uses release ordering so that all per-CPU initialization performed
+    ///       before this call is visible to any observer that subsequently sees
+    ///       the bit via for_each_online_cpu (acquire).
+    auto cpu_set_online(u16 id) noexcept -> void;
+
+    /// @brief Remove a CPU from the online set (halt / teardown).
+    /// @param[in] id CPU identifier.
+    /// @note Release ordering; once cleared the slot must not be revisited.
+    auto cpu_clear_online(u16 id) noexcept -> void;
+
+    /// @brief Test whether a CPU is currently online.
+    /// @param[in] id CPU identifier.
+    [[nodiscard]] auto cpu_online(u16 id) noexcept -> bool;
+
+    /// @brief Number of CPUs currently online.
+    [[nodiscard]] auto num_online_cpus() noexcept -> u32;
+
+    /// @brief Number of CPUs that physically exist.
+    [[nodiscard]] auto num_possible_cpus() noexcept -> u32;
+
+    /// @brief Invoke @p fn for every online CPU, in ascending id order.
+    /// @tparam Fn Callable invocable as fn(u16 cpu).
+    /// @param[in] fn Callback receiving each online CPU id.
+    template <typename Fn>
+        requires std::is_invocable_r_v<void, Fn&, u16>
+    auto for_each_online_cpu(Fn&& fn) noexcept -> void {
+        _internal::g_online_mask.for_each(static_cast<Fn&&>(fn), std::memory_order::acquire);
+    }
+
+    /// @brief Invoke @p fn for every possible CPU, in ascending id order.
+    /// @tparam Fn Callable invocable as fn(u16 cpu).
+    /// @param[in] fn Callback receiving each possible CPU id.
+    template <typename Fn>
+    auto for_each_possible_cpu(Fn&& fn) noexcept -> void {
+        _internal::g_possible_mask.for_each(static_cast<Fn&&>(fn), std::memory_order::relaxed);
+    }
+
+} // namespace arch::s390x::cpu::cpumask
+
+} // end export

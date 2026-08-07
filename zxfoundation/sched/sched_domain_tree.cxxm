@@ -11,15 +11,10 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.sched.sched_policy_types;
 import lib.cpumask;
-import lib.util;
-import lib.algorithm;
 import lib.softirq_types;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
-import arch.s390x.lib.atomic;
+import std;
 import arch.s390x.cpu.cpumask;
-import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.lowcore;
 
 namespace _internal {
@@ -29,7 +24,7 @@ namespace _internal {
     inline auto cpumask_copy(::lib::cpumask& dst, const ::lib::cpumask& src) noexcept -> void {
         dst.reset();
         src.for_each([&](u16 c) noexcept -> void {
-            dst.set(c, arch::s390x::lib::atomic::memory_order::relaxed);
+            dst.set(c, std::memory_order::relaxed);
         });
     }
 
@@ -91,7 +86,7 @@ namespace _internal {
         sd.span_cpus.for_each([&](u16 cpu) noexcept -> void {
             auto& sg = g_group_pool[group_index(local_cpu, group_n)];
             reset_group(sg);
-            sg.cpus.set(cpu, arch::s390x::lib::atomic::memory_order::relaxed);
+            sg.cpus.set(cpu, std::memory_order::relaxed);
             sg.group_capacity = 100U;  // canonical nonsense capacity until refresh_cpu_record updates.
             if (ring_tail == nullptr) {
                 ring_head = &sg;
@@ -101,7 +96,7 @@ namespace _internal {
                 ring_tail = &sg;
             }
             ++group_n;
-        }, arch::s390x::lib::atomic::memory_order::relaxed);
+        }, std::memory_order::relaxed);
         if (ring_tail != nullptr) {
             ring_tail->next = ring_head; // circular
         }
@@ -155,7 +150,7 @@ namespace zxfoundation::sched::sd {
                 case sd_level::smt: {
                     if (topo_record->smt_evidence ==
                         zxfoundation::sched::topology_evidence::degraded) {
-                        sd.span_cpus.set(cpu, arch::s390x::lib::atomic::memory_order::relaxed);
+                        sd.span_cpus.set(cpu, std::memory_order::relaxed);
                         sd.flags = sd_flag::load_balance | sd_flag::share_pkg_resources;
                     } else {
                         _internal::cpumask_copy(sd.span_cpus, node_mask);  // siblings are subset of node
@@ -252,7 +247,7 @@ namespace zxfoundation::sched::sd {
 
     /// @brief Test whether @c cpu is in @c sd.span_cpus.
     [[nodiscard]] auto domain_contains_cpu(const sched_domain& sd, u16 cpu) noexcept -> bool {
-        return sd.span_cpus.test(cpu, arch::s390x::lib::atomic::memory_order::relaxed);
+        return sd.span_cpus.test(cpu, std::memory_order::relaxed);
     }
 
     /// @brief Cache-hot predicate: keeping a strand on its current CPU for

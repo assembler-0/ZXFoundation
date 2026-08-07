@@ -4,7 +4,7 @@
 
 export module zxfoundation.sys.printk_types;
 import zxfoundation.base.types;
-import lib.string_view;
+import std;
 
 export {
 
@@ -27,11 +27,11 @@ namespace zxfoundation::sys::printk {
     /// @note Backends are responsible for the final emission of log strings.
     struct printk_backend {
         /// @brief Backend name for identification.
-        lib::string_view name{};
+        std::string_view name{};
 
         /// @brief Emit a formatted string to the backend.
         /// @param[in] s The string to emit.
-        auto (*emit)(lib::string_view s) noexcept -> void{};
+        auto (*emit)(std::string_view s) noexcept -> void{};
 
         /// @brief Optional initialization for the backend.
         auto (*init)() noexcept -> void{};

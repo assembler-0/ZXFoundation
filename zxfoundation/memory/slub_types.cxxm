@@ -8,17 +8,20 @@ import zxfoundation.base.typestate;
 import zxfoundation.base.config;
 import zxfoundation.rcu.rcu_types;
 import zxfoundation.locking.qspinlock;
+import zxfoundation.scoms.scoms_types;
+import zxfoundation.memory.memory_objects;
+import zxfoundation.memory.numa_types;
 
-import arch.s390x.lib.atomic;
-import arch.s390x.cpu.processor_types;
+import std;
+import arch.s390x.cpu.types;
 
 export {
 
 namespace zxfoundation::memory::slub {
 
     using base::lifecycle_state;
-    using arch::s390x::lib::atomic::atomic;
-    using arch::s390x::lib::atomic::memory_order;
+    using std::atomic;
+    using std::memory_order;
     using arch::s390x::cpu::processor::CACHE_LINE_SIZE;
 
     /// @brief Maximum number of distinct kmem_caches (static table).
@@ -84,13 +87,14 @@ namespace zxfoundation::memory::slub {
         void*          freelist{nullptr};          ///< In-object freelist head (when parked).
         kmem_cache*    cache{nullptr};             ///< Back-pointer to owning kmem_cache.
         u64            phys{0};                    ///< Physical address of this slab frame.
-        u32            inuse{0};                   ///< Live allocated objects.
+        atomic<u32>    inuse{0};                   ///< Live allocated objects.
         u32            objects{0};                 ///< Total objects in this slab.
         u32            rcu_order{0};               ///< PMM order stashed for RCU deferred free.
         u32            slab_order{0};              ///< PMM order of this slab (set once, never changes).
-        u8             frozen{0};                  ///< 1 = CPU-owned (frozen).
-        u8             node_id{0};                 ///< NUMA node (always 0).
-        u16            _pad{0};
+        u8             frozen{0};                  ///< 1 = CPU owns its active freelist.
+        u8             node_id{0};                 ///< PMM-selected NUMA owner node.
+        u8             on_node_partial{0};         ///< Linked in its owner's partial list.
+        u8             _pad{0};
         rcu::rcu_head  rcu{};                      ///< For typesafe_by_rcu deferred free.
     };
     static_assert(sizeof(slab_header) <= 112, "slab_header must fit well within PAGE_SIZE");
@@ -143,11 +147,13 @@ namespace zxfoundation::memory::slub {
         atomic<u64>  stat_free_slab{0};
         atomic<i64>  live_objects{0};
 
-        kmem_cache_node node{};
+        /// Node-local partial lists.  A slab is always parked on the PMM node
+        /// that supplied its backing folio; CPU state is only a fast tier.
+        kmem_cache_node node[numa::MAX_NUMA_NODES]{};
 
         kmem_cache_cpu cpu[base::config::CONFIG_ZX_MAX_CPUS]{};
 
-
+        objects::memory_object_ref authority{};
 
         kmem_cache() noexcept = default;
 

@@ -78,11 +78,13 @@ namespace zxfoundation::gate {
     };
 
     enum class io_op : u32 {
-        bind     = 0,
-        unbind   = 1,
-        submit   = 2,
-        irq_bind = 3,
-        _count   = 4,
+        bind               = 0,
+        unbind             = 1,
+        submit             = 2,
+        irq_bind           = 3, ///< Retired: hard IRQs never enter user gates.
+        dma_extent         = 4,
+        completion_dequeue = 5,
+        _count             = 6,
     };
 
     enum class sgn_op : u32 {
@@ -112,12 +114,17 @@ namespace zxfoundation::gate {
         service_register   = 4,
         service_lookup     = 5,
         service_unregister = 6,
-        _count             = 7,
+        ipc_endpoint_create = 7,
+        ipc_endpoint_destroy = 8,
+        ipc_send = 9,
+        ipc_receive = 10,
+        shm_export = 11,
+        shm_import = 12,
+        shm_map = 13,
+        policy_register = 14,
+        policy_unregister = 15,
+        _count             = 16,
     };
-
-    // -----------------------------------------------------------------
-    // Gate descriptor
-    // -----------------------------------------------------------------
 
     struct gate_desc {
         scoms::kobject ko{};

@@ -1,6 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/init/bootstrap.cxxm
-/// @brief sys/bootstrap — first schedulable kernel domain.
+/// @brief sys/bootstrapd — first schedulable kernel domain.
 ///
 /// Searches boot protocol modules for the init binary, loads the ELF
 /// into a new user-mode domain, and enqueues it on the scheduler.
@@ -24,12 +24,11 @@ import zxfoundation.exec.elf_loader;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.numa;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.psw;
 import arch.s390x.init.zxfl.protocol;
-import arch.s390x.cpu.psw_types;
 import lib.error;
-import lib.expected;
 import lib.cstring;
-import lib.string_view;
+import std;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
@@ -68,7 +67,7 @@ namespace _internal {
             info->size_bytes);
 
         if (!entry_r) [[unlikely]] {
-            perr("bootstrap: elf_load failed for user/init");
+            perr("bootstrap: elf_load failed for user/init: {}", entry_r.error());
             discard_value zxfoundation::scoms::mark_dying(self);
             zxfoundation::sched::schedule();
             return;
@@ -104,7 +103,7 @@ namespace zxfoundation::init::bootstrap {
 
         for (u32 i = 0; i < proto->module_count && i < 16U; ++i) {
             const auto& mod = proto->modules[i];
-            if (lib::string_view(mod.name) == "ZXF.INIT") {
+            if (std::string_view(mod.name) == "ZXF.INIT") {
                 found = &mod;
                 break;
             }
@@ -153,11 +152,16 @@ namespace zxfoundation::init::bootstrap {
         d->primary_strand.cpu = 0;
 
         {
-            d->admin_token = zxfoundation::sys::cap::cap_token::make(
+            auto admin_r = zxfoundation::sys::cap::cap_issue(
                 zxfoundation::sys::cap::cap_type::domain,
                 static_cast<u16>(d->ko.id),
-                static_cast<u16>(d->ko.generation),
-                zxfoundation::sys::cap::cap_rights::admin).raw;
+                zxfoundation::sys::cap::cap_rights::all,
+                d->ko.id);
+            if (!admin_r) {
+                perr("bootstrap: failed to issue init admin capability");
+                return;
+            }
+            d->admin_token = admin_r->raw;
             pverbose("bootstrap: admin token {:#016x} set for domain {} gen={}",
                   d->admin_token, d->ko.id, static_cast<u32>(d->ko.generation));
         }
@@ -166,6 +170,7 @@ namespace zxfoundation::init::bootstrap {
             d,
             _internal::init_domain_entry,
             &_internal::g_init_module_info);
+        d->primary_strand.body->uregs.gprs[10] = d->admin_token;
         zxfoundation::sched::enqueue_domain(d);
 
         pverbose("bootstrap: user/init domain created (id={}), enqueued", d->ko.id);

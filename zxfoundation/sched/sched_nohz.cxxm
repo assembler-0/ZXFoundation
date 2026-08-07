@@ -8,10 +8,8 @@ import zxfoundation.base.config;
 import zxfoundation.sys.timer_types;
 import zxfoundation.sys.timer;
 import lib.error;
-import lib.expected;
-import arch.s390x.lib.atomic;
+import std;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu_types;
 
 export {
 

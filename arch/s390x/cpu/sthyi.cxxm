@@ -1,39 +1,1154 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/sthyi.cxxm
-/// @brief STHYI (Store Hypervisor Information) kernel API.
+/// @brief STHYI (Store Hypervisor Information) types and constants.
+/// @ref IBM z/VM 7.3 CP Programming (chapter 29. STHYI - STORE HYPERVISOR INFORMATION)
 
 export module arch.s390x.cpu.sthyi;
-export import arch.s390x.cpu.sthyi_types;
-import arch.s390x.cpu.processor_types;
 import zxfoundation.base.types;
-import lib.expected;
+import arch.s390x.cpu.types;
+import arch.s390x.cpu.features;
+import lib.cstring;
+import lib.bit;
 import lib.error;
+import lib.charconv;
+import std;
+
+__endian__(BIG);
 
 export {
 
 namespace arch::s390x::cpu::sthyi {
 
-    /// @brief Issue STHYI instruction.
-    /// @param[out] sctns sctns
-    /// @param[out] rc return code
-    /// @return Condition code (0 = success, 1 = partial, 3 = not supported).
-    auto issue(sctns& sctns, u64& rc) -> condition_code {
-        u64 addr = reinterpret_cast<u64>(&sctns);
-        processor::register_pair r1{};
-        processor::register_pair r2{ .even =  addr, .odd = 0 };
-        condition_code cc;
+	enum class sthyi_fc : u8 {
+		processor_capability_function = 0x0,
+		hypervisor_environment_info   = 0x1,
+		guest_list					  = 0x2,
+		designated_guest_info		  = 0x3,
+		resource_pool_list 			  = 0x4,
+		designated_resource_pool_info = 0x5,
+		resource_pool_member_list	  = 0x6
+	};
 
-        __asm__ volatile(
-            ".insn   rre,0xB2560000,%[r1],%[r2]\n"
-            "ipm	 %[cc]\n"
-            "srl	 %[cc],28\n"
-            : [cc] "=d" (cc), [r2] "+&d" (r2.pair)
-            : [r1] "d" (r1.pair)
-            : "cc", "memory");
-        rc = r2.odd;
-        return cc;
-    }
+	enum class sthyi_rc : u32 {
+		ok          		      = 0x00,
+		unsupported_fc		      = 0x04,
+		not_authorized		      = 0x08,
+		invalid_name		      = 0x0c,
+		unknown_none			  = 0x10,
+		response_buffer_too_small = 0x14,
+		unknown					  = 0xff
+	};
 
+	struct sthyi_result {
+		sthyi_rc rc{};
+		condition_code cc{};
+	};
+
+	struct NoBase {};
+	struct NoExt {};
+
+	template <typename Base = NoBase, typename Ext = NoExt>
+	struct infhdr_layout {
+		using base_type = Base;
+		using ext_type  = Ext;
+		static constexpr bool has_base = !std::same_as<Base, NoBase>;
+		static constexpr bool has_ext  = !std::same_as<Ext,  NoExt>;
+	};
+
+	template <typename L> concept has_base_hdr = L::has_base;
+	template <typename L> concept has_ext_hdr  = L::has_ext;
+
+	template <typename L>
+	class infhdr_view {
+	public:
+		explicit infhdr_view(std::span<const std::byte> buf) : buf_(buf) {}
+
+		auto header() const -> const L::base_type& requires has_base_hdr<L> {
+			return *reinterpret_cast<const L::base_type*>(buf_.data());
+		}
+		auto extended_header() const -> const L::ext_type& requires has_ext_hdr<L> {
+			constexpr usize off = has_base_hdr<L> ? sizeof(typename L::base_type) : 0;
+			return *reinterpret_cast<const L::ext_type*>(buf_.data() + off);
+		}
+
+	private:
+		std::span<const std::byte> buf_;
+	};
+
+	struct hvg_pair {
+		u16 hyp_off{}, hyp_len{}, hyp_ver{};
+		u16 gst_off{}, gst_len{}, gst_ver{};
+	};
+
+	struct machine_pair {
+		u16 mac_off{}, mac_len{};
+	};
+
+	struct partition_pair {
+		u16 poff{}, plen{};
+	};
+
+	template <typename HeaderT> struct hvg_leveled_traits;
+	template <typename HeaderT> struct machine_traits;
+	template <typename HeaderT> struct partition_traits;
+
+	template <typename T>
+	[[nodiscard]] auto bounded_section(std::span<const std::byte> buf, u16 off, u16 len) -> std::optional<T> {
+	    if (!len || static_cast<usize>(off) + len > buf.size()) return std::nullopt;
+	    T out{};
+	    lib::memcpy(&out, buf.data() + off, std::min<usize>(len, sizeof(T)));
+	    return out;
+	}
+
+	template <typename LayoutT, typename MacT, typename ParT, typename HypT, typename GstT>
+	class hv_view {
+	public:
+	    explicit hv_view(std::span<const std::byte> buf) : buf_(buf) {}
+
+		[[nodiscard]] auto header() const -> const LayoutT::base_type& requires has_base_hdr<LayoutT> {
+	    	return infhdr_view<LayoutT>{buf_}.header();
+	    }
+
+		[[nodiscard]] auto extended_header() const -> const LayoutT::ext_type& requires has_ext_hdr<LayoutT> {
+	    	return infhdr_view<LayoutT>{buf_}.extended_header();
+	    }
+
+		[[nodiscard]] auto machine() const -> std::optional<MacT> {
+		    auto p = machine_traits<typename LayoutT::ext_type>::at(extended_header());
+			return bounded_section<MacT>(buf_, p.mac_off, p.mac_len);
+	    }
+
+		[[nodiscard]] auto partition() const -> std::optional<ParT> {
+	    	auto p = partition_traits<typename LayoutT::ext_type>::at(extended_header());
+	    	return bounded_section<ParT>(buf_, p.poff, p.plen);
+	    }
+
+	    struct level { std::optional<HypT> hyp{}; std::optional<GstT> gst{}; };
+
+	    class level_iterator {
+	    public:
+	        using value_type = level;
+	    	using difference_type = std::ptrdiff_t;
+	        using iterator_category = std::forward_iterator_tag;
+	        level_iterator() = default;
+	        level_iterator(const hv_view* v, u8 i) : v_(v), i_(i) {}
+	        auto operator*() const -> level {
+	            auto p = hvg_leveled_traits<typename LayoutT::ext_type>::at(v_->extended_header(), i_);
+	            return { bounded_section<HypT>(v_->buf_, p.hyp_off, p.hyp_len),
+	                     bounded_section<GstT>(v_->buf_, p.gst_off, p.gst_len) };
+	        }
+	        auto operator++() -> level_iterator& { ++i_; return *this; }
+	        auto operator++(int) -> level_iterator { auto t = *this; ++i_; return t; }
+	        auto operator==(const level_iterator&) const -> bool = default;
+	    private:
+	        const hv_view* v_ = nullptr; u8 i_ = 0;
+	    };
+
+	    [[nodiscard]] auto begin() const -> level_iterator { return {this, 0}; }
+	    [[nodiscard]] auto end()   const -> level_iterator { return {this, hvg_leveled_traits<typename LayoutT::ext_type>::count(extended_header())}; }
+
+	private:
+	    std::span<const std::byte> buf_;
+	};
+
+	template <typename LayoutT, typename EntryT>
+	class list_view {
+	public:
+		explicit list_view(std::span<const std::byte> buf) : buf_(buf) {}
+
+		[[nodiscard]] auto header() const -> const LayoutT::base_type& requires has_base_hdr<LayoutT> {
+			return infhdr_view<LayoutT>{buf_}.header();
+		}
+
+		[[nodiscard]] auto extended_header() const -> const LayoutT::ext_type& requires has_ext_hdr<LayoutT> {
+			return infhdr_view<LayoutT>{buf_}.extended_header();
+		}
+
+		[[nodiscard]] auto required_pages() const -> u16 { return header().infcrqsz; }
+
+		class iterator {
+		public:
+			using value_type        = EntryT;
+			using difference_type   = std::ptrdiff_t;
+			using iterator_category = std::forward_iterator_tag;
+
+			iterator() = default;
+			iterator(const std::byte* base, u16 stride, u32 idx) : base_(base), stride_(stride), idx_(idx) {}
+
+			auto operator*() const -> EntryT {
+				EntryT out{};
+				lib::memcpy(&out, base_ + static_cast<usize>(idx_) * stride_,
+							std::min<usize>(stride_, sizeof(EntryT)));
+				return out;
+			}
+			auto operator++() -> iterator& { ++idx_; return *this; }
+			auto operator++(int) -> iterator { auto t = *this; ++idx_; return t; }
+			auto operator==(const iterator&) const -> bool = default;
+
+		private:
+			const std::byte* base_ = nullptr;
+			u16 stride_ = 0;
+			u32 idx_ = 0;
+		};
+
+		[[nodiscard]] auto begin() const -> iterator {
+			auto& c = header();
+			if (!c.infclsof || !c.infcenln || !c.infccten) return end();
+			return { buf_.data() + c.infclsof, c.infcenln, 0 };
+		}
+		[[nodiscard]] auto end() const -> iterator {
+			auto& c = header();
+			u32 max_fit = (c.infcenln && c.infclsof <= buf_.size())
+				? static_cast<u32>((buf_.size() - c.infclsof) / c.infcenln) : 0;
+			return { buf_.data() + c.infclsof, c.infcenln, std::min(c.infccten, max_fit) };
+		}
+
+	private:
+		std::span<const std::byte> buf_;
+	};
+
+	template <sthyi_fc Fc> struct sthyi_traits;
+
+	template <> struct sthyi_traits<sthyi_fc::processor_capability_function> {
+		using pb_type = std::array<std::byte, PAGE_SIZE>;
+		static constexpr bool fixed_size   = true;
+		static constexpr bool requires_key = false;
+	};
+	template <> struct sthyi_traits<sthyi_fc::hypervisor_environment_info> {
+		using pb_type = std::array<std::byte, PAGE_SIZE>;
+		static constexpr bool fixed_size   = true;
+		static constexpr bool requires_key = false;
+	};
+	template <> struct sthyi_traits<sthyi_fc::guest_list> {
+		using pb_type = std::span<std::byte>;
+		static constexpr bool fixed_size   = false;
+		static constexpr bool requires_key = false;
+	};
+	template <> struct sthyi_traits<sthyi_fc::designated_guest_info> {
+		using pb_type = std::array<std::byte, PAGE_SIZE>;
+		static constexpr bool fixed_size   = true;
+		static constexpr bool requires_key = true;
+	};
+	template <> struct sthyi_traits<sthyi_fc::resource_pool_list> {
+		using pb_type = std::span<std::byte>;
+		static constexpr bool fixed_size   = false;
+		static constexpr bool requires_key = false;
+	};
+	template <> struct sthyi_traits<sthyi_fc::designated_resource_pool_info> {
+		using pb_type = std::array<std::byte, PAGE_SIZE>;
+		static constexpr bool fixed_size   = true;
+		static constexpr bool requires_key = true;
+	};
+	template <> struct sthyi_traits<sthyi_fc::resource_pool_member_list> {
+		using pb_type = std::span<std::byte>;
+		static constexpr bool fixed_size   = false;
+		static constexpr bool requires_key = true;
+	};
+
+	namespace detail {
+
+		template <sthyi_fc Fc>
+		auto invoke(void* buf, u16 num_pages, u64 key) -> std::expected<sthyi_result, lib::kernel_error> {
+			if (!features::has(features::facility::store_hypervisor_info))
+				return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_supported));
+			processor::register_pair r1{ .odd = key };
+			lib::bit_insert_msb<u64>(r1.even, 48, 63, std::to_underlying(Fc));
+			if constexpr (!sthyi_traits<Fc>::fixed_size)
+				lib::bit_insert_msb<u64>(r1.even, 32, 47, num_pages);
+
+			processor::register_pair r2{ .even = reinterpret_cast<u64>(buf), .odd = 0 };
+			condition_code cc;
+
+			__asm__ volatile(
+				".insn   rre,0xB2560000,%[r1],%[r2]\n"
+				"ipm     %[cc]\n"
+				"srl     %[cc],28\n"
+				: [cc] "=d" (cc), [r2] "+&d" (r2.pair)
+				: [r1] "d" (r1.pair)
+				: "cc", "memory");
+
+			auto rc = static_cast<sthyi_rc>(r2.odd);
+			return sthyi_result { cc == 0 ? sthyi_rc::ok : rc, cc };
+		}
+
+	} // namespace detail
+
+	struct sthyi_key {
+		u64 raw{};
+
+		static constexpr auto from_ascii(std::string_view name) -> sthyi_key {
+			u64 v = 0;
+			for (usize i = 0; i < 8; ++i)
+				v = (v << 8) | (i < name.size() ? lib::charconv::ascii_to_ebcdic(name[i]) : 0x40);
+			return { v };
+		}
+	};
+
+	template <sthyi_fc Fc>
+		requires (sthyi_traits<Fc>::fixed_size && !sthyi_traits<Fc>::requires_key)
+	auto invoke(typename sthyi_traits<Fc>::pb_type& pb)
+		-> std::expected<sthyi_result, lib::kernel_error>
+	{
+		if (reinterpret_cast<u64>(pb.data()) & 0xFFF)
+			return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+		return detail::invoke<Fc>(pb.data(), 0, 0);
+	}
+
+	template <sthyi_fc Fc>
+		requires (sthyi_traits<Fc>::fixed_size && sthyi_traits<Fc>::requires_key)
+	auto invoke(typename sthyi_traits<Fc>::pb_type& pb, sthyi_key key)
+		-> std::expected<sthyi_result, lib::kernel_error>
+	{
+		if (reinterpret_cast<u64>(pb.data()) & 0xFFF)
+			return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+		return detail::invoke<Fc>(pb.data(), 0, key.raw);
+	}
+
+	template <sthyi_fc Fc>
+		requires (!sthyi_traits<Fc>::fixed_size && !sthyi_traits<Fc>::requires_key)
+	auto invoke(typename sthyi_traits<Fc>::pb_type& pb)
+		-> std::expected<sthyi_result, lib::kernel_error>
+	{
+		if (!(pb.size() && !(pb.size() % PAGE_SIZE)))
+			return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+		return detail::invoke<Fc>(pb.data(), static_cast<u16>(pb.size() / PAGE_SIZE), 0);
+	}
+
+	template <sthyi_fc Fc>
+		requires (!sthyi_traits<Fc>::fixed_size && sthyi_traits<Fc>::requires_key)
+	auto invoke(typename sthyi_traits<Fc>::pb_type& pb, sthyi_key key) -> std::expected<sthyi_result, lib::kernel_error> {
+		if (!(pb.size() && !(pb.size() % PAGE_SIZE)))
+			return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+		return detail::invoke<Fc>(pb.data(), static_cast<u16>(pb.size() / PAGE_SIZE), key.raw);
+	}
+
+	struct [[gnu::packed]] inf0hdyg {
+		u16 infyoff{};
+		u16 infylen{};
+		u16 infgoff{};
+		u16 infglen{};
+	};
+	assert_size(inf0hdyg, 0x8);
+
+	constexpr u8 INF0YGMX = 3;
+
+	struct [[gnu::packed]] inf0hdr {
+		union {
+			uchar infhflg1{};
+			struct {
+				bitfield(infgpdu);
+				bitfield(infsthyi);
+				bitfield(infvsi);
+				bitfield(infbasic);
+				bitrsvd(4);
+			};
+		};
+		uchar infhflg2{};
+		uchar infhval1{};
+		uchar infhval2{};
+		bytersvd(3){};
+		u8 infhygct{};
+		u16 infhtotl{};
+		u16 infhdln{};
+		u16 infmoff{};
+		u16 infmlen{};
+		u16 infpoff{};
+		u16 infplen{};
+		inf0hdyg infhygs[3]{};
+		bytersvd(4){};
+	};
+	assert_size(inf0hdr, 0x30);
+
+	struct [[gnu::packed]] inf0mac {
+		union {
+			uchar infmflg1{};
+			struct {
+				bitfield(infmpool);
+				bitrsvd(7);
+			};
+		};
+		uchar infmflg2{};
+		union {
+			uchar infmval1{};
+			struct {
+				bitfield(infmproc);
+				bitfield(infmmid);
+				bitfield(infmmnam);
+				bitfield(infmplnv);
+				bitfield(infmziipv);
+				bitrsvd(3);
+			};
+		};
+		uchar infmval2{};
+		u16 infmscps{};
+		u16 infmdcps{};
+		u16 infmsifl{};
+		u16 infmdifl{};
+		uchar infmname[8]{};
+		uchar infmtype[4]{};
+		uchar infmmanu[16]{};
+		uchar infmseq[16]{};
+		uchar infmpman[4]{};
+		bytersvd(4){};
+		u64 infmplnm{};
+		u16 infmsziip{};
+		u16 infmdziip{};
+		bytersvd(4){};
+	};
+	assert_size(inf0mac, 0x50);
+
+	struct [[gnu::packed]] inf0par {
+		union {
+			uchar infpflg1{};
+			struct {
+				bitfield(infpmten);
+				bitfield(infppool);
+				bitrsvd(6);
+			};
+		};
+		uchar infpflg2{};
+		union {
+			uchar infpval1{};
+			struct {
+				bitfield(infpproc);
+				bitfield(infpwbcc);
+				bitfield(infpacc);
+				bitfield(infppid);
+				bitfield(infplgvl);
+				bitfield(infpplnv);
+				bitfield(infpziipv);
+				bitrsvd(1);
+			};
+		};
+		uchar infpval2{};
+		u16 infppnum{};
+		u16 infpscps{};
+		u16 infpdcps{};
+		u16 infpsifl{};
+		u16 infpdifl{};
+		bytersvd(2){};
+		uchar infppnam[8]{};
+		u32 infpwbcp{};
+		u32 infpabcp{};
+		u32 infpwbif{};
+		u32 infpabif{};
+		uchar infplgnm[8]{};
+		u32 infplgcp{};
+		u32 infplgif{};
+		uchar infpplnm[8]{};
+		i16 infpsziip{};
+		i16 infpdziip{};
+		i16 infpwbziip{};
+		bytersvd(2){};
+		i32 infpabziip{};
+		i32 infplgziip{};
+	};
+	assert_size(inf0par, 0x50);
+
+	enum class inf0hyp_infytype : u8 {
+		infytvm   = 0x1,
+		infytkvm  = 0x2,
+		infytzcx  = 0x3
+	};
+
+	union [[gnu::packed]] inf0hyp_infyins {
+		uchar infyins{};
+		struct {
+			bitfield(infyfccp);
+			bitfield(infyhyp);
+			bitfield(infygls);
+			bitfield(infygst);
+			bitfield(infyfpls);
+			bitfield(infyfpds);
+			bitfield(infyfpml);
+			bitrsvd(1);
+		};
+	};
+	assert_size(inf0hyp_infyins, 1);
+
+	union [[gnu::packed]] inf0hyp_infyaut {
+		uchar infyaut{};
+		struct {
+			bitfield(infyfccp);
+			bitfield(infyhyp);
+			bitfield(infygls);
+			bitfield(infygst);
+			bitfield(infyfpls);
+			bitfield(infyfpds);
+			bitfield(infyfpml);
+			bitrsvd(1);
+		};
+	};
+	assert_size(inf0hyp_infyaut, 1);
+
+	struct [[gnu::packed]] inf0hyp {
+		union {
+			uchar infyflg1{};
+			struct {
+				bitfield(infymcn);
+				bitfield(infympr);
+				bitfield(infymten);
+				bitrsvd(5);
+			};
+		};
+		uchar infyflg2{};
+		union {
+			uchar infyval1{};
+			struct {
+				bitfield(infyziipv);
+				bitrsvd(7);
+			};
+		};
+		uchar infyval2{};
+		inf0hyp_infytype infytype{};
+		bytersvd(1){};
+		uchar infycpt{};
+		uchar infyiflt{};
+		uchar infysyid[8]{};
+		uchar infclnm[8]{};
+		u16 infyscps{};
+		u16 infydcps{};
+		u16 infysifl{};
+		u16 infydifl{};
+		union {
+			uchar infyinsf[8]{};
+			inf0hyp_infyins infyins[8];
+		};
+		union {
+			uchar infyautf[8]{};
+			inf0hyp_infyaut infyaut[8];
+		};
+		uchar infyziipt{};
+		bytersvd(1){};
+		i16 infysziip{};
+		bytersvd(4){};
+	};
+	assert_size(inf0hyp, 0x38);
+
+	enum class inf0gst_infgcpdt : u8 {
+		infgpuccp   = 0x00,
+		infgpucifl  = 0x03,
+		infgpuczip  = 0x05,
+		infgpuczcp  = 0xff,
+	};
+
+	enum class inf0gst_infgifdt : u8 {
+		infgpuccp   = 0x00,
+		infgpucifl  = 0x03,
+		infgpuczip  = 0x05,
+		infgpuczcp  = 0xff,
+	};
+
+	enum class inf0gst_infgziipdt : u8 {
+		infgpuccp   = 0x00,
+		infgpucifl  = 0x03,
+		infgpuczip  = 0x05,
+		infgpuczcp  = 0xff,
+	};
+
+	struct [[gnu::packed]] inf0gst {
+		union {
+			uchar infgflg1{};
+			struct {
+				bitfield(infgmob);
+				bitfield(infgmcpt);
+				bitfield(infgcplh);
+				bitfield(infgiglh);
+				bitfield(infgvpt);
+				bitfield(infgvift);
+				bitfield(infgziiph);
+				bitfield(infgziipt);
+			};
+		};
+		uchar infgflg2{};
+		union {
+			uchar infgval1{};
+			struct {
+				bitfield(infyziipv);
+				bitrsvd(7);
+			};
+		};
+		uchar infgval2{};
+		uchar infgusid[8]{};
+		u16 infgscps{};
+		u16 infgpcps{};
+		inf0gst_infgcpdt infgcpdt{};
+		bytersvd(3);
+		u32 infgcpcc{};
+		u16 infgsifl{};
+		u16 infgdifl{};
+		inf0gst_infgifdt infgifdt{};
+		bytersvd(3);
+		u32 infgifcc{};
+		union {
+			uchar infgpflg{};
+			struct {
+				bitfield(infgpclh);
+				bitfield(infgpcpc);
+				bitfield(infgpilh);
+				bitfield(infgpifc);
+				bitfield(infprctm);
+				bitfield(infgpzlh);
+				bitfield(infgpzpc);
+				bitrsvd(1);
+			};
+		};
+		bytersvd(3);
+		uchar infgpnam[8]{};
+		u32 infgpccc{};
+		u32 infgpicc{};
+		i16 infgsziip{};
+		inf0gst_infgziipdt infgziipdt{};
+		bytersvd(1);
+		i32 infgziipcc{};
+		i32 infgpzcc{};
+		bytersvd(4);
+	};
+	assert_size(inf0gst, 0x48);
+
+	template <>
+	struct hvg_leveled_traits<inf0hdr> {
+		static auto count(const inf0hdr& h) -> u8 { return std::min<u8>(h.infhygct, 3); }
+		static auto at(const inf0hdr& h, u8 i) -> hvg_pair {
+			auto& e = h.infhygs[i];
+			return { e.infyoff, e.infylen, 0, e.infgoff, e.infglen, 0 };
+		}
+	};
+
+	template <>
+	struct machine_traits<inf0hdr> {
+		static auto at(const inf0hdr& h) -> machine_pair {
+			return { h.infmoff, h.infmlen };
+		}
+	};
+
+	template <>
+	struct partition_traits<inf0hdr> {
+		static auto at(const inf0hdr& h) -> partition_pair {
+			return { h.infpoff, h.infplen };
+		}
+	};
+
+	using inf0hdr_layout = infhdr_layout<NoBase, inf0hdr>;
+	using inf0view = hv_view<inf0hdr_layout, inf0mac, inf0par, inf0hyp, inf0gst>;
+
+	struct [[gnu::packed]] infchdr {
+		u16 infcvrsn{};
+		u16 infchdln{};
+		u32 infctotl{};
+		u16 infcrqsz{};
+		u16 infclsof{};
+		u16 infcenln{};
+		bytersvd(2){};
+		u32 infccten{};
+		bytersvd(4){};
+		bytersvd(24){};
+		u64 infcfcus[2]{};
+	};
+	assert_size(infchdr, 0x40);
+
+	struct inf1yghd {
+		u16 inf1yof{};
+		u16 inf1yln{};
+		u16 inf1yvr{};
+		bytersvd(2){};
+		u16 inf1gof{};
+		u16 inf1gln{};
+		u16 inf1gvr{};
+		bytersvd(2){};
+	};
+	assert_size(inf1yghd, 0x10);
+
+	struct [[gnu::packed]] inf1hdr {
+		union {
+			uchar inf1hfl1{};
+			struct {
+				bitfield(inf1gdpu);
+				bitfield(inf1sthy);
+				bitfield(inf1vsi);
+				bitfield(inf1basc);
+				bitfield(inf1fcfc);
+				bitfield(inf1fcau);
+				bitrsvd(2);
+			};
+		};
+		uchar inf1hfl2{};
+		uchar inf1hvl1{};
+		uchar inf1hvl2{};
+		bytersvd(3){};
+		u8 inf1hygc{};
+		u16 inf1moff{};
+		u16 inf1mlen{};
+		u16 infpoff{};
+		u16 infplen{};
+		inf1yghd inf1hyg[3];
+	};
+	assert_size(inf1hdr, 0x40);
+
+	struct [[gnu::packed]] inf1mac {
+		union {
+			uchar inf1mfl1{};
+			struct {
+				bitfield(inf1mpool);
+				bitrsvd(7);
+			};
+		};
+		uchar inf1mfl2{};
+		union {
+			uchar inf1mvl1{};
+			struct {
+				bitfield(inf1mproc);
+				bitfield(inf1midv);
+				bitfield(inf1mnmv);
+				bitfield(inf1mplnv);
+				bitrsvd(4);
+			};
+		};
+		uchar inf1mvl2{};
+		u16 inf1mscp{};
+		u16 inf1mdcp{};
+		u16 inf1msif{};
+		u16 inf1mdif{};
+		uchar inf1mtyp[4]{};
+		uchar inf1mnam[8]{};
+		uchar inf1mmam[16]{};
+		uchar inf1mseq[16]{};
+		uchar inf1mpma[4]{};
+		bytersvd(4);
+		uchar inf1mplnm[8]{};
+	};
+	assert_size(inf1mac, 0x48);
+
+	enum class inf1par_inf1pcmod : u8 {
+		inf1pcmgn   = 0x80,
+		inf1pcmli   = 0x40,
+		inf1pcmvn   = 0x20,
+		inf1puvifl  = 0x10
+	};
+
+	enum class inf1par_inf1prcpu : u8 {
+		inf1puccp   = 0x00,
+		inf1pucifl  = 0x03
+	};
+
+	struct [[gnu::packed]] inf1par {
+		union {
+			uchar inf1pfl1{};
+			struct {
+				bitfield(inf1pmte);
+				bitfield(inf1ppool);
+				bitfield(inf1pwtfl);
+				bitrsvd(5);
+			};
+		};
+		uchar inf1pfl2{};
+		union {
+			uchar inf1pvl1{};
+			struct {
+				bitfield(inf1pprc);
+				bitfield(inf1pwcv);
+				bitfield(inf1pacc);
+				bitfield(inf1pidv);
+				bitfield(inf1plgv);
+				bitfield(inf1pplnv);
+				bitfield(inf1penv);
+				bitfield(inf1putv);
+			};
+		};
+		uchar inf1pvl2{};
+		u16 inf1pscp{};
+		u16 inf1pdcp{};
+		u16 inf1psif{};
+		u16 inf1pdif{};
+		u16 inf1ppnu{};
+		inf1par_inf1pcmod inf1pcmod{};
+		inf1par_inf1prcpu inf1prcpu{};
+		uchar inf1ppna[8]{};
+		u32 inf1pwbc{};
+		u32 inf1pabc{};
+		u32 inf1pwbi{};
+		u32 inf1pabi{};
+		uchar inf1pgln[8]{};
+		u32 inf1plgc{};
+		u32 inf1plgi{};
+		uchar inf1pplnm[8]{};
+		u32 inf1penc{};
+		u32 inf1peni{};
+		u64 inf1pxsca{};
+		u64 inf1psxia{};
+		u32 inf1psxcc{};
+		u32 inf1psxic{};
+		u64 inf1pucpa{};
+		u64 inf1puifa{};
+		u32 inf1pucpc{};
+		u32 inf1pcuifc{};
+		u64 inf1pguca{};
+		u64 inf1pguia{};
+		u32 inf1pgucc{};
+		u32 inf1pguic{};
+		u64 inf1putod{};
+		u64 inf1pactc{};
+		u64 inf1plptc{};
+		u64 inf1poltc{};
+		u64 inf1pwttc{};
+		u64 inf1pmtic{};
+		u64 inf1pacti{};
+		u64 inf1plpti{};
+		u64 inf1polti{};
+		u64 inf1pwtti{};
+		u64 inf1pmtii{};
+	};
+	assert_size(inf1par, 0xe8);
+
+	enum class inf1hyp_inf1ypkf : u8 {
+		inf1yplg   = 0x00,
+		inf1ypmd   = 0x01,
+		inf1ypsm   = 0x02,
+	};
+
+	enum class inf1hyp_inf1yxusc : u8 {
+		inf1yxhi   = 0x10,
+		inf1yxmd   = 0x08,
+		inf1yxlo   = 0x01,
+		inf1yxno   = 0x02,
+	};
+
+	enum class inf1hyp_inf1yxusi : u8 {
+		inf1yxhi   = 0x10,
+		inf1yxmd   = 0x08,
+		inf1yxlo   = 0x01,
+		inf1yxno   = 0x02,
+	};
+
+	struct [[gnu::packed]] inf1hyp {
+		union {
+			uchar inf1yfl1{};
+			struct {
+				bitfield(inf1ylmc);
+				bitfield(inf1ylmp);
+				bitfield(inf1ymte);
+				bitfield(inf1yvrt);
+				bitrsvd(4);
+			};
+		};
+		uchar inf1yfl2{};
+		uchar inf1yvl1{};
+		uchar inf1yvl2{};
+		u8 inf1ytyp{};
+		bytersvd(1);
+		uchar inf1ycpt{};
+		uchar inf1yift{};
+		uchar inf1ysid[8]{};
+		uchar inf1ycln[8]{};
+		u16 inf1yscp{};
+		u16 inf1ydcp{};
+		u16 inf1ysif{};
+		u16 inf1ydif{};
+		u32 inf1yasc{};
+		u32 inf1yasi{};
+		u32 inf1yrsc{};
+		u32 inf1yrsi{};
+		u32 inf1ylcc{};
+		u32 inf1ylci{};
+		u32 inf1ymonh{};
+		inf1hyp_inf1ypkf inf1ypkf{};
+		inf1hyp_inf1yxusc inf1yxusc{};
+		inf1hyp_inf1yxusi inf1yxusi{};
+		bytersvd(1);
+		u32 inf1ypadc{};
+		u32 inf1ypadi{};
+		u64 inf1yutod{};
+		u64 inf1yutc{};
+		u64 inf1yuti{};
+		u64 inf1ystc{};
+		u64 inf1ysti{};
+		u64 inf1ywtc{};
+		u64 inf1ywti{};
+		u64 inf1ypti{};
+		u64 inf1yptc{};
+	};
+	assert_size(inf1hyp, 0x90);
+
+	enum class inf3dst_inf3gcmod : u8 {
+		inf3gcmgn   = 0x80,
+		inf3gcmli   = 0x40,
+		inf3gcmvn   = 0x20,
+		inf3gcmcf   = 0x10,
+	};
+
+	enum class inf3dst_inf3gprtp : u8 {
+		inf3puccp    = 0x00,
+		inf3pucifl   = 0x03,
+	};
+
+	enum class inf3dst_inf3ccdt : u8 {
+		inf3puccp = 0x00,
+		inf3pucifl = 0x03
+	};
+	enum class inf3dst_inf3cidt : u8 {
+		inf3puccp = 0x00,
+		inf3pucifl = 0x03
+	};
+
+	struct [[gnu::packed]] inf3gst {
+		uchar inf3guid[8]{};
+		uchar inf3gacn[8]{};
+		union {
+			uchar inf3flg{};
+			struct {
+				bitfield(inf3gmob);
+				bitrsvd(3);
+				bitfield(inf3glini);
+				bitfield(inf3linh);
+				bitrsvd(2);
+			};
+		};
+		uchar inf3gval;
+		inf3dst_inf3gcmod inf3gmod{};
+		inf3dst_inf3gprtp inf3gprtp{};
+		u32 inf3gtod{};
+		u8 inf3pgna[8]{};
+		u32 inf3giwsc{};
+		u32 inf3gcfsc{};
+		u32 inf3gsmsc{};
+		u32 inf3gpwsc{};
+		u32 inf3glsc{};
+		u32 inf3gdsc{};
+		u32 inf3gcsc{};
+		u32 inf3gessc{};
+		u32 inf3gldsc{};
+		u32 inf3gdlsc{};
+		u32 inf3gdssc{};
+		u32 inf3giasc{};
+		u32 inf3gtisc{};
+		u32 inf3gtssc{};
+		u32 inf3gpasc{};
+		u32 inf3gosc{};
+		u32 inf3gtsc{};
+		u32 inf3giwsi{};
+		u32 inf3gcfsi{};
+		u32 inf3gsmsi{};
+		u32 inf3gpwsi{};
+		u32 inf3glsi{};
+		u32 inf3gdsi{};
+		u32 inf3gcsi{};
+		u32 inf3gessi{};
+	    u32 inf3gldsi{};
+	    u32 inf3gdlsi{};
+	    u32 inf3gdssi{};
+	    u32 inf3giasi{};
+	    u32 inf3gtisi{};
+	    u32 inf3gtssi{};
+	    u32 inf3gpasi{};
+	    u32 inf3gosi{};
+	    u32 inf3gtsi{};
+
+	    union {
+	        uchar inf3cflg{};
+	        struct {
+	            bitrsvd(1);
+	            bitfield(inf3cmct);
+	            bitfield(inf3cvct);
+	            bitfield(inf3cvit);
+	            bitrsvd(4);
+	        };
+	    };
+	    union {
+	        uchar inf3caffn{};
+	        struct {
+	            bitfield(inf3cafon);
+	            bitfield(inf3cafsup);
+	            bitrsvd(6);
+	        };
+	    };
+	    u16 inf3cmcpu{};
+	    bytersvd(4){};
+	    u64 inf3ctcpp{};
+	    u64 inf3ctcps{};
+	    u64 inf3ctcrp{};
+	    u64 inf3ctcrs{};
+	    u16 inf3cscp{};
+	    u16 inf3cdcp{};
+	    u16 inf3crcp{};
+	    bytersvd(2){};
+	    inf3dst_inf3ccdt inf3ccdt{};
+	    union {
+	        uchar inf3ccscf{};
+	        struct {
+	            bitrsvd(1);
+	            bitfield(inf3cclhc);
+	            bitfield(inf3ccnac);
+	            bitfield(inf3ccmac);
+	            bitrsvd(4);
+	        };
+	    };
+	    union {
+	        uchar inf3ciscf{};
+	        struct {
+	            bitrsvd(1);
+	            bitfield(inf3cilhc);
+	            bitfield(inf3cinac);
+	            bitfield(inf3cimac);
+	            bitrsvd(4);
+	        };
+	    };
+	    bytersvd(1){};
+	    u32 inf3ccnsc{};
+	    u32 inf3ccasc{};
+	    u32 inf3ccmsc{};
+	    u32 inf3cinsc{};
+	    u32 inf3ciasc{};
+	    u32 inf3cimsc{};
+	    bytersvd(4){};
+	    u64 inf3ctipp{};
+	    u64 inf3ctips{};
+	    u64 inf3ctirp{};
+	    u64 inf3ctirs{};
+	    u16 inf3csif{};
+	    u16 inf3cdif{};
+	    u16 inf3crif{};
+	    bytersvd(2){};
+	    inf3dst_inf3cidt inf3cidt{};
+	    union {
+	        uchar inf3ccsif{};
+	        struct {
+	            bitrsvd(1);
+	            bitfield(inf3cclhi);
+	            bitfield(inf3ccnai);
+	            bitfield(inf3ccmai);
+	            bitrsvd(4);
+	        };
+	    };
+	    union {
+	        uchar inf3cisif{};
+	        struct {
+	            bitrsvd(1);
+	            bitfield(inf3cilhi);
+	            bitfield(inf3cinai);
+	            bitfield(inf3cimai);
+	            bitrsvd(4);
+	        };
+	    };
+	    bytersvd(1){};
+	    u32 inf3ccnsi{};
+	    u32 inf3ccasi{};
+	    u32 inf3ccmsi{};
+	    u32 inf3cinsi{};
+	    u32 inf3ciasi{};
+	    u32 inf3cimsi{};
+	    bytersvd(4){};
+	};
+	assert_size(inf3gst, 0x140);
+
+	using inf1gst = inf3gst;
+
+	template <>
+	struct hvg_leveled_traits<inf1hdr> {
+		static auto count(const inf1hdr& h) -> u8 { return std::min<u8>(h.inf1hygc, 3); }
+		static auto at(const inf1hdr& h, u8 i) -> hvg_pair {
+			auto& e = h.inf1hyg[i];
+			return { e.inf1yof, e.inf1yln, e.inf1yvr, e.inf1gof, e.inf1gln, e.inf1gvr };
+		}
+	};
+
+	template <>
+	struct machine_traits<inf1hdr> {
+		static auto at(const inf1hdr& h) -> machine_pair {
+			return { h.inf1moff, h.inf1mlen };
+		}
+	};
+
+	template <>
+	struct partition_traits<inf1hdr> {
+		static auto at(const inf1hdr& h) -> partition_pair {
+			return { h.infpoff, h.infplen };
+		}
+	};
+
+	using inf1hdr_layout = infhdr_layout<infchdr, inf1hdr>;
+	using inf1view = hv_view<inf1hdr_layout, inf1mac, inf1par, inf1hyp, inf1gst>;
+
+	struct [[gnu::packed]] inf2gst {
+		uchar infguid[8]{};
+		uchar infgacn[8]{};
+		u32   infgtod{};
+		union {
+			uchar infgflg{};
+			struct {
+				bitrsvd(4);
+				bitfield(infglini);
+				bitfield(infglinh);
+				bitrsvd(2);
+			};
+		};
+		u8    infgcmod{};
+		union {
+			uchar infgaffn{};
+			struct {
+				bitfield(infgafon);
+				bitfield(infgafsup);
+				bitrsvd(6);
+			};
+		};
+		u8    infgprtp{};
+		u8    infgprdt{};
+		bytersvd(7){};
+	};
+	assert_size(inf2gst, 0x20);
+
+	using inf2hdr_layout = infhdr_layout<infchdr>;
+	using inf2view = list_view<inf2hdr_layout, inf2gst>;
+
+	struct [[gnu::packed]] inf4pool {
+		uchar inf4pnam[8]{};
+		uchar inf4pcre[8]{};
+	};
+	assert_size(inf4pool, 0x10);
+
+	using inf4hdr_layout = infhdr_layout<infchdr>;
+	using inf4view = list_view<inf4hdr_layout, inf4pool>;
+
+	struct [[gnu::packed]] inf5hdr {
+		uchar inf5plna[8]{};
+		uchar inf5pcre[8]{};
+		u64 inf5stmp{};
+		union {
+			uchar inf5cflg{};
+			struct {
+				bitfield(inf5cclc);
+				bitfield(inf5cccc);
+				bitfield(inf5cilc);
+				bitfield(inf5cicc);
+				bitfield(inf5cpct);
+				bitfield(inf5csup);
+				bitrsvd(2);
+			};
+		};
+		bytersvd(3);
+		u32 ifn5clim{};
+		u64 inf5ctim{};
+		u32 inf5clmn{};
+		u32 inf5cctl{};
+		u64 inf5ctml{};
+		u32 inf5cifla{};
+		bytersvd(4);
+	};
+	assert_size(inf5hdr, 0x40);
+
+	using inf5hdr_layout = infhdr_layout<infchdr, inf5hdr>;
+	using inf5view = infhdr_view<inf5hdr_layout>;
+
+	struct [[gnu::packed]] inf6hdr {
+		uchar inf6plna[8]{};
+	};
+
+	struct [[gnu::packed]] inf6mem {
+		uchar inf6mnam[8]{};
+	};
+
+	using inf6hdr_layout = infhdr_layout<infchdr, inf6hdr>;
+	using inf6view = list_view<inf6hdr_layout, inf6hdr_layout>;
+	
 } // namespace arch::s390x::cpu::sthyi
 
 } // end export

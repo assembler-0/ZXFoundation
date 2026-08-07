@@ -4,18 +4,13 @@
 
 export module lib.static_vector;
 import zxfoundation.base.types;
-import lib.concepts;
-import lib.type_traits;
-import lib.util;
-import lib.placementnew;
-import lib.expected;
 import lib.error;
 import lib.format;
-import lib.span;
+import std;
 
 export {
 
-namespace lib {
+namespace lib{
 
     /// @brief A contiguous sequence of up to @p N elements stored entirely
     /// @tparam T  Element type.
@@ -55,7 +50,7 @@ namespace lib {
 
         /// @brief Copy constructor.
         static_vector(const static_vector& o)
-            requires is_copy_constructible_v<T>
+            requires std::is_copy_constructible_v<T>
             : m_size(0) {
             for (usize i = 0; i < o.m_size; ++i)
                 new(slot(m_size++)) T(*o.slot(i));
@@ -63,15 +58,15 @@ namespace lib {
 
         /// @brief Move constructor.
         static_vector(static_vector&& o)
-            requires is_move_constructible_v<T>
+            requires std::is_move_constructible_v<T>
             : m_size(0) {
             for (usize i = 0; i < o.m_size; ++i)
-                new(slot(m_size++)) T(lib::move(*o.slot(i)));
+                new(slot(m_size++)) T(std::move(*o.slot(i)));
             o.clear();
         }
 
         auto operator=(const static_vector& o) noexcept -> static_vector&
-            requires is_copy_constructible_v<T> {
+            requires std::is_copy_constructible_v<T> {
             if (this != &o) {
                 clear();
                 for (usize i = 0; i < o.m_size; ++i) new(slot(m_size++)) T(*o.slot(i));
@@ -80,10 +75,10 @@ namespace lib {
         }
 
         auto operator=(static_vector&& o) noexcept -> static_vector&
-            requires is_move_constructible_v<T> {
+            requires std::is_move_constructible_v<T> {
             if (this != &o) {
                 clear();
-                for (usize i = 0; i < o.m_size; ++i) new(slot(m_size++)) T(lib::move(*o.slot(i)));
+                for (usize i = 0; i < o.m_size; ++i) new(slot(m_size++)) T(std::move(*o.slot(i)));
                 o.clear();
             }
             return *this;
@@ -115,38 +110,38 @@ namespace lib {
         [[nodiscard]] auto end() const noexcept -> const_iterator { return slot(m_size); }
 
         /// @brief Non-owning view over the live elements.
-        [[nodiscard]] auto as_span() noexcept -> lib::span<T> {
+        [[nodiscard]] auto as_span() noexcept -> std::span<T> {
             return {slot(0), m_size};
         }
 
-        [[nodiscard]] auto as_span() const noexcept -> lib::span<const T> {
+        [[nodiscard]] auto as_span() const noexcept -> std::span<const T> {
             return {slot(0), m_size};
         }
 
         /// @brief Append a copy of @p val.
         /// @return expected<void, kernel_error>: err(generic::out_of_range) when full.
-        auto push_back(const T& val) noexcept -> expected<void, kernel_error> {
+        auto push_back(const T& val) noexcept -> std::expected<void, lib::kernel_error> {
             if (m_size == N) [[unlikely]]
-                return unexpected(kernel_error::from_generic(generic_error::out_of_range));
+                return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::out_of_range));
             new(slot(m_size++)) T(val);
             return {};
         }
 
         /// @brief Append by moving @p val.
-        auto push_back(T&& val) noexcept -> expected<void, kernel_error> {
+        auto push_back(T&& val) noexcept -> std::expected<void, lib::kernel_error> {
             if (m_size == N) [[unlikely]]
-                return unexpected(kernel_error::from_generic(generic_error::out_of_range));
-            new(slot(m_size++)) T(lib::move(val));
+                return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::out_of_range));
+            new(slot(m_size++)) T(std::move(val));
             return {};
         }
 
         /// @brief Construct element in-place at the end.
         template <typename... Args>
-        auto emplace_back(Args&&... args) noexcept -> expected<T*, kernel_error> {
+        auto emplace_back(Args&&... args) noexcept -> std::expected<T*, lib::kernel_error> {
             if (m_size == N) [[unlikely]]
-                return unexpected(kernel_error::from_generic(generic_error::out_of_range));
+                return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::out_of_range));
             T* p = slot(m_size++);
-            new(p) T(lib::forward<Args>(args)...);
+            new(p) T(std::forward<Args>(args)...);
             return p;
         }
 
@@ -171,7 +166,7 @@ namespace lib {
         }
 
         auto push_back_unchecked(T&& val) noexcept -> void {
-            new(slot(m_size++)) T(lib::move(val));
+            new(slot(m_size++)) T(std::move(val));
         }
     };
 
@@ -184,11 +179,11 @@ export {
     /// @brief Formatter for lib::static_vector<T, N>.
     template <typename T, usize N>
     struct lib::format::formatter<lib::static_vector<T, N>> {
-        auto format(format_context& ctx, const static_vector<T, N>& v) const noexcept -> void {
+        auto format(format_context& ctx, const lib::static_vector<T, N>& v) const noexcept -> void {
             ctx.write("static_vector<array([");
             for (usize i = 0; i < v.size(); ++i) {
                 if (i) ctx.write(", ");
-                formatter<remove_cvref_t<T>>{}.format(ctx, v[i]);
+                formatter<std::remove_cvref_t<T>>{}.format(ctx, v[i]);
             }
             ctx.write("]), size(");
             formatter<usize>{}.format(ctx, v.size());

@@ -8,15 +8,13 @@ import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_types;
 import zxfoundation.scoms.scoms_table;
 import zxfoundation.scoms.scoms_ref;
-import arch.s390x.cpu.irq_frame;
-import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.lowcore_types;
-import arch.s390x.lib.atomic;
+import zxfoundation.scoms.scoms_object_core;
 import zxfoundation.locking.qspinlock;
 import zxfoundation.locking.lock;
-import lib.placementnew;
-import lib.expected;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.irq;
 import lib.error;
+import std;
 
 export {
 
@@ -114,7 +112,7 @@ namespace zxfoundation::sys::irq {
         u32                                     flags{0};          ///< IRQF_* bitmask.
         u16                                      irq_nr{0};         ///< Vector number.
 
-        arch::s390x::lib::atomic::atomic<u32>    count{0};          ///< Dispatch count (relaxed).
+        std::atomic<u32>    count{0};          ///< Dispatch count (relaxed).
         locking::qspinlock::qspinlock            lock{};
 
         irq_desc() noexcept = default;
@@ -184,14 +182,14 @@ namespace zxfoundation::sys::irq {
                 d = desc->data;
                 flags_to_check = desc->flags;
                 discard_value desc->count.fetch_add(1,
-                    arch::s390x::lib::atomic::memory_order::relaxed);
+                    std::memory_order::relaxed);
             } else {
                 const locking::irq_lock_guard guard{desc->lock};
                 h = desc->handler;
                 d = desc->data;
                 flags_to_check = desc->flags;
                 discard_value desc->count.fetch_add(1,
-                    arch::s390x::lib::atomic::memory_order::relaxed);
+                    std::memory_order::relaxed);
             }
         }
 
@@ -224,21 +222,21 @@ namespace zxfoundation::sys::irq {
         handler_fn handler,
         void*      data  = nullptr,
         u32        flags = 0
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         using namespace _internal;
 
         if (!g_initialized)
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         if (irq >= IRQ_NR_MAX || !handler)
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
         irq_desc* d = g_irq_table.find_raw(irq);
         if (!d) {
             auto result = g_irq_table.alloc_at(irq);
             if (!result) [[unlikely]]
-                return lib::unexpected(
+                return std::unexpected(
                     lib::kernel_error::from_memory(
                         lib::memory_error::out_of_memory));
             auto embryo_ref = static_cast<
@@ -246,6 +244,11 @@ namespace zxfoundation::sys::irq {
             >(result.value());
             d = &(*embryo_ref);
             d->irq_nr = irq;
+            auto owner_result = scoms::object_core::set_owner(d->ko, 0U);
+            if (!owner_result) {
+                discard_value g_irq_table.release(irq);
+                return std::unexpected(owner_result.error());
+            }
             discard_value static_cast<
                 scoms::kobject_ref<irq_desc, base::lifecycle_state::embryo>&&
             >(embryo_ref).activate();
@@ -254,7 +257,7 @@ namespace zxfoundation::sys::irq {
         const locking::irq_lock_guard desc_guard{d->lock};
 
         if (d->registered() && !(flags & IRQF_SHARED))
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_locking(
                     lib::locking_error::already_locked));
 
@@ -300,7 +303,7 @@ namespace zxfoundation::sys::irq {
     auto deferred_set(u32 bit) noexcept -> void {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         discard_value pcp.deferred_pending.fetch_or(bit,
-            arch::s390x::lib::atomic::memory_order::release);
+            std::memory_order::release);
     }
 
     /// @brief Test-and-clear a deferred-work bit.
@@ -310,7 +313,7 @@ namespace zxfoundation::sys::irq {
     [[nodiscard]] auto deferred_test_clear(u32 bit) noexcept -> bool {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
         const u32 old = pcp.deferred_pending.fetch_and(~bit,
-            arch::s390x::lib::atomic::memory_order::acq_rel);
+            std::memory_order::acq_rel);
         return (old & bit) != 0U;
     }
 

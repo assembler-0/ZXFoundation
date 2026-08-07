@@ -8,8 +8,7 @@ import arch.s390x.init.zxfl.protocol;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 
 namespace _internal {
 
@@ -47,12 +46,12 @@ namespace _internal {
     }
 
     [[nodiscard]] constexpr auto align_up_page(u64 value) noexcept -> u64 {
-        return (value + (zxfoundation::memory::numa::NUMA_PAGE_SIZE - 1ULL))
-            & ~(zxfoundation::memory::numa::NUMA_PAGE_SIZE - 1ULL);
+        return (value + (PAGE_SIZE - 1ULL))
+            & ~(PAGE_SIZE - 1ULL);
     }
 
     [[nodiscard]] constexpr auto align_down_page(u64 value) noexcept -> u64 {
-        return value & ~(zxfoundation::memory::numa::NUMA_PAGE_SIZE - 1ULL);
+        return value & ~(PAGE_SIZE - 1ULL);
     }
 
     [[nodiscard]] constexpr auto sanitize_node_id(u8 node_id) noexcept -> u8 {
@@ -74,7 +73,7 @@ namespace _internal {
             return 0ULL;
         }
 
-        return (end - start) >> zxfoundation::memory::numa::NUMA_PAGE_SHIFT;
+        return (end - start) >> PAGE_SHIFT;
     }
 
     [[nodiscard]] auto node_record(
@@ -269,9 +268,9 @@ namespace _internal {
         }
     }
 
-    [[nodiscard]] auto is_initialized_or_error() noexcept -> lib::expected<void, lib::kernel_error> {
+    [[nodiscard]] auto is_initialized_or_error() noexcept -> std::expected<void, lib::kernel_error> {
         if (!g_initialized) {
-            return lib::unexpected(uninitialized());
+            return std::unexpected(uninitialized());
         }
 
         return {};
@@ -290,18 +289,18 @@ namespace zxfoundation::memory::numa {
     /// @warning This function must run before AP release and before node-owned allocator state is initialized.
     auto init(
         const arch::s390x::init::zxfl::protocol& protocol
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         _internal::reset_state();
 
         if (protocol.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
             || protocol.cpu_count > zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
-            return lib::unexpected(_internal::out_of_range());
+            return std::unexpected(_internal::out_of_range());
         }
 
         const auto* regions = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
             protocol.mem_map_addr);
         if (protocol.mem_map_count != 0U && !regions) {
-            return lib::unexpected(_internal::invalid_argument());
+            return std::unexpected(_internal::invalid_argument());
         }
 
         for (u32 i = 0U; i < protocol.mem_map_count; ++i) {
@@ -375,19 +374,19 @@ namespace zxfoundation::memory::numa {
     /// @warning The returned pointer remains valid only while the topology generation is unchanged.
     [[nodiscard]] auto node_at(
         u8 node_id
-    ) noexcept -> lib::expected<const node_topology*, lib::kernel_error> {
+    ) noexcept -> std::expected<const node_topology*, lib::kernel_error> {
         auto init_result = _internal::is_initialized_or_error();
         if (!init_result) {
-            return lib::unexpected(init_result.error());
+            return std::unexpected(init_result.error());
         }
 
         if (!node_id_is_valid(node_id)) {
-            return lib::unexpected(_internal::out_of_range());
+            return std::unexpected(_internal::out_of_range());
         }
 
         const auto& node = _internal::g_nodes[node_id];
         if (node.state == node_state::offline && node.source == topology_source::none) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_found));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
 
         return &node;
@@ -399,10 +398,10 @@ namespace zxfoundation::memory::numa {
     /// @note Sparse or discontiguous firmware regions fall back to the first encompassing node range.
     [[nodiscard]] auto node_for_phys(
         u64 phys
-    ) noexcept -> lib::expected<u8, lib::kernel_error> {
+    ) noexcept -> std::expected<u8, lib::kernel_error> {
         auto init_result = _internal::is_initialized_or_error();
         if (!init_result) {
-            return lib::unexpected(init_result.error());
+            return std::unexpected(init_result.error());
         }
 
         for (u32 i = 0U; i < MAX_NUMA_NODES; ++i) {
@@ -415,7 +414,7 @@ namespace zxfoundation::memory::numa {
             }
         }
 
-        return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_found));
+        return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_found));
     }
 
     /// @brief Resolve a page-frame number to a NUMA node.
@@ -423,12 +422,12 @@ namespace zxfoundation::memory::numa {
     /// @return NUMA node identifier containing the frame, or a kernel error.
     [[nodiscard]] auto node_for_pfn(
         u64 pfn
-    ) noexcept -> lib::expected<u8, lib::kernel_error> {
-        if (pfn > (_internal::U64_MAX_VALUE >> NUMA_PAGE_SHIFT)) {
-            return lib::unexpected(_internal::out_of_range());
+    ) noexcept -> std::expected<u8, lib::kernel_error> {
+        if (pfn > (_internal::U64_MAX_VALUE >> PAGE_SHIFT)) {
+            return std::unexpected(_internal::out_of_range());
         }
 
-        return node_for_phys(pfn << NUMA_PAGE_SHIFT);
+        return node_for_phys(pfn << PAGE_SHIFT);
     }
 
     /// @brief Resolve a logical CPU to its preferred NUMA node.
@@ -437,14 +436,14 @@ namespace zxfoundation::memory::numa {
     /// @note The mapping is derived from ZXFL CPU topology evidence and is stable until topology generation changes.
     [[nodiscard]] auto node_for_cpu(
         u16 cpu_id
-    ) noexcept -> lib::expected<u8, lib::kernel_error> {
+    ) noexcept -> std::expected<u8, lib::kernel_error> {
         auto init_result = _internal::is_initialized_or_error();
         if (!init_result) {
-            return lib::unexpected(init_result.error());
+            return std::unexpected(init_result.error());
         }
 
         if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
-            return lib::unexpected(_internal::out_of_range());
+            return std::unexpected(_internal::out_of_range());
         }
 
         const u8 node_id = _internal::g_cpu_to_node[cpu_id];
@@ -464,10 +463,10 @@ namespace zxfoundation::memory::numa {
     [[nodiscard]] auto resolve_policy(
         const allocation_policy& policy,
         u8 local_node
-    ) noexcept -> lib::expected<placement_result, lib::kernel_error> {
+    ) noexcept -> std::expected<placement_result, lib::kernel_error> {
         auto init_result = _internal::is_initialized_or_error();
         if (!init_result) {
-            return lib::unexpected(init_result.error());
+            return std::unexpected(init_result.error());
         }
 
         u8 preferred = policy.preferred_node;
@@ -475,7 +474,7 @@ namespace zxfoundation::memory::numa {
             preferred = node_id_is_valid(local_node) ? local_node : NUMA_NODE_BOOT;
         }
         if (!node_id_is_valid(preferred)) {
-            return lib::unexpected(_internal::out_of_range());
+            return std::unexpected(_internal::out_of_range());
         }
 
         const auto& first = _internal::g_nodes[preferred];
@@ -489,7 +488,7 @@ namespace zxfoundation::memory::numa {
         }
 
         if (policy.fallback == fallback_mode::strict_local || !policy.allow_remote) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
         }
 
         for (u8 distance = 1U; distance <= MAX_NUMA_NODES; ++distance) {
@@ -521,7 +520,7 @@ namespace zxfoundation::memory::numa {
             }
         }
 
-        return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+        return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
     }
 
     /// @brief Install a fully-resolved SLIT matrix from an outside evidence

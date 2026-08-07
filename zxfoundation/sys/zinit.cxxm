@@ -7,11 +7,8 @@ import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.zinit_types;
 import zxfoundation.sys.printk;
-import lib.placementnew;
 import lib.error;
-import lib.expected;
-import lib.string_view;
-import lib.util;
+import std;
 
 extern "C" {
     extern const zxfoundation::sys::zinit::zi_desc __zinit_start[];
@@ -21,10 +18,10 @@ extern "C" {
 namespace _internal {
 
     [[nodiscard]] auto execute(const zxfoundation::sys::zinit::zi_desc* desc) noexcept
-        -> lib::expected<void, lib::kernel_error>
+        -> std::expected<void, lib::kernel_error>
     {
         using namespace zxfoundation::sys;
-        if (!desc || !desc->init) return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        if (!desc || !desc->init) return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         if (!(desc->action & zinit::zi_action::silent))
             printk::pinfo("zinit: running entry {}", desc->name);
         const auto d { *desc }; // TODO: stop copying

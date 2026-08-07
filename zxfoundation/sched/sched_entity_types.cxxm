@@ -6,7 +6,7 @@ export module zxfoundation.sched.sched_entity_types;
 import zxfoundation.base.types;
 import lib.rbtree;
 import lib.list;
-import arch.s390x.lib.atomic;
+import std;
 
 export {
 

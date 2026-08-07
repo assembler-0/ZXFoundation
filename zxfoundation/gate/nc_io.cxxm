@@ -17,7 +17,7 @@ import zxfoundation.sys.printk;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
 import lib.error;
-import lib.expected;
+import std;
 
 static constexpr u64 NC_IO_ERROR = ~0ULL; 
 
@@ -33,6 +33,11 @@ namespace __io_detail {
 
     auto copy_from_user(void* dst, u64 src, u64 len, domain* d) noexcept -> i32 {
         return arch::s390x::cpu::uaccess::copy_from_user(
+            dst, src, len, d->root_phys);
+    }
+
+    auto copy_to_user(u64 dst, const void* src, u64 len, domain* d) noexcept -> i32 {
+        return arch::s390x::cpu::uaccess::copy_to_user(
             dst, src, len, d->root_phys);
     }
 
@@ -100,7 +105,7 @@ namespace __io_detail {
             return NC_IO_ERROR;
         }
 
-        auto result = io_unbind(token);
+        auto result = io_unbind(token, d->ko.id);
         if (!result) {
             zxfoundation::sys::printk::perr("io_unbind: unbind failed");
             return NC_IO_ERROR;
@@ -116,7 +121,7 @@ namespace __io_detail {
         if (!d) [[unlikely]] return NC_IO_ERROR;
 
         const zxfoundation::sys::cap::cap_token token{a0};
-        const u64 orb_user_ptr = a1;
+        const u64 request_user_ptr = a1;
 
         if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
             zxfoundation::sys::printk::perr("io_submit: invalid token");
@@ -139,18 +144,18 @@ namespace __io_detail {
             return NC_IO_ERROR;
         }
 
-        if (orb_user_ptr == 0) {
-            zxfoundation::sys::printk::perr("io_submit: null orb pointer");
+        if (request_user_ptr == 0) {
+            zxfoundation::sys::printk::perr("io_submit: null request pointer");
             return NC_IO_ERROR;
         }
 
-        zxfoundation::sys::io::user_orb orb_kern{};
-        if (copy_from_user(&orb_kern, orb_user_ptr, sizeof(orb_kern), d) != 0) {
+        zxfoundation::sys::io::io_request request{};
+        if (copy_from_user(&request, request_user_ptr, sizeof(request), d) != 0) {
             zxfoundation::sys::printk::perr("io_submit: copy_from_user failed");
             return NC_IO_ERROR;
         }
 
-        auto result = io_submit(token, &orb_kern);
+        auto result = io_submit(token, d->ko.id, request);
         if (!result) {
             zxfoundation::sys::printk::perr("io_submit: io_submit failed");
             return NC_IO_ERROR;
@@ -190,12 +195,63 @@ namespace __io_detail {
             return NC_IO_ERROR;
         }
 
-        auto result = io_irq_bind(token, gate_id);
+        auto result = io_irq_bind(token, d->ko.id, gate_id);
         if (!result) {
             zxfoundation::sys::printk::perr("io_irq_bind: irq bind failed");
             return NC_IO_ERROR;
         }
 
+        return 0;
+    }
+
+    auto nc_io_dma_extent(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::io;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_IO_ERROR;
+        const zxfoundation::sys::cap::cap_token token{a0};
+        if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
+            return NC_IO_ERROR;
+        }
+        auto owner = zxfoundation::sys::cap::cap_validate_generic_for(
+            token, zxfoundation::sys::cap::cap_rights::read, d->ko.id);
+        if (!owner) return NC_IO_ERROR;
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d, zxfoundation::dgp::operation_kind::io_dma_extent,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::io,
+            });
+        if (!dgp_r) return NC_IO_ERROR;
+        auto result = io_dma_extent(token, d->ko.id);
+        if (!result || !dgp_r->consume()) return NC_IO_ERROR;
+        return result->raw;
+    }
+
+    /// @brief a0 = I/O binding token, a1 = writable user completion record.
+    auto nc_io_completion_dequeue(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::io;
+
+        auto* d = current_domain();
+        if (!d || a1 == 0U) [[unlikely]] return NC_IO_ERROR;
+        const zxfoundation::sys::cap::cap_token token{a0};
+        if (!token || token.type() != zxfoundation::sys::cap::cap_type::io_device) {
+            return NC_IO_ERROR;
+        }
+        auto owner = zxfoundation::sys::cap::cap_validate_generic_for(
+            token, zxfoundation::sys::cap::cap_rights::read, d->ko.id);
+        if (!owner) return NC_IO_ERROR;
+        auto dgp_r = zxfoundation::dgp::dgp_authorize(
+            *d, *d, zxfoundation::dgp::operation_kind::io_completion_dequeue,
+            zxfoundation::dgp::dgp_authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation_rights::io,
+            });
+        if (!dgp_r) return NC_IO_ERROR;
+
+        auto completion = io_completion_dequeue(token, d->ko.id);
+        if (!completion || copy_to_user(a1, &*completion, sizeof(*completion), d) != 0 ||
+            !dgp_r->consume()) {
+            return NC_IO_ERROR;
+        }
         return 0;
     }
 
@@ -217,6 +273,10 @@ namespace zxfoundation::gate::nc_io {
             return __io_detail::nc_io_submit(a0, a1, a2, a3, a4);
         case io_op::irq_bind:
             return __io_detail::nc_io_irq_bind(a0, a1, a2, a3, a4);
+        case io_op::dma_extent:
+            return __io_detail::nc_io_dma_extent(a0, a1, a2, a3, a4);
+        case io_op::completion_dequeue:
+            return __io_detail::nc_io_completion_dequeue(a0, a1, a2, a3, a4);
         default:
             zxfoundation::sys::printk::perr("io_dispatch: unknown op {}", op);
             return NC_IO_ERROR;

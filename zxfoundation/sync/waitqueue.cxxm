@@ -10,7 +10,8 @@ import zxfoundation.base.types;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
 import lib.list;
-import lib.util;
+import lib.container_of;
+import std;
 
 export {
 

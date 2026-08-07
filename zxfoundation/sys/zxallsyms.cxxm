@@ -6,11 +6,8 @@
 export module zxfoundation.sys.zxallsyms;
 import zxfoundation.base.types;
 import zxfoundation.sys.zxallsyms_types;
-import lib.string_view;
-import lib.expected;
+import std;
 import lib.error;
-import lib.concepts;
-import lib.placementnew;
 
 extern "C" {
     extern const u64  zxallsyms_addrs[];   ///< Sorted ascending virtual addresses.
@@ -29,10 +26,10 @@ namespace zxfoundation::sys::zxallsyms {
     /// @return kernel_error::from_generic(generic_error::not_found) if @p addr
     ///         is below the first symbol or the table is empty.
     [[nodiscard]] auto lookup_by_addr(const u64 addr)
-        noexcept -> lib::expected<sym_info, lib::kernel_error> {
+        noexcept -> std::expected<sym_info, lib::kernel_error> {
         const u32 count = zxallsyms_count;
         if (count == 0) [[unlikely]]
-            return lib::unexpected(lib::kernel_error::from_generic(
+            return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::not_found));
 
         u32 lo = 0;
@@ -46,7 +43,7 @@ namespace zxfoundation::sys::zxallsyms {
         }
 
         if (zxallsyms_addrs[lo] > addr)
-            return lib::unexpected(lib::kernel_error::from_generic(
+            return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::not_found));
 
         return sym_info {
@@ -60,16 +57,16 @@ namespace zxfoundation::sys::zxallsyms {
     /// @return sym_info on success.
     /// @return kernel_error::from_generic(generic_error::not_found) if no
     ///         symbol with that name exists.
-    [[nodiscard]] auto lookup_by_name(const lib::string_view name)
-        noexcept -> lib::expected<sym_info, lib::kernel_error> {
+    [[nodiscard]] auto lookup_by_name(const std::string_view name)
+        noexcept -> std::expected<sym_info, lib::kernel_error> {
         if (name.empty()) [[unlikely]]
-            return lib::unexpected(lib::kernel_error::from_generic(
+            return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
 
         const u32 count = zxallsyms_count;
         for (u32 i = 0; i < count; ++i) {
             const char* entry_ptr = &zxallsyms_names[zxallsyms_offsets[i]];
-            if (name == lib::string_view{entry_ptr}) {
+            if (name == std::string_view{entry_ptr}) {
                 return sym_info{
                     .address = zxallsyms_addrs[i],
                     .name    = entry_ptr,
@@ -77,7 +74,7 @@ namespace zxfoundation::sys::zxallsyms {
             }
         }
 
-        return lib::unexpected(lib::kernel_error::from_generic(
+        return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
     }
 
@@ -96,7 +93,7 @@ namespace zxfoundation::sys::zxallsyms {
                 .address = zxallsyms_addrs[i],
                 .name    = &zxallsyms_names[zxallsyms_offsets[i]],
             };
-            if constexpr (requires { { fn(info) } -> lib::same_as<bool>; }) {
+            if constexpr (requires { { fn(info) } -> std::same_as<bool>; }) {
                 if (!fn(info)) return;
             } else {
                 fn(info);

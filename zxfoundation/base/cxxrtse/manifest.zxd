@@ -1,5 +1,6 @@
 !files : !compile_group -> [auto] {
     cxxabi.cxxm
+    cxxabi.cxx
     builtins.cxxm
     contracts.cxxm
 }

@@ -1,13 +1,11 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/cpacf.cxxm
-/// @brief CPACF instruction wrappers (IBM PoP 15th/Linux arch/s390/include/asm/cpacf.h)
+/// @brief CPACF instruction wrappers
 
 export module arch.s390x.cpu.cpacf;
-import arch.s390x.cpu.features;
-import arch.s390x.cpu.processor_types;
+import arch.s390x.cpu.types;
 import zxfoundation.base.types;
-import lib.algorithm;
-import lib.span;
+import std;
 
 export {
 
@@ -112,7 +110,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <km_fc Fc, cipher_modifiers Mod, typename Pb>
         requires km_pb_for<Fc, Pb>
-    auto km(Pb& pb, u8& dest, lib::span<const u8> src) -> i32 {
+    auto km(Pb& pb, u8& dest, std::span<const u8> src) -> i32 {
         processor::register_pair
             d { .even = dest, .odd = 0 },
             s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
@@ -174,7 +172,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <kmc_fc Fc, cipher_modifiers Mod, typename Pb>
         requires kmc_pb_for<Fc, Pb>
-    auto kmc(Pb& pb, u8& dest, lib::span<const u8> src) -> i32 {
+    auto kmc(Pb& pb, u8& dest, std::span<const u8> src) -> i32 {
         processor::register_pair
             d { .even = dest, .odd = 0 },
             s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
@@ -237,7 +235,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <kimd_fc Fc, kimd_flags Fl, typename Pb>
         requires kimd_pb_for<Fc, Pb>
-    auto kimd(Pb& pb, lib::span<const u8> src) -> void {
+    auto kimd(Pb& pb, std::span<const u8> src) -> void {
         processor::register_pair s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
             "	lghi	0,%[fc]\n"
@@ -296,7 +294,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <klmd_fc Fc, klmd_flags Fl, typename Pb>
         requires klmd_pb_for<Fc, Pb>
-    auto klmd(Pb& pb, lib::span<const u8> src) -> void {
+    auto klmd(Pb& pb, std::span<const u8> src) -> void {
         processor::register_pair s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
             "	lghi	0,%[fc]\n"
@@ -381,7 +379,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <kmac_fc Fc, kmac_flags Fl, typename Pb>
         requires kmac_pb_for<Fc, Pb> && (!kmac_is_hmac<Fc> || Fl != kmac_flags::none)
-    auto kmac(Pb& pb, lib::span<const u8> src) -> i32 {
+    auto kmac(Pb& pb, std::span<const u8> src) -> i32 {
         processor::register_pair s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
             "	lghi	0,%[fc]\n"
@@ -447,8 +445,8 @@ namespace arch::s390x::cpu::cpacf {
     auto kma(
         Pb& pb,
         u8& dest,
-        lib::span<const u8> src,
-        lib::span<const u8> aad
+        std::span<const u8> src,
+        std::span<const u8> aad
     ) -> void {
         processor::register_pair
             d { .even = dest, .odd = 0 },
@@ -509,7 +507,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <kmctr_fc Fc, cipher_modifiers Mod, typename Pb>
         requires kmctr_pb_for<Fc, Pb>
-    auto kmctr(Pb& pb, u8& dest, lib::span<const u8> src, u8& counter) -> i32 {
+    auto kmctr(Pb& pb, u8& dest, std::span<const u8> src, u8& counter) -> i32 {
         processor::register_pair
             d { .even = dest, .odd = 0 },
             s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() },
@@ -554,7 +552,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <prno_fc Fc, typename Pb>
         requires prno_pb_for<Fc, Pb>
-    auto prno(Pb& pb, lib::span<u8> dest, lib::span<u8> seed) -> void {
+    auto prno(Pb& pb, std::span<u8> dest, std::span<u8> seed) -> void {
         processor::register_pair
             d { .even = reinterpret_cast<u64>(dest.data()), .odd = dest.size() },
             s { .even = reinterpret_cast<u64>(seed.data()), .odd = seed.size() };
@@ -570,7 +568,7 @@ namespace arch::s390x::cpu::cpacf {
         );
     }
 
-    auto trng(lib::span<u8> dest, lib::span<u8> seed) -> void {
+    auto trng(std::span<u8> dest, std::span<u8> seed) -> void {
         struct blank_pb{} pb;
         prno<prno_fc::trng, blank_pb>(pb, dest, seed);
     }

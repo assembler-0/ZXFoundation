@@ -4,7 +4,7 @@
 
 export module lib.list;
 import zxfoundation.base.types;
-import lib.util;
+import lib.container_of;
 
 export {
 

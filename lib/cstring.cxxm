@@ -3,8 +3,8 @@
 /// @brief String and memory operations
 
 export module lib.cstring;
-import lib.string_view;
 import zxfoundation.base.types;
+import std;
 
 extern "C" {
     auto __zx_memcpy(void* dest, const void* src, usize n) -> void*;
@@ -17,6 +17,9 @@ extern "C" {
     auto __zx_strcat(char* dest, const char* src) -> char*;
     auto __zx_clcle(const char* s1, usize l1,
                     const char* s2, usize l2) -> condition_code;
+    auto __zx_strlen(const char* s) -> usize;
+    auto __zx_strstr(const char* s1, const char* s2) -> char*;
+    auto __zx_strnlen(const char* str, usize max) -> usize;
 }
 
 export {
@@ -35,29 +38,11 @@ namespace lib {
     inline auto strcat(char* dest, const char* src) -> char*        { return __zx_strcat(dest, src); }
     inline auto clcle(const char* s1, usize l1,
                       const char* s2, usize l2) -> condition_code   { return __zx_clcle(s1, l1, s2, l2); }
+    inline auto strlen(const char* s) -> usize { return __zx_strlen(s); }
+    inline auto strnlen(const char* str, usize max) noexcept -> usize { return __zx_strnlen(str, max); }
+    inline auto strstr(const char* s1, const char* s2) -> char* { return __zx_strstr(s1, s2); }
 
-    auto strlen(const char* s) -> usize {
-        return __zx_strend(s) - s;
-    }
-
-    auto strnlen(const char* str, usize max) noexcept -> usize {
-        return __zx_strnend(str, max) - str;
-    }
-
-    auto strstr(const char* s1, const char* s2) -> char* {
-        const usize l2 = strlen(s2);
-        usize l1 = strlen(s1);
-        if (!l2)
-            return const_cast<char*>(s1);
-        while (l1-- >= l2) {
-            if (!clcle(s1, l2, s2, l2))
-                return const_cast<char*>(s1);
-            s1++;
-        }
-        return nullptr;
-    }
-
-    auto string_copy(char* dest, usize cap, const string_view& src) noexcept -> void {
+    auto string_copy(char* dest, usize cap, const std::string_view& src) noexcept -> void {
         if (!dest || cap == 0) [[unlikely]] return;
         const usize n = (src.size() < cap - 1) ? src.size() : (cap - 1);
         if (n != 0) {
@@ -67,7 +52,7 @@ namespace lib {
     }
 
     template <usize N>
-    auto string_copy(char (&dest)[N], const string_view& src) noexcept -> void {
+    auto string_copy(char (&dest)[N], const std::string_view& src) noexcept -> void {
         string_copy(dest, N, src);
     }
 

@@ -8,23 +8,23 @@
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/string.h>
 #include <arch/s390x/init/zxfl/zxvl.h>
+#include <arch/s390x/init/zxfl/processor.h>
 #include <zxfoundation/memory/hhdm.h>
 
 /// @brief Zero memory using MVCL pad-fill mode (srclen=0, pad=0x00).
 static void zxfl_bzero(uint64_t addr, uint64_t size) {
     if (size == 0) return;
-    register uint64_t r2 __asm__("2") = addr;
-    register uint64_t r3 __asm__("3") = size;
-    register uint64_t r4 __asm__("4") = addr;  // source addr (unused; srclen=0)
-    register uint64_t r5 __asm__("5") = 0;     // srclen=0, pad byte=0x00
+    union register_pair dst, src;
+    dst.even = addr;
+    dst.odd  = size;
+    src.even = addr;
+    src.odd  = 0;
 
-    __asm__ volatile (
-        "1: mvcl %[r2], %[r4]\n"
-        "   jo   1b\n"
-        : [r2] "+d" (r2), [r3] "+d" (r3), [r4] "+d" (r4), [r5] "+d" (r5)
-        :
-        : "cc", "memory"
-    );
+    __asm__ volatile(
+        "	mvcl	%[dst],%[src]"
+        : [dst] "+&d" (dst.pair), [src] "+&d" (src.pair)
+        : : "memory", "cc");
+
 }
 
 #define ZXVL_RECS_PER_TRACK     12U

@@ -14,10 +14,10 @@ import zxfoundation.sched.sched;
 import zxfoundation.base.typestate;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
-import arch.s390x.cpu.irq_types;
-import arch.s390x.lib.atomic;
+import arch.s390x.cpu.irq;
 import lib.list;
-import lib.util;
+import lib.container_of;
+import std;
 
 namespace zxfoundation::locking::mutex_detail {
 
@@ -35,8 +35,8 @@ export {
 
 namespace zxfoundation::locking::mutex {
 
-    using arch::s390x::lib::atomic::atomic;
-    using arch::s390x::lib::atomic::memory_order;
+    using std::atomic;
+    using std::memory_order;
     using zxfoundation::domain::strand;
     using zxfoundation::domain::sched_substate;
     using zxfoundation::base::lifecycle_state;

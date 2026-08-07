@@ -7,9 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.cpumask;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
-import arch.s390x.lib.atomic;
+import std;
 import arch.s390x.cpu.cpumask;
 
 namespace _internal {
@@ -31,7 +29,7 @@ namespace _internal {
     cpupri_index g_cpupri{};
 
     /// @brief Per-CPU cached "lowest currently-running RT priority".
-    arch::s390x::lib::atomic::atomic<u8> g_cpu_top_pri[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+    std::atomic<u8> g_cpu_top_pri[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
 } // namespace _internal
 
@@ -53,9 +51,9 @@ namespace zxfoundation::sched::cpupri {
         _internal::g_cpupri.free_mask.reset();
         for (u32 c = 0U; c < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++c) {
             _internal::g_cpu_top_pri[c].store(_internal::CPUPRI_INVALID,
-                                              arch::s390x::lib::atomic::memory_order::relaxed);
+                                              std::memory_order::relaxed);
             if (arch::s390x::cpu::cpumask::cpu_online(static_cast<u16>(c))) {
-                _internal::g_cpupri.free_mask.set(c, arch::s390x::lib::atomic::memory_order::relaxed);
+                _internal::g_cpupri.free_mask.set(c, std::memory_order::relaxed);
             }
         }
     }
@@ -68,18 +66,18 @@ namespace zxfoundation::sched::cpupri {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
 
         if (old_pri != _internal::CPUPRI_INVALID && old_pri < _internal::CPUPRI_NR_PRIORITIES) {
-            _internal::g_cpupri.pri_mask[old_pri].clear(cpu, arch::s390x::lib::atomic::memory_order::release);
+            _internal::g_cpupri.pri_mask[old_pri].clear(cpu, std::memory_order::release);
         } else {
-            _internal::g_cpupri.free_mask.clear(cpu, arch::s390x::lib::atomic::memory_order::release);
+            _internal::g_cpupri.free_mask.clear(cpu, std::memory_order::release);
         }
 
         if (new_pri != _internal::CPUPRI_INVALID && new_pri < _internal::CPUPRI_NR_PRIORITIES) {
-            _internal::g_cpupri.pri_mask[new_pri].set(cpu, arch::s390x::lib::atomic::memory_order::release);
+            _internal::g_cpupri.pri_mask[new_pri].set(cpu, std::memory_order::release);
         } else {
-            _internal::g_cpupri.free_mask.set(cpu, arch::s390x::lib::atomic::memory_order::release);
+            _internal::g_cpupri.free_mask.set(cpu, std::memory_order::release);
         }
 
-        _internal::g_cpu_top_pri[cpu].store(new_pri, arch::s390x::lib::atomic::memory_order::release);
+        _internal::g_cpu_top_pri[cpu].store(new_pri, std::memory_order::release);
     }
 
     /// @brief Find the CPU with the lowest RT priority at or below a threshold,
@@ -95,7 +93,7 @@ namespace zxfoundation::sched::cpupri {
             auto first = mask.first_set();
             while (first.has_value()) {
                 const u16 cpu = static_cast<u16>(*first);
-                if (affinity.test(cpu, arch::s390x::lib::atomic::memory_order::acquire)
+                if (affinity.test(cpu, std::memory_order::acquire)
                     && arch::s390x::cpu::cpumask::cpu_online(cpu)) {
                     return cpu;
                 }
@@ -106,7 +104,7 @@ namespace zxfoundation::sched::cpupri {
         auto free_first = _internal::g_cpupri.free_mask.first_set();
         while (free_first.has_value()) {
             const u16 cpu = static_cast<u16>(*free_first);
-            if (affinity.test(cpu, arch::s390x::lib::atomic::memory_order::acquire)
+            if (affinity.test(cpu, std::memory_order::acquire)
                 && arch::s390x::cpu::cpumask::cpu_online(cpu)) {
                 return cpu;
             }
@@ -118,7 +116,7 @@ namespace zxfoundation::sched::cpupri {
     /// @brief Read the cached top RT priority of a CPU.
     [[nodiscard]] auto cpupri_top(u16 cpu) noexcept -> u8 {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) return _internal::CPUPRI_INVALID;
-        return _internal::g_cpu_top_pri[cpu].load(arch::s390x::lib::atomic::memory_order::acquire);
+        return _internal::g_cpu_top_pri[cpu].load(std::memory_order::acquire);
     }
 
     /// @brief Count of supported priority buckets.

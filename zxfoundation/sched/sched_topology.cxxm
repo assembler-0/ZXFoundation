@@ -9,13 +9,10 @@ import arch.s390x.init.zxfl.protocol;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu_types;
 import arch.s390x.cpu.cpumask;
-import arch.s390x.lib.atomic;
+import std;
 import zxfoundation.memory.numa_types;
 import lib.cpumask;
-import lib.util;
-import lib.placementnew;
 
 namespace zxfoundation::sched::topology::_internal {
 
@@ -237,21 +234,21 @@ namespace zxfoundation::sched::topology {
                     if (yr->core_evidence != zxfoundation::sched::topology_evidence::degraded
                         && yr->core_id == rec->core_id) {
                         _internal::g_core_siblings[cpu_id].set(
-                            y, arch::s390x::lib::atomic::memory_order::release);
+                            y, std::memory_order::release);
                         _internal::g_core_siblings[y].set(
-                            cpu_id, arch::s390x::lib::atomic::memory_order::release);
+                            cpu_id, std::memory_order::release);
                     }
                 },
-                arch::s390x::lib::atomic::memory_order::relaxed);
+                std::memory_order::relaxed);
         }
 
         if (node < zxfoundation::memory::numa::MAX_NUMA_NODES) {
             _internal::g_node_masks[node].set(
-                cpu_id, arch::s390x::lib::atomic::memory_order::release);
+                cpu_id, std::memory_order::release);
         }
 
         _internal::g_remote_mask.set(
-            cpu_id, arch::s390x::lib::atomic::memory_order::release);
+            cpu_id, std::memory_order::release);
     }
 
     /// @brief Remove a CPU from the per-group balancing masks (halt / teardown).
@@ -266,20 +263,20 @@ namespace zxfoundation::sched::topology {
 
         if (node < zxfoundation::memory::numa::MAX_NUMA_NODES) {
             _internal::g_node_masks[node].clear(
-                cpu_id, arch::s390x::lib::atomic::memory_order::release);
+                cpu_id, std::memory_order::release);
         }
 
         _internal::g_core_siblings[cpu_id].for_each(
             [&](u16 y) noexcept -> void {
                 _internal::g_core_siblings[y].clear(
-                    cpu_id, arch::s390x::lib::atomic::memory_order::release);
+                    cpu_id, std::memory_order::release);
             },
-            arch::s390x::lib::atomic::memory_order::relaxed);
+            std::memory_order::relaxed);
         _internal::g_core_siblings[cpu_id].reset();
 
         if (cpu_id < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
             _internal::g_remote_mask.clear(
-                cpu_id, arch::s390x::lib::atomic::memory_order::release);
+                cpu_id, std::memory_order::release);
         }
     }
 
@@ -294,19 +291,19 @@ namespace zxfoundation::sched::topology {
             case cpu_relation::same_smt_core:
             case cpu_relation::same_core_group:
                 if (local_cpu < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
-                    _internal::g_core_siblings[local_cpu].for_each(lib::forward<Fn>(fn));
+                    _internal::g_core_siblings[local_cpu].for_each(std::forward<Fn>(fn));
                 }
                 break;
             case cpu_relation::same_numa_node: {
                 const auto* rec = record_for(local_cpu);
                 const u8 node = rec ? rec->numa_node : 0xFFU;
                 if (node < zxfoundation::memory::numa::MAX_NUMA_NODES) {
-                    _internal::g_node_masks[node].for_each(lib::forward<Fn>(fn));
+                    _internal::g_node_masks[node].for_each(std::forward<Fn>(fn));
                 }
                 break;
             }
             default:
-                _internal::g_remote_mask.for_each(lib::forward<Fn>(fn));
+                _internal::g_remote_mask.for_each(std::forward<Fn>(fn));
                 break;
         }
     }

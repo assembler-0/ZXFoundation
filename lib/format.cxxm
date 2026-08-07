@@ -4,11 +4,7 @@
 
 export module lib.format;
 import zxfoundation.base.types;
-import lib.string_view;
-import lib.span;
-import lib.concepts;
-import lib.algorithm;
-import lib.type_traits;
+import std;
 
 export {
 
@@ -16,7 +12,7 @@ namespace lib::format {
 
     /// @brief Internal buffer management for formatting.
     struct format_context {
-        span<char> buffer;
+        std::span<char> buffer;
         usize offset{0};
 
         auto write(char c) noexcept -> void {
@@ -25,7 +21,7 @@ namespace lib::format {
             }
         }
 
-        auto write(string_view s) noexcept -> void {
+        auto write(std::string_view s) noexcept -> void {
             for (char c : s) {
                 write(c);
             }
@@ -48,8 +44,8 @@ namespace lib::format {
 
     /// @brief Formatter for string views.
     template <>
-    struct formatter<string_view> {
-        auto format(format_context& ctx, string_view val) const noexcept -> void {
+    struct formatter<std::string_view> {
+        auto format(format_context& ctx, std::string_view val) const noexcept -> void {
             ctx.write(val);
         }
     };
@@ -58,7 +54,7 @@ namespace lib::format {
     template <>
     struct formatter<const char*> {
         auto format(format_context& ctx, const char* val) const noexcept -> void {
-            if (val) ctx.write(string_view(val));
+            if (val) ctx.write(std::string_view(val));
             else ctx.write("(null)");
         }
     };
@@ -67,7 +63,7 @@ namespace lib::format {
     template <usize N>
     struct formatter<char[N]> {
         auto format(format_context& ctx, const char (&val)[N]) const noexcept -> void {
-            ctx.write(string_view(val));
+            ctx.write(std::string_view(val));
         }
     };
 
@@ -80,17 +76,17 @@ namespace lib::format {
     };
 
     /// @brief Base formatter for integers.
-    template <typename T> requires is_integral_v<T>
+    template <typename T> requires std::is_integral_v<T>
     struct formatter<T> {
         auto format(format_context& ctx, T val) const noexcept -> void {
-            if constexpr (is_signed_v<T>) {
+            if constexpr (std::is_signed_v<T>) {
                 if (val < 0) {
                     ctx.write('-');
-                    format_unsigned(ctx, static_cast<make_unsigned<T>::type>(-val), 0, false);
+                    format_unsigned(ctx, static_cast<std::make_unsigned<T>::type>(-val), 0, false);
                     return;
                 }
             }
-            format_unsigned(ctx, static_cast<make_unsigned<T>::type>(val), 0, false);
+            format_unsigned(ctx, static_cast<std::make_unsigned<T>::type>(val), 0, false);
         }
 
     private:
@@ -119,20 +115,39 @@ namespace lib::format {
         }
     };
 
-    /// @brief Formatter for lib::span<T, Extent>.
+    /// @brief Formatter for std::span<T, Extent>.
     template <typename T, usize Extent>
-    struct formatter<span<T, Extent>> {
+    struct formatter<std::span<T, Extent>> {
         /// @brief Format the span into ctx.
         /// @param[in,out] ctx  Output context.
         /// @param[in]     val  Span to format.
-        auto format(format_context& ctx, const span<T, Extent>& val) const noexcept -> void {
+        auto format(format_context& ctx, const std::span<T, Extent>& val) const noexcept -> void {
             ctx.write("span<array([");
             for (usize i = 0; i < val.size(); ++i) {
                 if (i) ctx.write(", ");
-                formatter<remove_cvref_t<T>>{}.format(ctx, val[i]);
+                formatter<std::remove_cvref_t<T>>{}.format(ctx, val[i]);
             }
             ctx.write("]), size(");
-            formatter<remove_cvref_t<T>>{}.format(ctx, val.size());
+            formatter<std::remove_cvref_t<T>>{}.format(ctx, val.size());
+            ctx.write(")>");
+        }
+    };
+
+    /// @brief Formatter for std::pair.
+    template <>
+    struct formatter<std::source_location> {
+        /// @brief Format the expected into ctx.
+        /// @param[in,out] ctx  Output context.
+        /// @param[in]     val  Expected to format.
+        auto format(format_context& ctx, const std::source_location& val) const noexcept -> void {
+            ctx.write("source_location<fn(");
+            ctx.write(val.function_name());
+            ctx.write("), file(");
+            ctx.write(val.file_name());
+            ctx.write("), location(");
+            formatter<std::remove_cvref_t<u32>>{}.format(ctx, val.line());
+            ctx.write(":");
+            formatter<std::remove_cvref_t<u32>>{}.format(ctx, val.column());
             ctx.write(")>");
         }
     };
@@ -232,7 +247,7 @@ namespace lib::format {
 
     /// @brief Entry point for formatting.
     template <typename... Args>
-    auto format_to(span<char> buf, string_view fmt, Args&&... args) -> usize {
+    auto format_to(std::span<char> buf, std::string_view fmt, Args&&... args) -> usize {
         format_context ctx{buf};
         usize arg_idx = 0;
 
@@ -256,7 +271,7 @@ namespace lib::format {
         };
 
         // Dispatch one argument by index, with an optional format spec string.
-        auto dispatch = [&](usize index, string_view spec) {
+        auto dispatch = [&](usize index, std::string_view spec) {
             // Parse spec: optional '#', optional width, optional type char (x/d/s)
             bool alt = false; bool pad_zero = false; usize width = 0; char type_ch = 'd';
             usize si = 0;
@@ -271,27 +286,27 @@ namespace lib::format {
                 if (i++ != index) return;
                 if (type_ch == 'x' || type_ch == 'X') {
                     u64 v = 0;
-                    if constexpr (is_integral_v<remove_cvref_t<T>>) v = static_cast<u64>(val);
-                    else if constexpr (is_pointer_v<remove_cvref_t<T>>)
+                    if constexpr (std::is_integral_v<std::remove_cvref_t<T>>) v = static_cast<u64>(val);
+                    else if constexpr (std::is_pointer_v<std::remove_cvref_t<T>>)
                         v = reinterpret_cast<u64>(val);
                     write_hex(v, alt, width, pad_zero);
                 } else if (type_ch == 's') {
-                    if constexpr (is_same_v<remove_cvref_t<T>, string_view>)
+                    if constexpr (std::is_same_v<std::remove_cvref_t<T>, std::string_view>)
                         ctx.write(val);
-                    else if constexpr (is_same_v<remove_cvref_t<T>, const char*>)
-                        ctx.write(val ? string_view(val) : "(null)");
+                    else if constexpr (std::is_same_v<std::remove_cvref_t<T>, const char*>)
+                        ctx.write(val ? std::string_view(val) : "(null)");
                     else
-                        formatter<remove_cvref_t<T>>{}.format(ctx, val);
+                        formatter<std::remove_cvref_t<T>>{}.format(ctx, val);
                 } else {
-                    if constexpr (is_same_v<remove_cvref_t<T>, char>) {
+                    if constexpr (std::is_same_v<std::remove_cvref_t<T>, char>) {
                         ctx.write(val);
-                    } else if constexpr (is_integral_v<remove_cvref_t<T>>) {
-                        if constexpr (is_signed_v<remove_cvref_t<T>>) {
+                    } else if constexpr (std::is_integral_v<std::remove_cvref_t<T>>) {
+                        if constexpr (std::is_signed_v<std::remove_cvref_t<T>>) {
                             if (val < 0) { ctx.write('-'); write_dec(static_cast<u64>(-val), width, pad_zero); return; }
                         }
                         write_dec(static_cast<u64>(val), width, pad_zero);
                     } else {
-                        formatter<remove_cvref_t<T>>{}.format(ctx, val);
+                        formatter<std::remove_cvref_t<T>>{}.format(ctx, val);
                     }
                 }
             };
@@ -305,9 +320,9 @@ namespace lib::format {
             while (j < fmt.size() && fmt[j] != '}') ++j;
             if (j >= fmt.size()) { ctx.write(fmt[i]); continue; }
 
-            string_view inner = fmt.substr(i + 1, j - i - 1);
+            std::string_view inner = fmt.substr(i + 1, j - i - 1);
             // Strip leading ':'
-            string_view spec = inner.size() > 0 && inner[0] == ':' ? inner.substr(1) : string_view{};
+            std::string_view spec = inner.size() > 0 && inner[0] == ':' ? inner.substr(1) : std::string_view{};
             dispatch(arg_idx++, spec);
             i = j; // skip past '}'
         }

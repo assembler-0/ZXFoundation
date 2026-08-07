@@ -1,0 +1,125 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/ipi.cxxm
+/// @brief Leaf IPI send primitives for s390x.
+
+module arch.s390x.cpu.ipi;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.sigp;
+import arch.s390x.cpu.smp;
+import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.cpumask;
+import arch.s390x.cpu.psw;
+import zxfoundation.base.types;
+import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sched.sched;
+import zxfoundation.sched.sched_topology;
+import std;
+
+namespace arch::s390x::cpu::ipi {
+
+    /// @brief Site-targeted helper: fetch-or a bit into the target's ec_bits
+    ///        and (if newly set) punch a SIGP to deliver the IPI.
+    auto send_bit_punch(u16 target_cpu_id, u64 bit_mask, u8 sigp_order) noexcept -> void {
+        percpu::percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        const u64 old = pcp->ec_bits.fetch_or(bit_mask,
+            std::memory_order::seq_cst);
+        if (old & bit_mask) return;
+        discard_value sigp::issue_bounded(pcp->cpu_addr, sigp_order, 0);
+    }
+
+    /// @brief Send an external-call IPI with a single soft-IPI bit.
+    auto send_extcall(u16 target_cpu_id, u64 ec_bit_mask) noexcept -> void {
+        send_bit_punch(target_cpu_id, ec_bit_mask,
+            arch::s390x::cpu::sigp::SIGP_EXTERNAL_CALL);
+    }
+
+    /// @brief Send an emergency-signal IPI (for panic / halt paths only).
+    auto send_emergency(u16 target_cpu_id, u64 ec_bit_mask) noexcept -> void {
+        send_bit_punch(target_cpu_id, ec_bit_mask,
+            arch::s390x::cpu::sigp::SIGP_EMERGENCY_SIGNAL);
+    }
+
+    /// @brief Send a self-IPI via external call (MCCK deferred work, irq_work).
+    auto send_self_extcall(u64 ec_bit_mask) noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        discard_value pcp.ec_bits.fetch_or(ec_bit_mask,
+            std::memory_order::seq_cst);
+        discard_value sigp::issue_bounded(pcp.cpu_addr,
+            arch::s390x::cpu::sigp::SIGP_EXTERNAL_CALL, 0);
+    }
+
+    /// @brief Convenience: request a remote CPU to reschedule.
+    auto send_reschedule(u16 target_cpu_id) noexcept -> void {
+        send_extcall(target_cpu_id, smp::EC_SCHEDULE_BIT);
+    }
+
+    /// @brief Convenience: request a remote CPU to stop.
+    auto send_stop_cpu(u16 target_cpu_id) noexcept -> void {
+        send_emergency(target_cpu_id, smp::EC_STOP_CPU_BIT);
+    }
+
+    auto send_call_function(u16 target_cpu_id) noexcept -> void {
+        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        const u32 old = pcp->deferred_pending.fetch_or(
+            zxfoundation::sys::irq::DEFERRED_CALL_FUNCTION_BIT,
+            std::memory_order::release);
+        if (old & zxfoundation::sys::irq::DEFERRED_CALL_FUNCTION_BIT) return;
+        discard_value sigp::issue_bounded(pcp->cpu_addr, sigp::SIGP_EXTERNAL_CALL, 0);
+    }
+
+    auto send_irq_work(u16 target_cpu_id) noexcept -> void {
+        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        const u32 old = pcp->deferred_pending.fetch_or(
+            zxfoundation::sys::irq::DEFERRED_IRQ_WORK_BIT,
+            std::memory_order::release);
+        if (old & zxfoundation::sys::irq::DEFERRED_IRQ_WORK_BIT) return;
+        discard_value sigp::issue_bounded(pcp->cpu_addr, sigp::SIGP_EXTERNAL_CALL, 0);
+    }
+
+    auto send_mcck_pending(u16 target_cpu_id) noexcept -> void {
+        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        discard_value pcp->deferred_pending.fetch_or(
+            zxfoundation::sys::irq::DEFERRED_MCCK_PENDING_BIT,
+            std::memory_order::release);
+        discard_value sigp::issue_bounded(pcp->cpu_addr, sigp::SIGP_EMERGENCY_SIGNAL, 0);
+    }
+
+    /// @brief Send a halt IPI to a logical CPU via SIGP_STOP_AND_STORE_STATUS.
+    auto send_halt_ipi(u16 target_cpu_id) noexcept -> void {
+        percpu::percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
+        if (!pcp) [[unlikely]] return;
+        discard_value pcp->ec_bits.fetch_or(smp::EC_HALT_BIT_OFFSET,
+            std::memory_order::seq_cst);
+        discard_value sigp::issue_bounded(pcp->cpu_addr,
+            arch::s390x::cpu::sigp::SIGP_STOP_AND_STORE_STATUS,
+            0);
+    }
+
+
+    auto handle_ipi(
+        [[maybe_unused]] u16 irq,
+        [[maybe_unused]] irq::irq_frame* frame,
+        [[maybe_unused]] void* data
+    ) noexcept -> void {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        const u64 bits = pcp.ec_bits.exchange(0,
+            std::memory_order::seq_cst);
+        using namespace arch::s390x::cpu::smp;
+
+        // Sync reschedule IPI.
+        if ((bits & EC_SCHEDULE_BIT) != 0ULL)
+            zxfoundation::sched::sched_resched_current();
+
+        // Stop / halt IPIs — cooperatively offline the CPU.
+        if ((bits & (EC_STOP_CPU_BIT | EC_HALT_BIT_OFFSET)) != 0ULL) {
+            arch::s390x::cpu::cpumask::cpu_clear_online(pcp.cpu_id);
+            zxfoundation::sched::topology::topology_offline_cpu(pcp.cpu_id);
+            arch::s390x::cpu::psw::disabled_wait();
+        }
+    }
+
+} // namespace arch::s390x::cpu::ipi

@@ -10,36 +10,29 @@ import zxfoundation.base.config;
 import zxfoundation.sys.stacktrace;
 import zxfoundation.sys.watchdog_disarm;
 import zxfoundation.sys.printk_types;
-import arch.s390x.lib.atomic;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
-import arch.s390x.cpu.psw_types;
 import arch.s390x.cpu.ipi;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.lowcore_types;
 import arch.s390x.init.zxfl.protocol;
 import lib.error;
-import lib.string_view;
 import lib.cstring;
-import lib.source_location;
 import lib.format;
-import lib.span;
-import lib.placementnew;
+import std;
 
 namespace _internal {
 
     using namespace zxfoundation::sys::syschk;
-    using namespace arch::s390x::lib::atomic;
 
     constexpr auto ZXF_BUG_REPORT_URL_HTTPS = "https://github.com/assembler-0/ZXFoundation/issues";
 
     /// @brief Atomic flag: set to 1 by the first CPU to call system_check.
     ///        All subsequent callers see it set and go directly to disabled-wait
     ///        without touching the crash record.
-    static atomic<u32> g_halting{0};
+    static std::atomic<u32> g_halting{0};
 
     /// @brief Snapshot of the boot-protocol CPU map pointer, saved by syschk_init.
     ///        Null until @c syschk_init is called.
@@ -93,8 +86,8 @@ namespace zxfoundation::sys::syschk {
     auto system_check(
         lib::kernel_error    err,
         syschk_severity      sev,
-        lib::string_view     msg,
-        lib::source_location location
+        std::string_view     msg,
+        std::source_location location
     ) noexcept -> void {
 
         discard_value arch::s390x::cpu::irq::irq_save_disable();
@@ -102,8 +95,8 @@ namespace zxfoundation::sys::syschk {
         u32 expected = 0;
         if (!_internal::g_halting.compare_exchange_strong(
                 expected, 1U,
-                arch::s390x::lib::atomic::memory_order::seq_cst,
-                arch::s390x::lib::atomic::memory_order::relaxed)) [[unlikely]] {
+                std::memory_order::seq_cst,
+                std::memory_order::relaxed)) [[unlikely]] {
             watchdog::watchdog_disarm_raw();
             arch::s390x::cpu::psw::disabled_wait();
         }

@@ -6,15 +6,13 @@ export module zxfoundation.locking.qspinlock;
 import zxfoundation.base.types;
 import zxfoundation.locking.mcs_types;
 import zxfoundation.sched.context;
-import arch.s390x.cpu.processor;
+import arch.s390x.cpu.sync;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.lowcore_types;
 import arch.s390x.cpu.irq;
-import arch.s390x.cpu.irq_types;
-import arch.s390x.lib.atomic;
 import zxfoundation.memory.hhdm;
 import lib.bit;
+import std;
 
 export {
 
@@ -22,21 +20,17 @@ namespace zxfoundation::locking::qspinlock {
 
     /// @brief Queued spinlock — SMP-safe, cache-line-efficient.
     class qspinlock {
-        using atomic_u32    = arch::s390x::lib::atomic::atomic<u32>;
-        using atomic_mcs    = arch::s390x::lib::atomic::atomic<mcs::mcs_node*>;
-        using memory_order  = arch::s390x::lib::atomic::memory_order;
+        using atomic_u32    = std::atomic<u32>;
+        using atomic_mcs    = std::atomic<mcs::mcs_node*>;
+        using memory_order  = std::memory_order;
 
-        // ---- Lock word bit positions ----------------------------------------
         static constexpr u32 _Q_LOCKED_VAL   = 1U;      ///< Bit 0: lock held.
         static constexpr u32 _Q_PENDING_VAL  = 2U;      ///< Bit 1: pending waiter.
         static constexpr u32 _Q_LOCKED_MASK  = _Q_LOCKED_VAL | _Q_PENDING_VAL;
 
-        /// Tail field occupies bits [31:2] (bits above LOCKED and PENDING).
         static constexpr u32 _Q_TAIL_OFFSET  = 2U;
         static constexpr u32 _Q_TAIL_MASK    = ~static_cast<u32>(_Q_LOCKED_MASK);
 
-        /// Within the tail field:
-        ///   [11:2] = 10-bit encoded tail (cpu_id+1 in [11:4], node_idx in [3:2])
         static constexpr u32 _Q_NODE_BITS    = 2U;
         static constexpr u32 _Q_NODE_MASK    = (1U << _Q_NODE_BITS) - 1U;  // 0x3
         static constexpr u32 _Q_CPU_BITS     = 10U;
@@ -131,7 +125,7 @@ namespace zxfoundation::locking::qspinlock {
             u32 expected = m_val.load(memory_order::relaxed);
             for (;;) {
                 if (expected & _Q_LOCKED_VAL) {
-                    arch::s390x::cpu::processor::cpu_relax();
+                    arch::s390x::cpu::sync::cpu_relax();
                     expected = m_val.load(memory_order::relaxed);
                     continue;
                 }
@@ -141,7 +135,7 @@ namespace zxfoundation::locking::qspinlock {
                         memory_order::acquire, memory_order::relaxed)) {
                     return;
                 }
-                arch::s390x::cpu::processor::cpu_relax();
+                arch::s390x::cpu::sync::cpu_relax();
             }
         }
 
@@ -161,7 +155,7 @@ namespace zxfoundation::locking::qspinlock {
                         memory_order::relaxed)) {
                     // Spin until the current holder clears LOCKED.
                     while (m_val.load(memory_order::acquire) & _Q_LOCKED_VAL)
-                        arch::s390x::cpu::processor::cpu_relax();
+                        arch::s390x::cpu::sync::cpu_relax();
 
                     pending_to_locked();
                     return;
@@ -214,11 +208,11 @@ namespace zxfoundation::locking::qspinlock {
                 prev_node->next.store(node_absolute, memory_order::release);
 
                 while (node->locked.load(memory_order::acquire))
-                    arch::s390x::cpu::processor::cpu_relax();
+                    arch::s390x::cpu::sync::cpu_relax();
             }
 
             while (m_val.load(memory_order::acquire) & _Q_LOCKED_MASK)
-                arch::s390x::cpu::processor::cpu_relax();
+                arch::s390x::cpu::sync::cpu_relax();
 
             u32 expected_solo = my_tail;
             if (m_val.compare_exchange_strong(
@@ -231,8 +225,8 @@ namespace zxfoundation::locking::qspinlock {
             discard_value m_val.fetch_or(_Q_LOCKED_VAL, memory_order::acquire);
 
             mcs::mcs_node* next_node;
-            while (!(next_node = node->next.load(memory_order::acquire)))
-                arch::s390x::cpu::processor::cpu_relax();
+            while (!((next_node = node->next.load(memory_order::acquire))))
+                arch::s390x::cpu::sync::cpu_relax();
 
             // Pass the lock to the successor by clearing its locked flag.
             next_node->locked.store(0, memory_order::release);

@@ -7,10 +7,9 @@ import crypto.sha256_types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.cpacf;
 import arch.s390x.cpu.features;
-import lib.span;
-import lib.expected;
+import std;
+import std;
 import lib.error;
-import lib.placementnew;
 
 namespace crypto::sha256 {
 
@@ -46,7 +45,7 @@ namespace crypto::sha256 {
     /// @param[in,out] ctx    SHA-256 context whose state[] is updated in place.
     /// @param[in]     block  Exactly 64 bytes of message data (one full block).
     /// @note The 64-word message schedule @c w[] is stack-allocated (~256 bytes).
-    static auto sha256_block(sha256_ctx& ctx, lib::span<const u8, 64> block) -> void {
+    static auto sha256_block(sha256_ctx& ctx, std::span<const u8, 64> block) -> void {
         u32 w[64];
 
         // Build the first 16 words from big-endian block bytes.
@@ -111,17 +110,17 @@ namespace crypto::sha256 {
     /// @brief Feed a span of bytes into a running SHA-256 computation.
     /// @param[in,out] ctx   Running SHA-256 context.
     /// @param[in]     data  Input byte span.
-    /// @return lib::expected<void, lib::kernel_error>
-    auto sha256_update(sha256_ctx& ctx, lib::span<const u8> data)
-        -> lib::expected<void, lib::kernel_error> {
+    /// @return std::expected<void, lib::kernel_error>
+    auto sha256_update(sha256_ctx& ctx, std::span<const u8> data)
+        -> std::expected<void, lib::kernel_error> {
         if (ctx.finalized) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
         }
 
         // Null pointer with non-zero size is malformed input.
         if (data.data() == nullptr && !data.empty()) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
         }
 
@@ -132,7 +131,7 @@ namespace crypto::sha256 {
 
         const u64 max_bytes = (static_cast<u64>(-1) - ctx.bit_count) / 8U;
         if (data.size() > max_bytes) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
         }
 
@@ -156,7 +155,7 @@ namespace crypto::sha256 {
 
             if (ctx.buf_len == 64U) {
                 // buf is exactly 64 bytes; construct a fixed-extent span over it.
-                sha256_block(ctx, lib::span<const u8, 64>(ctx.buf, 64U));
+                sha256_block(ctx, std::span<const u8, 64>(ctx.buf, 64U));
                 ctx.buf_len = 0U;
             }
         }
@@ -167,11 +166,11 @@ namespace crypto::sha256 {
     /// @brief Finalize the hash and write the 32-byte digest.
     /// @param[in,out] ctx  Running SHA-256 context.
     /// @param[out]    out  Exactly 32-byte output span.
-    /// @return lib::expected<void, lib::kernel_error>
-    auto sha256_final(sha256_ctx& ctx, lib::span<u8, SHA256_DIGEST_SIZE> out)
-        -> lib::expected<void, lib::kernel_error> {
+    /// @return std::expected<void, lib::kernel_error>
+    auto sha256_final(sha256_ctx& ctx, std::span<u8, SHA256_DIGEST_SIZE> out)
+        -> std::expected<void, lib::kernel_error> {
         if (ctx.finalized) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
         }
 
@@ -184,7 +183,7 @@ namespace crypto::sha256 {
             while (ctx.buf_len < 64U) {
                 ctx.buf[ctx.buf_len++] = 0x00U;
             }
-            sha256_block(ctx, lib::span<const u8, 64>(ctx.buf, 64U));
+            sha256_block(ctx, std::span<const u8, 64>(ctx.buf, 64U));
             ctx.buf_len = 0U;
         }
 
@@ -204,7 +203,7 @@ namespace crypto::sha256 {
         ctx.buf[62] = static_cast<u8>(bits >>  8U);
         ctx.buf[63] = static_cast<u8>(bits);
 
-        sha256_block(ctx, lib::span<const u8, 64>(ctx.buf, 64U));
+        sha256_block(ctx, std::span<const u8, 64>(ctx.buf, 64U));
 
         // Serialize the eight 32-bit state words as big-endian bytes.
         for (u32 i = 0U; i < 8U; ++i) {
@@ -220,8 +219,8 @@ namespace crypto::sha256 {
 
     /// @brief One-shot SHA-256: hash @p data and write the 32-byte digest to @p out.
     ///        Uses CPACF KIMD/KLMD when MSA Ext 1 is available, software fallback.
-    [[nodiscard]] auto sha256_hash(lib::span<const u8> data, lib::span<u8, SHA256_DIGEST_SIZE> out)
-        -> lib::expected<void, lib::kernel_error> {
+    [[nodiscard]] auto sha256_hash(std::span<const u8> data, std::span<u8, SHA256_DIGEST_SIZE> out)
+        -> std::expected<void, lib::kernel_error> {
         namespace cpacf = arch::s390x::cpu::cpacf;
         namespace feat  = arch::s390x::cpu::features;
 
@@ -257,22 +256,22 @@ namespace crypto::sha256 {
         sha256_ctx ctx;
         sha256_init(ctx);
         return sha256_update(ctx, data)
-            .and_then([&]() -> lib::expected<void, lib::kernel_error> {
+            .and_then([&]() -> std::expected<void, lib::kernel_error> {
                 return sha256_final(ctx, out);
             });
     }
 
-    [[nodiscard]] auto sha256_verify(lib::span<const u8> data,
-                                     lib::span<const u8, SHA256_DIGEST_SIZE> expected)
-        -> lib::expected<void, lib::kernel_error> {
+    [[nodiscard]] auto sha256_verify(std::span<const u8> data,
+                                     std::span<const u8, SHA256_DIGEST_SIZE> expected)
+        -> std::expected<void, lib::kernel_error> {
         u8 computed[SHA256_DIGEST_SIZE]{};
-        auto hash_result = sha256_hash(data, lib::span<u8, SHA256_DIGEST_SIZE>(computed));
+        auto hash_result = sha256_hash(data, std::span<u8, SHA256_DIGEST_SIZE>(computed));
         if (!hash_result) {
             return hash_result;
         }
         for (u32 i = 0U; i < SHA256_DIGEST_SIZE; ++i) {
             if (computed[i] != expected[i]) {
-                return lib::unexpected(
+                return std::unexpected(
                     lib::kernel_error::from_crypto(lib::crypto_error::hash_mismatch));
             }
         }

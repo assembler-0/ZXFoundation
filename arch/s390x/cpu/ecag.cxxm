@@ -1,36 +1,150 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/cpu/ecag.cxxm
-/// @brief ECAG (Extract CPU Attributes) kernel API.
+/// @brief ECAG (Extract CPU Attribute) kernel API.
 
 export module arch.s390x.cpu.ecag;
-export import arch.s390x.cpu.ecag_types;
 import zxfoundation.base.types;
+import lib.bit;
+import lib.error;
+import std;
+
+__endian__(BIG);
 
 export {
 
 namespace arch::s390x::cpu::ecag {
 
-    auto invoke(u32 asi, uchar parm) -> u64 {
-        u64 val;
-        __asm__ volatile("ecag %0,0,0(%1)" : "=d" (val) : "a" (asi << 8 | parm));
-        return val;
+    enum class attribute_set_indication : u32 {
+        cache = 0,
+        cpu   = 1,
+    };
+
+    enum class attribute_indication : u8 {
+        extract_topo_summary        = 0,
+        extract_cache_line_size     = 1,
+        extract_cache_size          = 2,
+        extract_cache_associativity = 3,
+    };
+
+    enum class cpu_attribute_indication : u8 {
+        extract_cpu_speed = 0,
+    };
+
+    enum class cache_level : u8 {
+        l1 = 0, l2 = 1, l3 = 2, l4 = 3,
+        l5 = 4, l6 = 5, l7 = 6, l8 = 7,
+    };
+
+    enum class type_indication : u8 {
+        data        = 0b0,
+        instruction = 0b1,
+    };
+
+    enum class cache_scope : u8 {
+        does_not_exist = 0b00,
+        private_to_cpu = 0b01,
+        may_be_shared  = 0b10,
+        reserved       = 0b11,
+    };
+
+    enum class cache_type : u8 {
+        separate    = 0b00,
+        instruction = 0b01,
+        data        = 0b10,
+        unified     = 0b11,
+    };
+
+    namespace detail {
+
+        constexpr u64 invalid_sentinel = ~u64{0};
+
+        /// @brief Invoke raw ECAG
+        template <attribute_set_indication Asi>
+        [[nodiscard]] auto invoke(u8 parm) noexcept -> std::expected<u64, lib::kernel_error> {
+            u64 p{};
+            lib::bit_insert_msb<u64>(p, 54, 55, std::to_underlying(Asi));
+            lib::bit_insert_msb<u64>(p, 56, 63, parm);
+            u64 val;
+            __asm__ volatile("ecag %0,0,0(%1)" : "=d" (val) : "a" (p));
+
+            if (val == invalid_sentinel) [[unlikely]] {
+                return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_supported));
+            }
+            return val;
+        }
+
+        /// @brief Build the AI[4] | LI[3] | TI[1] byte for a cache-set query.
+        [[nodiscard]] constexpr auto pack_cache_parm(attribute_indication ai,
+                                                      cache_level li,
+                                                      type_indication ti) noexcept -> u8 {
+            return static_cast<u8>(std::to_underlying(ai) << 4
+                                  | std::to_underlying(li) << 1
+                                  | std::to_underlying(ti));
+        }
+
+    } // namespace detail
+
+    /// @brief One byte of a topology-summary result.
+    union [[gnu::packed]] cache_summary_entry {
+        u8 value{};
+        struct {
+            bitrsvd(4);
+            cache_scope scope : 2;
+            cache_type  type  : 2;
+        };
+
+        /// @brief True if a cache exists at this level.
+        [[nodiscard]] constexpr auto exists() const noexcept -> bool {
+            return scope != cache_scope::does_not_exist;
+        }
+    };
+    assert_size(cache_summary_entry, 1);
+
+    /// @brief Full topology summary (ASI=cache, AI=extract_topo_summary).
+    union [[gnu::packed]] cache_summary {
+        u64 value{};
+        cache_summary_entry entry[8];
+
+        [[nodiscard]] constexpr auto operator[](cache_level level) const noexcept
+            -> const cache_summary_entry& {
+            return entry[std::to_underlying(level)];
+        }
+    };
+    assert_size(cache_summary, 8);
+
+    [[nodiscard]] constexpr auto begin(const cache_summary& s) noexcept { return std::begin(s.entry); }
+    [[nodiscard]] constexpr auto end(const cache_summary& s) noexcept   { return std::end(s.entry); }
+
+    /// @brief CPU-speed result (ASI=cpu, AI=extract_cpu_speed).
+    struct cpu_speed {
+        u32 dynamic; ///< bits 0-31: dynamic (current/turbo) CPU speed
+        u32 static_; ///< bits 32-63: static (nominal) CPU speed
+    };
+    static_assert(sizeof(cpu_speed) == sizeof(u64));
+    static_assert(std::is_trivially_copyable_v<cpu_speed>);
+
+    /// @brief Extract the per-level cache topology summary.
+    [[nodiscard]] auto query_topology() noexcept -> std::expected<cache_summary, lib::kernel_error> {
+        constexpr u8 parm = detail::pack_cache_parm(attribute_indication::extract_topo_summary,
+                                                     cache_level::l1,           // ignored by hardware when AI == 0
+                                                     type_indication::data); // ignored by hardware when AI == 0
+        return detail::invoke<attribute_set_indication::cache>(parm)
+            .transform([](u64 raw) { return std::bit_cast<cache_summary>(raw); });
     }
 
-    auto invoke(int ai, int li, int ti) -> u64 {
-        return invoke(ECAG_CACHE, ai << 4 | li << 1 | ti);
+    /// @brief Extract a scalar cache attribute.
+    template <attribute_indication Indication, cache_level Level, type_indication Type>
+        requires (Indication != attribute_indication::extract_topo_summary)
+    [[nodiscard]] auto query_cache_attribute() noexcept -> std::expected<u64, lib::kernel_error> {
+        constexpr u8 parm = detail::pack_cache_parm(Indication, Level, Type);
+        return detail::invoke<attribute_set_indication::cache>(parm);
     }
 
-    /// @brief Extract CPU mhz via ECAG.
-    /// @param[out] mhz Output buffer.
-    auto query_cpu(u64& mhz) noexcept -> void{
-        mhz = invoke(ECAG_CPU, 0);
-    }
-
-    /// @brief Extract CPU cache geometry via ECAG
-    /// @param[out] out Output buffer
-    /// @param[in] parm
-    auto query_cache(u64& out, uchar parm) noexcept -> void {
-        out = invoke(ECAG_CACHE, parm);
+    /// @brief Extract dynamic/static CPU speed via ECAG.
+    [[nodiscard]] auto query_cpu_speed() noexcept -> std::expected<cpu_speed, lib::kernel_error> {
+        const u8 parm = static_cast<u8>(std::to_underlying(cpu_attribute_indication::extract_cpu_speed) << 4);
+        return detail::invoke<attribute_set_indication::cpu>(parm)
+            .transform([](u64 raw) { return std::bit_cast<cpu_speed>(raw); });
     }
 
 } // namespace arch::s390x::cpu::ecag

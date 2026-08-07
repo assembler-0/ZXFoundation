@@ -4,7 +4,7 @@
 
 export module lib.softirq_types;
 import zxfoundation.base.types;
-import arch.s390x.lib.atomic;
+import std;
 
 export {
 
@@ -58,7 +58,7 @@ namespace lib {
         void*        data{nullptr};
         /// @brief Generation counter bumped on @c open_softirq, allowing callers
         ///        to detect re-registration of a vector slot (e.g. for diagnostics).
-        arch::s390x::lib::atomic::atomic<u32> generation{0U};
+        std::atomic<u32> generation{0U};
     };
 
     static_assert(sizeof(softirq_entry) <= 24U,
@@ -67,7 +67,7 @@ namespace lib {
     /// @brief Per-CPU softirq execution state.
     struct softirq_state {
         /// @brief Bitmap of pending softirq vectors (one bit per @c softirq_vec).
-        arch::s390x::lib::atomic::atomic<u32> pending{0U};
+        std::atomic<u32> pending{0U};
         /// @brief Snapshot of pending bits being processed right now in @c do_softirq.
         u32                                     processing{0U};
         /// @brief Recursive re-entry guard (a softirq may raise another softirq).

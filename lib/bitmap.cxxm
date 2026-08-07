@@ -1,20 +1,15 @@
 /// SPDX-License-Identifier: Apache 2.0
 /// @file lib/bitmap.cxxm
-/// @brief static bitmap implementation
+/// @brief Fixed-capacity SMP-safe bitmap using std::atomic.
 
 export module lib.bitmap;
 import zxfoundation.base.types;
 import lib.bit;
-import lib.array;
-import lib.optional;
-import lib.placementnew;
-import arch.s390x.lib.atomic;
+import std;
 
 export {
 
 namespace lib {
-
-    using memory_order = arch::s390x::lib::atomic::memory_order;
 
     /// @brief A fixed-capacity, SMP-aware bitmap.
     /// @tparam N Number of bits in the bitmap.
@@ -23,156 +18,146 @@ namespace lib {
     class static_bitmap {
         static constexpr usize bits_per_word = 64;
         static constexpr usize word_count    = (N + bits_per_word - 1) / bits_per_word;
-        
-        using atomic_u64 = arch::s390x::lib::atomic::atomic<u64>;
-        
-        /// @brief Storage using atomic u64s for SMP safety.
-        lib::array<atomic_u64, word_count> m_storage;
 
-        /// @brief Returns a mask for the valid bits in the last word.
+        /// @brief Atomic storage per word. std::atomic lowers on s390x to
+        ///        the same @c __atomic_* builtins as the previous homegrown
+        ///        wrapper — i.e. @c LAA/LAAG + @c STOC/STOCG for the
+        ///        read-modify-write ops and @c LPGR/LGFR for plain loads.
+        using atomic_u64 = std::atomic<u64>;
+
+        std::array<atomic_u64, word_count> m_storage{};
+
+        /// @brief Mask of the valid bits in the last word.
         static constexpr auto last_word_mask() noexcept -> u64 {
             if constexpr (N % bits_per_word == 0) return ~0ULL;
-            else return lib::bit_range_mask_msb<u64>(0, (N % bits_per_word) - 1);
+            else return bit_range_mask_msb<u64>(0, (N % bits_per_word) - 1);
         }
 
     public:
         constexpr static_bitmap() noexcept = default;
 
         /// @brief Atomically set a bit.
-        /// @param[in] bit Index of the bit (0 to N-1).
-        /// @param[in] order Memory ordering.
-        auto set(usize bit, memory_order order = memory_order::seq_cst) noexcept -> void {
+        auto set(usize bit,
+                 std::memory_order order = std::memory_order::seq_cst) noexcept -> void {
             if (bit >= N) [[unlikely]] return;
-            discard_value m_storage[bit / bits_per_word].fetch_or(lib::bit_mask_msb<u64>(bit % bits_per_word), order);
+            discard_value m_storage[bit / bits_per_word].fetch_or(
+                bit_mask_msb<u64>(bit % bits_per_word), order);
         }
 
         /// @brief Atomically clear a bit.
-        /// @param[in] bit Index of the bit (0 to N-1).
-        /// @param[in] order Memory ordering.
-        auto clear(usize bit, memory_order order = memory_order::seq_cst) noexcept -> void {
+        auto clear(usize bit,
+                   std::memory_order order = std::memory_order::seq_cst) noexcept -> void {
             if (bit >= N) [[unlikely]] return;
-            discard_value m_storage[bit / bits_per_word].fetch_and(~lib::bit_mask_msb<u64>(bit % bits_per_word), order);
+            discard_value m_storage[bit / bits_per_word].fetch_and(
+                ~bit_mask_msb<u64>(bit % bits_per_word), order);
         }
 
         /// @brief Atomically test a bit.
-        /// @param[in] bit Index of the bit (0 to N-1).
-        /// @param[in] order Memory ordering.
-        /// @return true if set, false otherwise.
-        [[nodiscard]] auto test(usize bit, memory_order order = memory_order::relaxed) const noexcept -> bool {
+        [[nodiscard]] auto test(
+            usize bit,
+            std::memory_order order = std::memory_order::relaxed
+        ) const noexcept -> bool {
             if (bit >= N) [[unlikely]] return false;
-            return lib::bit_test_msb(m_storage[bit / bits_per_word].load(order), 
-                                     static_cast<u32>(bit % bits_per_word));
+            return bit_test_msb(
+                m_storage[bit / bits_per_word].load(order),
+                static_cast<u32>(bit % bits_per_word));
         }
 
-        /// @brief Non-atomically set a bit (use when lock is held).
+        /// @brief Non-atomic set (caller holds exterior lock).
         auto set_relaxed(usize bit) noexcept -> void {
             if (bit >= N) [[unlikely]] return;
-            u64 val = m_storage[bit / bits_per_word].load(memory_order::relaxed);
-            val |= lib::bit_mask_msb<u64>(bit % bits_per_word);
-            m_storage[bit / bits_per_word].store(val, memory_order::relaxed);
+            u64 val = m_storage[bit / bits_per_word].load(std::memory_order::relaxed);
+            val |= bit_mask_msb<u64>(bit % bits_per_word);
+            m_storage[bit / bits_per_word].store(val, std::memory_order::relaxed);
         }
 
-        /// @brief Non-atomically clear a bit (use when lock is held).
+        /// @brief Non-atomic clear (caller holds exterior lock).
         auto clear_relaxed(usize bit) noexcept -> void {
             if (bit >= N) [[unlikely]] return;
-            u64 val = m_storage[bit / bits_per_word].load(memory_order::relaxed);
-            val &= ~lib::bit_mask_msb<u64>(bit % bits_per_word);
-            m_storage[bit / bits_per_word].store(val, memory_order::relaxed);
+            u64 val = m_storage[bit / bits_per_word].load(std::memory_order::relaxed);
+            val &= ~bit_mask_msb<u64>(bit % bits_per_word);
+            m_storage[bit / bits_per_word].store(val, std::memory_order::relaxed);
         }
 
-        /// @brief Find the first set bit.
-        /// @return The index of the first set bit, or nullopt if none.
-        [[nodiscard]] auto find_first_set() const noexcept -> optional<usize> {
+        /// @brief Find first set bit.
+        [[nodiscard]] auto find_first_set() const noexcept -> std::optional<usize> {
             for (usize i = 0; i < word_count; ++i) {
-                u64 val = m_storage[i].load(memory_order::relaxed);
+                u64 val = m_storage[i].load(std::memory_order::relaxed);
                 if (i == word_count - 1) val &= last_word_mask();
-                
                 if (val != 0) {
-                    usize bit = static_cast<usize>(countl_zero(val));
+                    const usize bit = static_cast<usize>(std::countl_zero(val));
                     return i * bits_per_word + bit;
                 }
             }
-            return nullopt;
+            return std::nullopt;
         }
 
-        /// @brief Find the first set bit strictly after a given index.
-        /// @param[in] after Index to search past (the result is always > after).
-        /// @return The index of the next set bit, or nullopt if none follows.
-        /// @note Skips fully-clear 64-bit words, so a forward sweep over the
-        ///       whole bitmap costs O(N/64 + popcount) rather than O(N) per call.
-        [[nodiscard]] auto find_next_set(usize after) const noexcept -> optional<usize> {
+        /// @brief Find first set bit strictly after @p after.
+        /// @details Skips fully-clear 64-bit words, so a forward sweep over
+        ///          the whole bitmap costs O(N/64 + popcount) per call.
+        [[nodiscard]] auto find_next_set(usize after) const noexcept -> std::optional<usize> {
             const usize start = after + 1;
-            if (start >= N) return nullopt;
+            if (start >= N) return std::nullopt;
             const usize start_word = start / bits_per_word;
             const usize start_bit  = start % bits_per_word;
 
             for (usize i = start_word; i < word_count; ++i) {
-                u64 val = m_storage[i].load(memory_order::relaxed);
+                u64 val = m_storage[i].load(std::memory_order::relaxed);
                 if (i == word_count - 1) val &= last_word_mask();
-                // For the first word, ignore bits at or before `after`.
                 if (i == start_word && start_bit != 0) {
-                    val &= lib::bit_range_mask_msb<u64>(start_bit, bits_per_word - 1);
+                    // Ignore bits at or before `after` in the first word.
+                    val &= bit_range_mask_msb<u64>(start_bit, bits_per_word - 1);
                 }
                 if (val != 0) {
-                    usize bit = static_cast<usize>(countl_zero(val));
-                    usize res = i * bits_per_word + bit;
+                    const usize bit = static_cast<usize>(std::countl_zero(val));
+                    const usize res  = i * bits_per_word + bit;
                     if (res < N) return res;
                 }
             }
-            return nullopt;
+            return std::nullopt;
         }
 
-        /// @brief Find the first unset bit.
-        /// @return The index of the first unset bit, or nullopt if all are set.
-        [[nodiscard]] auto find_first_unset() const noexcept -> optional<usize> {
+        /// @brief Find first unset bit.
+        [[nodiscard]] auto find_first_unset() const noexcept -> std::optional<usize> {
             for (usize i = 0; i < word_count; ++i) {
-                u64 val = ~m_storage[i].load(memory_order::relaxed);
+                u64 val = ~m_storage[i].load(std::memory_order::relaxed);
                 if (i == word_count - 1) val &= last_word_mask();
-
                 if (val != 0) {
-                    auto bit = static_cast<usize>(countl_zero(val));
-                    usize res = i * bits_per_word + bit;
+                    const usize bit = static_cast<usize>(std::countl_zero(val));
+                    const usize res  = i * bits_per_word + bit;
                     if (res < N) return res;
                 }
             }
-            return nullopt;
+            return std::nullopt;
         }
 
-        /// @brief Count the number of set bits.
+        /// @brief Count set bits.
         [[nodiscard]] auto count() const noexcept -> usize {
             usize total = 0;
             for (usize i = 0; i < word_count; ++i) {
-                u64 val = m_storage[i].load(memory_order::relaxed);
+                u64 val = m_storage[i].load(std::memory_order::relaxed);
                 if (i == word_count - 1) val &= last_word_mask();
-                total += static_cast<usize>(popcount(val));
+                total += static_cast<usize>(std::popcount(val));
             }
             return total;
         }
 
-        /// @brief Returns true if no bits are set.
         [[nodiscard]] auto none() const noexcept -> bool {
             for (usize i = 0; i < word_count; ++i) {
-                u64 val = m_storage[i].load(memory_order::relaxed);
+                u64 val = m_storage[i].load(std::memory_order::relaxed);
                 if (i == word_count - 1) val &= last_word_mask();
                 if (val != 0) return false;
             }
             return true;
         }
 
-        /// @brief Returns true if any bit is set.
-        [[nodiscard]] auto any() const noexcept -> bool {
-            return !none();
-        }
-
-        /// @brief Returns true if all bits are set.
-        [[nodiscard]] auto all() const noexcept -> bool {
-            return count() == N;
-        }
+        [[nodiscard]] auto any() const noexcept -> bool { return !none(); }
+        [[nodiscard]] auto all() const noexcept -> bool { return count() == N; }
 
         /// @brief Clear the entire bitmap.
         auto reset() noexcept -> void {
             for (usize i = 0; i < word_count; ++i) {
-                m_storage[i].store(0, memory_order::relaxed);
+                m_storage[i].store(0, std::memory_order::relaxed);
             }
         }
     };

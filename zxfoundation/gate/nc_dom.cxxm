@@ -20,8 +20,7 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
 import zxfoundation.sched.sched;
 import lib.error;
-import lib.expected;
-import lib.algorithm;
+import std;
 import zxfoundation.sched.sched_policy_types;
 
 static constexpr u64 NC_DOM_ERROR = ~0ULL;
@@ -59,7 +58,13 @@ namespace __dom_detail {
     /// @brief Validate that a capability token confers admin authority.
     /// Uses cap_validate<domain> to check the token references a valid domain,
     /// then verifies the admin right is present.
-    [[nodiscard]] auto validate_admin(cap_token token) noexcept -> bool {
+    [[nodiscard]] auto validate_admin(cap_token token, u32 owner_id) noexcept -> bool {
+        auto dgp_r = zxfoundation::sys::cap::cap_validate_generic_for(
+            token, cap_rights::admin, owner_id);
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("dom: admin cap ownership validation failed");
+            return false;
+        }
         auto d_r = zxfoundation::sys::cap::cap_validate<domain>(
             token, cap_rights::admin);
         if (!d_r) {
@@ -71,11 +76,12 @@ namespace __dom_detail {
 
     auto nc_domain_create(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         // a0 = admin capability token, a1 = user-space name pointer
-        if (!validate_admin(cap_token{a0})) {
+        auto* caller = current_domain();
+        if (!caller || !validate_admin(cap_token{a0}, caller->ko.id)) {
             return NC_DOM_ERROR;
         }
 
-        auto* d = current_domain();
+        auto* d = caller;
         if (!d) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -114,11 +120,12 @@ namespace __dom_detail {
 
     auto nc_domain_destroy(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         // a0 = admin capability token, a1 = target domain ID
-        if (!validate_admin(cap_token{a0})) {
+        auto* caller = current_domain();
+        if (!caller || !validate_admin(cap_token{a0}, caller->ko.id)) {
             return NC_DOM_ERROR;
         }
 
-        auto* d = current_domain();
+        auto* d = caller;
         if (!d) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -141,7 +148,9 @@ namespace __dom_detail {
 
         auto result = zxfoundation::domain::domain_destroy(target_id);
         if (!result) {
-            zxfoundation::sys::printk::perr("domain_destroy: domain_destroy({}) failed", target_id);
+            zxfoundation::sys::printk::perr(
+                "domain_destroy: domain_destroy({}) failed: {}", target_id,
+                result.error());
             return NC_DOM_ERROR;
         }
 
@@ -186,11 +195,12 @@ namespace __dom_detail {
 
     auto nc_domain_strand_create(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
         // a0 = admin capability token, a1 = cpu affinity, a2 = owner domain ID
-        if (!validate_admin(cap_token{a0})) {
+        auto* caller = current_domain();
+        if (!caller || !validate_admin(cap_token{a0}, caller->ko.id)) {
             return NC_DOM_ERROR;
         }
 
-        auto* self = current_domain();
+        auto* self = caller;
         if (!self) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -277,9 +287,10 @@ namespace __dom_detail {
     ///          follow-up.  Reads a @c sched_policy struct (sizeof=64) from
     ///          user VA @c a2 and re-admits it through @c sched_class::admit_policy.
     auto nc_dom_strand_set_policy(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
-        if (!validate_admin(cap_token{a0})) return NC_DOM_ERROR;
+        auto* caller = current_domain();
+        if (!caller || !validate_admin(cap_token{a0}, caller->ko.id)) return NC_DOM_ERROR;
 
-        auto* self = current_domain();
+        auto* self = caller;
         if (!self) [[unlikely]] return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
@@ -329,10 +340,8 @@ namespace __dom_detail {
 
     /// @brief dom_op::strand_set_affinity — (admin cap, strand_id, sched_mask_bits)
     auto nc_dom_strand_set_affinity(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
-        if (!validate_admin(cap_token{a0})) return NC_DOM_ERROR;
-
         auto* self = current_domain();
-        if (!self) [[unlikely]] return NC_DOM_ERROR;
+        if (!self || !validate_admin(cap_token{a0}, self->ko.id)) return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *self, *self,
@@ -359,10 +368,8 @@ namespace __dom_detail {
     /// @brief dom_op::strand_query_state — (admin cap, strand_id)
     /// @details Returns a packed u64
     auto nc_dom_strand_query_state(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
-        if (!validate_admin(cap_token{a0})) return NC_DOM_ERROR;
-
         auto* self = current_domain();
-        if (!self) [[unlikely]] return NC_DOM_ERROR;
+        if (!self || !validate_admin(cap_token{a0}, self->ko.id)) return NC_DOM_ERROR;
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *self, *self,

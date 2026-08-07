@@ -8,12 +8,10 @@ import zxfoundation.sched.sched_domain_tree_types;
 import lib.softirq_types;
 import lib.softirq;
 import lib.error;
-import lib.expected;
+import std;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import arch.s390x.lib.atomic;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu_types;
 import zxfoundation.sys.syschk;
 
 namespace _internal {
@@ -35,16 +33,16 @@ namespace _internal {
             : arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
         auto& req = g_balance_reqs[cpu];
-        const u8 kind_u = req.kind.load(arch::s390x::lib::atomic::memory_order::acquire);
+        const u8 kind_u = req.kind.load(std::memory_order::acquire);
         const balance_kind kind = static_cast<balance_kind>(kind_u);
         discard_value lib::softirq_clear(lib::softirq_vec::sched);
 
-        req.last_migration_ok.store(0U, arch::s390x::lib::atomic::memory_order::release);
+        req.last_migration_ok.store(0U, std::memory_order::release);
 
         if (s_balance_dispatch != nullptr) {
             s_balance_dispatch(cpu, kind, req);
         }
-        discard_value req.completion_count.fetch_add(1U, arch::s390x::lib::atomic::memory_order::release);
+        discard_value req.completion_count.fetch_add(1U, std::memory_order::release);
     }
 
 } // namespace _internal
@@ -55,7 +53,7 @@ namespace zxfoundation::sched::softirq_bal {
 
     /// @brief Open the SCHED_SOFTIRQ vector with the framework.
     /// @return Success when the vector was registered.
-    auto open_sched_softirq() noexcept -> lib::expected<void, lib::kernel_error> {
+    auto open_sched_softirq() noexcept -> std::expected<void, lib::kernel_error> {
         return lib::open_softirq(lib::softirq_vec::sched, _internal::softirq_entry, nullptr);
     }
 
@@ -71,8 +69,8 @@ namespace zxfoundation::sched::softirq_bal {
     auto raise_balance(u16 cpu, balance_kind kind) noexcept -> void {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
         auto& req = _internal::g_balance_reqs[cpu];
-        req.kind.store(static_cast<u8>(kind), arch::s390x::lib::atomic::memory_order::release);
-        discard_value req.request_count.fetch_add(1U, arch::s390x::lib::atomic::memory_order::relaxed);
+        req.kind.store(static_cast<u8>(kind), std::memory_order::release);
+        discard_value req.request_count.fetch_add(1U, std::memory_order::relaxed);
         const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
         if (cpu == self) {
             lib::raise_softirq(lib::softirq_vec::sched);

@@ -6,12 +6,10 @@ export module zxfoundation.sched.sched_cpudl;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.rbtree;
-import lib.util;
 import lib.cpumask;
 import lib.error;
-import lib.expected;
-import lib.util;
-import arch.s390x.lib.atomic;
+import lib.container_of;
+import std;
 import arch.s390x.cpu.cpumask;
 
 namespace _internal {
@@ -32,8 +30,8 @@ namespace _internal {
         lib::rb_root            root{};
         cpudl_node              nodes[CONFIG_ZX_MAX_CPUS]{};
         /// @brief Cached snapshot of the earliest-deadline CPU + deadline ns.
-        arch::s390x::lib::atomic::atomic<u64>  earliest_ns{0ULL};
-        arch::s390x::lib::atomic::atomic<u32> earliest_cpu{0xFFFF'FFFFU};
+        std::atomic<u64>  earliest_ns{0ULL};
+        std::atomic<u32> earliest_cpu{0xFFFF'FFFFU};
     };
 
     cpudl_index g_cpudl{};
@@ -59,8 +57,8 @@ namespace zxfoundation::sched::cpudl {
             _internal::g_cpudl.nodes[c].cpu = static_cast<u16>(c);
             _internal::g_cpudl.nodes[c].is_set = false;
         }
-        _internal::g_cpudl.earliest_ns.store(0ULL, arch::s390x::lib::atomic::memory_order::release);
-        _internal::g_cpudl.earliest_cpu.store(0xFFFF'FFFFU, arch::s390x::lib::atomic::memory_order::release);
+        _internal::g_cpudl.earliest_ns.store(0ULL, std::memory_order::release);
+        _internal::g_cpudl.earliest_cpu.store(0xFFFF'FFFFU, std::memory_order::release);
     }
 
 /// @brief Insert / update a CPU's top-deadline entry.
@@ -86,9 +84,9 @@ namespace zxfoundation::sched::cpudl {
         if (first != nullptr) {
             auto* first_node = lib::container_of<_internal::cpudl_node, lib::rb_node, &_internal::cpudl_node::rb_link>(first);
             _internal::g_cpudl.earliest_ns.store(first_node->deadline_ns,
-                                                   arch::s390x::lib::atomic::memory_order::release);
+                                                   std::memory_order::release);
             _internal::g_cpudl.earliest_cpu.store(first_node->cpu,
-                                                     arch::s390x::lib::atomic::memory_order::release);
+                                                     std::memory_order::release);
         }
     }
 
@@ -105,12 +103,12 @@ namespace zxfoundation::sched::cpudl {
         if (first != nullptr) {
             auto* first_node = lib::container_of<_internal::cpudl_node, lib::rb_node, &_internal::cpudl_node::rb_link>(first);
             _internal::g_cpudl.earliest_ns.store(first_node->deadline_ns,
-                                                   arch::s390x::lib::atomic::memory_order::release);
+                                                   std::memory_order::release);
             _internal::g_cpudl.earliest_cpu.store(first_node->cpu,
-                                                     arch::s390x::lib::atomic::memory_order::release);
+                                                     std::memory_order::release);
         } else {
-            _internal::g_cpudl.earliest_ns.store(0ULL, arch::s390x::lib::atomic::memory_order::release);
-            _internal::g_cpudl.earliest_cpu.store(0xFFFF'FFFFU, arch::s390x::lib::atomic::memory_order::release);
+            _internal::g_cpudl.earliest_ns.store(0ULL, std::memory_order::release);
+            _internal::g_cpudl.earliest_cpu.store(0xFFFF'FFFFU, std::memory_order::release);
         }
     }
 
@@ -118,7 +116,7 @@ namespace zxfoundation::sched::cpudl {
     ///        @c CONFIG_ZX_MAX_CPUS when none set.
     [[nodiscard]] auto cpudl_first_cpu() noexcept -> u16 {
         const u32 cpu = _internal::g_cpudl.earliest_cpu.load(
-            arch::s390x::lib::atomic::memory_order::acquire);
+            std::memory_order::acquire);
         if (cpu == 0xFFFF'FFFFU) return static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS);
         return static_cast<u16>(cpu);
     }
@@ -134,7 +132,7 @@ namespace zxfoundation::sched::cpudl {
         for (u32 c = 0; c < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++c) {
             const auto& node = _internal::g_cpudl.nodes[c];
             if (!node.is_set) continue;
-            if (!affinity.test(c, arch::s390x::lib::atomic::memory_order::acquire)) continue;
+            if (!affinity.test(c, std::memory_order::acquire)) continue;
             if (!arch::s390x::cpu::cpumask::cpu_online(static_cast<u16>(c))) continue;
             if (node.deadline_ns >= latest) {
                 latest = node.deadline_ns;

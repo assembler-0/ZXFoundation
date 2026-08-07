@@ -10,8 +10,7 @@ import zxfoundation.sys.timer;
 import zxfoundation.sys.time;
 import zxfoundation.base.types;
 import lib.error;
-import lib.expected;
-import arch.s390x.lib.atomic;
+import std;
 
 export {
 

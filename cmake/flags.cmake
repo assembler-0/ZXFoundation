@@ -97,6 +97,7 @@ set(_ZX_NEEDED_CXX_FLAGS
     "-fno-exceptions|REQUIRED"
     "-fno-rtti|REQUIRED"
     "-nostdlib|REQUIRED"
+    "-Wno-c2y-extensions|REQUIRED"
     "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=|OPTIONAL"
     "-march=${MARCH_MODE}|OPTIONAL"
     "-mtune=${MARCH_MODE}|OPTIONAL"
@@ -109,6 +110,7 @@ set(_ZX_NEEDED_CXX_LTO_FLAGS "")
 if(COMPILER_ID STREQUAL "gcc")
     list(APPEND _ZX_NEEDED_CXX_FLAGS
         "-static-libgcc|REQUIRED"
+        "-nostdinc++|REQUIRED"
         "-mzarch|REQUIRED"
     )
 endif()
@@ -116,6 +118,15 @@ endif()
 if(COMPILER_ID STREQUAL "clang")
     list(APPEND _ZX_NEEDED_CXX_FLAGS
         "-nostdlib++|REQUIRED"
+        "-fcolor-diagnostics|OPTIONAL"
+        "-Wno-keyword-compat|REQUIRED"
+        "-Wno-nested-anon-types|REQUIRED"
+        "-Wno-unknown-warning-option|REQUIRED"
+        "-Wno-unused-parameter|REQUIRED"
+        "-Wno-gcc-compat|REQUIRED"
+        "-Wno-user-defined-literals|REQUIRED"
+        "-Wno-unused-local-typedef|REQUIRED"
+        "-Wno-unknown-attributes|REQUIRED"
         "--target=${COMMON_TARGET_TRIPLE}|REQUIRED"
     )
     if(ENABLE_LTO)

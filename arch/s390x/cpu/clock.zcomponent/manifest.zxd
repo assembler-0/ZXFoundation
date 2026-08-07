@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    clock.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-gnu-anonymous-struct) ]
+    clock.cxx
+}

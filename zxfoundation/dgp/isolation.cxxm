@@ -6,19 +6,39 @@ export module zxfoundation.dgp.isolation;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.memory_contract;
 import zxfoundation.domain.domain_types;
+import zxfoundation.locking.lock;
 import zxfoundation.sched.sched_policy_types;
 import zxfoundation.base.config;
 import arch.s390x.mmu.mmu_types;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 
 namespace zxfoundation::dgp::_internal {
 
-    static bool g_isolation_initialized{false};
+    static std::atomic<bool> g_isolation_initialized{false};
     static bool g_storage_key_used[STORAGE_KEY_COUNT]{};
     static u32 g_storage_key_generation[STORAGE_KEY_COUNT]{};
+    static std::atomic<u32> g_storage_key_lock{0U};
+
+    class storage_key_lock_guard {
+    public:
+        storage_key_lock_guard() noexcept {
+            u32 expected = 0U;
+            while (!g_storage_key_lock.compare_exchange_weak(
+                expected, 1U, std::memory_order::acquire, std::memory_order::relaxed)) {
+                expected = 0U;
+            }
+        }
+
+        ~storage_key_lock_guard() noexcept {
+            g_storage_key_lock.store(0U, std::memory_order::release);
+        }
+
+        storage_key_lock_guard(const storage_key_lock_guard&) = delete;
+        auto operator=(const storage_key_lock_guard&) -> storage_key_lock_guard& = delete;
+    };
 
     [[nodiscard]] auto generic_invalid_arg() noexcept -> lib::kernel_error {
         return lib::kernel_error::from_generic(lib::generic_error::invalid_arg);
@@ -39,15 +59,16 @@ namespace zxfoundation::dgp::_internal {
     }
 
     [[nodiscard]] auto allocate_storage_key(u8 requested) noexcept
-        -> lib::expected<u8, lib::kernel_error>
+        -> std::expected<u8, lib::kernel_error>
     {
+        const storage_key_lock_guard guard{};
         if (requested != STORAGE_KEY_AUTO) {
             if (requested < STORAGE_KEY_USER_BASE || requested > STORAGE_KEY_USER_MAX) {
-                return lib::unexpected(generic_invalid_arg());
+                return std::unexpected(generic_invalid_arg());
             }
 
             if (g_storage_key_used[requested]) {
-                return lib::unexpected(memory_out_of_memory());
+                return std::unexpected(memory_out_of_memory());
             }
 
             g_storage_key_used[requested] = true;
@@ -61,17 +82,23 @@ namespace zxfoundation::dgp::_internal {
             }
         }
 
-        return lib::unexpected(memory_out_of_memory());
+        return std::unexpected(memory_out_of_memory());
     }
 
-    auto release_storage_key(u8 key) noexcept -> void {
+    [[nodiscard]] auto release_storage_key(u8 key) noexcept -> u32 {
+        const storage_key_lock_guard guard{};
         if (key >= STORAGE_KEY_USER_BASE && key <= STORAGE_KEY_USER_MAX) {
-            g_storage_key_used[key] = false;
-            ++g_storage_key_generation[key];
+            if (g_storage_key_used[key]) {
+                g_storage_key_used[key] = false;
+                ++g_storage_key_generation[key];
+            }
+            return g_storage_key_generation[key];
         }
+        return 0U;
     }
 
     [[nodiscard]] auto storage_key_generation(u8 key) noexcept -> u32 {
+        const storage_key_lock_guard guard{};
         if (key >= STORAGE_KEY_COUNT) return 0U;
         return g_storage_key_generation[key];
     }
@@ -88,6 +115,7 @@ namespace zxfoundation::dgp {
     /// @note The initial implementation resets the bootstrap storage-key registry before domain-visible DGP objects exist.
     /// @warning This function must run before domain, gate, or portal policy is exposed to user-visible objects.
     auto isolation_init() noexcept -> void {
+        const _internal::storage_key_lock_guard guard{};
         for (u8 key = 0U; key < STORAGE_KEY_COUNT; ++key) {
             _internal::g_storage_key_used[key] = false;
             _internal::g_storage_key_generation[key] = 1U;
@@ -95,7 +123,7 @@ namespace zxfoundation::dgp {
 
         _internal::g_storage_key_used[0U] = true;
 
-        _internal::g_isolation_initialized = true;
+        _internal::g_isolation_initialized.store(true, std::memory_order::release);
     }
 
     /// @brief Create initial DGP isolation state for a domain.
@@ -107,14 +135,14 @@ namespace zxfoundation::dgp {
     [[nodiscard]] auto isolation_create_domain(
         u32 domain_id,
         const isolation_policy& policy
-    ) noexcept -> lib::expected<isolation_domain_state, lib::kernel_error> {
-        if (!_internal::g_isolation_initialized) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+    ) noexcept -> std::expected<isolation_domain_state, lib::kernel_error> {
+        if (!_internal::g_isolation_initialized.load(std::memory_order::acquire)) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::uninitialized));
         }
 
         auto key_result = _internal::allocate_storage_key(policy.storage_key);
         if (!key_result) {
-            return lib::unexpected(key_result.error());
+            return std::unexpected(key_result.error());
         }
 
         isolation_domain_state state{};
@@ -152,9 +180,9 @@ namespace zxfoundation::dgp {
         lifecycle_state current_ls,
         arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
         u64 root_phys
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (current_ls != lifecycle_state::sealed || root_phys == 0ULL || asce.raw() == 0ULL) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         state.asce = asce;
@@ -175,12 +203,11 @@ namespace zxfoundation::dgp {
         arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
         u64 root_phys,
         [[maybe_unused]] u8 storage_key
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (state != lifecycle_state::sealed || root_phys == 0ULL || asce.raw() == 0ULL) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
-        state = lifecycle_state::active;
         return {};
     }
 
@@ -192,8 +219,8 @@ namespace zxfoundation::dgp {
     [[nodiscard]] auto isolation_begin_storage_key_revocation(
         lifecycle_state& state,
         storage_key_revocation_state& storage_key_state,
-        u16& revocation_epoch
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        std::atomic<u16>& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (state == lifecycle_state::destroyed
             || storage_key_state == storage_key_revocation_state::reusable) {
             return {};
@@ -201,12 +228,29 @@ namespace zxfoundation::dgp {
 
         state = lifecycle_state::dying;
         storage_key_state = storage_key_revocation_state::draining;
-        ++revocation_epoch;
+        discard_value revocation_epoch.fetch_add(1U, std::memory_order::acq_rel);
+        return {};
+    }
+
+    [[nodiscard]] auto isolation_begin_storage_key_revocation(
+        lifecycle_state& state,
+        storage_key_revocation_state& storage_key_state,
+        u16& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (state == lifecycle_state::destroyed
+            || storage_key_state == storage_key_revocation_state::reusable) {
+            return {};
+        }
+
+        state = lifecycle_state::dying;
+        storage_key_state = storage_key_revocation_state::draining;
+        std::atomic_ref<u16> epoch{revocation_epoch};
+        discard_value epoch.fetch_add(1U, std::memory_order::acq_rel);
         return {};
     }
 
     /// @brief Complete storage-key revocation after required translation invalidation is done.
-    /// @param[in,out] state Isolation state whose storage key can be returned to DGP policy.
+    /// @param[in] state Isolation state whose storage key can be returned to DGP policy.
     /// @param[in,out] storage_key The domain's hardware storage key.
     /// @param[in,out] storage_key_generation Storage key generation counter.
     /// @param[in,out] storage_key_state Storage key revocation state.
@@ -214,11 +258,11 @@ namespace zxfoundation::dgp {
     /// @note The key generation is advanced by the storage-key allocator when the key is released.
     /// @warning Callers must only invoke this after VM, DAT, and portal teardown have completed.
     [[nodiscard]] auto isolation_complete_storage_key_revocation(
-        lifecycle_state& state,
+        [[maybe_unused]] lifecycle_state& state,
         u8& storage_key,
         u32& storage_key_generation,
         storage_key_revocation_state& storage_key_state
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (storage_key_state == storage_key_revocation_state::reusable
             || storage_key == 0U) {
             storage_key_state = storage_key_revocation_state::reusable;
@@ -226,14 +270,13 @@ namespace zxfoundation::dgp {
         }
 
         if (storage_key_state != storage_key_revocation_state::draining) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         const u8 released_key = storage_key;
-        _internal::release_storage_key(released_key);
-        storage_key_generation = _internal::storage_key_generation(released_key);
+        storage_key_generation = _internal::release_storage_key(released_key);
         storage_key_state = storage_key_revocation_state::reusable;
-        state = lifecycle_state::destroyed;
+        discard_value generation_bump();
         return {};
     }
 
@@ -245,9 +288,18 @@ namespace zxfoundation::dgp {
     /// @warning This function only updates DGP metadata; callers still destroy hardware access-list entries.
     [[nodiscard]] auto isolation_begin_portal_teardown(
         [[maybe_unused]] lifecycle_state& state,
+        std::atomic<u16>& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        discard_value revocation_epoch.fetch_add(1U, std::memory_order::acq_rel);
+        return {};
+    }
+
+    [[nodiscard]] auto isolation_begin_portal_teardown(
+        [[maybe_unused]] lifecycle_state& state,
         u16& revocation_epoch
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        ++revocation_epoch;
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        std::atomic_ref<u16> epoch{revocation_epoch};
+        discard_value epoch.fetch_add(1U, std::memory_order::acq_rel);
         return {};
     }
 
@@ -262,13 +314,13 @@ namespace zxfoundation::dgp {
         const lifecycle_state state,
         u64 root_phys,
         u64 asce_raw
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (!_internal::g_isolation_initialized) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!_internal::g_isolation_initialized.load(std::memory_order::acquire)) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::uninitialized));
         }
 
         if (state != lifecycle_state::active || root_phys == 0ULL || asce_raw == 0ULL) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         return {};
@@ -285,9 +337,9 @@ namespace zxfoundation::dgp {
         const lifecycle_state state,
         const zxfoundation::sched::sched_policy& policy,
         bool has_rt_authority
-    ) noexcept -> lib::expected<zxfoundation::sched::sched_admission_result, lib::kernel_error> {
+    ) noexcept -> std::expected<zxfoundation::sched::sched_admission_result, lib::kernel_error> {
         if (state != lifecycle_state::active) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         zxfoundation::sched::sched_admission_result result{};
@@ -301,36 +353,36 @@ namespace zxfoundation::dgp {
                 return result;
             case zxfoundation::sched::sched_class_id::rt:
                 if (!has_rt_authority || policy.rt_priority == 0U || policy.rt_priority > 99U) {
-                    return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                    return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 if (policy.runtime_ns == 0U || policy.period_ns == 0U || policy.runtime_ns > policy.period_ns) {
-                    return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                    return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 if (!_internal::mask_is_valid(policy.allowed_cpus, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
                     || !_internal::mask_is_valid(policy.allowed_numa_nodes, 64U)) {
-                    return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                    return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 result.admitted_runtime_ns = policy.runtime_ns;
                 result.admitted_period_ns = policy.period_ns;
                 return result;
             case zxfoundation::sched::sched_class_id::deadline:
                 if (!has_rt_authority) {
-                    return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                    return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 if (policy.runtime_ns == 0U || policy.deadline_ns == 0U || policy.period_ns == 0U
                     || policy.runtime_ns > policy.deadline_ns || policy.deadline_ns > policy.period_ns) {
-                    return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                    return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 if (!_internal::mask_is_valid(policy.allowed_cpus, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
                     || !_internal::mask_is_valid(policy.allowed_numa_nodes, 64U)) {
-                    return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+                    return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 result.admitted_runtime_ns = policy.runtime_ns;
                 result.admitted_period_ns = policy.period_ns;
                 return result;
         }
 
-        return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
     }
 
     /// @brief Destroy DGP isolation state for a domain.
@@ -339,7 +391,7 @@ namespace zxfoundation::dgp {
     /// @param[in,out] storage_key_generation Storage key generation counter.
     /// @param[in,out] storage_key_state Storage key revocation state.
     /// @param[in,out] revocation_epoch Revocation epoch counter.
-    /// @return Success when storage-key ownership is released and the state is marked destroyed.
+    /// @return Success when storage-key ownership is released; SCOMS records the terminal state.
     /// @note This helper releases DGP-owned identity only; the caller remains responsible for DAT tables, VM regions, portals, gates, and stacks.
     /// @warning Destruction with active gate or portal counts is rejected to prevent stale authority use.
     [[nodiscard]] auto isolation_destroy_domain(
@@ -347,8 +399,8 @@ namespace zxfoundation::dgp {
         u8& storage_key,
         u32& storage_key_generation,
         storage_key_revocation_state& storage_key_state,
-        u16& revocation_epoch
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+        std::atomic<u16>& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         if (state == lifecycle_state::destroyed) {
             return {};
         }
@@ -356,12 +408,36 @@ namespace zxfoundation::dgp {
         auto begin_revocation = isolation_begin_storage_key_revocation(
             state, storage_key_state, revocation_epoch
         );
-        if (!begin_revocation) return lib::unexpected(begin_revocation.error());
+        if (!begin_revocation) return std::unexpected(begin_revocation.error());
 
         auto complete_revocation = isolation_complete_storage_key_revocation(
             state, storage_key, storage_key_generation, storage_key_state
         );
-        if (!complete_revocation) return lib::unexpected(complete_revocation.error());
+        if (!complete_revocation) return std::unexpected(complete_revocation.error());
+
+        return {};
+    }
+
+    [[nodiscard]] auto isolation_destroy_domain(
+        lifecycle_state& state,
+        u8& storage_key,
+        u32& storage_key_generation,
+        storage_key_revocation_state& storage_key_state,
+        u16& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (state == lifecycle_state::destroyed) {
+            return {};
+        }
+
+        auto begin_revocation = isolation_begin_storage_key_revocation(
+            state, storage_key_state, revocation_epoch
+        );
+        if (!begin_revocation) return std::unexpected(begin_revocation.error());
+
+        auto complete_revocation = isolation_complete_storage_key_revocation(
+            state, storage_key, storage_key_generation, storage_key_state
+        );
+        if (!complete_revocation) return std::unexpected(complete_revocation.error());
 
         return {};
     }
@@ -376,22 +452,22 @@ namespace zxfoundation::dgp {
         u32 caller_domain_id,
         u32 gate_id,
         isolation_rights requested
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (!_internal::g_isolation_initialized) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!_internal::g_isolation_initialized.load(std::memory_order::acquire)) {
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         if (requested == isolation_rights::none) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         if (caller_domain_id >= zxfoundation::domain::MAX_DOMAINS) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         const u32 ns = gate_id >> 5;
         if (ns > 0x1F) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         return {};
@@ -412,20 +488,20 @@ namespace zxfoundation::dgp {
         u64 va_start,
         u64 va_end,
         isolation_rights requested
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
-        if (!_internal::g_isolation_initialized) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!_internal::g_isolation_initialized.load(std::memory_order::acquire)) {
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         discard_value source_domain_id;
         discard_value target_domain_id;
 
         if (va_start >= va_end) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         if (!has_all_rights(requested, isolation_rights::share)) {
-            return lib::unexpected(_internal::generic_invalid_arg());
+            return std::unexpected(_internal::generic_invalid_arg());
         }
 
         return {};
@@ -435,11 +511,16 @@ namespace zxfoundation::dgp {
     /// @param[in] d          Target domain.  Must be non-null and active.
     /// @param[in] drop_mask  Bits to clear from @c granted_rights.
     ///                       Bits not currently set have no effect.
-    /// @return Success on completion, or kernel_error if @c d is null.
+    /// @return Success on completion, or kernel_error when @c d is not active.
     auto revoke_domain_rights(
         zxfoundation::domain::domain& d,
         isolation_rights drop_mask
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        const zxfoundation::locking::irq_lock_guard guard{d.ko.lock};
+        if (d.ko.state != lifecycle_state::active) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
         const auto drop_raw = static_cast<u32>(drop_mask);
         const auto granted_raw = static_cast<u32>(d.granted_rights);
         const auto effective_drop = drop_raw & granted_raw;
@@ -449,7 +530,7 @@ namespace zxfoundation::dgp {
 
         d.granted_rights = static_cast<isolation_rights>(granted_raw & ~effective_drop);
         d.pending_rights_revoke_raw |= effective_drop;
-        ++d.revocation_epoch;
+        discard_value d.revocation_epoch.fetch_add(1U, std::memory_order::acq_rel);
 
         return {};
     }

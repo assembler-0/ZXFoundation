@@ -14,18 +14,13 @@ import zxfoundation.locking.lock;
 import zxfoundation.base.types;
 import zxfoundation.base.linksym;
 import zxfoundation.sys.syschk;
-import lib.util;
 import lib.error;
-import lib.expected;
-import lib.algorithm;
-import lib.array;
-import lib.algorithm;
-import lib.placementnew;
+import std;
 import lib.static_vector;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.irq;
-import arch.s390x.lib.atomic;
+import arch.s390x.cpu.skey;
 
 namespace zxfoundation::memory::pmm::_internal {
 
@@ -113,6 +108,11 @@ namespace zxfoundation::memory::pmm::_internal {
     /// @brief Highest PFN ever observed in the boot memory map.
     static u64 g_max_pfn{0};
 
+    /// @brief Frames deliberately retired after validation or MCCK failure.
+    /// They have already been removed from free_pages and must never re-enter
+    /// buddy until an explicit offline-recovery path can verify them.
+    static u64 g_retired_pages{0};
+
     static bool g_initialized{false};
 
     [[nodiscard]] constexpr auto zone_of(u64 phys) noexcept -> zone {
@@ -132,12 +132,13 @@ namespace zxfoundation::memory::pmm::_internal {
 
     [[nodiscard]] auto local_node_id() noexcept -> u8 {
         auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        auto node = numa::node_for_cpu(pcp.cpu_id);
-        if (node) return normalize_node_id(*node);
-        return normalize_node_id(pcp.drawer_id);
+        if (auto node = numa::node_for_cpu(pcp.cpu_id)) return normalize_node_id(*node);
+        // Topology not yet initialised or unavailable: fall back to the boot
+        // node.  A drawer id is a topology coordinate, not a NUMA node id.
+        return numa::NUMA_NODE_BOOT;
     }
 
-    [[nodiscard]] auto desc_of(u64 phys) noexcept -> lib::expected<frame_desc*, lib::kernel_error>;
+    [[nodiscard]] auto desc_of(u64 phys) noexcept -> std::expected<frame_desc*, lib::kernel_error>;
 
     [[nodiscard]] auto frame_node_id(u64 phys) noexcept -> u8 {
         auto desc = desc_of(phys);
@@ -169,19 +170,20 @@ namespace zxfoundation::memory::pmm::_internal {
             (p == purpose::stack)      ? frame_owner::stack      :
             (p == purpose::device_dma) ? frame_owner::device     :
             (p == purpose::slab)       ? frame_owner::slab       :
-                                         frame_owner::domain;
+            (p == purpose::file_cache) ? frame_owner::domain :
+                                          frame_owner::domain;
     }
 
     /// @brief Access the frame_desc for a given physical address.
     /// @warning Only valid after pmm::init() has set g_frame_table.
-    [[nodiscard]] auto desc_of(u64 phys) noexcept -> lib::expected<frame_desc*, lib::kernel_error> {
+    [[nodiscard]] auto desc_of(u64 phys) noexcept -> std::expected<frame_desc*, lib::kernel_error> {
         if (!g_frame_table) [[unlikely]] {
-            return lib::unexpected(lib::kernel_error::from_memory(
+            return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::out_of_memory));
         }
         const u64 pfn = phys >> PAGE_SHIFT;
         if (pfn >= g_max_pfn) [[unlikely]] {
-            return lib::unexpected(lib::kernel_error::from_memory(
+            return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::invalid_address));
         }
         return &g_frame_table[pfn];
@@ -217,47 +219,52 @@ namespace zxfoundation::memory::pmm::_internal {
         u32 order,
         zone z,
         u8 node_id
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         const u64 size = static_cast<u64>(PAGE_SIZE) << order;
         const u64 max_phys = g_max_pfn << PAGE_SHIFT;
 
         if (!g_frame_table || order > MAX_ORDER || size == 0U) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
         }
         if ((phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U
             || (phys & (size - 1U)) != 0U) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
         }
         if (phys >= max_phys || phys + size < phys || phys + size > max_phys) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
         }
         if (!hhdm::phys_range_is_mapped(phys, size)) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed));
         }
         if (zone_of(phys) != z || !node_is_allocatable(node_id)) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
         }
 
         auto fde = desc_of(phys);
         if (!fde) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
         }
         auto* fd = *fde;
         if (fd->owner() != frame_owner::page_table || fd->order() != order || fd->numa_node != node_id) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::purpose_mismatch));
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::purpose_mismatch));
         }
-        if ((fd->flags & (ff_offline | ff_shared)) != 0U) {
-            return lib::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        if ((fd->load_flags() & (ff_offline | ff_shared)) != 0U) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
         }
 
         return {};
     }
 
+    /// @brief Retire an allocation that failed post-allocation validation.
+    /// The allocator has already removed it from its free accounting; keeping
+    /// it reserved prevents an unsafe frame from returning through buddy.
     auto quarantine_failed_allocation(u64 phys, u32 order, u8 node_id) noexcept -> void {
         if (!g_frame_table || (phys >> PAGE_SHIFT) >= g_max_pfn) return;
-        auto fde = desc_of(phys);
-        if (fde) [[likely]] {
-            (*fde)->set(static_cast<u8>(order), frame_owner::reserved, node_id, ff_suspect);
+        const u8 node = normalize_node_id(node_id);
+        if (auto fde = desc_of(phys); fde) [[likely]] {
+            (*fde)->set(static_cast<u8>(order), frame_owner::reserved,
+                        node, ff_suspect);
+            g_retired_pages += 1ULL << order;
         }
     }
 
@@ -312,9 +319,9 @@ namespace zxfoundation::memory::pmm::_internal {
             if (bd->numa_node != node) break;
 
             // EC-3: never merge across an MCCK-offline frame.
-            if (bd->flags & ff_offline) {
+            if (bd->load_flags() & ff_offline) {
                 auto pde = desc_of(phys);
-                if (pde) [[likely]] (*pde)->flags |= ff_suspect;
+                if (pde) [[likely]] (*pde)->or_flags(ff_suspect);
                 break;
             }
 
@@ -324,16 +331,18 @@ namespace zxfoundation::memory::pmm::_internal {
             g_node_zones[node].free_pages[zi] -= 1ULL << ord;
             auto fde = desc_of(buddy);
             if (fde) [[likely]] (*fde)->set(0, frame_owner::none, node);
-            phys = lib::min(phys, buddy);
+            phys = std::min(phys, buddy);
             // ord is incremented at the top of the next iteration → merge goes up
         }
 
         // Push at the *final merged* order (fixes the original coalescing bug).
-        bz.push(ord, phys);
         auto pde = desc_of(phys);
         if (pde) [[likely]] {
-            (*pde)->set(static_cast<u8>(ord), frame_owner::buddy, node);
+            const u8 flags = static_cast<u8>(
+                (*pde)->load_flags(std::memory_order::acquire) & ff_suspect);
+            (*pde)->set(static_cast<u8>(ord), frame_owner::buddy, node, flags);
         }
+        bz.push(ord, phys);
         g_node_zones[node].free_pages[zi] += 1ULL << ord;
     }
 
@@ -454,7 +463,10 @@ namespace zxfoundation::memory::pmm::_internal {
         }
     }
 
-    constexpr u32 MAX_RESERVATIONS = 16;
+    /// Fixed kernel reservations plus every loader-provided map record and
+    /// the PMM frame-descriptor table reservation.
+    constexpr u32 MAX_RESERVATIONS =
+        arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX + 5U;
 
     struct resv_entry {
         u64 start{0}; ///< Inclusive, page-aligned.
@@ -471,7 +483,7 @@ namespace zxfoundation::memory::pmm::_internal {
         u32 out = 0;
         for (u32 i = 0; i < count; ++i) {
             if (out > 0 && resv[i].start <= resv[out - 1].end)
-                resv[out - 1].end = lib::max(resv[out - 1].end, resv[i].end);
+                resv[out - 1].end = std::max(resv[out - 1].end, resv[i].end);
             else
                 resv[out++] = resv[i];
         }
@@ -508,6 +520,26 @@ export {
 
 namespace zxfoundation::memory::pmm {
 
+    /// @brief Callback invoked once after a sleepable allocation exhausts all
+    ///        eligible node zones.  The callback must not recurse into PMM
+    ///        allocation; PMM serializes retries globally while it runs.
+    using allocation_retry_fn = auto (*)(u8 node, u32 target_pages) noexcept -> u32;
+
+    namespace _internal {
+        allocation_retry_fn g_allocation_retry{nullptr};
+        std::atomic<u32> g_reclaim_active{0U};
+    }
+
+    /// @brief Install the allocation-pressure reclaim callback.
+    [[nodiscard]] auto install_allocation_retry(
+        allocation_retry_fn callback
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!callback) return std::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::invalid_arg));
+        _internal::g_allocation_retry = callback;
+        return {};
+    }
+
     auto reserve(u64 phys, u32 order) noexcept -> void;
 
     /// @brief Initialize the PMM from the ZXFL boot protocol.
@@ -518,14 +550,33 @@ namespace zxfoundation::memory::pmm {
 
         const auto* map = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
             proto.mem_map_addr);
+        if (proto.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
+            || (proto.mem_map_count != 0U && !map)) {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
+                "pmm: invalid ZXFL memory map descriptor");
+        }
 
         for (u32 i = 0; i < proto.mem_map_count; ++i) {
-            const u64 pfn_end = (map[i].base + map[i].length) >> PAGE_SHIFT;
+            if (map[i].length != 0U
+                && map[i].base > ~0ULL - map[i].length) {
+                sys::syschk::syschk_fatal(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
+                    "pmm: ZXFL memory-map range overflow at entry {}", i);
+            }
+            const u64 region_end = map[i].base + map[i].length;
+            const u64 pfn_end = (region_end + PAGE_SIZE - 1U) >> PAGE_SHIFT;
             if (pfn_end > g_max_pfn) g_max_pfn = pfn_end;
         }
 
         lib::static_vector<resv_entry, MAX_RESERVATIONS> resv{};
-        auto push_resv = [&](resv_entry e) noexcept { resv.push_back_unchecked(e); };
+        auto push_resv = [&](resv_entry e) noexcept -> void {
+            auto pushed = resv.push_back(e);
+            if (!pushed) {
+                sys::syschk::syschk_fatal(
+                    pushed.error(), "pmm: reservation staging capacity exhausted");
+            }
+        };
 
         // Reserve low 1 MiB (lowcore + hardware-defined area).
         push_resv(align_resv({ 0, 1ULL << 20 }));
@@ -537,7 +588,7 @@ namespace zxfoundation::memory::pmm {
             reinterpret_cast<u64>(base::linksym::__bss_end));
         push_resv(align_resv({
             proto.kernel_phys_start,
-            lib::max(lib::max(proto.kernel_phys_end, bss_phys), proto.pgtbl_pool_end)
+            std::max(std::max(proto.kernel_phys_end, bss_phys), proto.pgtbl_pool_end)
         }));
         if (proto.pgtbl_pool_end > proto.kernel_phys_end)
             push_resv(align_resv({ proto.kernel_phys_end, proto.pgtbl_pool_end }));
@@ -580,7 +631,7 @@ namespace zxfoundation::memory::pmm {
 
         g_frame_table = reinterpret_cast<frame_desc*>(hhdm::phys_to_virt(table_phys));
 
-        lib::fill_n(reinterpret_cast<u8*>(g_frame_table), table_bytes, u8{0});
+        std::fill_n(reinterpret_cast<u8*>(g_frame_table), table_bytes, u8{0});
 
         push_resv(align_resv({ table_phys, table_phys + (table_pages << PAGE_SHIFT) }));
         {
@@ -600,7 +651,7 @@ namespace zxfoundation::memory::pmm {
             while (cur < region_end) {
                 const u64 skip_to = resv_skip_end(cur, resv.data(), static_cast<u32>(resv.size()));
                 if (skip_to) {
-                    const u64 resv_end = lib::min(skip_to, region_end);
+                    const u64 resv_end = std::min(skip_to, region_end);
                     for (u64 p = cur; p < resv_end; p += PAGE_SIZE) {
                         auto fde = desc_of(p);
                         if (fde) [[likely]] (*fde)->set(0, frame_owner::reserved, 0);
@@ -615,7 +666,7 @@ namespace zxfoundation::memory::pmm {
                 while (run < run_end) {
                     const zone z = zone_of(run);
                     const u64 zone_end = (z == zone::dma31)
-                        ? lib::min(run_end, ZONE_DMA_LIMIT)
+                        ? std::min(run_end, ZONE_DMA_LIMIT)
                         : run_end;
                     u32 ord = MAX_ORDER;
                     while (ord > 0) {
@@ -749,16 +800,25 @@ namespace zxfoundation::memory::pmm {
             u8      node_id{numa::NUMA_NODE_BOOT};
         };
 
-        lib::array<slot, TXN_MAX> m_slots{};
+        std::array<slot, TXN_MAX> m_slots{};
         u32 m_count{0};
 
         auto on_rollback() noexcept -> void {
             using namespace _internal;
-            // EC-5: skip frames that were marked ff_offline by MCCK during
-            // the transaction window (they are already accounted as lost).
             for (u32 i = 0; i < m_count; ++i) {
                 auto fde = desc_of(m_slots[i].phys);
-                if (!fde || ((*fde)->flags & ff_offline)) continue;
+                if (!fde) continue;
+                if ((*fde)->load_flags() & ff_offline) {
+                    // An MCCK-offline frame must never be placed on buddy:
+                    // alloc_locked accepts buddy-owned heads.  Retire it with
+                    // explicit accounting until offline recovery handles it.
+                    (*fde)->set(static_cast<u8>(m_slots[i].order),
+                        frame_owner::reserved,
+                        normalize_node_id(m_slots[i].node_id),
+                        static_cast<u8>(ff_offline | ff_suspect));
+                    g_retired_pages += 1ULL << m_slots[i].order;
+                    continue;
+                }
                 const u32 zi = static_cast<u32>(m_slots[i].z);
                 const u8 node = normalize_node_id(m_slots[i].node_id);
                 const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
@@ -783,11 +843,11 @@ namespace zxfoundation::memory::pmm {
             zone      z,
             purpose   p    = purpose::generic,
             page_init init = page_init::uninitialized
-        ) noexcept -> lib::expected<folio_embryo, lib::kernel_error> {
+        ) noexcept -> std::expected<folio_embryo, lib::kernel_error> {
             using namespace _internal;
 
             if (committed() || m_count >= TXN_MAX)
-                return lib::unexpected(lib::kernel_error::from_memory(
+                return std::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::out_of_memory));
 
             if (sched::context::in_mcck())
@@ -808,7 +868,7 @@ namespace zxfoundation::memory::pmm {
             };
             const node_allocation allocation = alloc_node_aware(order, z, placement, local_node);
             if (!allocation.phys)
-                return lib::unexpected(lib::kernel_error::from_memory(
+                return std::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::zone_exhausted));
 
             const frame_owner fo = owner_for_purpose(p);
@@ -821,12 +881,12 @@ namespace zxfoundation::memory::pmm {
                 auto validation = validate_page_table_allocation(allocation.phys, order, z, allocation.node_id);
                 if (!validation) {
                     quarantine_failed_allocation(allocation.phys, order, allocation.node_id);
-                    return lib::unexpected(validation.error());
+                    return std::unexpected(validation.error());
                 }
             }
 
             if (init == page_init::zeroed)
-                lib::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
+                std::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
                             static_cast<u64>(PAGE_SIZE) << order, u8{0});
 
             m_slots[m_count++] = { allocation.phys, order, z, p, allocation.node_id };
@@ -848,7 +908,7 @@ namespace zxfoundation::memory::pmm {
     /// @warning Allocation is forbidden in MCCK context and multi-page allocation is forbidden in hard IRQ context.
     [[nodiscard]] auto alloc(
         const allocation_request& request
-    ) noexcept -> lib::expected<allocation_result, lib::kernel_error> {
+    ) noexcept -> std::expected<allocation_result, lib::kernel_error> {
         using namespace _internal;
 
         if (sched::context::in_mcck())
@@ -860,7 +920,7 @@ namespace zxfoundation::memory::pmm {
                 lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
                 "pmm::alloc order>0 forbidden in hard-IRQ context");
         if (request.order > MAX_ORDER)
-            return lib::unexpected(lib::kernel_error::from_memory(
+            return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::out_of_memory));
 
         const zone z = request.mem_zone;
@@ -871,7 +931,7 @@ namespace zxfoundation::memory::pmm {
             placement.preferred_node = local_node;
         }
         if (placement.require_dma31 && z != zone::dma31)
-            return lib::unexpected(lib::kernel_error::from_memory(
+            return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::zone_exhausted));
 
         node_allocation allocation{};
@@ -896,8 +956,25 @@ namespace zxfoundation::memory::pmm {
             allocation = alloc_node_aware(request.order, z, placement, local_node);
         }
 
+        // Reclaim may write back through a filesystem provider and must never
+        // run from an IRQ-disabled, non-sleepable, or nested allocator path.
+        // The retry happens after all PCP/buddy locks have been released.
+        if (!allocation.phys && _internal::g_allocation_retry
+            && sched::context::can_sleep()) {
+            u32 expected = 0U;
+            if (_internal::g_reclaim_active.compare_exchange_strong(
+                    expected, 1U, std::memory_order::acq_rel,
+                    std::memory_order::acquire)) {
+                const u32 target_pages = 1U << request.order;
+                discard_value _internal::g_allocation_retry(
+                    placement.preferred_node, target_pages);
+                _internal::g_reclaim_active.store(0U, std::memory_order::release);
+                allocation = alloc_node_aware(request.order, z, placement, local_node);
+            }
+        }
+
         if (!allocation.phys)
-            return lib::unexpected(lib::kernel_error::from_memory(
+            return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::zone_exhausted));
 
         const frame_owner fo = owner_for_purpose(request.use);
@@ -910,12 +987,12 @@ namespace zxfoundation::memory::pmm {
             auto validation = validate_page_table_allocation(allocation.phys, request.order, z, allocation.node_id);
             if (!validation) {
                 quarantine_failed_allocation(allocation.phys, request.order, allocation.node_id);
-                return lib::unexpected(validation.error());
+                return std::unexpected(validation.error());
             }
         }
 
         if (request.init == page_init::zeroed)
-            lib::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
+            std::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
                         static_cast<u64>(PAGE_SIZE) << request.order, u8{0});
 
         return allocation_result{
@@ -943,7 +1020,7 @@ namespace zxfoundation::memory::pmm {
         zone      z,
         purpose   p    = purpose::generic,
         page_init init = page_init::uninitialized
-    ) noexcept -> lib::expected<folio_embryo, lib::kernel_error> {
+    ) noexcept -> std::expected<folio_embryo, lib::kernel_error> {
         numa::allocation_policy placement{
             .preferred_node = numa::NUMA_NODE_ANY,
             .fallback = numa::fallback_mode::local_first,
@@ -957,7 +1034,7 @@ namespace zxfoundation::memory::pmm {
             .init = init,
             .placement = placement,
         });
-        if (!result) return lib::unexpected(result.error());
+        if (!result) return std::unexpected(result.error());
         return result->into_folio();
     }
 
@@ -998,40 +1075,226 @@ namespace zxfoundation::memory::pmm {
     /// @param[in] phys  Physical base address of the frame.
     /// @return New refcount on success, kernel_error on invalid address.
     [[nodiscard]] auto frame_ref(u64 phys) noexcept
-        -> lib::expected<u16, lib::kernel_error>
+        -> std::expected<u16, lib::kernel_error>
     {
         using namespace _internal;
-        if (!g_frame_table) return lib::unexpected(
+        if (!g_frame_table) return std::unexpected(
             lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         const u64 pfn = phys >> PAGE_SHIFT;
-        if (pfn >= g_max_pfn) return lib::unexpected(
+        if (pfn >= g_max_pfn) return std::unexpected(
             lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         auto& fd = g_frame_table[pfn];
-        const u16 prev = fd.refcount.fetch_add(static_cast<u16>(1),
-                                               arch::s390x::lib::atomic::memory_order::acquire);
-        return static_cast<u16>(prev + 1U);
+        u16 current = fd.refcount.load(std::memory_order::acquire);
+        for (;;) {
+            if (current == 0xFFFFU) {
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+            }
+            const u16 desired = static_cast<u16>(current + 1U);
+            if (fd.refcount.compare_exchange_weak(
+                    current, desired,
+                    std::memory_order::acq_rel,
+                    std::memory_order::acquire)) {
+                return desired;
+            }
+        }
+    }
+
+
+    /// @brief Fail-closed frame-descriptor accessor.
+    ///
+    /// @param[in] phys  Physical address (lower PAGE_SHIFT bits are ignored).
+    /// @return Pointer into the frame descriptor table, or a kernel_error when
+    ///         the PMM is uninitialized or @p phys is outside the managed
+    ///         physical range.
+    /// @note Unlike the internal desc_of(), this never computes an
+    ///       out-of-range descriptor address, so a corrupted/over-range base
+    ///       yields a diagnosable kernel_error instead of a wild byte store
+    ///       that would take a translation exception (PoP 0x003A).
+    [[nodiscard]] auto desc_of_checked(u64 phys) noexcept
+        -> std::expected<frame_desc*, lib::kernel_error> {
+        using namespace _internal;
+        if (!g_frame_table) [[unlikely]]
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) [[unlikely]]
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        return &g_frame_table[pfn];
     }
 
     /// @brief Atomically decrement a frame's refcount.
     /// @param[in] phys  Physical base address of the frame.
     /// @return New refcount on success, kernel_error on invalid address.
     [[nodiscard]] auto frame_unref(u64 phys) noexcept
-        -> lib::expected<u16, lib::kernel_error> {
+        -> std::expected<u16, lib::kernel_error> {
         using namespace _internal;
-        if (!g_frame_table) return lib::unexpected(
+        if (!g_frame_table) return std::unexpected(
             lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         const u64 pfn = phys >> PAGE_SHIFT;
-        if (pfn >= g_max_pfn) return lib::unexpected(
+        if (pfn >= g_max_pfn) return std::unexpected(
             lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         auto& fd = g_frame_table[pfn];
-        const u16 prev = fd.refcount.load(arch::s390x::lib::atomic::memory_order::relaxed);
-        if (prev == 0)
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
-                "pmm::frame_unref: refcount underflow (double-free?)");
-        const u16 next = fd.refcount.fetch_sub(static_cast<u16>(1),
-                                               arch::s390x::lib::atomic::memory_order::release) - 1U;
-        return next;
+        u16 current = fd.refcount.load(std::memory_order::acquire);
+        for (;;) {
+            if (current == 0U) {
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::purpose_mismatch));
+            }
+            const u16 desired = static_cast<u16>(current - 1U);
+            if (fd.refcount.compare_exchange_weak(
+                    current, desired,
+                    std::memory_order::acq_rel,
+                    std::memory_order::acquire)) {
+                return desired;
+            }
+        }
+    }
+
+    /// @brief Release one order-zero mapping pin and return the frame to PMM
+    /// when it was the final pin.
+    /// @return True when this call returned the frame to buddy/PCP, false when
+    ///         another pin still owns it.
+    /// @note The frame descriptor supplies the NUMA node and physical zone;
+    /// callers cannot reconstruct allocator provenance from a raw address.
+    [[nodiscard]] auto frame_release_pin(u64 phys) noexcept
+        -> std::expected<bool, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        if ((*desc)->order() != 0U) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::purpose_mismatch));
+        }
+
+        auto remaining = frame_unref(phys);
+        if (!remaining) return std::unexpected(remaining.error());
+        if (*remaining != 0U) return false;
+
+        // The frame has no remaining pins.  `free()` derives the NUMA node
+        // from the descriptor; the physical address determines its zone.
+        arch::s390x::cpu::skey::sske(phys,
+            arch::s390x::cpu::skey::make_skey(0U, false));
+        free(folio_active{phys, 0U, purpose::generic, _internal::zone_of(phys)});
+        return true;
+    }
+
+    /// @brief Stamp the SCOMS memory_object id that authorizes this frame.
+    /// @param[in] phys Physical frame address.
+    /// @param[in] object_id SCOMS id of the authoritative memory_object
+    ///                      (typically a vm_region's storage_object grant,
+    ///                      or KOBJECT_ID_INVALID to clear).
+    /// @param[in] object_generation SCOMS generation paired with @p object_id.
+    /// @param[in] writable True when the frame backs a writable mapping.
+    /// @return Success or a checked physical-address error.
+    /// @note This is the ONLY mechanism that ties a physical frame to its
+    ///       authority.  Owner domain, storage key, DGP generation and any
+    ///       other authority field are recovered through @ref objects
+    ///       by resolving @c object_id — never duplicated in @ref frame_desc.
+    [[nodiscard]] auto frame_set_mapping_metadata(
+        u64 phys, u32 object_id, u32 object_generation, bool writable = true
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        // Publish the generation before the id. A reader that sees the id
+        // with acquire also sees the matching generation.
+        (*desc)->object_generation.store(object_generation, std::memory_order::release);
+        (*desc)->object_id.store(object_id, std::memory_order::release);
+        if (writable) {
+            // Atomically clear ff_zeroed; preserves concurrent ff_offline/ff_suspect
+            // sets from the MCCK/reclaim path.
+            u8 cur = (*desc)->load_flags(std::memory_order::acquire);
+            while (cur & ff_zeroed) {
+                const u8 desired = static_cast<u8>(cur & ~ff_zeroed);
+                if ((*desc)->flags.compare_exchange_weak(
+                        cur, desired,
+                        std::memory_order::acq_rel,
+                        std::memory_order::acquire)) break;
+            }
+        }
+        return {};
+    }
+
+    /// @brief Clear the authority identity stamped on one physical frame.
+    [[nodiscard]] auto frame_clear_mapping_metadata(u64 phys) noexcept
+        -> std::expected<void, lib::kernel_error> {
+        return frame_set_mapping_metadata(
+            phys, KOBJECT_ID_INVALID, 0U, false);
+    }
+
+    /// @brief Return the current atomic reference count of a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return Reference count or a checked physical-address error.
+    [[nodiscard]] auto frame_refcount(u64 phys) noexcept
+        -> std::expected<u16, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->refcount.load(std::memory_order::acquire);
+    }
+
+    /// @brief Validate that a physical range is owned by one SCOMS object.
+    /// @param[in] phys_start Page-aligned physical range start.
+    /// @param[in] length Range length in bytes.
+    /// @param[in] object_id Required SCOMS id (must match @ref frame_desc::object_id).
+    /// @param[in] object_generation Required paired SCOMS generation.
+    /// @return Success only when every page carries the exact live object
+    ///         identity and generation, and is not MCCK-offline.
+    /// @note Prior versions accepted a domain id directly; the unified
+    ///       frame↔object model replaces that with the SCOMS id —
+    ///       callers pass the resolved @c vm_region.ko.id of the
+    ///       mapping authority.
+    [[nodiscard]] auto frame_validate_mapping(
+        u64 phys_start, u64 length, u32 object_id, u32 object_generation
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (length == 0U || (phys_start & (PAGE_SIZE - 1U)) != 0U ||
+            (length & (PAGE_SIZE - 1U)) != 0U ||
+            phys_start + length < phys_start) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        }
+
+        const u64 end = phys_start + length;
+        for (u64 phys = phys_start; phys < end; phys += PAGE_SIZE) {
+            auto desc = desc_of_checked(phys);
+            if (!desc) return std::unexpected(desc.error());
+            auto* frame = *desc;
+            if (frame->object_id.load(std::memory_order::acquire) != object_id ||
+                frame->object_generation.load(std::memory_order::acquire) != object_generation ||
+                (frame->load_flags() & ff_offline) != 0U) {
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::capability_invalid));
+            }
+        }
+        return {};
+    }
+
+    /// @brief Resolve the SCOMS memory_object_id that authorizes a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return SCOMS id, or @ref KOBJECT_ID_INVALID when the frame is not
+    ///         bound to a memory authority (buddy-owned, reserved, page-table).
+    [[nodiscard]] auto frame_object_id_of(u64 phys) noexcept
+        -> std::expected<u32, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->object_id.load(std::memory_order::acquire);
+    }
+
+    /// @brief Resolve the SCOMS generation paired with a frame authority id.
+    [[nodiscard]] auto frame_object_generation_of(u64 phys) noexcept
+        -> std::expected<u32, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->object_generation.load(std::memory_order::acquire);
+    }
+
+    /// @brief Return the NUMA node id recorded for a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return NUMA node id, or a checked physical-address error.
+    [[nodiscard]] auto frame_numa_node_of(u64 phys) noexcept
+        -> std::expected<u8, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->numa_node;
     }
 
 
@@ -1066,29 +1329,6 @@ namespace zxfoundation::memory::pmm {
         if (!g_frame_table) return nullptr;
         const u64 pfn = phys >> PAGE_SHIFT;
         if (pfn >= g_max_pfn) return nullptr;
-        return &g_frame_table[pfn];
-    }
-
-    /// @brief Fail-closed frame-descriptor accessor.
-    ///
-    /// @param[in] phys  Physical address (lower PAGE_SHIFT bits are ignored).
-    /// @return Pointer into the frame descriptor table, or a kernel_error when
-    ///         the PMM is uninitialized or @p phys is outside the managed
-    ///         physical range.
-    /// @note Unlike the internal desc_of(), this never computes an
-    ///       out-of-range descriptor address, so a corrupted/over-range base
-    ///       yields a diagnosable kernel_error instead of a wild byte store
-    ///       that would take a translation exception (PoP 0x003A).
-    [[nodiscard]] auto desc_of_checked(u64 phys) noexcept
-        -> lib::expected<frame_desc*, lib::kernel_error> {
-        using namespace _internal;
-        if (!g_frame_table) [[unlikely]]
-            return lib::unexpected(lib::kernel_error::from_memory(
-                lib::memory_error::out_of_memory));
-        const u64 pfn = phys >> PAGE_SHIFT;
-        if (pfn >= g_max_pfn) [[unlikely]]
-            return lib::unexpected(lib::kernel_error::from_memory(
-                lib::memory_error::invalid_address));
         return &g_frame_table[pfn];
     }
 

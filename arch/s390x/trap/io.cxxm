@@ -4,8 +4,8 @@
 
 export module arch.s390x.trap.io;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.irq_frame;
 import arch.s390x.css.css;
+import arch.s390x.cpu.irq;
 import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.base.types;
 

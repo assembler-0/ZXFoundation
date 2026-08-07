@@ -17,6 +17,8 @@
     cap_types.cxxm
     cap.cxxm
     service.cxxm
+    ipc_types.cxxm
+    ipc.cxxm
     io_types.cxxm
     io.cxxm
     zinit.cxxm

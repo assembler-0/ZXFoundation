@@ -22,14 +22,11 @@ import zxfoundation.sched.sched_fair;
 import zxfoundation.sched.context;
 import zxfoundation.sched.admit;
 import lib.error;
-import lib.expected;
+import std;
 import lib.rbtree;
-import lib.pair;
-import lib.placementnew;
+import std;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.percpu_types;
-import arch.s390x.lib.atomic;
 
 namespace _internal {
 
@@ -51,7 +48,7 @@ namespace _internal {
     [[nodiscard]] inline auto lock_order(
         zxfoundation::domain::run_queue& a,
         zxfoundation::domain::run_queue& b
-    ) noexcept -> lib::pair<zxfoundation::domain::run_queue*, zxfoundation::domain::run_queue*> {
+    ) noexcept -> std::pair<zxfoundation::domain::run_queue*, zxfoundation::domain::run_queue*> {
         if (a.cpu_id < b.cpu_id) return { &a, &b };
         return { &b, &a };
     }
@@ -96,20 +93,20 @@ namespace zxfoundation::sched::balance {
     [[nodiscard]] auto validate_cpu_for_strand(
         const zxfoundation::domain::strand& s,
         u16 target_cpu
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         const auto* target = topology::record_for(target_cpu);
         if (!target || target->state != topology::cpu_scheduling_state::online) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         const auto policy = placement_policy_for(s);
         if (policy.isolation_sensitive && !policy.allow_smt_sibling
             && target->smt_evidence == topology_evidence::degraded) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (!policy.allow_remote_node && policy.preferred_node != 0xFFU
             && target->numa_node != policy.preferred_node) {
-            return lib::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         return {};
@@ -165,13 +162,12 @@ namespace zxfoundation::sched::balance {
                            softirq_bal::balance_req& req) noexcept -> void {
         discard_value kind;
 
-        namespace atm = arch::s390x::lib::atomic;
         namespace cpumask = arch::s390x::cpu::cpumask;
 
         if (_internal::s_rq_accessor == nullptr) return;
 
         auto& local_rq = _internal::s_rq_accessor(cpu);
-        if (!local_rq.online.load(atm::memory_order::acquire)) return;
+        if (!local_rq.online.load(std::memory_order::acquire)) return;
         topology::refresh_cpu_record(cpu, local_rq.nr_running, true);
 
         constexpr u16 CONFIG = zxfoundation::base::config::CONFIG_ZX_MAX_CPUS;
@@ -224,7 +220,7 @@ namespace zxfoundation::sched::balance {
         }
 
         if (best.cpu >= CONFIG || best.score < _internal::BALANCE_MIN_SCORE) {
-            req.last_migration_ok.store(0U, atm::memory_order::release);
+            req.last_migration_ok.store(0U, std::memory_order::release);
             return;
         }
 
@@ -240,7 +236,7 @@ namespace zxfoundation::sched::balance {
 
         if (!cpumask::cpu_online(src_rq.cpu_id) || src_rq.nr_running <= 1U) {
             unlock_both();
-            req.last_migration_ok.store(0U, atm::memory_order::release);
+            req.last_migration_ok.store(0U, std::memory_order::release);
             return;
         }
 
@@ -251,14 +247,14 @@ namespace zxfoundation::sched::balance {
             stolen = fair::rb_node_to_strand(last);
             if (stolen->cpu != src_rq.cpu_id || !stolen->on_rq) [[unlikely]] {
                 unlock_both();
-                req.last_migration_ok.store(0U, atm::memory_order::release);
+                req.last_migration_ok.store(0U, std::memory_order::release);
                 return;
             }
             auto placement_result = validate_cpu_for_strand(*stolen, local_rq.cpu_id);
             const auto* stolen_domain = static_cast<const domain::domain*>(stolen->owner);
             if (stolen_domain
                 && !zxfoundation::sched::admit::can_admit_domain(stolen_domain)) [[unlikely]] {
-                placement_result = lib::unexpected(
+                placement_result = std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
             }
 
@@ -270,7 +266,7 @@ namespace zxfoundation::sched::balance {
                     const u32 src_dom   = stolen_domain->ko.id;
                     const u32 src_attach = best.snap.attached_domain_id;
                     if (src_attach != 0U && src_attach != src_dom) {
-                        placement_result = lib::unexpected(
+                        placement_result = std::unexpected(
                             lib::kernel_error::from_generic(
                                 lib::generic_error::invalid_arg));
                     }
@@ -278,7 +274,7 @@ namespace zxfoundation::sched::balance {
                             arch::s390x::cpu::lowcore::cpu_percpu(local_rq.cpu_id)) {
                         const u32 tgt_attach = tgt_pcp->attached_domain_id;
                         if (tgt_attach != 0U && tgt_attach != src_dom) {
-                            placement_result = lib::unexpected(
+                            placement_result = std::unexpected(
                                 lib::kernel_error::from_generic(
                                     lib::generic_error::invalid_arg));
                         }
@@ -287,7 +283,7 @@ namespace zxfoundation::sched::balance {
             }
             if (!placement_result) {
                 unlock_both();
-                req.last_migration_ok.store(0U, atm::memory_order::release);
+                req.last_migration_ok.store(0U, std::memory_order::release);
                 return;
             }
 
@@ -303,12 +299,17 @@ namespace zxfoundation::sched::balance {
                 stolen->cpu = src_rq.cpu_id;
                 eevdf::migrate_entity(stolen->se, local_rq.min_vruntime, src_min_vr);
                 discard_value fair::enqueue(src_rq, *stolen);
+                rq_snap::publish(local_rq);
+                rq_snap::publish(src_rq);
                 unlock_both();
-                req.last_migration_ok.store(0U, atm::memory_order::release);
+                req.last_migration_ok.store(0U, std::memory_order::release);
                 return;
             }
             ++local_rq.nr_running;
         }
+
+        rq_snap::publish(local_rq);
+        rq_snap::publish(src_rq);
 
         unlock_both();
 
@@ -324,7 +325,7 @@ namespace zxfoundation::sched::balance {
         }
 
         req.last_migration_ok.store(
-            (stolen != nullptr) ? 1U : 0U, atm::memory_order::release);
+            (stolen != nullptr) ? 1U : 0U, std::memory_order::release);
     }
 
 } // namespace zxfoundation::sched::balance

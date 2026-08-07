@@ -12,8 +12,7 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.base.typestate;
 import lib.error;
-import lib.expected;
-import lib.placementnew;
+import std;
 
 namespace _internal {
 
@@ -70,7 +69,7 @@ namespace zxfoundation::sched::classed {
     [[nodiscard]] auto validate_policy(
         const domain& owner,
         const sched_policy& policy
-    ) noexcept -> lib::expected<sched_admission_result, lib::kernel_error> {
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error> {
         sched_admission_result result{};
         result.preferred_cpu = 0U;
         result.remote_node_allowed = true;
@@ -80,24 +79,24 @@ namespace zxfoundation::sched::classed {
         switch (policy.class_id) {
             case sched_class_id::idle:
                 if (!is_idle_domain(owner) || policy.user_visible) {
-                    return lib::unexpected(
+                    return std::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 return result;
             case sched_class_id::fair:
                 if (is_idle_domain(owner)) {
-                    return lib::unexpected(
+                    return std::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 return result;
             case sched_class_id::rt:
                 if (is_idle_domain(owner)) {
-                    return lib::unexpected(
+                    return std::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 if (policy.rt_priority == 0U || policy.runtime_ns == 0U || policy.period_ns == 0U
                     || policy.runtime_ns > policy.period_ns) {
-                    return lib::unexpected(
+                    return std::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 result.admitted_runtime_ns = policy.runtime_ns;
@@ -105,12 +104,12 @@ namespace zxfoundation::sched::classed {
                 return result;
             case sched_class_id::deadline:
                 if (is_idle_domain(owner)) {
-                    return lib::unexpected(
+                    return std::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 if (policy.runtime_ns == 0U || policy.deadline_ns == 0U || policy.period_ns == 0U
                     || policy.runtime_ns > policy.deadline_ns || policy.deadline_ns > policy.period_ns) {
-                    return lib::unexpected(
+                    return std::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
                 }
                 result.admitted_runtime_ns = policy.runtime_ns;
@@ -118,7 +117,7 @@ namespace zxfoundation::sched::classed {
                 return result;
         }
 
-        return lib::unexpected(
+        return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
     }
 
@@ -133,12 +132,12 @@ namespace zxfoundation::sched::classed {
         domain& owner,
         strand& s,
         const sched_policy& policy
-    ) noexcept -> lib::expected<sched_admission_result, lib::kernel_error> {
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error> {
         switch (policy.class_id) {
             case sched_class_id::idle:
             case sched_class_id::fair: {
                 auto result = validate_policy(owner, policy);
-                if (!result) return lib::unexpected(result.error());
+                if (!result) return std::unexpected(result.error());
                 s.sched_policy = policy;
                 s.sched_admission = *result;
                 return *result;
@@ -149,7 +148,7 @@ namespace zxfoundation::sched::classed {
                 return zxfoundation::sched::deadline::admit(owner, s, policy);
         }
 
-        return lib::unexpected(
+        return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
     }
 
@@ -164,7 +163,7 @@ namespace zxfoundation::sched::classed {
     [[nodiscard]] auto enqueue(
         run_queue& rq,
         strand& s
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         switch (_internal::class_of(s)) {
             case sched_class_id::deadline:
                 return zxfoundation::sched::deadline::enqueue(rq, s);
@@ -176,7 +175,7 @@ namespace zxfoundation::sched::classed {
                 return {};
         }
 
-        return lib::unexpected(
+        return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
     }
 

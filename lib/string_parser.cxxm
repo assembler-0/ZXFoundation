@@ -4,16 +4,11 @@
 
 export module lib.string_parser;
 import zxfoundation.base.types;
-import lib.string_view;
-import lib.optional;
-import lib.pair;
-import lib.util;
-import lib.type_traits;
-import lib.placementnew;
+import std;
 
 export {
 
-namespace lib {
+namespace std {
 
     /// @brief Zero-allocation streaming string tokenizer.
     ///
@@ -50,9 +45,9 @@ namespace lib {
         /// (@c \\' , @c \\" , @c \\\\).
         ///
         /// @return The next token, or @c nullopt if exhausted.
-        [[nodiscard]] auto next() noexcept -> optional<string_view> {
+        [[nodiscard]] auto next() noexcept -> std::optional<string_view> {
             skip_delimiters();
-            if (m_pos >= m_input.size()) return nullopt;
+            if (m_pos >= m_input.size()) return std::nullopt;
 
             const usize start = m_pos;
             const char first = m_input[m_pos];
@@ -98,10 +93,10 @@ namespace lib {
         ///
         /// @return A @c (key, value) pair, or @c nullopt if exhausted.
         [[nodiscard]] auto next_pair() noexcept
-            -> optional<pair<string_view, string_view>>
+            -> std::optional<std::pair<string_view, string_view>>
         {
             skip_delimiters();
-            if (m_pos >= m_input.size()) return nullopt;
+            if (m_pos >= m_input.size()) return std::nullopt;
 
             const usize key_start = m_pos;
             while (m_pos < m_input.size()) {
@@ -124,22 +119,22 @@ namespace lib {
                 ++m_pos;
             }
 
-            if (m_pos <= key_start) return nullopt;
+            if (m_pos <= key_start) return std::nullopt;
             const string_view key = m_input.substr(key_start, m_pos - key_start);
 
             skip_delimiters();
             if (m_pos < m_input.size() && m_input[m_pos] == '=') {
                 ++m_pos;
                 auto val = next();
-                if (!val) return pair{key, string_view{}};
-                return pair{key, *val};
+                if (!val) return std::pair{key, string_view{}};
+                return std::pair{key, *val};
             }
 
-            return pair{key, string_view{}};
+            return std::pair{key, string_view{}};
         }
 
         /// @brief Peek at the next token without consuming it.
-        [[nodiscard]] auto peek() noexcept -> optional<string_view> {
+        [[nodiscard]] auto peek() noexcept -> std::optional<string_view> {
             const usize saved = m_pos;
             auto tok = next();
             m_pos = saved;
@@ -220,7 +215,7 @@ namespace lib {
     /// @return Pair (before, after).  @c after is empty if @p delim not found.
     [[nodiscard]] inline auto split(
         string_view s, string_view delim
-    ) noexcept -> pair<string_view, string_view> {
+    ) noexcept -> std::pair<string_view, string_view> {
         for (usize i = 0; i < s.size(); ++i) {
             bool match = true;
             for (usize j = 0; j < delim.size(); ++j) {
@@ -240,7 +235,7 @@ namespace lib {
     /// @return Pair (before, after).  @c after is empty if @p delim not found.
     [[nodiscard]] inline auto rsplit(
         string_view s, string_view delim
-    ) noexcept -> pair<string_view, string_view> {
+    ) noexcept -> std::pair<string_view, string_view> {
         isize end = static_cast<isize>(s.size()) - static_cast<isize>(delim.size());
         while (end >= 0) {
             bool match = true;

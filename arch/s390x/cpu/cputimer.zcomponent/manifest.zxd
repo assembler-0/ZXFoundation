@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    cputimer.cxxm
+    cputimer.cxx
+}

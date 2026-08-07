@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    sigp.cxxm
+    sigp.cxx
+}

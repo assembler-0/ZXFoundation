@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    irq.cxx
+    irq.cxxm
+}

@@ -15,6 +15,13 @@ target_sources(core.zxfoundation.nucleus.pass1
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES ${ZX_SOURCES_MODULES_64}
 )
+target_sources(core.zxfoundation.nucleus.pass1
+    PUBLIC
+        FILE_SET cxx_std_modules
+        TYPE CXX_MODULES
+        BASE_DIRS ${LIBSTDCXX_BASE}
+        FILES ${LIBSTDCXX_MODS}
+)
 
 _zx_kernel_flags(core.zxfoundation.nucleus.pass1)
 
@@ -43,6 +50,13 @@ target_sources(core.zxfoundation.nucleus
     PUBLIC FILE_SET CXX_MODULES TYPE CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES ${ZX_SOURCES_MODULES_64}
+)
+target_sources(core.zxfoundation.nucleus
+    PUBLIC
+        FILE_SET cxx_std_modules
+        TYPE CXX_MODULES
+        BASE_DIRS ${LIBSTDCXX_BASE_DIR}
+        FILES ${LIBSTDCXX_MODS}
 )
 
 _zx_kernel_flags(core.zxfoundation.nucleus)

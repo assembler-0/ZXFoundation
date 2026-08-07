@@ -11,7 +11,7 @@ import zxfoundation.sys.printk;
 import zxfoundation.base.typestate;
 import zxfoundation.scoms.scoms_ref;
 import lib.error;
-import lib.expected;
+import std;
 
 // ── Implementation detail (non-exported) ────────────────────────────────────
 namespace zxfoundation::domain::signal::_detail {
@@ -85,10 +85,10 @@ namespace zxfoundation::domain::signal {
         domain&               d,
         signal_kind           kind,
         const signal_handler_info& info
-    ) noexcept -> lib::expected<void, lib::kernel_error> {
+    ) noexcept -> std::expected<void, lib::kernel_error> {
         const u8 idx = static_cast<u8>(kind);
         if (idx >= 8) {
-            return lib::unexpected(
+            return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 

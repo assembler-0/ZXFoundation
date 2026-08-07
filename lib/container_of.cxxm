@@ -1,0 +1,72 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file util.cxxm
+/// @brief C++ utility
+
+export module lib.container_of;
+import zxfoundation.base.types;
+
+export {
+
+namespace lib {
+
+    /// @brief Recover the enclosing object from a pointer to one of its members.
+    ///
+    /// Given a pointer to a field of type @p Member embedded inside @p Owner,
+    /// computes and returns the address of the enclosing @p Owner instance.
+    ///
+    /// @tparam Owner   Type of the enclosing struct.
+    /// @tparam Member  Type of the embedded field.
+    /// @tparam member  Pointer-to-member identifying the field within @p Owner.
+    /// @param[in] ptr  Non-null pointer to the embedded field.
+    /// @return Pointer to the @p Owner instance that contains @p ptr.
+    ///
+    /// @note  The byte offset is a compile-time constant; at -O1 and above the
+    ///        compiler emits a single subtraction instruction.
+    /// @note  Requires @c -fno-strict-aliasing (already in kernel compile flags).
+    /// @warning Behavior is undefined if @p ptr does not belong to an @p Owner.
+    /// @warning Behavior is undefined if @p ptr is null.
+    template <typename Owner, typename Member, Member Owner::* member>
+    [[nodiscard]] auto container_of(Member* ptr) noexcept -> Owner* {
+        const uptr offset = reinterpret_cast<uptr>(
+            &(reinterpret_cast<Owner*>(static_cast<uptr>(0))->*member));
+        return reinterpret_cast<Owner*>(reinterpret_cast<uptr>(ptr) - offset);
+    }
+
+    /// @brief Const-qualified overload of @c container_of.
+    /// @tparam Owner   Type of the enclosing struct.
+    /// @tparam Member  Type of the embedded field.
+    /// @tparam member  Pointer-to-member identifying the field within @p Owner.
+    /// @param[in] ptr  Non-null const pointer to the embedded field.
+    /// @return Const pointer to the @p Owner instance that contains @p ptr.
+    template <typename Owner, typename Member, Member Owner::* member>
+    [[nodiscard]] auto container_of(const Member* ptr) noexcept -> const Owner* {
+        const uptr offset = reinterpret_cast<uptr>(
+            &(reinterpret_cast<Owner*>(static_cast<uptr>(0))->*member));
+        return reinterpret_cast<const Owner*>(reinterpret_cast<uptr>(ptr) - offset);
+    }
+
+    /// @brief Two-level container_of: @c Outer::@c outer_member is an
+    ///        @c Inner struct that itself contains @c inner_member of type
+    ///        @c Field.  Walks back from @p ptr (a @c Field*) to the
+    ///        enclosing @c Outer instance.
+    /// @tparam Outer       Outer container type.
+    /// @tparam Inner       Intermediate embedded struct type.
+    /// @tparam Field       Leaf field type.
+    /// @tparam outer_member Pointer-to-member yielding Inner inside Outer.
+    /// @tparam inner_member Pointer-to-member yielding Field inside Inner.
+    /// @note Defers to @c container_of twice — first to recover the
+    ///       @c Inner* from the @c Field*, then the @c Outer* from the
+    ///       @c Inner*.  Each step is a compile-time-constant subtraction
+    ///       that the backend folds into a single immediate.
+    ///       Requires @c -fno-strict-aliasing (kernel default).
+    template <typename Outer, typename Inner, typename Field,
+              Inner Outer::* outer_member,
+              Field Inner::* inner_member>
+    [[nodiscard]] auto container_of_anchor(Field* ptr) noexcept -> Outer* {
+        auto* inner = lib::container_of<Inner, Field, inner_member>(ptr);
+        return lib::container_of<Outer, Inner, outer_member>(inner);
+    }
+
+} // namespace lib
+
+} // end export
