@@ -5,7 +5,7 @@
 export module zxfoundation.sched.sched_idle;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
 import zxfoundation.base.typestate;
 import zxfoundation.base.types;
 import zxfoundation.domain.domain;

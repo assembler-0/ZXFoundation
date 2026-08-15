@@ -1,4 +1,5 @@
 !files : !compile_group -> [auto] {
+    interface.cxxm
     types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-gnu-anonymous-struct) !compiler_id:gcc(-Wno-pedantic) ]
     processor.cxxm
     skey.cxxm
@@ -7,7 +8,8 @@
     cpacf.cxxm
     vector.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
     ptf.cxxm
-    sthyi.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
+    nnpa.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-packed -Wno-attributes -Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
+    sthyi.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-packed -Wno-attributes -Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
     ecag.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
     teid.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
 }

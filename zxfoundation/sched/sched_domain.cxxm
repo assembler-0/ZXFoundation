@@ -15,7 +15,7 @@ import arch.s390x.cpu.aste;
 import arch.s390x.cpu.psw;
 import std;
 
-extern "C" {
+no_mangle {
     /// @brief Assembly stub: sets r15 = frame_base, loads ARs/VRs, jumps to ret_to_user.
     [[noreturn]] auto __domain_enter_user_asm(u64 frame_base, zxfoundation::domain::user_regs* uregs) noexcept -> void;
 

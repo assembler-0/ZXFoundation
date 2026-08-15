@@ -4,31 +4,30 @@
 
 export module zxfoundation.init.main;
 import zxfoundation.base.types;
-import zxfoundation.sys.time;
-import zxfoundation.sys.timer;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.watchdog;
+import zxfoundation.sys.time.core;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.printk.core;
 import zxfoundation.base.config;
 import zxfoundation.memory.pmm;
-import zxfoundation.sys.irq.irqdesc;
-import zxfoundation.sys.syschk_core;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.service;
-import zxfoundation.sys.io;
+import zxfoundation.sys.irq.core;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.service.core;
+import zxfoundation.sys.zxio.core;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.numa;
 import zxfoundation.base.cxxrtse.cxxabi;
 import zxfoundation.memory.slub;
-import zxfoundation.rcu.rcu;
+import zxfoundation.sync.rcu.core;
 import zxfoundation.memory.kmalloc;
 import zxfoundation.memory.vm;
 import zxfoundation.memory.memory_objects;
-import zxfoundation.sys.cap;
-import zxfoundation.sys.cap_types;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.sys.cap.core;
+import zxfoundation.sys.cap.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
 import zxfoundation.memory.rmap;
 import zxfoundation.memory.reclaim;
-import zxfoundation.sys.ipc;
+import zxfoundation.sys.ipc.core;
 import zxfoundation.sched.sched;
 import zxfoundation.sched.sched_numa_distance;
 import zxfoundation.init.bootstrap;
@@ -49,13 +48,14 @@ import arch.s390x.cpu.psw;
 import arch.s390x.cpu.smp;
 import arch.s390x.cpu.features;
 import arch.s390x.cpu.irq;
-import arch.s390x.mmu.mmu;
+import arch.s390x.mmu.core;
 import arch.s390x.cpu.aste;
-import arch.s390x.css.css;
-import arch.s390x.css.ccw_io;
+import arch.s390x.io.css.subchannel;
+import arch.s390x.io.ccw.core;
 import crypto.sha256_types;
 import crypto.sha256;
-import drivers.console.diag;
+import drivers.console.diag.core;
+import drivers.watchdog.core;
 import lib.error;
 import std;
 
@@ -308,10 +308,10 @@ namespace _internal {
     auto cap_register_lookup() -> void {
         discard_value zxfoundation::sys::cap::register_lookup(
         zxfoundation::sys::cap::cap_type::memory_extent,
-        [](u16 object_id) noexcept -> zxfoundation::scoms::kobject* {
+        [](u16 object_id) noexcept -> zxfoundation::scoms::kobject::bobject* {
             auto* object = zxfoundation::memory::objects::memory_object_resolve_id(
                 static_cast<u32>(object_id));
-            return object && object->ko.type == zxfoundation::scoms::kobject_type::memory_extent
+            return object && object->ko.type == zxfoundation::scoms::kobject::kobject_type::memory_extent
                 ? &object->ko : nullptr;
         });
     }
@@ -335,7 +335,7 @@ namespace _internal {
 } // namespace _internal
 
 /// @brief nucleus main entry point
-extern "C" [[noreturn]] auto zxfoundation_global_initialize(
+no_mangle [[noreturn]] auto zxfoundation_global_initialize(
     const arch::s390x::init::zxfl::protocol* protocol
 ) noexcept -> void {
     if (!protocol) [[unlikely]]
@@ -353,7 +353,7 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
 
     zxfoundation::sys::printk::init();
     zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
-    zxfoundation::sys::syschk::syschk_init(*protocol);
+    zxfoundation::sys::syschk::init(*protocol);
     _internal::cmdline_init();
     _internal::banner();
 
@@ -376,21 +376,21 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     zxfoundation::memory::slub::slub_attach_authorities();
     _internal::rmap_init();
     _internal::reclaim_entry_install();
-    zxfoundation::ipc::ipc_init();
+    zxfoundation::sys::ipc::ipc_init();
     zxfoundation::policy::policy_init();
 
     zxfoundation::dgp::isolation_init();
 
-    zxfoundation::sys::irq::irq_subsystem_init();
-    zxfoundation::sys::timer::timer_init();
+    zxfoundation::sys::irq::init();
+    zxfoundation::sys::timer::init();
 
-    zxfoundation::rcu::rcu_init();
+    zxfoundation::sync::rcu::init();
     arch::s390x::cpu::aste::aste_subsystem_init();
 
     zxfoundation::domain::domain_init();
     discard_value zxfoundation::domain::domain_init_nucleus();
     zxfoundation::domain::strand_init();
-    zxfoundation::sys::service::service_init();
+    zxfoundation::sys::service::init();
     zxfoundation::gate::gate_init();
     zxfoundation::gate::gate_registration::register_all_handlers();
     zxfoundation::portal::portal_init();
@@ -401,15 +401,15 @@ extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     arch::s390x::cpu::smp::launch(*protocol);
     arch::s390x::cpu::irq::irq_enable();
 
-    arch::s390x::css::css_init();
-    arch::s390x::css::ccw_io::css_probe_devices();
-    zxfoundation::sys::io::io_init();
+    arch::s390x::io::css::init();
+    arch::s390x::io::ccw::probe_devices();
+    zxfoundation::sys::zxio::init();
 
     _internal::launch_bootstrap_domain();
 
     pinfo("sys: core.zxfoundation.nucleus initialization complete");
 
-    zxfoundation::sys::watchdog::watchdog_init();
+    drivers::watchdog::init();
 
     zxfoundation::sched::sched_idle_enter();
 }

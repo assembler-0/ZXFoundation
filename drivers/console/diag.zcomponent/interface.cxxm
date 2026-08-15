@@ -1,0 +1,2 @@
+export module drivers.console.diag;
+export import drivers.console.diag.core;

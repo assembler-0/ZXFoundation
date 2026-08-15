@@ -1,0 +1,68 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/printk.cxxm
+/// @brief Kernel logging framework.
+
+export module zxfoundation.sys.printk.core;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk.types;
+import zxfoundation.sys.printk.format;
+import lib.format;
+import std;
+
+export {
+
+namespace zxfoundation::sys::printk {
+
+    auto set_min_level(log_level level) noexcept -> void;
+
+    auto get_current_level() noexcept -> log_level;
+
+    auto handle_min_level(std::string_view val) noexcept -> bool;
+
+    auto init() noexcept -> void;
+
+    auto register_backend(const printk_backend& backend) noexcept -> void;
+
+    auto read_logs(std::span<u8> dest, bool consume) noexcept -> usize;
+
+    auto log_size() noexcept -> usize;
+
+    /// @brief Commit a pre-formatted message to all active backends and the ring-buffer.
+    /// @param[in] buf     Pre-formatted message buffer (NUL-terminated).
+    /// @param[in] offset  Number of valid bytes in buf (not counting NUL).
+    /// @param[in] cpu     Logical CPU ID of the calling processor.
+    auto printk_commit(const char* buf, usize offset) noexcept -> void;
+
+    template <typename... Args>
+    auto printk(log_level level, std::string_view fmt, Args&&... args) noexcept -> void {
+        if (static_cast<u8>(level) > static_cast<u8>(get_current_level()))
+            return;
+
+        char buf[PRINTK_LINE_MAX]{};
+        usize offset = prepare_header(level, buf, PRINTK_LINE_MAX);
+
+        offset += lib::format::format_to(
+            {buf + offset, PRINTK_LINE_MAX - offset},
+            fmt,
+            std::forward<Args>(args)...);
+
+        if (offset < (PRINTK_LINE_MAX - 1) && (offset == 0 || buf[offset-1] != '\n')) {
+            buf[offset++] = '\n';
+        }
+        buf[offset] = '\0';
+
+        printk_commit(buf, offset);
+    }
+
+    template <typename... Args> auto pemerg(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::EMERG,  fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto palert(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::ALERT,  fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pcrit(std::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::CRIT,   fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto perr(std::string_view fmt, Args&&... args) noexcept -> void   { printk(log_level::ERROR,  fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pwarn(std::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::WARN,   fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pnotice(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::NOTICE, fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pinfo(std::string_view fmt, Args&&... args) noexcept -> void  { printk(log_level::INFO,   fmt, std::forward<Args>(args)...); }
+    template <typename... Args> auto pverbose(std::string_view fmt, Args&&... args) noexcept -> void { printk(log_level::VERBOSE,  fmt, std::forward<Args>(args)...); }
+
+} // namespace zxfoundation::sys::printk
+
+} // end export

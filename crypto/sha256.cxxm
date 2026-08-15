@@ -7,9 +7,8 @@ import crypto.sha256_types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.cpacf;
 import arch.s390x.cpu.features;
-import std;
-import std;
 import lib.error;
+import std;
 
 namespace crypto::sha256 {
 
@@ -90,6 +89,17 @@ namespace crypto::sha256 {
 export {
 
 namespace crypto::sha256 {
+
+    std::array<u32, 8> sha256_default_ctx {
+        0x6a09e667U,
+        0xbb67ae85U,
+        0x3c6ef372U,
+        0xa54ff53aU,
+        0x510e527fU,
+        0x9b05688cU,
+        0x1f83d9abU,
+        0x5be0cd19U
+    };
 
     /// @brief Initialize a SHA-256 context to the FIPS 180-4 initial hash value.
     /// @param[out] ctx  Context to initialize.
@@ -218,7 +228,6 @@ namespace crypto::sha256 {
     }
 
     /// @brief One-shot SHA-256: hash @p data and write the 32-byte digest to @p out.
-    ///        Uses CPACF KIMD/KLMD when MSA Ext 1 is available, software fallback.
     [[nodiscard]] auto sha256_hash(std::span<const u8> data, std::span<u8, SHA256_DIGEST_SIZE> out)
         -> std::expected<void, lib::kernel_error> {
         namespace cpacf = arch::s390x::cpu::cpacf;
@@ -242,7 +251,7 @@ namespace crypto::sha256 {
             pb._pad[0] = static_cast<u32>(msg_bits >> 32U);
             pb._pad[1] = static_cast<u32>(msg_bits);
 
-            cpacf::klmd<cpacf::klmd_fc::sha256, cpacf::klmd_flags::none, sha256_pb>(pb, data);
+            cpacf::klmd<cpacf::klmd_fc::sha256, cpacf::klmd_flags::none, cpacf::klmd_fv_flag::flags_field_valid, sha256_pb>(pb, data);
 
             for (u32 i = 0U; i < 8U; ++i) {
                 out[i * 4U + 0U] = static_cast<u8>(pb.state[i] >> 24U);

@@ -13,7 +13,7 @@ import zxfoundation.memory.oom;
 import zxfoundation.memory.page_cache;
 import zxfoundation.memory.vm;
 import zxfoundation.memory.vm_types;
-import arch.s390x.mmu.mmu_tlb;
+import arch.s390x.mmu.tlb;
 import zxfoundation.domain.domain;
 import zxfoundation.base.types;
 import zxfoundation.domain.domain_types;

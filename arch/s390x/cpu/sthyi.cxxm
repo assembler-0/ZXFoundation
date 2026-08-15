@@ -354,7 +354,7 @@ namespace arch::s390x::cpu::sthyi {
 		u16 infmlen{};
 		u16 infpoff{};
 		u16 infplen{};
-		inf0hdyg infhygs[3]{};
+		std::array<inf0hdyg, 3> infhygs{};
 		bytersvd(4){};
 	};
 	assert_size(inf0hdr, 0x30);
@@ -384,11 +384,11 @@ namespace arch::s390x::cpu::sthyi {
 		u16 infmdcps{};
 		u16 infmsifl{};
 		u16 infmdifl{};
-		uchar infmname[8]{};
-		uchar infmtype[4]{};
-		uchar infmmanu[16]{};
-		uchar infmseq[16]{};
-		uchar infmpman[4]{};
+		std::array<uchar, 8> infmname{};
+		std::array<uchar, 4> infmtype{};
+		std::array<uchar, 16> infmmanu{};
+		std::array<uchar, 16> infmseq{};
+		std::array<uchar, 4> infmpman{};
 		bytersvd(4){};
 		u64 infmplnm{};
 		u16 infmsziip{};
@@ -427,15 +427,15 @@ namespace arch::s390x::cpu::sthyi {
 		u16 infpsifl{};
 		u16 infpdifl{};
 		bytersvd(2){};
-		uchar infppnam[8]{};
+		std::array<uchar, 8> infppnam{};
 		u32 infpwbcp{};
 		u32 infpabcp{};
 		u32 infpwbif{};
 		u32 infpabif{};
-		uchar infplgnm[8]{};
+		std::array<uchar, 8> infplgnm{};
 		u32 infplgcp{};
 		u32 infplgif{};
-		uchar infpplnm[8]{};
+		std::array<uchar, 8> infpplnm{};
 		i16 infpsziip{};
 		i16 infpdziip{};
 		i16 infpwbziip{};
@@ -504,20 +504,14 @@ namespace arch::s390x::cpu::sthyi {
 		bytersvd(1){};
 		uchar infycpt{};
 		uchar infyiflt{};
-		uchar infysyid[8]{};
-		uchar infclnm[8]{};
+		std::array<uchar, 8> infysyid{};
+		std::array<uchar, 8> infclnm{};
 		u16 infyscps{};
 		u16 infydcps{};
 		u16 infysifl{};
 		u16 infydifl{};
-		union {
-			uchar infyinsf[8]{};
-			inf0hyp_infyins infyins[8];
-		};
-		union {
-			uchar infyautf[8]{};
-			inf0hyp_infyaut infyaut[8];
-		};
+		std::array<inf0hyp_infyins, 8> infyinsf{};
+		std::array<inf0hyp_infyaut, 8> infyautf{};
 		uchar infyziipt{};
 		bytersvd(1){};
 		i16 infysziip{};
@@ -569,7 +563,7 @@ namespace arch::s390x::cpu::sthyi {
 			};
 		};
 		uchar infgval2{};
-		uchar infgusid[8]{};
+		std::array<uchar, 8> infgusid{};
 		u16 infgscps{};
 		u16 infgpcps{};
 		inf0gst_infgcpdt infgcpdt{};
@@ -594,7 +588,7 @@ namespace arch::s390x::cpu::sthyi {
 			};
 		};
 		bytersvd(3);
-		uchar infgpnam[8]{};
+		std::array<uchar, 8> infgpnam{};
 		u32 infgpccc{};
 		u32 infgpicc{};
 		i16 infgsziip{};
@@ -643,7 +637,7 @@ namespace arch::s390x::cpu::sthyi {
 		u32 infccten{};
 		bytersvd(4){};
 		bytersvd(24){};
-		u64 infcfcus[2]{};
+		std::array<u64, 2> infcfcus{};
 	};
 	assert_size(infchdr, 0x40);
 
@@ -709,13 +703,13 @@ namespace arch::s390x::cpu::sthyi {
 		u16 inf1mdcp{};
 		u16 inf1msif{};
 		u16 inf1mdif{};
-		uchar inf1mtyp[4]{};
-		uchar inf1mnam[8]{};
-		uchar inf1mmam[16]{};
-		uchar inf1mseq[16]{};
-		uchar inf1mpma[4]{};
+		std::array<uchar, 4> inf1mtyp{};
+		std::array<uchar, 8> inf1mnam{};
+		std::array<uchar, 16> inf1mmam{};
+		std::array<uchar, 16> inf1mseq{};
+		std::array<uchar, 4> inf1mpma{};
 		bytersvd(4);
-		uchar inf1mplnm[8]{};
+		std::array<uchar, 8> inf1mplnm{};
 	};
 	assert_size(inf1mac, 0x48);
 
@@ -763,15 +757,15 @@ namespace arch::s390x::cpu::sthyi {
 		u16 inf1ppnu{};
 		inf1par_inf1pcmod inf1pcmod{};
 		inf1par_inf1prcpu inf1prcpu{};
-		uchar inf1ppna[8]{};
+		std::array<uchar, 8> inf1ppna{};
 		u32 inf1pwbc{};
 		u32 inf1pabc{};
 		u32 inf1pwbi{};
 		u32 inf1pabi{};
-		uchar inf1pgln[8]{};
+		std::array<uchar, 8> inf1pgln{};
 		u32 inf1plgc{};
 		u32 inf1plgi{};
-		uchar inf1pplnm[8]{};
+		std::array<uchar, 8> inf1pplnm{};
 		u32 inf1penc{};
 		u32 inf1peni{};
 		u64 inf1pxsca{};
@@ -838,8 +832,8 @@ namespace arch::s390x::cpu::sthyi {
 		bytersvd(1);
 		uchar inf1ycpt{};
 		uchar inf1yift{};
-		uchar inf1ysid[8]{};
-		uchar inf1ycln[8]{};
+		std::array<uchar, 8> inf1ysid{};
+		std::array<uchar, 8> inf1ycln{};
 		u16 inf1yscp{};
 		u16 inf1ydcp{};
 		u16 inf1ysif{};
@@ -891,8 +885,8 @@ namespace arch::s390x::cpu::sthyi {
 	};
 
 	struct [[gnu::packed]] inf3gst {
-		uchar inf3guid[8]{};
-		uchar inf3gacn[8]{};
+		std::array<uchar, 8> inf3guid{};
+		std::array<uchar, 8> inf3gacn{};
 		union {
 			uchar inf3flg{};
 			struct {
@@ -907,7 +901,7 @@ namespace arch::s390x::cpu::sthyi {
 		inf3dst_inf3gcmod inf3gmod{};
 		inf3dst_inf3gprtp inf3gprtp{};
 		u32 inf3gtod{};
-		u8 inf3pgna[8]{};
+		std::array<u8, 8> inf3pgna{};
 		u32 inf3giwsc{};
 		u32 inf3gcfsc{};
 		u32 inf3gsmsc{};
@@ -1069,8 +1063,8 @@ namespace arch::s390x::cpu::sthyi {
 	using inf1view = hv_view<inf1hdr_layout, inf1mac, inf1par, inf1hyp, inf1gst>;
 
 	struct [[gnu::packed]] inf2gst {
-		uchar infguid[8]{};
-		uchar infgacn[8]{};
+		std::array<uchar, 8> infguid{};
+		std::array<uchar, 8> infgacn{};
 		u32   infgtod{};
 		union {
 			uchar infgflg{};
@@ -1100,8 +1094,8 @@ namespace arch::s390x::cpu::sthyi {
 	using inf2view = list_view<inf2hdr_layout, inf2gst>;
 
 	struct [[gnu::packed]] inf4pool {
-		uchar inf4pnam[8]{};
-		uchar inf4pcre[8]{};
+		std::array<uchar, 8> inf4pnam{};
+		std::array<uchar, 8> inf4pcre{};
 	};
 	assert_size(inf4pool, 0x10);
 
@@ -1109,8 +1103,8 @@ namespace arch::s390x::cpu::sthyi {
 	using inf4view = list_view<inf4hdr_layout, inf4pool>;
 
 	struct [[gnu::packed]] inf5hdr {
-		uchar inf5plna[8]{};
-		uchar inf5pcre[8]{};
+		std::array<uchar, 8> inf5plna{};
+		std::array<uchar, 8> inf5pcre{};
 		u64 inf5stmp{};
 		union {
 			uchar inf5cflg{};
@@ -1139,11 +1133,11 @@ namespace arch::s390x::cpu::sthyi {
 	using inf5view = infhdr_view<inf5hdr_layout>;
 
 	struct [[gnu::packed]] inf6hdr {
-		uchar inf6plna[8]{};
+		std::array<uchar, 8> inf6plna{};
 	};
 
 	struct [[gnu::packed]] inf6mem {
-		uchar inf6mnam[8]{};
+		std::array<uchar, 8> inf6mnam{};
 	};
 
 	using inf6hdr_layout = infhdr_layout<infchdr, inf6hdr>;

@@ -4,6 +4,7 @@
 
 export module arch.s390x.cpu.cpu_mf;
 import zxfoundation.base.types;
+import lib.bit;
 
 export {
 
@@ -134,13 +135,27 @@ ZX_QCTRI_CONTROL_TYPES(ZX_DEFINE_QCTRI_CTL)
     /// @return Condition code (0 = success).
     auto ecctr(u64 ctr, u64& val) noexcept -> condition_code;
 
-
-    /// @brief Store CPU Counter Multiple (STCCTM).
-    /// @param set Counter set selection.
-    /// @param range Number of counters.
-    /// @param dest Output buffer.
-    /// @return Condition code.
-    auto stcctm(stcctm_ctr_set set, u64 range, u64& dest) noexcept -> condition_code;
+	/// @brief Store CPU Counter Multiple (STCCTM).
+	/// @tparam Set Counter set selection.
+	/// @param range Number of counters.
+	/// @param dest Output buffer.
+	/// @return Condition code.
+	template <stcctm_ctr_set Set>
+	auto stcctm(u16 range, u64& dest) noexcept -> condition_code {
+		condition_code cc{0};
+		u64 r1{0};
+		lib::bit_insert_msb<u64>(r1, 48, 63, range);
+		__asm__ volatile(
+			"    stcctm %[range],%[set],22222(%[dest])\n"
+			__asm_capture_cc()
+			: __asm_cc_out(cc)
+			: [dest] "Q" (dest),
+			  [range] "d" (range),
+			  [set] "i" (Set)
+			: "cc", "memory"
+		);
+		return cc;
+	}
 
 	/// @brief Load Sampling Controls (LSCTL).
 	/// @param req LSCTL Parameter block.

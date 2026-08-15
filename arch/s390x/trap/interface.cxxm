@@ -1,0 +1,7 @@
+export module arch.s390x.trap;
+export import arch.s390x.trap.ext;
+export import arch.s390x.trap.io;
+export import arch.s390x.trap.pgm;
+export import arch.s390x.trap.mcck;
+export import arch.s390x.trap.svc;
+export import arch.s390x.trap.fixup;

@@ -5,7 +5,7 @@
 
 export module zxfoundation.portal.portal_types;
 import zxfoundation.base.types;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
 
 export {
 
@@ -59,7 +59,7 @@ export {
         }
 
         struct portal_desc {
-            scoms::kobject ko{};              ///< FIRST field — lifecycle + refcount.
+            scoms::kobject::bobject ko{};              ///< FIRST field — lifecycle + refcount.
             u32          source_domain{0};    ///< Domain that holds this portal (has the ALET).
             u32          target_domain{0};    ///< Domain whose address space is accessed.
             u64          va_start{0};         ///< Start of accessible range in target.

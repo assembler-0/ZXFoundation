@@ -1,0 +1,81 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file scoms_object_core.cxxm
+/// @brief Nucleus-owned metadata for the unified object ontology.
+
+export module zxfoundation.scoms.metadata.core;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+    namespace zxfoundation::scoms::object_core {
+
+    constexpr u32 MAX_OBJECT_METADATA = 16384U;
+    constexpr u32 METADATA_BLOCK_SIZE = 256U;
+    constexpr u32 METADATA_BLOCK_COUNT =
+        (MAX_OBJECT_METADATA + METADATA_BLOCK_SIZE - 1U) / METADATA_BLOCK_SIZE;
+
+    struct object_metadata {
+        const kobject::bobject* object{nullptr};
+        u32 owner_domain{kobject::KOBJECT_ID_INVALID};
+        u32 parent_slot{0};
+        kobject::kobject_type parent_type{kobject::kobject_type::none};
+        u32 parent_id{kobject::KOBJECT_ID_INVALID};
+        u32 parent_generation{0};
+        u32 object_flags{0};
+        u32 dependent_count{0};
+        u32 hardware_generation{0};
+        void (*reclaimer)(kobject::bobject&) noexcept{nullptr};
+        bool active{false};
+        bool reclaim_pending{false};
+    };
+
+    [[nodiscard]] auto register_object(
+        kobject::bobject& object, u32 owner_domain = kobject::KOBJECT_ID_INVALID
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto unregister_object(
+        kobject::bobject& object
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Register the table-specific final reclaimer for an object.
+    [[nodiscard]] auto set_reclaimer(
+        kobject::bobject& object, void (*reclaimer)(kobject::bobject&) noexcept
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Dispatch the final-put reclaimer retained in object metadata.
+    auto finalize_last_put(kobject::bobject& object) noexcept -> void;
+
+    /// @brief Remove metadata only after table storage has been unpublished.
+    auto complete_reclaim(kobject::bobject& object) noexcept -> void;
+
+    [[nodiscard]] auto set_owner(
+        kobject::bobject& object, u32 owner_domain
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto attach(
+        kobject::bobject& child, kobject::bobject& parent
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto detach(
+        kobject::bobject& child
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto has_dependents(
+        const kobject::bobject& object
+    ) noexcept -> bool;
+
+    [[nodiscard]] auto bump_hardware_generation(
+        kobject::bobject& object
+    ) noexcept -> std::expected<u32, lib::kernel_error>;
+
+    [[nodiscard]] auto metadata(
+        const kobject::bobject& object
+    ) noexcept -> std::expected<object_metadata, lib::kernel_error>;
+
+} // namespace zxfoundation::scoms::object_core
+
+} // end export

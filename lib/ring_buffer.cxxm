@@ -8,7 +8,7 @@ import std;
 
 export {
 
-namespace std {
+namespace lib {
 
     /// @brief A lock-free byte-stream ring buffer (mirrors Linux kfifo).
     /// @tparam N Capacity of the buffer (MUST be a power of two).

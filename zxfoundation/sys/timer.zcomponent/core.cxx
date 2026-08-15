@@ -1,0 +1,205 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/timer.cxxm
+/// @brief Generic kernel timer subsystem — per-CPU min-heap with clock comparator arming.
+
+module zxfoundation.sys.timer.core;
+import zxfoundation.sys.timer.types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.clock;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.lowcore;
+import zxfoundation.sys.irq.core;
+import zxfoundation.sys.irq.consts;
+import lib.min_heap;
+import lib.error;
+import lib.format;
+import std;
+
+namespace zxfoundation::sys::timer::detail {
+
+    /// @brief Comparator for kernel_timer pointers — orders by deadline_tod.
+    struct timer_less {
+        [[nodiscard]] auto operator()(
+            const kernel_timer* a, const kernel_timer* b
+        ) const noexcept -> bool {
+            return a->deadline_tod < b->deadline_tod;
+        }
+    };
+
+    static std::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
+        g_heaps[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+
+    /// @brief Subsystem initialization flag.
+    static bool g_timer_initialized{false};
+
+    /// @brief Program the clock comparator for the next timer deadline.
+    auto rearm_comparator(u16 cpu_id) noexcept -> void {
+        const auto* top = g_heaps[cpu_id].peek();
+        if (top) {
+            arch::s390x::cpu::clock::sckc(top->deadline_tod);
+        } else {
+            // Far future: current TOD + ~10 seconds.
+            const u64 far_future = arch::s390x::cpu::clock::stck()
+                                 + 40'960'000'000ULL;
+            arch::s390x::cpu::clock::sckc(far_future);
+        }
+    }
+
+    auto irq_handler_clock_comparator(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void {
+        discard_value irq; discard_value frame; discard_value data;
+        timer_interrupt();
+    }
+
+    auto irq_handler_timing_alert(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void {
+        discard_value irq; discard_value frame; discard_value data;
+        const u64 far_future = arch::s390x::cpu::clock::stck()
+                             + 40'960'000'000ULL;
+        arch::s390x::cpu::clock::sckc(far_future);
+    }
+
+    auto irq_handler_service_signal(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void {
+        discard_value irq; discard_value frame; discard_value data;
+    }
+    
+} // namespace detail
+
+namespace zxfoundation::sys::timer {
+
+    /// @brief Add a timer to the current CPU's heap and arm the clock comparator.
+    [[nodiscard]] auto timer_add(kernel_timer& t) noexcept
+        -> std::expected<void, lib::kernel_error>
+    {
+        if (t.armed) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+        }
+
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+
+        const u16 cpu_id = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        t.cpu = cpu_id;
+
+        if (!detail::g_heaps[cpu_id].push(&t, detail::timer_less{})) {
+            arch::s390x::cpu::irq::irq_restore(flags);
+            return std::unexpected(
+                lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+        }
+
+        t.armed = true;
+
+        if (detail::g_heaps[cpu_id].peek() == &t) {
+            detail::rearm_comparator(cpu_id);
+        }
+
+        arch::s390x::cpu::irq::irq_restore(flags);
+        return {};
+    }
+
+    /// @brief Cancel an armed timer.
+    [[nodiscard]] auto timer_cancel(kernel_timer& t) noexcept
+        -> std::expected<void, lib::kernel_error>
+    {
+        if (!t.armed) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::invalid_arg));
+        }
+
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+
+        const u16 current_cpu =
+            arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        if (t.cpu != current_cpu) {
+            arch::s390x::cpu::irq::irq_restore(flags);
+            return std::unexpected(
+                lib::kernel_error::from_generic(
+                    lib::generic_error::not_supported));
+        }
+
+        discard_value detail::g_heaps[t.cpu].remove(&t, detail::timer_less{});
+        t.armed = false;
+
+        detail::rearm_comparator(t.cpu);
+
+        arch::s390x::cpu::irq::irq_restore(flags);
+        return {};
+    }
+
+    /// @brief Clock comparator interrupt handler.
+    auto timer_interrupt() noexcept -> void {
+        const u16 cpu_id =
+            arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u64 now = arch::s390x::cpu::clock::stck();
+
+        auto& heap = detail::g_heaps[cpu_id];
+        constexpr detail::timer_less less{};
+
+        while (!heap.empty()) {
+            kernel_timer* t = heap.peek();
+            if (t->deadline_tod > now)
+                break;
+
+            discard_value heap.remove(t, less);
+            t->armed = false;
+
+            if (t->callback) {
+                t->callback(t->data);
+            }
+
+            if (t->mode == timer_mode::periodic && t->interval_tod > 0) {
+                u64 next = t->deadline_tod + t->interval_tod;
+                if (next <= now) {
+                    const u64 missed = (now - t->deadline_tod) / t->interval_tod;
+                    next = t->deadline_tod + (missed + 1) * t->interval_tod;
+                }
+                t->deadline_tod = next;
+                t->cpu = cpu_id;
+                if (heap.push(t, less)) {
+                    t->armed = true;
+                }
+            }
+        }
+
+        detail::rearm_comparator(cpu_id);
+    }
+
+    /// @brief Initialize the timer subsystem on the BSP (CPU 0).
+    auto init() noexcept -> void {
+        detail::g_timer_initialized = true;
+
+        using irq::IRQ_BASE_EXT;
+        using irq::EXT_IRQ_CLOCK_COMPARATOR;
+        using irq::EXT_IRQ_TIMING_ALERT;
+        using irq::EXT_IRQ_SERVICE_SIGNAL;
+        using irq::IRQF_FAST;
+
+        const u16 clk_comp_irq = static_cast<u16>(IRQ_BASE_EXT + EXT_IRQ_CLOCK_COMPARATOR);
+        const u16 timing_alert_irq = static_cast<u16>(IRQ_BASE_EXT + EXT_IRQ_TIMING_ALERT);
+        const u16 service_signal_irq = static_cast<u16>(IRQ_BASE_EXT + EXT_IRQ_SERVICE_SIGNAL);
+
+        auto reg = [](u16 vec, irq::handler_fn h) {
+            discard_value(irq::irq_register(vec, h, nullptr, IRQF_FAST));
+        };
+
+        reg(clk_comp_irq,       detail::irq_handler_clock_comparator);
+        reg(timing_alert_irq,   detail::irq_handler_timing_alert);
+        reg(service_signal_irq, detail::irq_handler_service_signal);
+    }
+
+} // namespace zxfoundation::sys::timer

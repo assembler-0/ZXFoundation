@@ -4,13 +4,14 @@
 
 export module zxfoundation.base.cxxrtse.cxxabi;
 import zxfoundation.base.types;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.printk;
-import zxfoundation.locking.qspinlock;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sync.qspinlock.core;
 import lib.error;
 import lib.static_vector;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
+import std;
 
 using zxfoundation::sys::printk::pinfo;
 
@@ -26,13 +27,13 @@ struct AtExitEntry {
 
 lib::static_vector<AtExitEntry, CXA_ATEXIT_MAX> g_atexit_table{};
 
-zxfoundation::locking::qspinlock::qspinlock g_atexit_lock{};
+alignas(4) zxfoundation::sync::qspinlock::qspinlock g_atexit_lock{};
 auto atexit_lock()   noexcept -> void { g_atexit_lock.lock(); }
 auto atexit_unlock() noexcept -> void { g_atexit_lock.unlock(); }
 
 } // anonymous namespace
 
-extern "C" {
+no_mangle {
 
 extern void (*__init_array_start[])() __attribute__((weak));
 
@@ -46,7 +47,7 @@ extern void *__dso_handle __attribute__((weak));
 
 }
 
-extern "C" {
+no_mangle {
 
 auto __cxa_atexit(void (*destructor)(void*), void* obj, void* dso) -> int {
     if (!destructor) return 0;
@@ -184,7 +185,7 @@ u64 __stack_chk_guard = 0x595A465353500001ULL; // "ZXFSSP" + version tag
     __builtin_unreachable();
 }
 
-} // extern "C"
+} // no_mangle
 
 export {
 

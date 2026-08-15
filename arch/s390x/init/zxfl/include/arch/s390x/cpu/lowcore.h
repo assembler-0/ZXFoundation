@@ -69,7 +69,7 @@ typedef struct {
     mcs_node_t  lock_nodes[MAX_LOCK_DEPTH]; ///< MCS nodes for qspinlock.
     uint64_t    rcu_gp_seq;         ///< RCU grace-period sequence number.
     uint64_t    rcu_qs_seq;         ///< RCU quiescent-state sequence number.
-    uint8_t     in_rcu_read_side;   ///< 1 if inside rcu_read_lock().
+    uint8_t     in_rcu_read_side;   ///< 1 if inside read_unlock().
     uint8_t     _pad0[3];
     uint32_t    ipi_pending_count;  ///< Atomic counter for pending IPI completion.
     uint64_t    ap_stack_top;       ///< AP initial stack pointer (physical, set before SIGP Restart).

@@ -15,7 +15,7 @@ import zxfoundation.gate.nc_sgn;
 import zxfoundation.gate.nc_cap;
 import zxfoundation.gate.nc_sys;
 import zxfoundation.dgp.dgp_authorize;
-import zxfoundation.sys.printk;
+import zxfoundation.sys.printk.core;
 import zxfoundation.base.types;
 import lib.error;
 import std;
@@ -139,9 +139,9 @@ namespace zxfoundation::gate::gate_registration {
                 make_op(1, nc_sys::dispatch_wrap<sys_op::time_deadline>,      gate_auth_level::none,        operation_kind::time_deadline),
                 make_op(2, nc_sys::dispatch_wrap<sys_op::time_now>,           gate_auth_level::none,        operation_kind::time_now),
                 make_op(3, nc_sys::dispatch_wrap<sys_op::console_write>,      gate_auth_level::none,        operation_kind::console_write),
-                make_op(4, nc_sys::dispatch_wrap<sys_op::service_register>,   gate_auth_level::capability,  operation_kind::service_register),
-                make_op(5, nc_sys::dispatch_wrap<sys_op::service_lookup>,     gate_auth_level::none,        operation_kind::service_lookup),
-                make_op(6, nc_sys::dispatch_wrap<sys_op::service_unregister>, gate_auth_level::none,        operation_kind::service_unregister),
+                make_op(4, nc_sys::dispatch_wrap<sys_op::register_service>,   gate_auth_level::capability,  operation_kind::register_service),
+                make_op(5, nc_sys::dispatch_wrap<sys_op::lookup_service>,     gate_auth_level::none,        operation_kind::lookup_service),
+                make_op(6, nc_sys::dispatch_wrap<sys_op::unregister_service>, gate_auth_level::none,        operation_kind::unregister_service),
                 make_op(7, nc_sys::dispatch_wrap<sys_op::ipc_endpoint_create>, gate_auth_level::none, operation_kind::ipc_endpoint_create),
                 make_op(8, nc_sys::dispatch_wrap<sys_op::ipc_endpoint_destroy>, gate_auth_level::none, operation_kind::ipc_endpoint_destroy),
                 make_op(9, nc_sys::dispatch_wrap<sys_op::ipc_send>, gate_auth_level::none, operation_kind::ipc_send),

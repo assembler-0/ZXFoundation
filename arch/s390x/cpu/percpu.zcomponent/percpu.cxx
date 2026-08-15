@@ -3,7 +3,6 @@
 /// @brief Per-CPU data initialization.
 
 module arch.s390x.cpu.percpu;
-import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.processor;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.numa_types;
@@ -13,9 +12,28 @@ import zxfoundation.base.types;
 
 namespace arch::s390x::cpu::percpu {
 
+    /// @brief Offset of the per-CPU data block within the 8 KiB prefix area.
+    no_export constexpr u64 LC_PERCPU_OFFSET = 0x0400UL;
+
+    /// @brief Reference to the current CPU's per-CPU block
+    [[nodiscard]] auto this_cpu() noexcept -> percpu_data& {
+        return *reinterpret_cast<percpu_data*>(
+            zxfoundation::memory::hhdm::phys_to_virt(0ULL) + LC_PERCPU_OFFSET);
+    }
+
+    /// @brief get current cpu's ZXFL_CPU_TYPE_* value
+    [[nodiscard]] auto cpu_type() noexcept -> u8 {
+        return this_cpu().cpu_type;
+    }
+
+    /// @brief get current cpu id
+    [[nodiscard]] auto cpu_id() noexcept -> u16 {
+        return this_cpu().cpu_id;
+    }
+
     /// @brief Finish BSP per-CPU initialization.
     auto init_bsp() noexcept -> void {
-        percpu_data& pcp = lowcore::this_cpu_percpu();
+        percpu_data& pcp = this_cpu();
 
         pcp.rcu_gp_seq         = 0;
         pcp.rcu_qs_seq         = 0;
@@ -64,23 +82,6 @@ namespace arch::s390x::cpu::percpu {
         pcp.topology_evidence = 0;
         pcp.capacity = 100;
         // drawer_id and topology details are set by smp::init_aps() from the boot protocol after this call.
-    }
-
-    /// @brief Return a reference to the current CPU's per-CPU block.
-    [[nodiscard]] auto this_cpu() noexcept -> percpu_data& {
-        return lowcore::this_cpu_percpu();
-    }
-
-    /// @brief get current cpu id
-    [[nodiscard]] auto cpu_id() noexcept -> u16 {
-        const u16 id = *reinterpret_cast<const volatile u16*>(
-            zxfoundation::memory::hhdm::phys_to_virt(lowcore::LC_CPU_ID_OFFSET));
-        return (id < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) ? id : 0;
-    }
-
-    /// @brief get current cpu's ZXFL_CPU_TYPE_* value
-    [[nodiscard]] auto cpu_type() noexcept -> u8 {
-        return this_cpu().cpu_type;
     }
 
     /// @brief Return the lowercase short prefix for the current CPU type.

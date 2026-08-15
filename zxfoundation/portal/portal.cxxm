@@ -4,19 +4,19 @@
 ///        portals backed by z/Architecture Access Register mode ALETs.
 
 export module zxfoundation.portal.portal;
-
 import zxfoundation.portal.portal_types;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.domain;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.scoms.scoms_ref;
-import zxfoundation.scoms.scoms_table;
-import zxfoundation.scoms.scoms_object_core;
-import zxfoundation.sys.transaction;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.scoms.table;
+import zxfoundation.scoms.metadata.core;
+import zxfoundation.base.transaction;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.dgp_authorize;
@@ -25,8 +25,8 @@ import zxfoundation.memory.vm;
 import zxfoundation.memory.vm_types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.hhdm;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.base.typestate;
@@ -35,12 +35,8 @@ import arch.s390x.cpu.aste;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.sync;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.mmu.mmu_const;
-import arch.s390x.mmu.mmu_tlb;
-import zxfoundation.smp.smp;
-import zxfoundation.smp.smp_types;
+import arch.s390x.mmu;
+import zxfoundation.smp.csd;
 import lib.error;
 import std;
 
@@ -54,11 +50,11 @@ namespace _internal {
     using zxfoundation::base::lifecycle_state;
 
     /// @brief SCOMS-managed portal table (replaces ad-hoc array + lock + count).
-    static kobject_table<portal_desc, MAX_PORTALS> g_portal_table{};
-    static zxfoundation::locking::qspinlock::qspinlock g_portal_lock{};
+    static scoms_table<portal_desc, MAX_PORTALS> g_portal_table{};
+    alignas(4) static zxfoundation::sync::qspinlock::qspinlock g_portal_lock{};
     static std::atomic_flag g_alb_purge_lock{};
     static ::lib::cpumask g_alb_purge_mask{};
-    static zxfoundation::smp::call_single_data g_alb_purge_csds[
+    static zxfoundation::smp::csd::call_single_data g_alb_purge_csds[
         zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
     auto portal_root_destroy(portal_desc& desc) noexcept -> void;
@@ -76,7 +72,7 @@ namespace _internal {
         g_alb_purge_mask.reset();
         arch::s390x::cpu::cpumask::for_each_online_cpu(
             [](u16 cpu) noexcept -> void { g_alb_purge_mask.set(cpu); });
-        auto result = zxfoundation::smp::smp_call_function_many(
+        auto result = zxfoundation::smp::csd::call_function_many(
             g_alb_purge_mask,
             purge_alb_on_cpu, nullptr, 0U,
             g_alb_purge_csds,
@@ -155,7 +151,7 @@ namespace _internal {
 
     [[nodiscard]] auto allocate_ar(zxfoundation::domain::domain& source) noexcept
         -> std::expected<u8, lib::kernel_error> {
-        const zxfoundation::locking::irq_lock_guard guard{g_portal_lock};
+        const zxfoundation::sync::irq_lock_guard guard{g_portal_lock};
         for (u8 ar = 1U; ar < arch::s390x::cpu::ar::AR_COUNT; ++ar) {
             const u16 bit = static_cast<u16>(1U << ar);
             if ((source.portal_ar_mask & bit) == 0U) {
@@ -168,7 +164,7 @@ namespace _internal {
     }
 
     auto release_ar(zxfoundation::domain::domain& source, u8 ar) noexcept -> void {
-        const zxfoundation::locking::irq_lock_guard guard{g_portal_lock};
+        const zxfoundation::sync::irq_lock_guard guard{g_portal_lock};
         if (ar < arch::s390x::cpu::ar::AR_COUNT)
             source.portal_ar_mask &= static_cast<u16>(~(1U << ar));
     }
@@ -178,8 +174,8 @@ namespace _internal {
 namespace _internal {
 
     /// @brief CRTP transaction that tracks the multi-step portal creation.
-    class portal_create_txn : public zxfoundation::transaction<portal_create_txn> {
-        friend class zxfoundation::transaction<portal_create_txn>;
+    class portal_create_txn : public zxfoundation::base::transaction<portal_create_txn> {
+        friend class zxfoundation::base::transaction<portal_create_txn>;
 
         u32  m_slot_id{~0U};
         bool m_slot_allocated{false};
@@ -348,7 +344,7 @@ namespace zxfoundation::portal {
         }
 
         auto embryo_ref = static_cast<
-            scoms::kobject_ref<portal_desc, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<portal_desc, base::lifecycle_state::embryo>&&
         >(alloc_result.value());
 
         txn.record_slot(embryo_ref.id());
@@ -405,7 +401,7 @@ namespace zxfoundation::portal {
 
         // Transition embryo → active.
         auto active_ref = static_cast<
-            scoms::kobject_ref<portal_desc, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<portal_desc, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
         // Increment source domain's portal_count.
@@ -520,7 +516,7 @@ namespace zxfoundation::portal {
     auto register_portal_cap_lookup() noexcept -> void {
         discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::portal,
-            [](u16 obj_id) noexcept -> scoms::kobject* {
+            [](u16 obj_id) noexcept -> scoms::kobject::bobject* {
                 auto* p = portal_find(static_cast<u32>(obj_id));
                 return p ? &p->ko : nullptr;
             });
@@ -528,7 +524,7 @@ namespace zxfoundation::portal {
 
     /// @brief Initialize the portal subsystem.
     auto portal_init() noexcept -> void {
-        _internal::g_portal_table.init(scoms::kobject_type::portal);
+        _internal::g_portal_table.init(scoms::kobject::kobject_type::portal);
         zxfoundation::domain::register_portal_drain_cb(portal_destroy_for_domain);
 
         register_portal_cap_lookup();

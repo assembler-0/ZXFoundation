@@ -7,21 +7,22 @@ import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.types;
+import arch.s390x.init.zxfl.protocol;
 import zxfoundation.memory.hhdm;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import arch.s390x.init.zxfl.protocol;
+import zxfoundation.sync.qspinlock.mcs;
 import std;
 
 
 /// @brief Physical addresses of each CPU's lowcore page, indexed by logical CPU ID.
-__internal__ std::array<std::atomic<u64>, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> __percpu_lowcore_phys{};
-alignas(16) __internal__ std::byte s_boot_async_stack[arch::s390x::cpu::processor::ASYNC_STACK_SIZE]{};
-alignas(16) __internal__ std::byte s_boot_mcck_stack[arch::s390x::cpu::processor::MCCK_STACK_SIZE]{};
-alignas(16) __internal__ std::byte s_boot_nodat_stack[arch::s390x::cpu::processor::NODAT_STACK_SIZE]{};
-alignas(16) __internal__ std::byte s_boot_restart_stack[arch::s390x::cpu::processor::STACK_SIZE]{};
+no_export std::array<std::atomic<u64>, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> __percpu_lowcore_phys{};
+alignas(16) no_export std::byte s_boot_async_stack[arch::s390x::cpu::processor::ASYNC_STACK_SIZE]{};
+alignas(16) no_export std::byte s_boot_mcck_stack[arch::s390x::cpu::processor::MCCK_STACK_SIZE]{};
+alignas(16) no_export std::byte s_boot_nodat_stack[arch::s390x::cpu::processor::NODAT_STACK_SIZE]{};
+alignas(16) no_export std::byte s_boot_restart_stack[arch::s390x::cpu::processor::STACK_SIZE]{};
 
-extern "C" {
+from_global(nomangle) {
     auto trap_pgm_entry()     -> void;
     auto trap_ext_entry()     -> void;
     auto trap_io_entry()      -> void;
@@ -31,7 +32,7 @@ extern "C" {
     auto ap_dat_on()          -> void;
 
     /// @brief Kernel-wide stack-protector guard
-    extern u64 __stack_chk_guard;
+    from_global(reference) u64 __stack_chk_guard;
 }
 
 namespace arch::s390x::cpu::lowcore {

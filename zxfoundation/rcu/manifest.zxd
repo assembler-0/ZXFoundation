@@ -1,4 +1,0 @@
-!files : !compile_group -> [auto] {
-    rcu_types.cxxm
-    rcu.cxxm
-}

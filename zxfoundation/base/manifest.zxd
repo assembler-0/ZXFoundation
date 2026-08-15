@@ -5,4 +5,5 @@
     linksym.cxxm
     typestate.cxxm
     cmdline.cxxm
+    transaction.cxxm
 }

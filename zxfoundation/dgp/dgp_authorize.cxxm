@@ -9,7 +9,7 @@ import zxfoundation.base.typestate;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
 import zxfoundation.domain.domain_types;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
 import lib.error;
 import std;
 
@@ -59,9 +59,9 @@ namespace zxfoundation::dgp {
         time_deadline     = 34,  ///< Compute a deadline.
         time_now          = 35,  ///< Get monotonic time.
         console_write     = 36,  ///< Write to console.
-        service_register  = 37,  ///< Register a named service.
-        service_lookup    = 38,  ///< Look up a named service.
-        service_unregister = 39,  ///< Unregister a service.
+        register_service  = 37,  ///< Register a named service.
+        lookup_service    = 38,  ///< Look up a named service.
+        unregister_service = 39,  ///< Unregister a service.
         strand_set_policy   = 40,  ///< Change a strand's scheduler policy.
         strand_set_affinity = 41,  ///< Change a strand's CPU affinity.
         strand_query_state  = 42,  ///< Read a strand's scheduler state.
@@ -86,8 +86,8 @@ namespace zxfoundation::dgp {
 
     /// @brief Short-lived authorization proof bound to object generations.
     struct authorization_lease {
-        const scoms::kobject* caller{nullptr};
-        const scoms::kobject* target{nullptr};
+        const scoms::kobject::bobject* caller{nullptr};
+        const scoms::kobject::bobject* target{nullptr};
         u32 caller_generation{0};
         u32 target_generation{0};
         operation_kind operation{operation_kind::none};
@@ -205,9 +205,9 @@ namespace zxfoundation::dgp {
             case operation_kind::time_deadline:    return isolation_rights::none;
             case operation_kind::time_now:         return isolation_rights::none;
             case operation_kind::console_write:    return isolation_rights::console;
-            case operation_kind::service_register: return isolation_rights::service;
-            case operation_kind::service_lookup:   return isolation_rights::service;
-            case operation_kind::service_unregister:return isolation_rights::service | isolation_rights::lifecycle;
+            case operation_kind::register_service: return isolation_rights::service;
+            case operation_kind::lookup_service:   return isolation_rights::service;
+            case operation_kind::unregister_service:return isolation_rights::service | isolation_rights::lifecycle;
 
             // ── Self-management ────────────────────────────────────────
             case operation_kind::domain_exit:      return isolation_rights::none;
@@ -297,9 +297,9 @@ namespace zxfoundation::dgp {
             case operation_kind::time_deadline:
             case operation_kind::time_now:
             case operation_kind::console_write:
-            case operation_kind::service_register:
-            case operation_kind::service_lookup:
-            case operation_kind::service_unregister:
+            case operation_kind::register_service:
+            case operation_kind::lookup_service:
+            case operation_kind::unregister_service:
             case operation_kind::none:
                 break;
         }

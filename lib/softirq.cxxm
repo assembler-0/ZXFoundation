@@ -12,8 +12,9 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.ipi;
 import arch.s390x.cpu.cpumask;
-import zxfoundation.sys.irq.irqdesc;
-import zxfoundation.sys.syschk;
+import zxfoundation.sys.irq.core;
+import zxfoundation.sys.irq.consts;
+import zxfoundation.sys.syschk.core;
 import std;
 
 namespace _internal {

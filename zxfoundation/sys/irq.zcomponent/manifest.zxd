@@ -1,0 +1,9 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    consts.cxxm
+    desc.cxxm
+    desc.cxx
+    core.cxxm
+    core.cxx
+    storage.cxx
+}

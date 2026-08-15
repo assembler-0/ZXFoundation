@@ -1,0 +1,63 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file transaction.cxxm
+/// @brief Generic kernel transaction base (CRTP).
+
+export module zxfoundation.base.transaction;
+import zxfoundation.base.types;
+import std;
+
+export {
+
+namespace zxfoundation::base {
+
+    template <typename Derived>
+    class transaction {
+        std::atomic<bool> m_committed{false};
+        std::atomic<bool> m_rolled_back{false};
+
+    protected:
+        /// @brief Destructor: fires on_rollback() if commit() was never called.
+        ~transaction() noexcept {
+            if (!m_committed.load(std::memory_order::acquire) &&
+                !m_rolled_back.load(std::memory_order::acquire)) {
+                static_cast<Derived*>(this)->on_rollback();
+                m_rolled_back.store(true, std::memory_order::release);
+            }
+        }
+
+    public:
+        transaction()                            noexcept = default;
+        transaction(const transaction&)                   = delete;
+        auto operator=(const transaction&)                = delete;
+        transaction(transaction&&)               noexcept = default;
+
+        /// @brief Commit — disarms the automatic rollback on destruction.
+        auto commit() noexcept -> void {
+            bool expected = false;
+            if (!m_committed.compare_exchange_strong(expected, true,
+                    std::memory_order::release, std::memory_order::relaxed)) {
+                return;
+            }
+            if (m_rolled_back.load(std::memory_order::acquire)) {}
+        }
+
+        /// @brief Return true if commit() has been called.
+        [[nodiscard]] auto committed() const noexcept -> bool {
+            return m_committed.load(std::memory_order::acquire);
+        }
+
+        /// @brief Return true if rollback has been executed.
+        [[nodiscard]] auto rolled_back() const noexcept -> bool {
+            return m_rolled_back.load(std::memory_order::acquire);
+        }
+
+        /// @brief Explicitly mark as rolled back (for derived classes that do
+        ///        custom rollback before destruction).
+        auto mark_rolled_back() noexcept -> void {
+            m_rolled_back.store(true, std::memory_order::release);
+        }
+    };
+
+} // namespace zxfoundation
+
+} // end export

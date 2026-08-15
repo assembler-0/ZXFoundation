@@ -112,6 +112,7 @@ if(COMPILER_ID STREQUAL "gcc")
         "-static-libgcc|REQUIRED"
         "-nostdinc++|REQUIRED"
         "-mzarch|REQUIRED"
+        "-w|REQUIRED" # TODO: non-POD issues
     )
 endif()
 

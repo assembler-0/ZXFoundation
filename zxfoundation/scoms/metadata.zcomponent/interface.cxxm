@@ -1,0 +1,2 @@
+export module zxfoundation.scoms.metadata;
+export import zxfoundation.scoms.metadata.core;

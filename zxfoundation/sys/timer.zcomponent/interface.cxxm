@@ -1,0 +1,3 @@
+export module zxfoundation.sys.timer;
+export import zxfoundation.sys.timer.core;
+export import zxfoundation.sys.timer.types;

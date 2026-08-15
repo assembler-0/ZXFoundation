@@ -1,0 +1,4 @@
+export module zxfoundation.sys.printk;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.printk.types;
+import zxfoundation.sys.printk.format;

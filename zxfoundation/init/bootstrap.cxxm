@@ -8,11 +8,11 @@
 export module zxfoundation.init.bootstrap;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import zxfoundation.scoms.scoms_ref;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.syschk;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.syschk.core;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.domain.domain;
@@ -68,7 +68,7 @@ namespace _internal {
 
         if (!entry_r) [[unlikely]] {
             perr("bootstrap: elf_load failed for user/init: {}", entry_r.error());
-            discard_value zxfoundation::scoms::mark_dying(self);
+            discard_value zxfoundation::scoms::kobject::mark_dying(self);
             zxfoundation::sched::schedule();
             return;
         }
@@ -120,7 +120,7 @@ namespace zxfoundation::init::bootstrap {
             auto* self = static_cast<zxfoundation::domain::domain*>(
                 arch::s390x::cpu::lowcore::current_domain_ptr());
             if (self) {
-                discard_value scoms::mark_dying(self);
+                discard_value scoms::kobject::mark_dying(self);
             }
             zxfoundation::sched::schedule();
             return;
@@ -136,7 +136,7 @@ namespace zxfoundation::init::bootstrap {
             auto* self = static_cast<zxfoundation::domain::domain*>(
                 arch::s390x::cpu::lowcore::current_domain_ptr());
             if (self) {
-                discard_value scoms::mark_dying(self);
+                discard_value scoms::kobject::mark_dying(self);
             }
             zxfoundation::sched::schedule();
             return;
@@ -181,7 +181,7 @@ namespace zxfoundation::init::bootstrap {
         auto* self = static_cast<zxfoundation::domain::domain*>(
             arch::s390x::cpu::lowcore::current_domain_ptr());
         if (self) {
-            discard_value scoms::mark_dying(self);
+            discard_value scoms::kobject::mark_dying(self);
         }
         zxfoundation::sched::schedule();
     }

@@ -1,0 +1,52 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/irq.zcomponent/irqdesc.cxxm
+/// @brief Generic IRQ descriptor table
+
+export module zxfoundation.sys.irq.desc;
+import zxfoundation.sys.irq.core;
+import zxfoundation.base.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.sync.qspinlock.core;
+import arch.s390x.cpu.irq;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sys::irq {
+
+    /// @brief IRQ descriptor — SCOMS-managed kobject, one per active vector.
+    struct irq_desc {
+        scoms::kobject::bobject                          ko{};           ///< SCOMS identity (offset 0).
+
+        handler_fn                              handler{nullptr};  ///< Dispatch target.
+        void*                                   data{nullptr};     ///< Handler-private context.
+        u32                                     flags{0};          ///< IRQF_* bitmask.
+        u16                                      irq_nr{0};         ///< Vector number.
+
+        std::atomic<u32>    count{0};          ///< Dispatch count (relaxed).
+        sync::qspinlock::qspinlock            lock{};
+
+        irq_desc() noexcept = default;
+
+        explicit irq_desc(u16 irq) noexcept
+            : irq_nr(irq) {}
+
+        [[nodiscard]] auto registered() const noexcept -> bool {
+            return handler != nullptr;
+        }
+
+        irq_desc(const irq_desc&)            = delete;
+        auto operator=(const irq_desc&)      = delete;
+        irq_desc(irq_desc&&)                 = delete;
+        auto operator=(irq_desc&&)           = delete;
+    };
+
+    static_assert(__builtin_offsetof(irq_desc, ko) == 0,
+        "irq_desc::ko must be at offset 0 for SCOMS scoms_table");
+
+    [[nodiscard]] auto irq_get_desc(u16 irq) noexcept -> irq_desc*;
+
+} // namespace zxfoundation::sys::irq
+
+} // end export

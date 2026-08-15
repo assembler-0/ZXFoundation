@@ -1,0 +1,65 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/locking/qspinlock.cxxm
+/// @brief Queued spinlock (MCS-based) for z/Architecture.
+
+export module zxfoundation.sync.qspinlock.core;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+import std;
+
+export {
+
+namespace zxfoundation::sync::qspinlock {
+
+    /// @brief Queued spinlock — SMP-safe, cache-line-efficient.
+    /// @note Aligned to 4 bytes minimum for CS instruction operand alignment.
+    class alignas(4) qspinlock {
+
+        /// @brief Atomically transition the lock word from PENDING|LOCKED to LOCKED.
+        /// @pre  PENDING bit is set, LOCKED bit is clear, TAIL field is zero.
+        /// @post LOCKED bit is set, PENDING bit is clear.
+        auto pending_to_locked() noexcept -> void;
+
+        /// @brief Slow acquisition path: pending-bit optimization + MCS queue.
+        /// @pre  Interrupts MUST be disabled (asserted by caller).
+        /// @pre  Fast-path CAS has already failed.
+        /// @post The lock is held with _Q_LOCKED_VAL set.
+        auto lock_slow() noexcept -> void;
+
+    public:
+        constexpr qspinlock() noexcept = default;
+
+        /// @brief Acquire the lock (blocking, SMP-safe).
+        /// @pre Interrupts MUST be disabled (enforced by assert).
+        /// @post The lock is held.  Caller MUST call unlock() exactly once.
+        auto lock() noexcept -> void;
+
+        /// @brief Try to acquire the lock without blocking.
+        /// @return true if the lock was acquired, false if it was already held.
+        [[nodiscard]] auto try_lock() noexcept -> bool;
+
+        /// @brief Release the lock.
+        /// @pre The caller holds the lock.
+        /// @post The lock is released.
+        auto unlock() noexcept -> void;
+
+        /// @brief Test whether the lock is held (non-deterministic snapshot).
+        /// @return true if the LOCKED bit is set at the time of the load.
+        /// @note This is a snapshot; the lock state may change immediately after.
+        [[nodiscard]] auto is_locked() const noexcept -> bool;
+
+        /// @brief Acquire the lock and save + disable IRQs atomically.
+        /// @return Saved irqflags (pass to unlock_irqrestore()).
+        auto lock_irqsave() noexcept -> irqflags;
+
+        /// @brief Release the lock and restore IRQs.
+        /// @param[in] flags  Value returned by lock_irqsave().
+        auto unlock_irqrestore(irqflags flags) noexcept -> void;
+
+    private:
+        std::atomic<u32> m_val{0};
+    };
+
+} // namespace zxfoundation::sync::qspinlock
+
+} // end export

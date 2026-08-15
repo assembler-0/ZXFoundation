@@ -4,8 +4,9 @@
 
 module arch.s390x.cpu.uaccess;
 import arch.s390x.cpu.features;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.consts;
+import arch.s390x.mmu.core;
+import arch.s390x.mmu.types;
 import zxfoundation.base.types;
 import zxfoundation.memory.hhdm;
 import std;
@@ -13,22 +14,22 @@ import std;
 namespace arch::s390x::cpu::uaccess::_internal {
 
     /// OAC: use PSW ASC (= HOME for kernel).  K=0,A=0 ⇒ 0x0000.
-    __internal__ constexpr u32 OAC_HOME    = 0x0000U;
+    no_export constexpr u32 OAC_HOME    = 0x0000U;
 
     /// OAC: explicit primary space.  A=1, AS=00 ⇒ 0x0001.
-    __internal__ constexpr u32 OAC_PRIMARY = 0x0001U;
+    no_export constexpr u32 OAC_PRIMARY = 0x0001U;
 
     /// GR0 for copy_from_user: dest=HOME, src=PRIMARY.
-    __internal__ constexpr u64 GR0_FROM_USER =
+    no_export constexpr u64 GR0_FROM_USER =
         (static_cast<u64>(OAC_HOME) << 16) | OAC_PRIMARY;   // 0x0000'0001
 
     /// GR0 for copy_to_user: dest=PRIMARY, src=HOME.
-    __internal__ constexpr u64 GR0_TO_USER =
+    no_export constexpr u64 GR0_TO_USER =
         (static_cast<u64>(OAC_PRIMARY) << 16) | OAC_HOME;   // 0x0001'0000
 
     /// @brief Fallback copy from user space via manual page-table walk.
     [[nodiscard]]
-    __internal__ auto dat_copy_from_user(void* dst, u64 src, u64 len,
+    no_export auto dat_copy_from_user(void* dst, u64 src, u64 len,
                                           u64 root_phys) noexcept -> i32 {
         namespace hhdm = zxfoundation::memory::hhdm;
 
@@ -57,7 +58,7 @@ namespace arch::s390x::cpu::uaccess::_internal {
 
     /// @brief Fallback copy to user space via manual page-table walk.
     [[nodiscard]]
-    __internal__ auto dat_copy_to_user(u64 dst, const void* src, u64 len,
+    no_export auto dat_copy_to_user(u64 dst, const void* src, u64 len,
                                         u64 root_phys) noexcept -> i32 {
         namespace hhdm = zxfoundation::memory::hhdm;
 

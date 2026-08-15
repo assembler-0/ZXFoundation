@@ -8,19 +8,20 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.memory.numa;
 import zxfoundation.memory.numa_types;
 import zxfoundation.sched.context;
-import zxfoundation.sys.transaction;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
+import zxfoundation.base.transaction;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
 import zxfoundation.base.types;
 import zxfoundation.base.linksym;
-import zxfoundation.sys.syschk;
-import lib.error;
-import std;
-import lib.static_vector;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.scoms.kobject.types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.skey;
+import lib.error;
+import lib.static_vector;
+import std;
 
 namespace zxfoundation::memory::pmm::_internal {
 
@@ -94,7 +95,7 @@ namespace zxfoundation::memory::pmm::_internal {
     /// @brief Per-node allocator state.
     struct numa_zone_set {
         buddy_zone zones[static_cast<u32>(zone::count)]{};
-        locking::qspinlock::qspinlock locks[static_cast<u32>(zone::count)]{};
+        sync::qspinlock::qspinlock locks[static_cast<u32>(zone::count)]{};
         u64 free_pages[static_cast<u32>(zone::count)]{};
         u64 total_pages[static_cast<u32>(zone::count)]{};
     };
@@ -361,7 +362,7 @@ namespace zxfoundation::memory::pmm::_internal {
         const u64 required_pages = 1ULL << order;
         if (g_node_zones[node].free_pages[zi] < required_pages) return {};
 
-        const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+        const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
         const u64 phys = alloc_locked(order, z, node);
         if (!phys) return {};
 
@@ -438,7 +439,7 @@ namespace zxfoundation::memory::pmm::_internal {
     auto pcp_refill(pcp_list& lst, u32 ord, zone z, u8 node_id) noexcept -> void {
         const u8 node = normalize_node_id(node_id);
         const u32 zi = static_cast<u32>(z);
-        const locking::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
+        const sync::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
         for (u32 i = 0; i < PCP_BATCH; ++i) {
             const u64 phys = alloc_locked(ord, z, node);
             if (!phys) break;
@@ -455,7 +456,7 @@ namespace zxfoundation::memory::pmm::_internal {
         const u8 node = normalize_node_id(node_id);
         const u32 zi     = static_cast<u32>(z);
         const u32 target = PCP_HIGH / 2U;
-        const locking::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
+        const sync::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
         while (lst.count > target) {
             const u64 phys = pcp_pop(lst);
             if (!phys) break;
@@ -719,7 +720,7 @@ namespace zxfoundation::memory::pmm {
                     continue;
             }
 
-            const locking::irq_lock_guard guard{node_zones.locks[zi]};
+            const sync::irq_lock_guard guard{node_zones.locks[zi]};
             auto& bz = node_zones.zones[zi];
 
             for (u32 ord = 0; ord <= MAX_ORDER; ++ord) {
@@ -789,8 +790,8 @@ namespace zxfoundation::memory::pmm {
     constexpr u32 TXN_MAX = 16;
 
     /// @brief Atomic multi-folio allocation transaction.
-    class transaction : public zxfoundation::transaction<transaction> {
-        friend class zxfoundation::transaction<transaction>;
+    class transaction : public zxfoundation::base::transaction<transaction> {
+        friend class zxfoundation::base::transaction<transaction>;
 
         struct slot {
             u64     phys{0};
@@ -821,7 +822,7 @@ namespace zxfoundation::memory::pmm {
                 }
                 const u32 zi = static_cast<u32>(m_slots[i].z);
                 const u8 node = normalize_node_id(m_slots[i].node_id);
-                const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+                const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
                 free_locked(m_slots[i].phys, m_slots[i].order, m_slots[i].z, node);
             }
         }
@@ -1065,7 +1066,7 @@ namespace zxfoundation::memory::pmm {
             arch::s390x::cpu::irq::irq_restore(irq_flags);
         } else {
             const u32 zi = static_cast<u32>(z);
-            const locking::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+            const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
             free_locked(phys, order, z, node);
         }
     }
@@ -1219,7 +1220,7 @@ namespace zxfoundation::memory::pmm {
     [[nodiscard]] auto frame_clear_mapping_metadata(u64 phys) noexcept
         -> std::expected<void, lib::kernel_error> {
         return frame_set_mapping_metadata(
-            phys, KOBJECT_ID_INVALID, 0U, false);
+            phys, scoms::kobject::KOBJECT_ID_INVALID, 0U, false);
     }
 
     /// @brief Return the current atomic reference count of a frame.

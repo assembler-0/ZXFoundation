@@ -1,0 +1,135 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/scoms/scoms_types.cxxm
+/// @brief SCOMS — Scalable Object Management System — core types.
+
+export module zxfoundation.scoms.kobject.types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import std;
+
+export {
+
+namespace zxfoundation::scoms::kobject {
+
+    using base::lifecycle_state;
+    using std::atomic;
+    using std::memory_order;
+
+    /// @brief value for an unassigned kernel-object id.
+    inline constexpr u32 KOBJECT_ID_INVALID = ~0U;
+
+    /// @brief Discriminates the concrete type behind a kobject pointer.
+    enum class kobject_type : u8 {
+        none       = 0,
+        domain     = 1,
+        gate       = 2,
+        portal     = 3,
+        vm_region  = 4,
+        io_binding = 5,
+        capability = 6,
+        strand     = 7,
+        irq_desc   = 8,
+        memory_resource = 9,
+        memory_extent   = 10,
+        memory_folio    = 11,
+        page            = 12,
+        storage         = 13,
+        grant           = 14,
+        mapping         = 15,
+        address_space   = 16,
+        page_table      = 17,
+        key             = 18,
+        endpoint        = 19,
+        message         = 20,
+        kmem_cache      = 21,
+        policy_server   = 22,
+        service_entry   = 23,
+        device_binding  = 24,
+        dataset_extent  = 25,
+    };
+
+    /// @brief ASCII name for each kobject type (debug/printk).
+    [[nodiscard]] constexpr auto kobject_type_name(kobject::kobject_type t) noexcept
+        -> std::string_view
+    {
+        switch (t) {
+            case kobject::kobject_type::none:       return "none";
+            case kobject::kobject_type::domain:     return "domain";
+            case kobject::kobject_type::gate:       return "gate";
+            case kobject::kobject_type::portal:     return "portal";
+            case kobject::kobject_type::vm_region:  return "vm_region";
+            case kobject::kobject_type::io_binding: return "io_binding";
+            case kobject::kobject_type::capability: return "capability";
+            case kobject::kobject_type::strand:     return "strand";
+            case kobject::kobject_type::irq_desc:   return "irq_desc";
+            case kobject::kobject_type::memory_resource: return "memory_resource";
+            case kobject::kobject_type::memory_extent:   return "memory_extent";
+            case kobject::kobject_type::memory_folio:    return "memory_folio";
+            case kobject::kobject_type::page:            return "page";
+            case kobject::kobject_type::storage:         return "storage";
+            case kobject::kobject_type::grant:           return "grant";
+            case kobject::kobject_type::mapping:         return "mapping";
+            case kobject::kobject_type::address_space:   return "address_space";
+            case kobject::kobject_type::page_table:      return "page_table";
+            case kobject::kobject_type::key:             return "key";
+            case kobject::kobject_type::endpoint:         return "endpoint";
+            case kobject::kobject_type::message:          return "message";
+            case kobject::kobject_type::kmem_cache:        return "kmem_cache";
+            case kobject::kobject_type::policy_server:     return "policy_server";
+            case kobject::kobject_type::service_entry:    return "service_entry";
+            case kobject::kobject_type::device_binding:   return "device_binding";
+            case kobject::kobject_type::dataset_extent:   return "dataset_extent";
+            default:                       return "unknown";
+        }
+    }
+
+    /// @brief Saturating atomic reference count.
+    struct kref {
+        atomic<u32> count{1};
+
+        /// @brief Acquire a reference only while the object remains live.
+        /// @return False when the last owner already released the object.
+        [[nodiscard]] auto try_get() noexcept -> bool {
+            u32 current = count.load(memory_order::acquire);
+            for (;;) {
+                if (current == 0U) return false;
+                if (current >= 0x7FFF'FFFEU) [[unlikely]] __builtin_trap();
+                if (count.compare_exchange_weak(
+                        current, static_cast<u32>(current + 1U),
+                        memory_order::acq_rel, memory_order::acquire)) {
+                    return true;
+                }
+            }
+        }
+
+        /// @brief Decrement the reference count.
+        /// @return true if this was the LAST reference (count hit 0).
+        [[nodiscard]] auto put() noexcept -> bool {
+            const u32 prev = count.fetch_sub(1U, memory_order::release);
+            if (prev == 0U) [[unlikely]] {
+                __builtin_trap();
+            }
+            if (prev == 1U) {
+                atomic<u32> fence_dummy{0};
+                discard_value fence_dummy.load(memory_order::acquire);
+                return true;
+            }
+            return false;
+        }
+
+        /// @brief Read the current count (advisory — racy by definition).
+        [[nodiscard]] auto read() const noexcept -> u32 {
+            return count.load(memory_order::relaxed);
+        }
+
+        /// @brief Check if exactly one reference remains.
+        [[nodiscard]] auto is_one() const noexcept -> bool {
+            return count.load(memory_order::acquire) == 1U;
+        }
+    };
+
+    static_assert(sizeof(kref) == 4, "kref must be exactly 4 bytes");
+
+} // namespace zxfoundation::scoms
+
+} // end export

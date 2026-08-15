@@ -5,24 +5,24 @@
 export module zxfoundation.gate.gate;
 import zxfoundation.gate.gate_types;
 import zxfoundation.domain.domain_types;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.scoms.scoms_ref;
-import zxfoundation.scoms.scoms_table;
-import zxfoundation.scoms.scoms_object_core;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.scoms.table;
+import zxfoundation.scoms.metadata.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import lib.error;
-import std;
-
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.domain.domain;
 import arch.s390x.cpu.lowcore;
+import lib.error;
+import std;
 
 using zxfoundation::gate::gate_desc;
 using zxfoundation::gate::gate_type;
@@ -37,7 +37,7 @@ namespace _internal {
     using zxfoundation::base::lifecycle_state;
 
     /// @brief SCOMS-managed gate table.
-    static kobject_table<gate_desc, MAX_GATES> g_gate_table{};
+    static scoms_table<gate_desc, MAX_GATES> g_gate_table{};
 
 } // namespace _internal
 
@@ -96,7 +96,7 @@ namespace zxfoundation::gate {
         }
 
         auto embryo_ref = static_cast<
-            scoms::kobject_ref<gate_desc, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<gate_desc, base::lifecycle_state::embryo>&&
         >(alloc_result.value());
 
         gate_desc& desc   = *embryo_ref;
@@ -116,7 +116,7 @@ namespace zxfoundation::gate {
         const u32 id = desc.ko.id;
 
         auto active_ref = static_cast<
-            scoms::kobject_ref<gate_desc, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<gate_desc, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
         sys::printk::pverbose("gate: created gate {} (type={}, target_domain={}, entry_va={:#x})",
@@ -173,7 +173,7 @@ namespace zxfoundation::gate {
     auto register_gate_cap_lookup() noexcept -> void {
         discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::gate,
-            [](u16 obj_id) noexcept -> scoms::kobject* {
+            [](u16 obj_id) noexcept -> scoms::kobject::bobject* {
                 auto* g = gate_find(static_cast<u32>(obj_id));
                 return g ? &g->ko : nullptr;
             });
@@ -181,7 +181,7 @@ namespace zxfoundation::gate {
 
     /// @brief Initialize the gate subsystem.
     auto gate_init() noexcept -> void {
-        _internal::g_gate_table.init(scoms::kobject_type::gate);
+        _internal::g_gate_table.init(scoms::kobject::kobject_type::gate);
         zxfoundation::domain::register_gate_drain_cb(gate_destroy_for_domain);
 
         register_gate_cap_lookup();

@@ -1,0 +1,62 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/rcu/rcu.cxxm
+/// @brief Read-Copy-Update — non-preemptive SMP implementation.
+
+export module zxfoundation.sync.rcu.core;
+import zxfoundation.sync.rcu.types;
+import arch.s390x.cpu.sync;
+import std;
+
+export {
+
+namespace zxfoundation::sync::rcu {
+
+    auto init() noexcept -> void;
+
+    /// @brief Enter an RCU read-side critical section.
+    auto read_lock() noexcept -> void;
+
+    /// @brief Exit an RCU read-side critical section.
+    auto read_unlock() noexcept -> void;
+
+    /// @brief RAII RCU read-side guard (inline OK — calls exported non-TU-local functions).
+    class read_guard {
+    public:
+        read_guard()  noexcept { read_lock();   }
+        ~read_guard() noexcept { read_unlock(); }
+        read_guard(const read_guard&)  = delete;
+        auto operator=(const read_guard&)  = delete;
+    };
+
+    /// @brief Load a RCU-protected pointer with acquire semantics.
+    template<typename T>
+    [[nodiscard]] auto dereference(T* const& ptr) noexcept -> T* {
+        arch::s390x::cpu::sync::barrier();
+        T* v;
+        __atomic_load(&ptr, &v,
+            static_cast<int>(std::memory_order::acquire));
+        return v;
+    }
+
+    /// @brief Publish a pointer with release semantics.
+    template<typename T>
+    auto assign_pointer(T*& ptr, T* v) noexcept -> void {
+        __atomic_store(&ptr, &v,
+            static_cast<int>(std::memory_order::release));
+    }
+
+    /// @brief Enqueue a deferred callback after the next grace period.
+    auto call_rcu(rcu_head* head, void(*func)(rcu_head*) noexcept) noexcept -> void;
+
+    /// @brief Block until all pre-existing RCU readers complete.
+    auto synchronize_rcu() noexcept -> void;
+
+    /// @brief Wait until all enqueued call_rcu callbacks have fired.
+    auto barrier() noexcept -> void;
+
+    /// @brief Per-CPU RCU tick: report QS, manage GPs, drain callbacks.
+    auto tick() noexcept -> void;
+
+} // namespace zxfoundation::rcu
+
+} // end export

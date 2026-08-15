@@ -1,0 +1,23 @@
+export module zxfoundation.sys.printk.core:state;
+import zxfoundation.sys.printk.types;
+import zxfoundation.sync.qspinlock.core;
+import lib.static_vector;
+import lib.ring_buffer;
+
+export {
+
+namespace zxfoundation::sys::printk {
+
+    struct printk_state {
+        sync::qspinlock::qspinlock lock;
+        sync::qspinlock::qspinlock flush_lock;
+        lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
+        log_level min_level{log_level::VERBOSE};
+        lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;
+    };
+
+    printk_state g_state;
+
+}
+
+}

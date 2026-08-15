@@ -75,30 +75,6 @@ namespace arch::s390x::cpu::cpu_mf {
         return cc;
     }
 
-    /// @brief Store CPU Counter Multiple (STCCTM).
-    /// @param set Counter set selection.
-    /// @param range Number of counters.
-    /// @param dest Output buffer.
-    /// @return Condition code.
-    auto stcctm(stcctm_ctr_set set, u64 range, u64& dest) noexcept -> condition_code {
-        condition_code cc =0;
-        discard_value set;
-        discard_value range;
-        discard_value dest;
-        // __asm__ volatile(
-        //     ".macro	STCCTM	r1 m3 db2\n"
-        //     "   .insn	rsy,0xeb0000000017,\\r1,\\m3 & 0xf,\\db2\n"
-        //     ".endm\n"
-        //     "    STCCTM %[range],%[set],%[dest]\n"
-        //     "    ipm    %[cc]\n"
-        //     "    srl    %[cc],28\n"
-        //     : [cc] "=d" (cc)
-        //     : [dest] "Q" (dest), [range] "d" (range), [set] "d" (set)
-        //     : "cc", "memory"
-        // );
-        return cc;
-    }
-
     /// @brief Load Sampling Controls (LSCTL).
     /// @param req LSCTL Parameter block.
     /// @return Condition code.

@@ -1,0 +1,53 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/locking/rtmutex.cxxm
+/// @brief Real-time mutex with multi-link priority inheritance.
+
+export module zxfoundation.sync.rtmutex.core;
+import zxfoundation.base.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.domain.strand_types;
+import arch.s390x.cpu.irq;
+import lib.list;
+import std;
+
+export {
+
+namespace zxfoundation::sync::rtmutex {
+
+    /// @brief Real-time mutex with multi-link priority inheritance.
+    class rtmutex {
+        std::atomic<u32>             m_lock_word{0}; ///< 0 = free, 1 = held.
+        sync::qspinlock::qspinlock   m_pi_lock{}; ///< Protects m_owner, m_waiters, and serializes the chain walk.
+        domain::strand*              m_owner{nullptr};
+        lib::list_head               m_waiters{};
+
+    public:
+        constexpr rtmutex() noexcept = default;
+
+        rtmutex(const rtmutex&)           = delete;
+        auto operator=(const rtmutex&)     = delete;
+        rtmutex(rtmutex&&)                = delete;
+        auto operator=(rtmutex&&)           = delete;
+
+        /// @brief Acquire the mutex, blocking if held.
+        /// @pre  can_sleep() (IRQs enabled, not in IRQ, preemption on).
+        auto lock() noexcept -> void;
+
+        /// @brief Non-blocking attempt.
+        [[nodiscard]] auto try_lock() noexcept -> bool;
+
+        /// @brief Release the mutex.
+        auto unlock() noexcept -> void;
+
+        [[nodiscard]] auto is_locked() const noexcept -> bool;
+
+    private:
+        auto slow_lock(irqflags flags) noexcept -> void;
+    };
+
+    static_assert(sizeof(rtmutex) <= 64U,
+        "rtmutex should fit in a single cache line for cheap PI-locking");
+
+} // namespace zxfoundation::sync::rtmutex
+
+} // end export

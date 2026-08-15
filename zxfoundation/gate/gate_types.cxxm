@@ -4,7 +4,7 @@
 
 export module zxfoundation.gate.gate_types;
 import zxfoundation.base.types;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
 
 export {
 
@@ -111,9 +111,9 @@ namespace zxfoundation::gate {
         time_deadline      = 1,
         time_now           = 2,
         console_write      = 3,
-        service_register   = 4,
-        service_lookup     = 5,
-        service_unregister = 6,
+        register_service   = 4,
+        lookup_service     = 5,
+        unregister_service = 6,
         ipc_endpoint_create = 7,
         ipc_endpoint_destroy = 8,
         ipc_send = 9,
@@ -127,7 +127,7 @@ namespace zxfoundation::gate {
     };
 
     struct gate_desc {
-        scoms::kobject ko{};
+        scoms::kobject::bobject ko{};
         gate_type type{gate_type::nucleus};
         gate_auth auth{gate_auth::any};
         u8        target_key{0};

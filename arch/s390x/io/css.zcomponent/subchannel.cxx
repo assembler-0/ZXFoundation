@@ -1,0 +1,481 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/css/subchannel.cxxm
+/// @brief Channel Subsystem wrapers
+
+module arch.s390x.io.css.subchannel;
+import arch.s390x.io.css.core;
+import arch.s390x.io.types;
+import zxfoundation.base.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sync.waitqueue.core;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.sync;
+import lib.error;
+import lib.format;
+import lib.bit;
+import std;
+
+namespace _internal {
+
+    using namespace arch::s390x::io::css;
+
+    /// @brief Maximum tracked subchannels (expandable later).
+    no_export inline constexpr u32 MAX_SCH_ENTRIES = 256;
+
+    /// @brief Global subchannel table.
+    no_export std::array<subchannel_entry, MAX_SCH_ENTRIES> g_subchannel_table{};
+
+    /// @brief Protects the global subchannel table.
+    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock g_css_lock;
+
+    /// @brief Number of subchannels actually probed and registered.
+    no_export u32 g_sch_count = 0;
+
+    /// @brief Initialization sentinel.
+    no_export bool g_css_initialized = false;
+
+    no_export io_completion_sink_fn g_completion_sink{nullptr};
+
+} // namespace _internal
+
+namespace arch::s390x::io::css {
+
+    /// @brief Probe all subchannels, enable valid ones, and populate the table.
+    auto init() noexcept -> void {
+        using namespace zxfoundation::sys::printk;
+
+        pverbose("css: starting subchannel probe (cssid=0, ssid=0)");
+
+        u32 found = 0;
+
+        const auto irq_state = arch::s390x::cpu::irq::irq_save_disable();
+
+        for (u32 sch_no = 0; sch_no <= 0xFFFF && found < _internal::MAX_SCH_ENTRIES; ++sch_no) {
+            const auto id = subchannel_id::from_parts(0, 0, static_cast<u16>(sch_no));
+
+            schib info{};
+            const int cc = stsch(id, info);
+
+            // CC != 0 means the subchannel does not exist or is not operational.
+            if (cc != 0) {
+                continue;
+            }
+
+            // Skip subchannels with no installed paths.
+            if (info.pmcw_data.pim == 0) {
+                continue;
+            }
+
+            if (!info.pmcw_data.is_enabled()) {
+                info.pmcw_data.flags &= static_cast<u16>(~0x3800U); // clear ISC -> 0
+                info.pmcw_data.flags |= 0x0080;                     // set E-bit
+                info.pmcw_data.intparm = static_cast<u32>(sch_no) << 3;
+                const int mcc = msch(id, info);
+                if (mcc != 0) {
+                    pwarn("css: msch failed for 0.0.{} cc={}",
+                          ::lib::format::hex{sch_no, 4, true},
+                          ::lib::format::dec{static_cast<u64>(mcc)});
+                    continue;
+                }
+
+                schib verify{};
+                if (stsch(id, verify) != 0 || !verify.pmcw_data.is_enabled()) {
+                    pnotice("css: 0.0.{} enable did not take effect, skipping",
+                           ::lib::format::hex{sch_no, 4, true});
+                    continue;
+                }
+            }
+
+            // Record in the table under the lock.
+            {
+                zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+
+                auto& entry = _internal::g_subchannel_table[found];
+                entry.schid  = id;
+                entry.devno  = info.pmcw_data.devno;
+                entry.available_lpm = info.pmcw_data.pam != 0U
+                    ? info.pmcw_data.pam : info.pmcw_data.pim;
+                entry.state  = subchannel_state::idle;
+            }
+
+            pverbose("css: found subchannel 0.0.{} devno={}",
+                  ::lib::format::hex{sch_no, 4, true},
+                  ::lib::format::hex{static_cast<u64>(info.pmcw_data.devno), 4, true});
+
+            ++found;
+        }
+
+        _internal::g_sch_count       = found;
+        _internal::g_css_initialized = true;
+
+        {
+            u64 cr6 = 0;
+            cpu::ctlreg::ctl_store<6, 6>(cr6);          // read current CR6
+            cr6 |= 0x00000000FF000000ULL;                 // unmask ISC 0-7
+            cpu::ctlreg::ctl_load<6, 6>(cr6);          // write back to CR6
+        }
+
+        cpu::irq::irq_restore(irq_state);
+
+        pinfo("css: probe complete, {} subchannel(s) registered",
+              ::lib::format::dec{static_cast<u64>(found)});
+    }
+
+    /// @brief Start I/O on a subchannel.
+    /// @param sch_index Index into the subchannel table.
+    /// @param orb_ref   Prepared Operation Request Block.
+    /// @return Ok on CC=0; driver_error on failure.
+    [[nodiscard]] auto start_io(u32 sch_index, orb& orb_ref) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>
+    {
+        if (!_internal::g_css_initialized) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+        }
+        if (sch_index >= _internal::g_sch_count) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+
+        auto& entry = _internal::g_subchannel_table[sch_index];
+        {
+            const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            if (entry.binding_id == ~0U || orb_ref.intparm != entry.binding_id) {
+                return ::std::unexpected(
+                    ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
+            }
+            if (entry.state != subchannel_state::idle) {
+                return ::std::unexpected(
+                    ::lib::kernel_error::from_driver(::lib::driver_error::busy));
+            }
+            // Publish the association before SSCH so a very fast completion
+            // cannot be mistaken for an unsolicited interruption.
+            entry.state = subchannel_state::active;
+            entry.active_binding_id = entry.binding_id;
+            entry.io_done.store(0, std::memory_order::release);
+        }
+
+        const int cc = ssch(entry.schid, orb_ref);
+        if (cc == 0) {
+            return {};
+        }
+
+        {
+            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            if (entry.state == subchannel_state::active &&
+                entry.active_binding_id == entry.binding_id) {
+                entry.state = subchannel_state::idle;
+                entry.active_binding_id = ~0U;
+            }
+        }
+
+        if (cc == 1) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_driver(::lib::driver_error::not_ready));
+        }
+        if (cc == 2) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_driver(::lib::driver_error::busy));
+        }
+        // cc == 3
+        return ::std::unexpected(
+            ::lib::kernel_error::from_driver(::lib::driver_error::not_found));
+    }
+
+    /// @brief Install the nucleus I/O completion sink.
+    /// @note The sink executes in CSS interrupt context and must be bounded,
+    ///       non-blocking, and allocation-free.
+    [[nodiscard]] auto install_completion_sink(
+        io_completion_sink_fn sink
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
+        if (!sink) return ::std::unexpected(
+            ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
+        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+        if (_internal::g_completion_sink && _internal::g_completion_sink != sink) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
+        }
+        _internal::g_completion_sink = sink;
+        return {};
+    }
+
+    /// @brief Exclusively associate an active I/O binding with a subchannel.
+    [[nodiscard]] auto claim_binding(
+        u32 sch_index, u32 binding_id, u32 binding_generation
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
+        if (sch_index >= _internal::g_sch_count || binding_id == ~0U ||
+            binding_generation == 0U) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
+        }
+        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+        auto& entry = _internal::g_subchannel_table[sch_index];
+        if (entry.binding_id != ~0U) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_driver(::lib::driver_error::busy));
+        }
+        entry.binding_id = binding_id;
+        entry.binding_generation = binding_generation;
+        entry.active_binding_id = ~0U;
+        return {};
+    }
+
+    /// @brief Remove an exact subchannel-binding association after I/O fencing.
+    [[nodiscard]] auto release_binding(
+        u32 sch_index, u32 binding_id, u32 binding_generation
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
+        if (sch_index >= _internal::g_sch_count) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+        auto& entry = _internal::g_subchannel_table[sch_index];
+        if (entry.binding_id != binding_id ||
+            entry.binding_generation != binding_generation) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::not_found));
+        }
+        if (entry.state != subchannel_state::idle) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_driver(::lib::driver_error::busy));
+        }
+        entry.binding_id = ~0U;
+        entry.binding_generation = 0U;
+        entry.active_binding_id = ~0U;
+        return {};
+    }
+
+    /// @brief Return the hardware-available logical path mask for a binding.
+    [[nodiscard]] auto available_lpm(u32 sch_index) noexcept -> u8 {
+        if (sch_index >= _internal::g_sch_count) return 0U;
+        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+        return _internal::g_subchannel_table[sch_index].available_lpm;
+    }
+
+    /// @brief Test I/O on a subchannel (issue TSCH).
+    /// @param sch_index Index into the subchannel table.
+    /// @param irb_ref   Output Interruption Response Block.
+    /// @return Condition code on success; driver_error on failure.
+    [[nodiscard]] auto test_io(u32 sch_index, irb& irb_ref) noexcept
+        -> ::std::expected<condition_code, ::lib::kernel_error>
+    {
+        if (!_internal::g_css_initialized) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+        }
+        if (sch_index >= _internal::g_sch_count) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+
+        auto& entry = _internal::g_subchannel_table[sch_index];
+
+        const condition_code cc = tsch(entry.schid, irb_ref);
+        if (cc == 3) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_driver(::lib::driver_error::not_found));
+        }
+
+        // Store a copy for interrupt-path inspection.
+        {
+            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            entry.last_irb = irb_ref;
+            if (cc == 0) {
+                const auto stctl = irb_ref.scsw_data.stctl();
+                const auto actl = irb_ref.scsw_data.actl();
+                if ((stctl & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0U &&
+                    (actl & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0U) {
+                    entry.state = subchannel_state::idle;
+                }
+            }
+        }
+
+        return cc;
+    }
+
+    /// @brief Halt I/O on a subchannel (issue HSCH).
+    /// @param sch_index Index into the subchannel table.
+    /// @return Ok on CC=0; driver_error on failure.
+    [[nodiscard]] auto halt_io(u32 sch_index) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>
+    {
+        if (!_internal::g_css_initialized) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+        }
+        if (sch_index >= _internal::g_sch_count) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+
+        auto& entry = _internal::g_subchannel_table[sch_index];
+
+        const int cc = hsch(entry.schid);
+        if (cc == 0) {
+            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            entry.state = subchannel_state::halting;
+            return {};
+        }
+        if (cc == 1) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_driver(::lib::driver_error::not_ready));
+        }
+        if (cc == 2) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_driver(::lib::driver_error::busy));
+        }
+        return ::std::unexpected(
+            ::lib::kernel_error::from_driver(::lib::driver_error::not_found));
+    }
+
+    /// @brief Clear I/O on a subchannel (issue CSCH).
+    /// @param sch_index Index into the subchannel table.
+    /// @return Ok on CC=0; driver_error on failure.
+    [[nodiscard]] auto clear_io(u32 sch_index) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>
+    {
+        if (!_internal::g_css_initialized) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+        }
+        if (sch_index >= _internal::g_sch_count) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
+        }
+
+        auto& entry = _internal::g_subchannel_table[sch_index];
+
+        const int cc = csch(entry.schid);
+        if (cc == 0) {
+            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            entry.state = subchannel_state::halting;
+            return {};
+        }
+        return ::std::unexpected(
+            ::lib::kernel_error::from_driver(::lib::driver_error::not_found));
+    }
+
+    /// @brief Called from the I/O interrupt handler to drain status.
+    /// @param sch_no Raw subchannel number from the I/O old PSW area.
+    auto io_interrupt(u32 sch_no) noexcept -> void {
+        if (!_internal::g_css_initialized) {
+            return;
+        }
+
+        u32 idx = 0xFFFFFFFF;
+        for (u32 i = 0; i < _internal::g_sch_count; ++i) {
+            if (_internal::g_subchannel_table[i].schid.sch_no() == static_cast<u16>(sch_no)) {
+                idx = i;
+                break;
+            }
+        }
+
+        if (idx == 0xFFFFFFFF) {
+            // Unknown subchannel — issue TSCH anyway to clear the status
+            // condition, then discard the result.
+            const auto id = subchannel_id::from_parts(0, 0, static_cast<u16>(sch_no));
+            irb discard{};
+            static_cast<void>(tsch(id, discard));
+            return;
+        }
+
+        auto& entry = _internal::g_subchannel_table[idx];
+
+        // Drain status from hardware.
+        irb status{};
+        const int cc = tsch(entry.schid, status);
+
+        bool completed = false;
+        bool io_finished = false;
+        u32 binding_id = ~0U;
+        u32 binding_generation = 0U;
+        irb completed_status{};
+        {
+            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            entry.last_irb = status;
+            if (cc == 0) {
+                const auto stctl = status.scsw_data.stctl();
+                const auto actl  = status.scsw_data.actl();
+                if ((stctl & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0 &&
+                    (actl  & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
+                    const bool owned_completion =
+                        (entry.state == subchannel_state::active ||
+                         entry.state == subchannel_state::halting) &&
+                        entry.binding_id != ~0U &&
+                        entry.active_binding_id == entry.binding_id;
+                    entry.state = subchannel_state::idle;
+                    io_finished = true;
+                    if (owned_completion) {
+                        completed = true;
+                        binding_id = entry.binding_id;
+                        binding_generation = entry.binding_generation;
+                        completed_status = status;
+                    }
+                    entry.active_binding_id = ~0U;
+                }
+            } else if (cc == 1) {
+                // No status pending for this subchannel — spurious/shared
+                // interrupt; leave any in-flight wait untouched.
+            }
+        }
+
+        if (io_finished) {
+            entry.io_done.store(1, std::memory_order::seq_cst);
+        }
+
+        if (completed && _internal::g_completion_sink) [[likely]] {
+            _internal::g_completion_sink(
+                idx, binding_id, binding_generation, completed_status);
+        }
+
+        // Wake anyone waiting on this subchannel's I/O completion.
+        zxfoundation::sync::waitqueue::wake_up(entry.io_wait);
+
+    }
+
+    /// @brief Find a subchannel by SENSE-ID device type and model.
+    /// @param dev_type  Device type from senseid_data.
+    /// @param dev_model Device model from senseid_data.
+    /// @return Table index on success; not_found error otherwise.
+    [[nodiscard]] auto find_device(u16 dev_type, u16 dev_model) noexcept
+        -> ::std::expected<u32, ::lib::kernel_error>
+    {
+        if (!_internal::g_css_initialized) {
+            return ::std::unexpected(
+                ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
+        }
+
+        zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+
+        for (u32 i = 0; i < _internal::g_sch_count; ++i) {
+            const auto& s = _internal::g_subchannel_table[i].sense;
+            if (s.dev_type == dev_type &&
+                s.dev_model == static_cast<u8>(dev_model)) {
+                return i;
+            }
+        }
+
+        return ::std::unexpected(
+            ::lib::kernel_error::from_driver(::lib::driver_error::not_found));
+    }
+
+    /// @brief Return the number of probed subchannels.
+    [[nodiscard]] auto subchannel_count() noexcept -> u32 {
+        return _internal::g_sch_count;
+    }
+
+    /// @brief Return a pointer to a subchannel entry by index.
+    /// @param index Index into the subchannel table.
+    /// @return Pointer to the entry, or nullptr if index is out of range.
+    [[nodiscard]] auto get_entry(u32 index) noexcept -> subchannel_entry* {
+        if (index >= _internal::g_sch_count) {
+            return nullptr;
+        }
+        return &_internal::g_subchannel_table[index];
+    }
+
+} // namespace arch::s390x::io::css

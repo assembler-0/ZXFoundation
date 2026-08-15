@@ -22,7 +22,9 @@ namespace arch::s390x::cpu::sync {
     auto msync() noexcept -> void;
 
     /// @brief compiler barrier
-    auto barrier() noexcept -> void;
+    [[gnu::always_inline]] inline auto barrier() noexcept -> void {
+        __asm__ volatile("" ::: "memory");
+    }
 
 } // namespace arch::s390x::cpu::sync
 

@@ -17,48 +17,43 @@ namespace arch::s390x::cpu::ptf {
         vertical   = 1,
     };
 
-    /// @brief Why a polarization request was rejected (CC 2 only --
-    ///        never constructed for any other outcome).
     enum class rejection_reason : u8 {
         unspecified       = 0,
         already_polarized = 1,
         change_in_process = 2,
     };
 
+    enum class function_code : u8 {
+        horizontal_polarization  = 0,
+        vertical_polarization    = 1,
+        check_topo_change_status = 2,
+    };
+
     namespace detail {
 
-        enum class function_code : u8 {
-            horizontal_polarization  = 0,
-            vertical_polarization    = 1,
-            check_topo_change_status = 2,
-        };
-
-        /// @brief Raw decoded PTF result. `rc` is only meaningful when
-        ///        `cc == 2`; callers must gate on `cc` before reading
-        ///        it, never read it unconditionally.
-        struct raw_result {
-            u8 cc;
-            u8 rc;
+        /// @brief Raw decoded PTF result.
+        struct ptf_result {
+            condition_code cc{};
+            u8 rc{};
         };
 
         /// @brief Invoke PTF raw
         template <function_code Fc>
-        [[nodiscard]] auto invoke() noexcept -> raw_result {
+        [[nodiscard]] auto invoke() noexcept -> ptf_result {
             u64 r1{};
             lib::bit_insert_msb<u64>(r1, 56, 63, std::to_underlying(Fc));
 
-            u64 cc_reg;
+            condition_code cc;
             __asm__ volatile(
                 "   ptf %[r1]\n"
-                "   ipm %[cc]\n"
-                "   srl %[cc],28\n"
-                : [r1] "+r" (r1), [cc] "=d" (cc_reg)
+                __asm_capture_cc()
+                : [r1] "+r" (r1), __asm_cc_out(cc)
                 :
                 : "cc", "memory"
             );
 
-            return raw_result{
-                .cc = static_cast<u8>(cc_reg & 0b11), // only bits 34-35 (post-shift 0-1) are defined
+            return {
+                .cc = cc,
                 .rc = static_cast<u8>(lib::bit_extract_msb<u64>(r1, 48, 55)),
             };
         }
@@ -74,7 +69,7 @@ namespace arch::s390x::cpu::ptf {
         switch (result.cc) {
             case 0:  return {};
             case 2:  return std::unexpected(static_cast<rejection_reason>(result.rc));
-            default: std::unreachable(); // architecturally impossible for FC 0/1
+            default: std::unreachable();
         }
     }
 
@@ -82,11 +77,11 @@ namespace arch::s390x::cpu::ptf {
     ///        report-pending condition for this configuration.
     [[nodiscard]] auto consume_topology_change_pending() noexcept -> bool {
         if (features::has(features::facility::configuration_topology)) return false;
-        const auto result = detail::invoke<detail::function_code::check_topo_change_status>();
+        const auto result = detail::invoke<function_code::check_topo_change_status>();
         switch (result.cc) {
             case 0:  return false;
             case 1:  return true;
-            default: std::unreachable(); // architecturally impossible for FC 2
+            default: std::unreachable();
         }
     }
 

@@ -1,0 +1,2 @@
+export module zxfoundation.sys.service;
+export import zxfoundation.sys.service.core;

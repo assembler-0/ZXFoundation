@@ -2,5 +2,4 @@
     cxxabi.cxxm
     cxxabi.cxx
     builtins.cxxm
-    contracts.cxxm
 }

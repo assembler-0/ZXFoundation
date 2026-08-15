@@ -33,9 +33,9 @@ namespace arch::s390x::cpu::irq {
     /// 128 (GPRs) + 16 (PSW) + 64 (ARs) + 8 (FPC+pad) + 512 (VRs v0-v31) = 728 = 0x2D8.
     constexpr u32 IRQ_FRAME_SIZE      = 0x02D8U;
 
+    constexpr u64 IRQ_RESTORE_MASK_LC = 0x0200UL;
+
     /// @brief Interrupt frame saved by entry.S on every trap or interrupt.
-    /// Saves all 32 vector registers (v0-v31), all 16 access registers,
-    /// and the FPC (floating-point control register) per PoP §4-67.
     struct [[gnu::packed]] alignas(8) irq_frame {
         u64 gprs[16]{};      ///< General-purpose registers r0–r15 at interrupt time.
         u64 psw_mask{};      ///< Old PSW mask word (hardware-saved in lowcore, copied here).
@@ -71,14 +71,12 @@ namespace arch::s390x::cpu::irq {
         ZX_IRQ_CLASS_SVC  = 4, ///< Supervisor call (0x01C0).
     };
 
-    constexpr u64 IRQ_RESTORE_MASK_LC = 0x0200UL;
-
     [[gnu::no_stack_protector]] auto irq_restore_mask_byte(u8 byte0) noexcept -> void;
 
-    [[nodiscard]] auto irq_save_disable() noexcept -> irqflags;
+    [[gnu::no_stack_protector]] [[nodiscard]] auto irq_save_disable() noexcept -> irqflags;
 
     /// @brief Restore PSW byte 0 from a saved irqflags.
-    auto irq_restore(irqflags flags) noexcept -> void;
+    [[gnu::no_stack_protector]] auto irq_restore(irqflags flags) noexcept -> void;
 
     auto irq_disable() noexcept -> void;
 

@@ -6,11 +6,11 @@ export module zxfoundation.memory.vm_types;
 import zxfoundation.base.types;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.memory_contract;
-import zxfoundation.rcu.rcu_types;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.sync.rcu.types;
+import zxfoundation.scoms.kobject.base;
 import zxfoundation.memory.memory_objects;
 import zxfoundation.memory.page_cache_types;
-import zxfoundation.locking.qspinlock;
+import zxfoundation.sync.qspinlock.core;
 import lib.rbtree;
 import std;
 import lib.error;
@@ -108,7 +108,7 @@ namespace zxfoundation::memory::vm {
     };
 
 
-    /// @brief Maximum number of VM regions system-wide (SCOMS kobject_table capacity).
+    /// @brief Maximum number of VM regions system-wide (SCOMS scoms_table capacity).
     inline constexpr u32 MAX_VM_REGIONS = 4096U;
 
     /// @brief Default per-domain committed-page budget (1 GiB at 4 KiB pages).
@@ -212,7 +212,7 @@ namespace zxfoundation::memory::vm {
     struct vm_space; // forward declaration (full definition below)
 
     struct vm_region {
-        scoms::kobject  ko{};
+        scoms::kobject::bobject  ko{};
 
         u64             va_start{0};
         u64             va_end{0};
@@ -249,7 +249,7 @@ namespace zxfoundation::memory::vm {
         vm_page_map     pages{};
 
         lib::rb_node    rb{};
-        rcu::rcu_head   rcu{};
+        sync::rcu::rcu_head   rcu{};
 
 
         [[nodiscard]] constexpr auto size() const noexcept -> u64 {
@@ -347,10 +347,10 @@ namespace zxfoundation::memory::vm {
 
 
     struct vm_space {
-        scoms::kobject*                         owner_object{nullptr};
-        scoms::kobject*                         address_space_object{nullptr};
+        scoms::kobject::bobject*                         owner_object{nullptr};
+        scoms::kobject::bobject*                         address_space_object{nullptr};
         lib::rb_root_cached                     tree{};
-        locking::qspinlock::qspinlock           lock{};
+        sync::qspinlock::qspinlock           lock{};
 
         u64                                     total_mapped{0};
         u64                                     total_committed{0};

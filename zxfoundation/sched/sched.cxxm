@@ -35,23 +35,26 @@ import zxfoundation.portal.portal;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.config;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.scoms.scoms_ref;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.numa_types;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.timer_types;
-import zxfoundation.sys.timer;
-import zxfoundation.sys.time;
-import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.timer.types;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.time.core;
+import zxfoundation.sys.irq.core;
+import zxfoundation.sys.irq.consts;
 import zxfoundation.sched.context;
 import zxfoundation.sched.admit;
-import zxfoundation.locking.qspinlock;
+import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sched.sched_rt;
+import zxfoundation.smp.csd.core;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.aste;
@@ -60,7 +63,6 @@ import arch.s390x.cpu.clock;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.ipi;
 import arch.s390x.cpu.irq;
-import zxfoundation.smp.smp;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.cputimer;
@@ -147,8 +149,8 @@ namespace _internal {
     }
 
     auto domain_reap(domain& d) noexcept -> void {
-        if (d.ko.id == zxfoundation::scoms::KOBJECT_ID_INVALID) return;
-        if (d.ko.state != zxfoundation::scoms::lifecycle_state::dying) return;
+        if (d.ko.id == zxfoundation::scoms::kobject::KOBJECT_ID_INVALID) return;
+        if (d.ko.state != zxfoundation::base::lifecycle_state::dying) return;
 
         discard_value zxfoundation::domain::domain_destroy(d.ko.id);
     }
@@ -310,7 +312,7 @@ namespace zxfoundation::sched {
         return _internal::g_rqs[pcp.cpu_id];
     }
 
-    extern "C" auto __switch_to_asm(
+    no_mangle auto __switch_to_asm(
         strand* prev,
         strand* next
     ) noexcept -> domain*;
@@ -598,7 +600,7 @@ namespace zxfoundation::sched {
         auto* current = reinterpret_cast<strand*>(pcp.current_strand);
         if (current) {
             current->on_rq = false;
-            discard_value scoms::mark_destroyed(current);
+            discard_value scoms::kobject::mark_destroyed(current);
             if (auto* owner = static_cast<domain*>(current->owner)) {
                 owner->flags = owner->flags | domain_flags::need_resched;
             }
@@ -816,7 +818,7 @@ namespace zxfoundation::sched {
         rq_snap::publish(rq);
 
         arch::s390x::cpu::ar::purge_alb();
-        zxfoundation::smp::smp_csd_enable_cpu(0U);
+        smp::csd::enable_cpu(0U);
         arch::s390x::cpu::cpumask::cpu_set_online(0U);
         topology::refresh_cpu_record(0U, 0U, true);
         topology::topology_online_cpu(0U);
@@ -880,7 +882,7 @@ namespace zxfoundation::sched {
 
         {
             using namespace zxfoundation::sys::timer;
-            timer_init_ap(cpu_id);
+            init_ap(cpu_id);
 
             auto& t = _internal::g_ap_tick_timers[cpu_id];
             t.deadline_tod = arch::s390x::cpu::clock::stck() + TICK_INTERVAL_TOD;
@@ -904,7 +906,7 @@ namespace zxfoundation::sched {
             arch::s390x::cpu::irq::irq_restore(ap_flags);
         }
         arch::s390x::cpu::ar::purge_alb();
-        zxfoundation::smp::smp_csd_enable_cpu(cpu_id);
+        smp::csd::enable_cpu(cpu_id);
         arch::s390x::cpu::cpumask::cpu_set_online(cpu_id);
         topology::refresh_cpu_record(cpu_id, 0U, true);
         topology::topology_online_cpu(cpu_id);
@@ -952,7 +954,7 @@ namespace zxfoundation::sched {
         }
 
         arch::s390x::cpu::ar::purge_alb();
-        zxfoundation::smp::smp_csd_enable_cpu(cpu_id);
+        smp::csd::enable_cpu(cpu_id);
         arch::s390x::cpu::cpumask::cpu_set_online(cpu_id);
         topology::refresh_cpu_record(cpu_id, 0U, true);
         topology::topology_online_cpu(cpu_id);
@@ -1016,6 +1018,6 @@ namespace zxfoundation::sched {
 
 } // end export
 
-extern "C" [[noreturn]] auto sched_strand_trampoline_exit() noexcept -> void {
+no_mangle [[noreturn]] auto sched_strand_trampoline_exit() noexcept -> void {
     zxfoundation::sched::strand_trampoline_exit();
 }

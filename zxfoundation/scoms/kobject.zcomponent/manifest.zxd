@@ -1,0 +1,7 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    types.cxxm
+    base.cxxm
+    base.cxx
+    ref.cxxm
+}

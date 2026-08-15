@@ -5,181 +5,589 @@
 export module arch.s390x.cpu.stsi;
 export import :common;
 import zxfoundation.base.types;
+import lib.cstring;
+import std;
+
+__endian__(BIG);
 
 export {
 
 namespace arch::s390x::cpu::stsi {
 
-    struct sysinfo_1_1_1 {
-		uchar p:1;
-		uchar :6;
-		uchar t:1;
-		uchar :8;
-		uchar ccr;
-		uchar cai;
-		char reserved_0[20];
-		u64 lic;
-		char manufacturer[16];
-		char type[4];
-		char reserved_1[12];
-		char model_capacity[16];
-		char sequence[16];
-		char plant[4];
-		char model[16];
-		char model_perm_cap[16];
-		char model_temp_cap[16];
-		u32 model_cap_rating;
-		u32 model_perm_cap_rating;
-		u32 model_temp_cap_rating;
-		uchar typepct[5];
-		uchar reserved_2[3];
-		u32 ncr;
-		u32 npr;
-		u32 ntr;
-		char reserved_3[4];
-		char model_var_cap[16];
-		u32 model_var_cap_rating;
-		u32 nvr;
+	enum class basic_machine_cfg_ccr : u8 {
+		nominal_capacity             = 0,
+		changed_manual_control		 = 1,
+		changed_machine_exception    = 2,
+		changed_nonexception_machine = 3,
+		changed_external_condition   = 4
 	};
 
-	struct sysinfo_1_2_1 {
-		char reserved_0[80];
-		char sequence[16];
-		char plant[4];
-		char reserved_1[2];
-		u16 cpu_address;
+	struct alignas(PAGE_SIZE) [[gnu::packed]] basic_machine_cfg {
+		bitfield(type_percentage_bytes_valid);
+		bitrsvd(5);
+		bitfield(multithreading_facility);
+		bitfield(transient_condition);
+		bytersvd(1){};
+		basic_machine_cfg_ccr capacity_change_reason{};
+		u8 capacity_adjustment_indication{};
+		bytersvd(tobytes(w, 5)){};
+		u64 lic_identifier{};
+		std::array<uchar, tobytes(w, 4)> manufacturer{};
+		std::array<uchar, tobytes(w, 1)> type{};
+		bytersvd(tobytes(w, 3)){};
+		std::array<uchar, tobytes(w, 4)> model_capacity_identifer{};
+		std::array<uchar, tobytes(w, 4)> sequence_code{};
+		std::array<uchar, tobytes(w, 1)> plant{};
+		std::array<uchar, tobytes(w, 4)> model{};
+		std::array<uchar, tobytes(w, 4)> permanent_capacity_identifier{};
+		std::array<uchar, tobytes(w, 4)> temporary_capacity_identifier{};
+		u32 capacity_rating{};
+		u32 permanent_capacity_rating{};
+		u32 temporary_capacity_rating{};
+		std::array<u8, 5> type_percentages{};
+		bytersvd(3){};
+		u32 nominal_capacity_rating{};
+		u32 nominal_permanent_capacity_rating{};
+		u32 nominal_temporary_capacity_rating{};
+		bytersvd(tobytes(w, 1)){};
+		std::array<uchar, tobytes(w, 4)> replacement_capacity_identifier{};
+		u32 replacement_capacity_rating{};
+		u32 nominal_replacement_capacity_rating{};
+		bytersvd(tobytes(w, 972)){};
+	};
+	assert_size(basic_machine_cfg, PAGE_SIZE);
+
+	struct alignas(PAGE_SIZE) [[gnu::packed]] basic_machine_cpu {
+		bytersvd(tobytes(w, 20)){};
+		std::array<uchar, tobytes(w, 4)> sequence_code{};
+		std::array<uchar, tobytes(w, 1)> plant{};
+		bytersvd(2){};
+		u16 cpu_address{};
+		bytersvd(tobytes(w, 998)){};
+	};
+	assert_size(basic_machine_cpu, PAGE_SIZE);
+
+	struct [[gnu::packed]] basic_machine_cpus {
+		u8 format{};
+		bytersvd(1){};
+		u16 acc_offset{};
+		union {
+			u8 mt{};
+			struct {
+				bitfield(mt_installed);
+				bitrsvd(2);
+				bitsfield(5, max_tid_core);
+			};
+		};
+		union {
+			u8 mt_general{};
+			struct {
+				bitrsvd(3);
+				bitsfield(5, max_tid_comprising_gcpu);
+			};
+		};
+		bytersvd(tobytes(w, 2) + 2){};
+		u32 primary_cpu_speed{};
+		u32 secondary_cpu_speed{};
+		u32 nominal_cpu_capability{};
+		u32 secondary_cpu_capability{};
+		u32 cpu_capability{};
+		u16 cpus_count{};
+		u16 configured_cpus_count{};
+		u16 standby_cpus_count{};
+		u16 reserved_cpus_count{};
+	};
+	assert_size(basic_machine_cpus, 44);
+
+	struct adjustment_factor {
+		u16 raw{};
+		[[nodiscard]] constexpr auto fraction() const noexcept -> double {
+			if (raw == 0) __builtin_trap();
+			if (raw <= 100)  return static_cast<double>(raw) / 100.0;
+			if (raw <= 255)  return static_cast<double>(raw) / 255.0;
+			return static_cast<double>(raw) / 65535.0;
+		}
+	};
+	assert_size(adjustment_factor, 2);
+
+	struct alternate_capability {
+		u32 raw{};
+		[[nodiscard]] constexpr auto is_float() const noexcept -> bool { return (raw >> 23) != 0; }
+		[[nodiscard]] constexpr auto value() const noexcept -> std::variant<u32, float> {
+			if (is_float()) {
+				float f;
+				lib::memcpy(&f, &raw, sizeof f);
+				return f;
+			}
+			return raw;
+		}
+	};
+	assert_size(alternate_capability, 4);
+
+	class basic_machine_cpus_view {
+	public:
+		explicit basic_machine_cpus_view(std::span<const std::byte, 4096> page) noexcept
+			: page_(page) {}
+
+		[[nodiscard]] const basic_machine_cpus& header() const noexcept {
+			return *reinterpret_cast<const basic_machine_cpus*>(page_.data());
+		}
+
+		[[nodiscard]] bool has_alternate() const noexcept { return header().format == 1; }
+
+		[[nodiscard]] auto adjustment_factors() const noexcept -> std::span<const adjustment_factor> {
+			return bounded_array(sizeof(basic_machine_cpus), count_for(header().cpus_count));
+		}
+
+		[[nodiscard]] auto alternate_cpu_capability() const noexcept -> std::optional<alternate_capability> {
+			if (!has_alternate()) return std::nullopt;
+			usize off = header().acc_offset;
+			if (off + sizeof(u32) > page_.size()) return std::nullopt;
+			u32 raw;
+			lib::memcpy(&raw, page_.data() + off, sizeof raw);
+			return alternate_capability{raw};
+		}
+
+		[[nodiscard]] auto alternate_adjustment_factors() const noexcept -> std::span<const adjustment_factor> {
+			if (!has_alternate()) return {};
+			usize off = static_cast<usize>(header().acc_offset) + sizeof(u32); // word N+1
+			return bounded_array(off, count_for(header().cpus_count));
+		}
+
+	private:
+		[[nodiscard]] static usize count_for(u16 cpus_count) noexcept {
+			return cpus_count >= 2 ? static_cast<usize>(cpus_count) - 1 : 0;
+		}
+
+		[[nodiscard]] std::span<const adjustment_factor> bounded_array(usize byte_off, usize count) const noexcept {
+			if (byte_off > page_.size()) return {};
+			usize avail_elems = (page_.size() - byte_off) / sizeof(adjustment_factor);
+			count = std::min(count, avail_elems);
+			return {reinterpret_cast<const adjustment_factor*>(page_.data() + byte_off), count};
+		}
+
+		std::span<const std::byte, 4096> page_;
 	};
 
-	struct sysinfo_1_2_2 {
-		char format;
-		char reserved_0[1];
-		u16 acc_offset;
-		uchar mt_installed :1;
-		uchar :2;
-		uchar mt_stid :5;
-		uchar :3;
-		uchar mt_gtid :5;
-		char reserved_1[18];
-		u32 nominal_cap;
-		u32 secondary_cap;
-		u32 capability;
-		u16 cpus_total;
-		u16 cpus_configured;
-		u16 cpus_standby;
-		u16 cpus_reserved;
-		u16 adjustment[];
+	struct alignas(PAGE_SIZE) [[gnu::packed]] lpar_cpu {
+		bytersvd(tobytes(w, 20)){};
+		std::array<uchar, tobytes(w, 4)> sequence_code{};
+		std::array<uchar, tobytes(w, 1)> plant{};
+		u16 lcpu_id{};
+		u16 lcpu_address{};
+		bytersvd(tobytes(w, 998)){};
 	};
+	assert_size(lpar_cpu, PAGE_SIZE);
 
-	struct sysinfo_1_2_2_extension {
-		u32 alt_capability;
-		u16 alt_adjustment[];
+	enum class virtual_server_name_enc : u8 {
+		not_provided = 0,
+		ebcdic		 = 1,
+		utf_8        = 2
 	};
+	assert_size(virtual_server_name_enc, 1);
 
-	struct sysinfo_2_2_1 {
-		char reserved_0[80];
-		char sequence[16];
-		char plant[4];
-		u16 cpu_id;
-		u16 cpu_address;
+	struct alignas(PAGE_SIZE) [[gnu::packed]] lpar_cpus {
+		bytersvd(tobytes(w, 8)){};
+		u16 lpar_numer{};
+		bytersvd(1){};
+		union {
+			u8 logical_cpu_characteristic{};
+			struct {
+				bitfield(dedicated);
+				bitfield(shared);
+				bitfield(untilization_limit);
+				bitrsvd(5);
+			};
+		};
+		u16 total_logical_cpu_count{};
+		u16 configured_logical_cpu_count{};
+		u16 standby_logical_cpu_count{};
+		u16 reserved_logical_cpu_count{};
+		std::array<uchar, tobytes(w, 2)> lpar_name{};
+		u32 lpar_caf{};
+		union {
+			u8 mt{};
+			struct {
+				bitfield(mt_installed);
+				bitrsvd(2);
+				bitsfield(5, max_tid_core);
+			};
+		};
+		union {
+			u8 mt_general{};
+			struct {
+				bitrsvd(3);
+				bitsfield(5, max_tid_comprising_gcpu);
+			};
+		};
+		union {
+			u8 program_specified_mtid{};
+			struct {
+				bitrsvd(3);
+				bitsfield(5, pmstid);
+			};
+		};
+		bytersvd(tobytes(w, 1) + 1){};
+		u16 dedicated_logical_cpu_count{};
+		u16 shared_logical_cpu_count{};
+		bytersvd(3){};
+		virtual_server_name_enc vsne{};
+		u128 vsi_uuid{};
+		bytersvd(tobytes(w, 40)){};
+		std::array<uchar, tobytes(w, 64)> virtual_server_name{};
+		bytersvd(tobytes(w, 896)){};
 	};
+	assert_size(lpar_cpus, PAGE_SIZE);
 
-	struct sysinfo_2_2_2 {
-		char reserved_0[32]{};
-		u16 lpar_number{};
-		char reserved_1{};
-		uchar characteristics{};
-		u16 cpus_total{};
-		u16 cpus_configured{};
-		u16 cpus_standby{};
-		u16 cpus_reserved{};
-		char name[8]{};
-		u32 caf{};
-		char reserved_2[8]{};
-		uchar mt_installed :1{};
-		uchar :2;
-		uchar mt_stid :5{};
-		uchar :3;
-		uchar mt_gtid :5{};
-		uchar :3;
-		uchar mt_psmtid :5{};
-		char reserved_3[5]{};
-		u16 cpus_dedicated{};
-		u16 cpus_shared{};
-		char reserved_4[3]{};
-		uchar vsne{};
-		uuid_t uuid{};
-		char reserved_5[160]{};
-		char ext_name[256]{};
+	enum class extended_vm_name_enc : u8 {
+		not_provided = 0,
+		ebcdic		 = 1,
+		utf_8        = 2
 	};
+	assert_size(extended_vm_name_enc, 1);
 
-	constexpr auto LPAR_CHAR_DEDICATED =	1 << 7;
-	constexpr auto LPAR_CHAR_SHARED    =	1 << 6;
-	constexpr auto LPAR_CHAR_LIMITED   = 1 << 5;
-
-	struct sysinfo_3_2_2 {
-		char reserved_0[31]{};
-		uchar :4;
-		uchar count:4{};
-		struct {
-			char reserved_0[4]{};
-			u16 cpus_total{};
-			u16 cpus_configured{};
-			u16 cpus_standby{};
-			u16 cpus_reserved{};
-			char name[8]{};
-			u32 caf{};
-			char cpi[16]{};
-			char reserved_1[3]{};
-			uchar evmne{};
-			u32 reserved_2{};
-			uuid_t uuid{};
-		} vm[8];
-		char reserved_3[1504]{};
-		char ext_names[8][256]{};
+	struct alignas(64) [[gnu::packed]] vm_descriptor_block {
+		bytersvd(tobytes(w, 1));
+		u16 total_logical_cpu_count;
+		u16 configured_logical_cpu_count;
+		u16 standby_logical_cpu_count;
+		u16 reserved_logical_cpu_count;
+		std::array<uchar, tobytes(w, 2)> vm_name;
+		u32 vm_caf;
+		std::array<uchar, tobytes(w, 4)> control_program_identifier;
+		bitrsvd(24);
+		extended_vm_name_enc evmne;
+		bytersvd(tobytes(w, 1));
+		u128 uuid;
 	};
+	assert_size(vm_descriptor_block, 64);
+
+	constexpr auto MAX_VMS = 8;
+
+	struct alignas(PAGE_SIZE) [[gnu::packed]] vm_cpus {
+		bytersvd(tobytes(w, 7)){};
+		bitrsvd(28){};
+		bitsfield(4, description_block_count){};
+		std::array<vm_descriptor_block, MAX_VMS> vmdbs{};
+		bytersvd(tobytes(w, 376)){};
+		std::array<std::array<uchar, tobytes(w, 64)>, MAX_VMS> vm_extended_name{};
+	};
+	assert_size(vm_cpus, PAGE_SIZE);
 
 	constexpr auto TOPOLOGY_NR_MAG = 6U;
 
-	struct topology_core {
-		uchar nl;
-		uchar reserved0[3];
-		uchar :5;
-		uchar d:1;
-		uchar pp:2;
-		uchar reserved1;
-		u16 origin;
-		u64 mask;
+	struct [[gnu::packed]] topology_core {
+		u8 nl{}; // == 0
+		bytersvd(3){};
+		bitrsvd(5);
+		bitfield(dedicated);
+		bitsfield(2, pp);
+		u8 cpu_type{};
+		u16 cpu_address_origin{};
+		u64 cpu_mask{};
 	};
+	assert_size(topology_core, 16);
 
-	struct topology_container {
-		uchar nl;
-		uchar reserved[6];
-		uchar id;
+	struct [[gnu::packed]] topology_container {
+		u8 nl{};
+		bytersvd(6){};
+		u8 id{};
 	};
+	assert_size(topology_container, 8);
 
-	union topology_entry {
+	union [[gnu::packed]] topology_entry {
 		uchar nl;
 		topology_core cpu;
 		topology_container container;
 	};
 
-	struct sysinfo_15_1_x {
-		uchar reserved0[2];
-		u16 length;
-		uchar mag[TOPOLOGY_NR_MAG];
-		uchar reserved1;
-		uchar mnest;
-		uchar reserved2[4];
+	struct [[gnu::packed]] configuration_topology {
+		bytersvd(tobytes(hw, 1)){};
+		u16 length{};
+		std::array<std::byte, TOPOLOGY_NR_MAG> mag{};
+		bytersvd(1){};
+		u16 mnest{};
+		bytersvd(tobytes(w, 1)){};
 		topology_entry tle[];
 	};
 
+	inline constexpr auto TOPOLOGY_MAX_NEST = TOPOLOGY_NR_MAG - 1U; // = 5
+
+	enum class cpu_polarization : u8 {
+		horizontal      = 0,
+		vertical_low    = 1,
+		vertical_medium = 2,
+		vertical_high   = 3,
+	};
+
+	class topology_container_view {
+	public:
+		explicit topology_container_view(const topology_container& raw) noexcept : raw_(raw) {}
+		[[nodiscard]] u8 nesting_level() const noexcept { return raw_.nl; }
+		[[nodiscard]] u8 id() const noexcept { return raw_.id; }
+	private:
+		const topology_container& raw_;
+	};
+
+	class topology_cpu_view {
+	public:
+		explicit topology_cpu_view(topology_core raw) noexcept : raw_(raw) {}
+
+		[[nodiscard]] bool dedicated() const noexcept { return raw_.dedicated; }
+		[[nodiscard]] cpu_polarization polarization() const noexcept {
+			return static_cast<cpu_polarization>(raw_.pp);
+		}
+		[[nodiscard]] u8 cpu_type() const noexcept { return raw_.cpu_type; }
+		[[nodiscard]] u16 address_origin() const noexcept { return raw_.cpu_address_origin; }
+		[[nodiscard]] u64 mask() const noexcept { return raw_.cpu_mask; }
+
+		template <typename Fn>
+			requires std::invocable<Fn, u16>
+		void for_each_cpu(u32 threads_per_core, Fn&& fn) const {
+			const u32 base = address_origin();
+			const u32 stride = threads_per_core == 0 ? 1U : threads_per_core;
+			for (u32 bit = 0; bit < 64U; ++bit) {
+				if (((raw_.cpu_mask >> bit) & 1ULL) == 0ULL) continue;
+				const u32 unit = base + bit;
+				if (stride <= 1U) {
+					fn(static_cast<u16>(unit));
+				} else {
+					const u32 first = unit * stride;
+					for (u32 tid = 0; tid < stride; ++tid) fn(static_cast<u16>(first + tid));
+				}
+			}
+		}
+
+	private:
+		topology_core raw_;
+	};
+
+	struct topology_path {
+		std::array<u8, TOPOLOGY_MAX_NEST> ids{};
+		u8 depth{};
+		[[nodiscard]] std::optional<u8> id_at(u8 level) const noexcept {
+			if (level == 0 || level > depth) return std::nullopt;
+			return ids[level - 1];
+		}
+		[[nodiscard]] std::optional<u8> outermost() const noexcept { return id_at(1); }
+		[[nodiscard]] std::optional<u8> innermost() const noexcept { return id_at(depth); }
+	};
+
+	struct topology_cpu_record {
+		topology_cpu_view cpu;
+		topology_path path;
+	};
+
+	enum class topology_parse_error : u8 {
+		none = 0,
+		truncated_entry,
+		reserved_nl,
+	};
+
+	struct topology_parse_result {
+		u32 cpu_entries_visited{};
+		u32 container_entries_visited{};
+		topology_parse_error error{topology_parse_error::none};
+		[[nodiscard]] bool ok() const noexcept { return error == topology_parse_error::none; }
+	};
+
+	class topology_list_view {
+	public:
+		explicit topology_list_view(std::span<const std::byte> tle_bytes) noexcept
+			: bytes_(tle_bytes) {}
+
+		[[nodiscard]] bool empty() const noexcept { return bytes_.empty(); }
+
+		template <typename Fn>
+			requires std::invocable<Fn, const topology_cpu_record&>
+		[[nodiscard]] auto visit_cpu_entries(Fn&& fn) const -> topology_parse_result {
+			topology_parse_result result{};
+			topology_path path{};
+
+			const std::byte* cur = bytes_.data();
+			const std::byte* const end = bytes_.data() + bytes_.size();
+
+			while (cur < end) {
+				if (static_cast<usize>(end - cur) < sizeof(u8)) {
+					result.error = topology_parse_error::truncated_entry;
+					break;
+				}
+				const u8 nl = static_cast<u8>(*cur);
+
+				if (nl == 0) {
+					if (static_cast<usize>(end - cur) < sizeof(topology_core)) {
+						result.error = topology_parse_error::truncated_entry;
+						break;
+					}
+					topology_core core{};
+					lib::memcpy(&core, cur, sizeof core);
+					fn(topology_cpu_record{topology_cpu_view{core}, path});
+					++result.cpu_entries_visited;
+					cur += sizeof(topology_core);
+					continue;
+				}
+
+				if (nl > TOPOLOGY_MAX_NEST) {
+					result.error = topology_parse_error::reserved_nl;
+					break;
+				}
+				if (static_cast<usize>(end - cur) < sizeof(topology_container)) {
+					result.error = topology_parse_error::truncated_entry;
+					break;
+				}
+				topology_container cont{};
+				lib::memcpy(&cont, cur, sizeof cont);
+
+				path.ids[nl - 1] = cont.id;
+				path.depth = nl;
+
+				++result.container_entries_visited;
+				cur += sizeof(topology_container);
+			}
+			return result;
+		}
+
+	private:
+		std::span<const std::byte> bytes_;
+	};
+
+	class configuration_topology_view {
+	public:
+		explicit configuration_topology_view(std::span<const std::byte, PAGE_SIZE> page) noexcept
+			: page_(page) {}
+
+		[[nodiscard]] const configuration_topology& header() const noexcept {
+			return *reinterpret_cast<const configuration_topology*>(page_.data());
+		}
+
+		[[nodiscard]] u8 mnest() const noexcept { return header().mnest; }
+		[[nodiscard]] std::span<const std::byte, TOPOLOGY_NR_MAG> mag() const noexcept {
+			return std::span<const std::byte, TOPOLOGY_NR_MAG>{header().mag};
+		}
+
+		[[nodiscard]] topology_list_view entries() const noexcept {
+			constexpr usize header_bytes = sizeof(configuration_topology);
+			const usize length = header().length;
+			if (length <= header_bytes) return topology_list_view{{}};
+			const usize clamped = std::min(length, page_.size());
+			if (clamped <= header_bytes) return topology_list_view{{}};
+			return topology_list_view{page_.subspan(header_bytes, clamped - header_bytes)};
+		}
+
+	private:
+		std::span<const std::byte, PAGE_SIZE> page_;
+	};
+
+	enum class stsi_fc : u8 {
+		basic_machine_information     = 1,
+		logical_partition_information = 2,
+		virtual_machine_information   = 3,
+		current_configuration_level   = 15
+	};
+
+	enum class selector1 : u8 {
+		configuration_level_fc            = 1,
+		configuration_level_multi_cpu     = 2
+	};
+
+	enum class selector2_1 : u8 {
+		configuration_level            = 1,
+		configuration_level_topology   = 2
+	};
+
+	enum class selector2_2 : u8 {
+		configuration_level_current_cpu  = 1,
+		configuration_level_all_cpu      = 2
+	};
+
+	namespace detail {
+
+		struct stsi_combo {
+			u8 fc{};
+			u8 sel1{};
+			u8 sel2_lo{};
+			u8 sel2_hi{};
+		};
+
+		constexpr std::array valid_combos = {
+			stsi_combo{1, 1, 1, 1},
+			stsi_combo{1, 2, 1, 1},
+			stsi_combo{1, 2, 2, 2},
+			stsi_combo{2, 2, 1, 1},
+			stsi_combo{2, 2, 2, 2},
+			stsi_combo{3, 2, 2, 2},
+			stsi_combo{15, 1, 2, 6},
+		};
+
+		consteval bool is_valid_stsi(u8 fc, u8 sel1, u8 sel2) {
+			return std::ranges::any_of(valid_combos, [&](stsi_combo const& c) {
+				return c.fc == fc && c.sel1 == sel1 && sel2 >= c.sel2_lo && sel2 <= c.sel2_hi;
+			});
+		}
+
+		/// @brief Issue STSI instruction to store system information.
+		/// @param sysinfo 4KB-aligned output block.
+		/// @param fc Function code (e.g. 1).
+		/// @param sel1 Selector 1 (e.g. 1).
+		/// @param sel2 Selector 2 (e.g. 1).
+		/// @return 0 on success, -1 if not supported.
+		auto invoke(void* sysinfo, u4 fc, u8 sel1, u8 sel2, u4& curr_level) noexcept -> std::expected<condition_code, lib::kernel_error>;
+	}
+
+	template <typename Out, stsi_fc Fc, selector1 Sel1, u8 Sel2>
+	concept ValidStsiArguments =
+		detail::is_valid_stsi(static_cast<u8>(Fc), static_cast<u8>(Sel1), Sel2) && sizeof(Out) == PAGE_SIZE;
+
 	/// @brief Issue STSI instruction to store system information.
-	/// @param sysinfo 4KB-aligned output block.
-	/// @param fc Function code (e.g. 1).
-	/// @param sel1 Selector 1 (e.g. 1).
-	/// @param sel2 Selector 2 (e.g. 1).
-	/// @return 0 on success, -1 if not supported.
-	auto invoke(void* sysinfo, int fc, int sel1, int sel2) noexcept -> std::expected<condition_code, lib::kernel_error>;
+	/// @tparam Out Output block type.
+	/// @tparam Fc Function code
+	/// @tparam Sel1 Selector 1 (Selector1 == 1)
+	/// @tparam Sel2 Selector 2 (Selector1 == 1)
+	/// @param  sysinfo output block
+	/// @return condition code or kernel error
+	template <typename Out, stsi_fc Fc, selector1 Sel1, selector2_1 Sel2>
+		requires ValidStsiArguments<Out, Fc, Sel1, static_cast<u8>(Sel2)> && (Sel1 == selector1::configuration_level_fc)
+	auto invoke(Out& sysinfo) noexcept -> std::expected<condition_code, lib::kernel_error> {
+		u4 curr{};
+		return detail::invoke(&sysinfo, static_cast<u4>(Fc), static_cast<u8>(Sel1), static_cast<u8>(Sel2), curr);
+	}
+
+	/// @brief Issue STSI instruction to store system information.
+	/// @tparam Out Output block type.
+	/// @tparam Fc Function code
+	/// @tparam Sel1 Selector 1 (Selector1 == 2)
+	/// @tparam Sel2 Selector 2 (Selector1 == 2)
+	/// @param  sysinfo output block
+	/// @return condition code or kernel error
+	template <typename Out, stsi_fc Fc, selector1 Sel1, selector2_2 Sel2>
+		requires ValidStsiArguments<Out, Fc, Sel1, static_cast<u8>(Sel2)> && (Sel1 == selector1::configuration_level_multi_cpu)
+	auto invoke(Out& sysinfo) noexcept -> std::expected<condition_code, lib::kernel_error> {
+		u4 curr{};
+		return detail::invoke(&sysinfo, static_cast<u4>(Fc), static_cast<u8>(Sel1), static_cast<u8>(Sel2), curr);
+	}
+
+	/// @brief Issue STSI instruction to store system information.
+	/// @tparam Out Output block type.
+	/// @tparam Fc Function code
+	/// @tparam Sel1 Selector 1
+	/// @param  sel2 Selector 2
+	/// @param  sysinfo output block
+	/// @return condition code or kernel error
+	template <typename Out, stsi_fc Fc, selector1 Sel1>
+		requires (Fc == stsi_fc::current_configuration_level)
+			&& (Sel1 == selector1::configuration_level_fc)
+	auto invoke(Out& sysinfo, u8 sel2) noexcept -> std::expected<condition_code, lib::kernel_error> {
+		if (sel2 < 2 || sel2 > 6) return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+		u4 curr{};
+		return detail::invoke(&sysinfo, static_cast<u4>(Fc), static_cast<u8>(Sel1), sel2, curr);
+	}
+
+	/// @brief Get current configuration level
+	auto current_configuration_number() -> u4 {
+		u4 curr{};
+		discard_value detail::invoke(nullptr, 0, 0, 0, curr);
+		return curr;
+	}
 
 } // namespace arch::s390x::cpu::stsi
 

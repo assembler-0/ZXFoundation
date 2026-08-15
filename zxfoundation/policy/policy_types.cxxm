@@ -4,7 +4,7 @@
 
 export module zxfoundation.policy.policy_types;
 import zxfoundation.base.types;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
 import zxfoundation.memory.memory_objects;
 
 export {
@@ -26,7 +26,7 @@ namespace zxfoundation::policy {
     };
 
     struct policy_server {
-        scoms::kobject ko{};
+        scoms::kobject::bobject ko{};
         server_kind kind{server_kind::pager};
         u8 _pad[3]{};
         u32 endpoint_id{0};

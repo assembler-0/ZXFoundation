@@ -12,7 +12,7 @@ import std;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.cpu.lowcore;
-import zxfoundation.sys.syschk;
+import zxfoundation.sys.syschk.core;
 
 namespace _internal {
 

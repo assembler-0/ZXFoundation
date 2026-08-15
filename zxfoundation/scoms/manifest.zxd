@@ -1,6 +1,4 @@
 !files : !compile_group -> [auto] {
-    scoms_types.cxxm
-    scoms_object_core.cxxm
-    scoms_ref.cxxm
-    scoms_table.cxxm
+    interface.cxxm
+    table.cxxm
 }

@@ -1,0 +1,153 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file rwonce.cxxm
+/// @brief Read-Write Once implementation
+
+export module lib.rwonce;
+import zxfoundation.base.types;
+import std;
+
+export {
+
+namespace lib::rwonce {
+
+    namespace detail {
+        template<usize>
+        struct native_uint {
+        };
+
+        template<>
+        struct native_uint<1> {
+            using type = u8;
+        };
+
+        template<>
+        struct native_uint<2> {
+            using type = u16;
+        };
+
+        template<>
+        struct native_uint<4> {
+            using type = u32;
+        };
+
+        template<>
+        struct native_uint<8> {
+            using type = u64;
+        };
+
+        template<usize N>
+        concept has_native_uint = requires { typename native_uint<N>::type; };
+
+        template<typename T>
+            requires has_native_uint<sizeof(T)>
+        using native_uint_t = native_uint<sizeof(T)>::type;
+    } // namespace detail
+
+    template<typename T>
+    concept Word =
+            std::is_trivially_copyable_v<T> &&
+            detail::has_native_uint<sizeof(T)> &&
+            alignof(T) >= alignof(detail::native_uint_t<T>);
+
+    namespace detail {
+        template<typename T>
+            requires (!Word<T>)
+        constexpr void reject_unsupported_type() {
+            static_assert(Word<T>,
+                          "rwonce: T must be trivially copyable and exactly 1, 2, 4, or 8 "
+                          "bytes (a native machine word) to be loaded/stored as a single, "
+                          "non-tearing access. Split it into word-sized fields, or use "
+                          "std::atomic if you actually need atomicity for a larger type.");
+        }
+    } // namespace detail
+
+    template<typename T>
+    [[nodiscard]] constexpr T read_once(const T &x) noexcept {
+        if constexpr (!Word<T>) {
+            detail::reject_unsupported_type<T>();
+            std::unreachable();
+        } else {
+            if consteval {
+                return x;
+            }
+            using U = detail::native_uint_t<T>;
+            const volatile U *p =
+                    reinterpret_cast<const volatile U *>(std::addressof(x));
+            return std::bit_cast<T>(*p);
+        }
+    }
+    
+    template<typename T>
+    constexpr void write_once(T &x, std::type_identity_t<T> val) noexcept {
+        if constexpr (!Word<T>) {
+            detail::reject_unsupported_type<T>();
+        } else {
+            if consteval {
+                x = val;
+            } else {
+                using U = detail::native_uint_t<T>;
+                volatile U *p = reinterpret_cast<volatile U *>(std::addressof(x));
+                *p = std::bit_cast<U>(val);
+            }
+        }
+    }
+
+    template<Word T>
+    class ref {
+    public:
+        explicit constexpr ref(T &obj) noexcept : ptr_(std::addressof(obj)) {
+        }
+
+        [[nodiscard]] constexpr operator T() const noexcept { return read_once(*ptr_); }
+
+        constexpr const ref &operator=(T val) const noexcept {
+            write_once(*ptr_, val);
+            return *this;
+        }
+
+        [[nodiscard]] constexpr T load() const noexcept { return read_once(*ptr_); }
+        constexpr void store(T val) const noexcept { write_once(*ptr_, val); }
+
+        constexpr ref(const ref &) noexcept = default;
+
+        ref &operator=(const ref &) = delete;
+
+    private:
+        T *ptr_;
+    };
+
+    template<typename T>
+    ref(T &) -> ref<T>;
+
+    template<Word T>
+    class cell {
+    public:
+        constexpr cell() noexcept = default;
+
+        constexpr cell(T init) noexcept : value_(init) {
+        }
+
+        [[nodiscard]] constexpr operator T() const noexcept { return read_once(value_); }
+
+        constexpr cell &operator=(T val) noexcept {
+            write_once(value_, val);
+            return *this;
+        }
+
+        [[nodiscard]] constexpr T load() const noexcept { return read_once(value_); }
+        constexpr void store(T val) noexcept { write_once(value_, val); }
+
+        [[nodiscard]] constexpr T &unsafe_ref() noexcept { return value_; }
+        [[nodiscard]] constexpr const T &unsafe_ref() const noexcept { return value_; }
+
+        cell(const cell &) = delete;
+
+        cell &operator=(const cell &) = delete;
+
+    private:
+        T value_{};
+    };
+    
+} // namespace lib
+    
+} // end export

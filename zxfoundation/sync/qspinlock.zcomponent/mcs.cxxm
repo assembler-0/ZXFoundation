@@ -1,0 +1,23 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file mcs_types.cxxm
+/// @brief mcs types
+
+export module zxfoundation.sync.qspinlock.mcs;
+import std;
+
+export {
+
+namespace zxfoundation::sync::qspinlock {
+
+    /// @brief Maximum MCS spinlock nesting depth.
+    constexpr auto MCS_MAX_LOCK_DEPTH = 4U;
+
+    /// @brief MCS node for queued spinlocks.
+    struct mcs_node {
+        std::atomic<mcs_node*> next{nullptr};
+        std::atomic<int>       locked{0};
+    };
+
+} // namespace zxfoundation::sync::qspinlock
+
+} // end export

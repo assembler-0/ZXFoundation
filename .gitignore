@@ -17,4 +17,5 @@ convert*.py
 build/
 docs/papers/
 docs/papers-vn/
+docs/handbook/
 *.pm

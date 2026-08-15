@@ -1,0 +1,51 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/locking/mutex.cxxm
+/// @brief Blocking mutex — sleep/wake lock with wait-queue integration.
+
+export module zxfoundation.sync.mutex.core;
+import zxfoundation.sync.waitqueue.types;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+import std;
+
+export {
+
+namespace zxfoundation::sync::mutex {
+
+    /// @brief Blocking mutex — sleep/wake mutual exclusion.
+    class mutex {
+        std::atomic<u32>  m_val{0};
+        waitqueue::wait_head m_wq{};
+
+    public:
+        constexpr mutex() noexcept = default;
+
+        mutex(const mutex&)            = delete;
+        auto operator=(const mutex&)   = delete;
+        mutex(mutex&&)                 = delete;
+        auto operator=(mutex&&)        = delete;
+
+        /// @brief Acquire the mutex, blocking if contended.
+        /// @post The mutex is held.  Caller call unlock() exactly once.
+        auto lock() noexcept -> void;
+
+        /// @brief Try to acquire the mutex without blocking.
+        /// @return true if the mutex was acquired.
+        [[nodiscard]] auto try_lock() noexcept -> bool;
+
+        /// @brief Release the mutex and wake the first waiter, if any.
+        /// @pre The caller holds the mutex.
+        /// @post The mutex is released.
+        auto unlock() noexcept -> void;
+
+        /// @brief Non-deterministic snapshot: true if the mutex appears held.
+        [[nodiscard]] auto is_locked() const noexcept -> bool;
+
+    private:
+        /// @brief Slow path: add to wait queue, block, re-contend.
+        auto slow_lock(irqflags flags) noexcept -> void;
+    };
+
+} // namespace zxfoundation::sync::mutex
+
+} // end export

@@ -1,0 +1,12 @@
+export module zxfoundation.sys;
+export import zxfoundation.sys.cap;
+export import zxfoundation.sys.ipc;
+export import zxfoundation.sys.irq;
+export import zxfoundation.sys.printk;
+export import zxfoundation.sys.service;
+export import zxfoundation.sys.syschk;
+export import zxfoundation.sys.time;
+export import zxfoundation.sys.timer;
+export import zxfoundation.sys.zinit;
+export import zxfoundation.sys.zxallsyms;
+export import zxfoundation.sys.zxio;

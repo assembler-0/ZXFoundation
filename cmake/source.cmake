@@ -21,7 +21,7 @@ list(REMOVE_ITEM ZX_SOURCES_64
     "${CMAKE_SOURCE_DIR}/zxfoundation/sys/zxallsyms_stub.cxx"
 )
 
-include(${CMAKE_SOURCE_DIR}/cmake/deps/libstdcxx.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/deps.cmake)
 
 # ZX_SOURCES_64_NO_STUB = all regular sources + modules (used by pass1).
 # The final kernel target adds its symbol table separately.

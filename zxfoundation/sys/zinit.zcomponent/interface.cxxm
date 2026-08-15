@@ -1,0 +1,2 @@
+export module zxfoundation.sys.zinit;
+export import zxfoundation.sys.zinit.core;

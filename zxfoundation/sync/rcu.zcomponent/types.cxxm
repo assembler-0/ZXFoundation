@@ -1,0 +1,38 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/rcu/rcu_types.cxxm
+/// @brief RCU type definitions.
+
+export module zxfoundation.sync.rcu.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sync::rcu {
+
+    /// @brief Deferred-callback node embedded in the object to be freed.
+    struct rcu_head {
+        rcu_head* next{nullptr};                       ///< Intrusive list linkage (single-linked).
+        void (*func)(rcu_head* head) noexcept{nullptr}; ///< Callback invoked after grace period.
+    };
+    static_assert(sizeof(rcu_head) == 16);
+    static_assert(__builtin_offsetof(rcu_head, func) == 8);
+
+    /// @brief Grace-period sequence number type.
+    using gp_seq_t = u64;
+
+    /// @brief Return true if gp_seq a is "after" gp_seq b (modular arithmetic).
+    [[nodiscard]] constexpr auto gp_seq_after(gp_seq_t a, gp_seq_t b) noexcept -> bool {
+        return static_cast<i64>(a - b) > 0;
+    }
+
+    /// @brief Return true if a grace period is currently in progress.
+    [[nodiscard]] constexpr auto gp_in_progress(gp_seq_t seq) noexcept -> bool {
+        return (seq & 1U) != 0U;
+    }
+
+    /// @brief Maximum number of callbacks to drain per tick per CPU.
+    constexpr u32 RCU_MAX_DRAIN_PER_TICK = 64U;
+
+} // namespace zxfoundation::rcu
+
+} // end export

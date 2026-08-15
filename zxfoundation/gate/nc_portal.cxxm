@@ -11,7 +11,7 @@ import zxfoundation.portal.portal_types;
 import zxfoundation.base.types;
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;
-import zxfoundation.sys.printk;
+import zxfoundation.sys.printk.core;
 import arch.s390x.cpu.lowcore;
 import lib.error;
 import std;

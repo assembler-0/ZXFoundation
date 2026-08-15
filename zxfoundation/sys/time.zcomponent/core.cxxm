@@ -1,0 +1,83 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file zxfoundation/sys/time.cxxm
+/// @brief High-performance industrial kernel time system for s390x.
+
+export module zxfoundation.sys.time.core;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sys::time {
+
+    /// @brief Represents a duration with nanosecond precision.
+    class duration {
+        u64 m_ns;
+
+    public:
+        constexpr duration() noexcept : m_ns(0) {}
+        constexpr explicit duration(u64 ns) noexcept : m_ns(ns) {}
+
+        [[nodiscard]] constexpr auto count_ns() const noexcept -> u64 { return m_ns; }
+        [[nodiscard]] constexpr auto count_us() const noexcept -> u64 { return m_ns / 1000U; }
+        [[nodiscard]] constexpr auto count_ms() const noexcept -> u64 { return m_ns / 1000000U; }
+        [[nodiscard]] constexpr auto count_s()  const noexcept -> u64 { return m_ns / 1000000000U; }
+
+        constexpr auto operator+(duration o) const noexcept -> duration { return duration(m_ns + o.m_ns); }
+        constexpr auto operator-(duration o) const noexcept -> duration { return duration(m_ns - o.m_ns); }
+        constexpr auto operator<=>(const duration&) const noexcept = default;
+
+        /// @brief Convert s390x TOD clock units to a duration.
+        /// Calculation: NS = (TOD * 1000) / 4096 = (TOD * 125) / 512.
+        static constexpr auto from_tod(u64 tod_units) noexcept -> duration {
+            const u128 val = static_cast<u128>(tod_units) * 125U;
+            return duration(static_cast<u64>(val >> 9U));
+        }
+
+        static constexpr auto from_seconds(u64 s)      noexcept -> duration { return duration(s * 1'000'000'000U); }
+        static constexpr auto from_milliseconds(u64 ms) noexcept -> duration { return duration(ms * 1'000'000U); }
+        static constexpr auto from_microseconds(u64 us) noexcept -> duration { return duration(us * 1'000U); }
+    };
+
+    /// @brief Represents an absolute point in time.
+    class instant {
+        u64 m_ns_since_epoch;
+
+    public:
+        constexpr instant() noexcept : m_ns_since_epoch(0) {}
+        constexpr explicit instant(u64 ns) noexcept : m_ns_since_epoch(ns) {}
+
+        [[nodiscard]] constexpr auto nanoseconds_since_epoch() const noexcept -> u64 { return m_ns_since_epoch; }
+
+        constexpr auto operator+(duration d) const noexcept -> instant  { return instant(m_ns_since_epoch + d.count_ns()); }
+        constexpr auto operator-(duration d) const noexcept -> instant  { return instant(m_ns_since_epoch - d.count_ns()); }
+        constexpr auto operator-(instant o)  const noexcept -> duration { return duration(m_ns_since_epoch - o.m_ns_since_epoch); }
+        constexpr auto operator<=>(const instant&) const noexcept = default;
+    };
+
+    /// @brief Initialize the global time system.
+    /// @param[in] tod_boot  TOD clock value captured at kernel entry by ZXFL.
+    auto initialize(u64 tod_boot) noexcept -> void;
+
+    /// @brief Retrieve the current monotonic time (time since boot).
+    [[nodiscard]] auto monotonic_now() noexcept -> instant;
+
+    /// @brief Retrieve the current realtime (wall-clock) time.
+    [[nodiscard]] auto realtime_now() noexcept -> instant;
+
+    /// @brief Adjust the realtime clock (e.g., NTP steering).
+    /// @param[in]  now  New absolute epoch-relative time.
+    [[nodiscard]] auto set_realtime(instant now) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Advance the wall-clock offset by one tick's worth of time.
+    /// @param[in]  tick_ns  Duration of one tick in nanoseconds (10,000,000).
+    auto tick_advance_wall(u64 tick_ns) noexcept -> void;
+
+    /// @brief Return the current monotonic tick counter.
+    [[nodiscard]] auto tick_count() noexcept -> u64;
+
+} // namespace zxfoundation::sys::time
+
+} // end export

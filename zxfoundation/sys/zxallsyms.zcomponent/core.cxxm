@@ -1,0 +1,67 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/zxallsyms.cxxm
+/// @brief Global kernel symbol table — address/name lookup over a static
+///        read-only table generated at link time by zxallsyms_gen.
+
+export module zxfoundation.sys.zxallsyms.core;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+from_global(nomangle) {
+    from_global(reference) const u64  zxallsyms_addrs[];   ///< Sorted ascending virtual addresses.
+    from_global(reference) const u32  zxallsyms_offsets[]; ///< Byte offset into zxallsyms_names[].
+    from_global(reference) const char zxallsyms_names[];   ///< Flat NUL-terminated name pool.
+    from_global(reference) const u32  zxallsyms_count;     ///< Total number of symbols.
+}
+
+export {
+
+namespace zxfoundation::sys::zxallsyms {
+
+    /// @brief A resolved kernel symbol entry.
+    struct sym_info {
+        u64 address;
+        const char* name;
+    };
+
+    /// @brief Look up the symbol whose range contains @p addr.
+    /// @param[in] addr  Virtual address to resolve.
+    /// @return sym_info on success.
+    [[nodiscard]] auto lookup_by_addr(u64 addr) noexcept
+        -> std::expected<sym_info, lib::kernel_error>;
+
+    /// @brief Look up the first symbol whose demangled name equals @p name.
+    /// @param[in] name  Demangled symbol name to search for.
+    /// @return sym_info on success.
+    [[nodiscard]] auto lookup_by_name(std::string_view name)
+        noexcept -> std::expected<sym_info, lib::kernel_error>;
+
+    /// @brief Invoke @p fn for every symbol in address order.
+    /// @tparam    Fn   Callable with signature compatible with
+    ///                 @c void(const sym_info&).
+    /// @param[in] fn   The callable to invoke per symbol.
+    template <typename Fn>
+    auto for_each(Fn&& fn) noexcept -> void {
+        const u32 count = zxallsyms_count;
+        for (u32 i = 0; i < count; ++i) {
+            const sym_info info{
+                .address = zxallsyms_addrs[i],
+                .name    = &zxallsyms_names[zxallsyms_offsets[i]],
+            };
+            if constexpr (requires { { fn(info) } -> std::same_as<bool>; }) {
+                if (!fn(info)) return;
+            } else {
+                fn(info);
+            }
+        }
+    }
+
+    /// @brief Return the total number of symbols in the table.
+    [[nodiscard]] consteval auto count() noexcept -> u32 {
+        return zxallsyms_count;
+    }
+
+} // namespace zxfoundation::sys::zxallsyms
+
+} // end export

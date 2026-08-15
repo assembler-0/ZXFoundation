@@ -1,0 +1,50 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/waitqueue.cxxm
+/// @brief Wait queue operations — prepare, finish, and wake primitives.
+
+export module zxfoundation.sync.waitqueue.core;
+import zxfoundation.sync.waitqueue.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sync::waitqueue {
+
+    /// @brief Initialize a wait queue head to the empty state.
+    auto init(wait_head& wq) noexcept -> void;
+
+    /// @brief Add a wait entry to the queue and mark it active.
+    /// @param wq    The wait queue to join.
+    /// @param entry The caller-owned wait entry (typically on kernel stack).
+    /// @param flags Behavioural flags for this wait (exclusive, interruptible, etc.).
+    auto prepare_to_wait(wait_head& wq,
+                         wait_entry& entry,
+                         wait_flags flags) noexcept -> void;
+
+    /// @brief Remove a wait entry from the queue if still active.
+    /// @param wq    The wait queue the entry was added to.
+    /// @param entry The wait entry to remove.
+    auto finish_wait(wait_head& wq,
+                     wait_entry& entry) noexcept -> void;
+
+    /// @brief Wake ALL waiters on the queue.
+    /// @param wq The wait queue to drain.
+    auto wake_up(wait_head& wq) noexcept -> void;
+
+    /// @brief Wake the first waiter on the queue.
+    /// @param wq The wait queue.
+    auto wake_up_one(wait_head& wq) noexcept -> void;
+
+    /// @brief Lockless snapshot: returns true if any waiters are queued.
+    /// @param wq The wait queue to test.
+    /// @return true if the entry list is non-empty.
+    [[nodiscard]] auto active(const wait_head& wq) noexcept -> bool;
+
+    /// @brief Lockless snapshot: returns the number of queued waiters.
+    /// @param wq The wait queue to count.
+    /// @return Number of entries currently linked.
+    [[nodiscard]] auto count(const wait_head& wq) noexcept -> u32;
+
+} // namespace zxfoundation::sync
+
+} // end export

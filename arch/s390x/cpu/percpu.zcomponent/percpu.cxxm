@@ -5,7 +5,7 @@
 export module arch.s390x.cpu.percpu;
 import arch.s390x.cpu.types;
 import zxfoundation.base.types;
-import zxfoundation.locking.mcs_types;
+import zxfoundation.sync.qspinlock.mcs;
 import zxfoundation.memory.pmm_types;
 import std;
 
@@ -48,11 +48,11 @@ namespace arch::s390x::cpu::percpu {
         u8      _pad_irq_class[3]{};   ///< Pad to u32 alignment.
         std::atomic<u64> ec_bits{};
 
-        zxfoundation::locking::mcs::mcs_node qnodes[zxfoundation::locking::mcs::MCS_MAX_LOCK_DEPTH]{};
+        zxfoundation::sync::qspinlock::mcs_node qnodes[zxfoundation::sync::qspinlock::MCS_MAX_LOCK_DEPTH]{};
 
         u64     rcu_gp_seq{};          ///< Last observed RCU grace-period sequence number.
         u64     rcu_qs_seq{};          ///< Last quiescent-state sequence number.
-        u8      in_rcu_read_side{};    ///< Non-zero if inside rcu_read_lock().
+        u8      in_rcu_read_side{};    ///< Non-zero if inside read_unlock().
         u8      _pad1[7]{};            ///< Pad to u64 alignment.
 
         void*   rcu_pending_cbs{nullptr};    ///< Head of pending rcu_head list (rcu_head*).

@@ -1,0 +1,17 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/printk.cxxm
+/// @brief Kernel logging framework.
+
+export module zxfoundation.sys.printk.format;
+import zxfoundation.sys.printk.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sys::printk {
+
+    auto prepare_header(log_level level, char buff[], usize size) noexcept -> usize;
+
+} // namespace zxfoundation::sys::printk
+
+} // end export

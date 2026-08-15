@@ -1,6 +1,7 @@
 !files : !compile_group -> [auto] {
+    interface.cxxm
     entry.S
-    trap.cxxm
+    core.cxx
     ext.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]
     io.cxxm
     mcck.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]

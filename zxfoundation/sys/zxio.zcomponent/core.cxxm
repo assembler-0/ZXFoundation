@@ -1,0 +1,52 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file io.cxxm
+/// @brief Capability-bound CSS I/O, DMA authority, and completion delivery.
+
+export module zxfoundation.sys.zxio.core;
+import zxfoundation.sys.zxio.types;
+import zxfoundation.sys.cap.types;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sys::zxio {
+
+    auto init() noexcept -> void;
+
+    [[nodiscard]] auto bind(
+        u16 dev_no, u32 domain_id, cap::cap_token& out_token
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto unbind(
+        cap::cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto dma_extent(
+        cap::cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<cap::cap_token, lib::kernel_error>;
+
+    /// @brief Submit a DMA-relative, verified format-1 CCW request.
+    [[nodiscard]] auto submit(
+        cap::cap_token token, u32 owner_domain, const io_request& request
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Dequeue one kernel-owned CSS completion record.
+    [[nodiscard]] auto completion_dequeue(
+        cap::cap_token token, u32 owner_domain
+    ) noexcept -> std::expected<io_completion, lib::kernel_error>;
+
+    /// @brief Retired: hard IRQs never invoke user gates.
+    [[nodiscard]] auto irq_bind(
+        cap::cap_token token, u32 owner_domain, u32 retired_gate_id
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    auto destroy_for_domain(u32 domain_id) noexcept -> void;
+
+    [[nodiscard]] auto binding_count() noexcept -> u32;
+    [[nodiscard]] auto binding_find(u32 id) noexcept -> io_binding*;
+
+} // namespace zxfoundation::sys::zxio
+
+} // end export

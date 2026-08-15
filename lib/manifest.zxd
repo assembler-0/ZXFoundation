@@ -19,4 +19,5 @@
     min_heap.cxxm
     container_of.cxxm
     align.cxxm
+    rwonce.cxxm
 }

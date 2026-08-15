@@ -30,7 +30,7 @@ namespace _internal {
 
 } // namespace _internal
 
-extern "C" {
+no_mangle {
 
 /// @brief 128-bit logical shift left.
 auto __ashlti3(u128 a, int b) noexcept -> u128 {
@@ -165,4 +165,4 @@ auto __multi3(u128 a, u128 b) noexcept -> u128 {
     return _internal::combine(res_hi, res_lo);
 }
 
-} // extern "C"
+} // no_mangle

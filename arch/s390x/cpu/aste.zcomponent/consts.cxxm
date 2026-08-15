@@ -1,0 +1,53 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/aste_types.cxxm
+/// @brief z/Architecture ASTE/ALE/ALT value types and constants.
+/// @note Purely value-level declarations shared by the arch.s390x.cpu.aste
+
+export module arch.s390x.cpu.aste.consts;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::cpu::aste {
+
+    /// @brief Maximum ASTE table entries (one per domain).
+    constexpr u32 MAX_ASTE_ENTRIES = 256;
+
+    /// @brief Maximum ALE entries in one domain's dispatchable-unit list.
+    /// AR0 always selects primary space, leaving AR1-AR15 for portal ALETs.
+    constexpr u32 MAX_ALE_ENTRIES = 16;
+
+    /// @brief ALETs 0–2 are architecturally reserved (primary, secondary, home).
+    constexpr u32 ALET_RESERVED_MAX = 2;
+
+    /// @brief Hardware ALET field masks in the 32-bit register image.
+    constexpr u32 ALET_RESERVED_MASK = 0xFE00'0000U;
+    constexpr u32 ALET_PRIMARY_LIST  = 0x0100'0000U;
+    constexpr u32 ALET_ALESN_MASK    = 0x00FF'0000U;
+    constexpr u32 ALET_ALEN_MASK     = 0x0000'FFFFU;
+
+    /// @brief Build a DUCT-selected ALET for an ALE slot and sequence.
+    [[nodiscard]] constexpr auto alet_make(u16 alen, u8 alesn) noexcept -> u32 {
+        return (static_cast<u32>(alesn) << 16) | static_cast<u32>(alen);
+    }
+
+    [[nodiscard]] constexpr auto alet_alen(u32 alet) noexcept -> u16 {
+        return static_cast<u16>(alet & ALET_ALEN_MASK);
+    }
+
+    [[nodiscard]] constexpr auto alet_alesn(u32 alet) noexcept -> u8 {
+        return static_cast<u8>((alet & ALET_ALESN_MASK) >> 16);
+    }
+
+    /// @brief Per-domain hardware ART state.  CR2 selects @c duct_phys while
+    /// AR-mode ALETs address @c ale_table_phys through DUALD at byte 16.
+    struct art_context {
+        u64 duct_phys{0};
+        u64 ale_table_phys{0};
+        u8  ale_sequence[MAX_ALE_ENTRIES]{};
+        u8  _pad[8]{};
+    };
+
+} // namespace arch::s390x::cpu::aste
+
+} // end export

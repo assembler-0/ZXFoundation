@@ -8,7 +8,7 @@ add_executable(core.zxfoundation.nucleus.pass1 EXCLUDE_FROM_ALL)
 
 target_sources(core.zxfoundation.nucleus.pass1 PRIVATE
     ${ZX_SOURCES_64_NO_STUB}
-    "${CMAKE_SOURCE_DIR}/zxfoundation/sys/zxallsyms_stub.cxx"
+    "${CMAKE_SOURCE_DIR}/zxfoundation/sys/zxallsyms.zcomponent/storage.cxx"
 )
 target_sources(core.zxfoundation.nucleus.pass1
     PUBLIC FILE_SET CXX_MODULES TYPE CXX_MODULES
@@ -19,8 +19,8 @@ target_sources(core.zxfoundation.nucleus.pass1
     PUBLIC
         FILE_SET cxx_std_modules
         TYPE CXX_MODULES
-        BASE_DIRS ${LIBSTDCXX_BASE}
-        FILES ${LIBSTDCXX_MODS}
+        BASE_DIRS ${ZXLIBSTDCXX_BASE}
+        FILES ${ZXLIBSTDCXX_MODULES}
 )
 
 _zx_kernel_flags(core.zxfoundation.nucleus.pass1)
@@ -55,8 +55,8 @@ target_sources(core.zxfoundation.nucleus
     PUBLIC
         FILE_SET cxx_std_modules
         TYPE CXX_MODULES
-        BASE_DIRS ${LIBSTDCXX_BASE_DIR}
-        FILES ${LIBSTDCXX_MODS}
+        BASE_DIRS ${ZXLIBSTDCXX_BASE}
+        FILES ${ZXLIBSTDCXX_MODULES}
 )
 
 _zx_kernel_flags(core.zxfoundation.nucleus)

@@ -15,10 +15,10 @@ export {
 namespace arch::s390x::trap::fixup {
 
     struct fixup_entry {
-        i32 fault_delta;
-        i32 fixup_delta;
-        u16 type;
-        u16 data;
+        i32 fault_delta{};
+        i32 fixup_delta{};
+        u16 type{};
+        u16 data{};
     };
 
     static_assert(sizeof(fixup_entry) == 12,
@@ -68,58 +68,58 @@ namespace arch::s390x::trap::fixup {
         };
 
         for (usize i = 0; i < n; ++i) {
-                const fixup_entry& e = entries[i];
-                if (field_address(&e, 0, e.fault_delta) != faulting_addr)
-                    continue;
+            const fixup_entry& e = entries[i];
+            if (field_address(&e, 0, e.fault_delta) != faulting_addr)
+                continue;
 
-                auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-                pcp.pgm_fixup_applied = 1U;
-                pcp.pgm_fixup_addr    = field_address(&e, 4, e.fixup_delta);
+            auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            pcp.pgm_fixup_applied = 1U;
+            pcp.pgm_fixup_addr    = field_address(&e, 4, e.fixup_delta);
 
-                switch (e.type) {
-                case EX_TYPE_FIXUP:
-                    break;
+            switch (e.type) {
+            case EX_TYPE_FIXUP:
+                break;
 
-                case EX_TYPE_UA_LOAD_REG: {
-                    const u8 reg = _internal::extract_reg(e.data);
-                    auto* lc = arch::s390x::cpu::lowcore::get_current();
-                    const u64 fsa = lc->failing_storage_address;
-                    if (frame) {
-                        frame->gprs[reg] = fsa;
-                    }
-                    break;
+            case EX_TYPE_UA_LOAD_REG: {
+                const u8 reg = _internal::extract_reg(e.data);
+                auto* lc = arch::s390x::cpu::lowcore::get_current();
+                const u64 fsa = lc->failing_storage_address;
+                if (frame) {
+                    frame->gprs[reg] = fsa;
                 }
+                break;
+            }
 
-                case EX_TYPE_UA_LOAD_RP: {
-                    const u8 reg = _internal::extract_reg(e.data);
-                    if (frame) {
-                        frame->gprs[reg]     = 0ULL;
-                        frame->gprs[reg + 1] = 0ULL;
-                    }
-                    break;
+            case EX_TYPE_UA_LOAD_RP: {
+                const u8 reg = _internal::extract_reg(e.data);
+                if (frame) {
+                    frame->gprs[reg]     = 0ULL;
+                    frame->gprs[reg + 1] = 0ULL;
                 }
+                break;
+            }
 
-                case EX_TYPE_UA_STORE: {
-                    const u8 reg = _internal::extract_reg(e.data);
-                    if (frame) {
-                        frame->gprs[reg] = 0ULL;
-                    }
-                    break;
+            case EX_TYPE_UA_STORE: {
+                const u8 reg = _internal::extract_reg(e.data);
+                if (frame) {
+                    frame->gprs[reg] = 0ULL;
                 }
+                break;
+            }
 
-                case EX_TYPE_UA_MVCOS_TO:
-                case EX_TYPE_UA_MVCOS_FROM: {
-                    const u8 reg = _internal::extract_reg(e.data);
-                    if (frame) {
-                        frame->gprs[reg] = 0ULL;
-                    }
-                    break;
+            case EX_TYPE_UA_MVCOS_TO:
+            case EX_TYPE_UA_MVCOS_FROM: {
+                const u8 reg = _internal::extract_reg(e.data);
+                if (frame) {
+                    frame->gprs[reg] = 0ULL;
                 }
+                break;
+            }
 
-                default:
-                    break;
-                }
-                return true;
+            default:
+                break;
+            }
+            return true;
         }
         return false;
     }

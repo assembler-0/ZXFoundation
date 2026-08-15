@@ -8,7 +8,7 @@ import zxfoundation.sched.sched_entity_types;
 import zxfoundation.sched.sched_cbs;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
 import std;
 import lib.rbtree;
 import lib.list;
@@ -91,7 +91,7 @@ namespace zxfoundation::domain {
 
     /// @brief Strand — the DGP kernel's unit of schedulable execution.
     struct strand {
-        scoms::kobject                  ko{};
+        scoms::kobject::bobject                  ko{};
 
         void*                           owner{nullptr};
 

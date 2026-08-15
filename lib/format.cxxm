@@ -59,11 +59,23 @@ namespace lib::format {
         }
     };
 
-    /// @brief Formatter for fixed-size character arrays (string literals).
+    /// @brief Formatter for fixed-size character arrays (string literals)
     template <usize N>
     struct formatter<char[N]> {
         auto format(format_context& ctx, const char (&val)[N]) const noexcept -> void {
-            ctx.write(std::string_view(val));
+            for (usize i = 0; i < N && val[i] != '\0'; ++i) {
+                ctx.write(val[i]);
+            }
+        }
+    };
+
+    /// @brief Formatter for fixed-size byte (uchar) arrays.
+    template <usize N>
+    struct formatter<uchar [N]> {
+        auto format(format_context& ctx, const uchar (&val)[N]) const noexcept -> void {
+            for (usize i = 0; i < N && val[i] != 0; ++i) {
+                ctx.write(static_cast<char>(val[i]));
+            }
         }
     };
 

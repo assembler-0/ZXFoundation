@@ -10,10 +10,10 @@ import zxfoundation.domain.domain;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.base.typestate;
-import zxfoundation.scoms.scoms_ref;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
-import zxfoundation.sys.printk;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
+import zxfoundation.sys.printk.core;
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;
 import arch.s390x.cpu.lowcore;
@@ -170,7 +170,7 @@ namespace __dom_detail {
             return NC_DOM_ERROR;
         }
 
-        discard_value zxfoundation::scoms::mark_dying(d);
+        discard_value zxfoundation::scoms::kobject::mark_dying(d);
         d->flags = d->flags | domain_flags::need_resched;
 
         return 0;

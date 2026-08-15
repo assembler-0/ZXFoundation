@@ -10,8 +10,8 @@ import zxfoundation.base.types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
 import arch.s390x.cpu.irq;
 import std;
 import :common;
@@ -27,16 +27,16 @@ namespace pmm = zxfoundation::memory::pmm;
 namespace arch::s390x::cpu::aste {
 
     /// @brief Physical address of the ASTE table (MAX_ASTE_ENTRIES × 64 bytes).
-    __internal__ u64 g_aste_table_phys{0};
+    no_export u64 g_aste_table_phys{0};
 
     /// @brief Lock protecting all ASTE/ALE table mutations.
-    __internal__ zxfoundation::locking::qspinlock::qspinlock g_aste_lock{};
+    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock g_aste_lock{};
 
     /// @brief Per-slot occupancy for the ASTE table (true = occupied).
-    __internal__ std::array<bool, MAX_ASTE_ENTRIES> g_aste_used{};
+    no_export std::array<bool, MAX_ASTE_ENTRIES> g_aste_used{};
 
     /// @brief Whether the subsystem has been initialized.
-    __internal__ bool g_initialized{false};
+    no_export bool g_initialized{false};
 
     /// @brief Return a typed pointer into the ASTE table by index.
     [[nodiscard]] auto aste_at(u32 idx) noexcept -> aste* {
@@ -357,7 +357,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
 
-        const zxfoundation::locking::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
 
         const u32 idx = find_free_aste();
         if (idx >= MAX_ASTE_ENTRIES)
@@ -392,7 +392,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
 
-        const zxfoundation::locking::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
 
         if (!g_aste_used[aste_index])
             return ::std::unexpected(
@@ -421,7 +421,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
 
-        const zxfoundation::locking::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
 
         if (!g_aste_used[aste_index])
             return ::std::unexpected(
@@ -467,7 +467,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
 
-        const zxfoundation::locking::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
 
         auto* entry = ale_at(context, ale_idx);
         if (entry->is_invalid() || entry->sequence() != alet_alesn(alet))

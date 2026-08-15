@@ -1,0 +1,2 @@
+export module drivers.watchdog;
+export import drivers.watchdog.core;

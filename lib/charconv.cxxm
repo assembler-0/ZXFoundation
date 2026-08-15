@@ -95,8 +95,20 @@ namespace lib::charconv {
             c = ebcdic_to_ascii(c);
     }
 
+    template <usize N>
+    auto ebcdic_to_ascii(uchar (&buff)[N]) -> void {
+        for (uchar& c : buff)
+            c = ebcdic_to_ascii(c);
+    }
+
     auto ascii_to_ebcdic(const std::span<char>& buff) -> void {
         for (char& c : buff)
+            c = ascii_to_ebcdic(c);
+    }
+
+    template <usize N>
+    auto ascii_to_ebcdic(uchar (&buff)[N]) -> void {
+        for (uchar& c : buff)
             c = ascii_to_ebcdic(c);
     }
 

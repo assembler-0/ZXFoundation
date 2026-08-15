@@ -5,8 +5,8 @@
 export module zxfoundation.sched.sched_nohz;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import zxfoundation.sys.timer_types;
-import zxfoundation.sys.timer;
+import zxfoundation.sys.timer.types;
+import zxfoundation.sys.timer.core;
 import lib.error;
 import std;
 import arch.s390x.cpu.lowcore;

@@ -1,26 +1,3 @@
 !files : !compile_group -> [auto] {
-    printk_types.cxxm
-    printk.cxxm
-    time.cxxm
-    transaction.cxxm
-    syschk_types.cxxm
-    syschk.cxxm
-    syschk_core.cxxm
-    zxallsyms_types.cxxm
-    zxallsyms.cxxm
-    zxallsyms_stub.cxx
-    stacktrace.cxxm
-    timer_types.cxxm
-    timer.cxxm
-    watchdog_disarm.cxxm
-    watchdog.cxxm
-    cap_types.cxxm
-    cap.cxxm
-    service.cxxm
-    ipc_types.cxxm
-    ipc.cxxm
-    io_types.cxxm
-    io.cxxm
-    zinit.cxxm
-    zinit_types.cxxm
+    interface.cxxm
 }

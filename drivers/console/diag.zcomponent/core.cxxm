@@ -1,0 +1,36 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file diag.cxxm
+/// @brief idiomatic C++23 DIAG 8 hypervisor console driver.
+
+export module drivers.console.diag.core;
+import zxfoundation.sys.printk.types;
+import std;
+
+export {
+
+namespace drivers::console::diag {
+
+    /// @brief Flush ASCII content to the DIAG 8 console.
+    /// @param[in] s The ASCII string view to transmit.
+    auto write(std::string_view s) noexcept -> void;
+
+    /// @brief Initializer for the DIAG console backend.
+    auto init() noexcept -> void {}
+
+    /// @brief Global printk backend for the DIAG 8 console.
+    constexpr zxfoundation::sys::printk::printk_backend
+    diag_hv_con_printk_backend {
+        .name   = "diag_hv_con",
+        .emit   = write,
+        .init   = init,
+        .active = false
+    };
+
+    /// @brief Retrieve the DIAG 8 console backend reference.
+    consteval auto get_backend() noexcept -> const zxfoundation::sys::printk::printk_backend& {
+        return diag_hv_con_printk_backend;
+    }
+
+} // namespace drivers::console::diag
+
+} // end export

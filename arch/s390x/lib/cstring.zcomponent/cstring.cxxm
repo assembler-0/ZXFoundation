@@ -1,0 +1,24 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/lib/cstring.cxx
+/// @brief z/Architecture string/memory operations.
+
+export module arch.s390x.lib.cstring;
+import zxfoundation.base.types;
+
+export no_mangle {
+
+    auto __zx_clcle(const char *s1, usize l1,
+                    const char *s2, usize l2) -> condition_code;
+    auto __zx_memcpy(void *dest, const void *src, usize n) -> void *;
+    auto __zx_memset(void *s, int c, usize n) -> void *;
+    auto __zx_memmove(void *dest, const void *src, usize n) -> void *;
+    auto __zx_memcmp(const void *s1, const void *s2, usize n) -> int;
+    auto __zx_strcmp(const char *s1, const char *s2) -> int;
+    auto __zx_strend(const char *s) -> char *;
+    auto __zx_strnend(const char *s, usize n) -> char *;
+    auto __zx_strcat(char *dest, const char *src) -> char *;
+    auto __zx_strlen(const char* s) -> usize;
+    auto __zx_strnlen(const char* str, usize max) -> usize;
+    auto __zx_strstr(const char* s1, const char* s2) -> char*;
+
+} // no_mangle

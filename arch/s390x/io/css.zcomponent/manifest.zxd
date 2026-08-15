@@ -1,0 +1,6 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    core.cxxm
+    subchannel.cxxm
+    subchannel.cxx
+}

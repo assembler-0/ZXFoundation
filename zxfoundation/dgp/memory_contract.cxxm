@@ -5,8 +5,8 @@
 export module zxfoundation.dgp.memory_contract;
 import zxfoundation.base.types;
 import zxfoundation.dgp.isolation_types;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.mmu.mmu_const;
+import arch.s390x.mmu.types;
+import arch.s390x.mmu.consts;
 import lib.error;
 import std;
 

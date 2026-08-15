@@ -1,0 +1,2 @@
+export module zxfoundation.sys.time;
+export import zxfoundation.sys.time.core;

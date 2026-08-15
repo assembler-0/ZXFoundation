@@ -1,0 +1,9 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    types.cxxm
+    state.cxxm
+    core.cxxm
+    core.cxx
+    format.cxxm
+    format.cxx
+}

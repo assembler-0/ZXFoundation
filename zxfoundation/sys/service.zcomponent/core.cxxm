@@ -1,0 +1,78 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/service.cxxm
+/// @brief Service registry — lightweight name-to-capability directory for
+///        the DGP kernel's service discovery model.
+
+export module zxfoundation.sys.service.core;
+import zxfoundation.base.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.memory.memory_objects;
+import zxfoundation.sys.cap.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sys::service {
+
+    /// @brief Maximum number of services that can be registered simultaneously.
+    constexpr u32 MAX_SERVICES = 64;
+
+    /// @brief Maximum length of a service name, including NUL terminator.
+    constexpr u32 SERVICE_NAME_MAX_LEN = 64;
+
+    /// @brief A single entry in the service registry.
+    struct service_entry {
+        scoms::kobject::bobject  ko{};
+        char            name[SERVICE_NAME_MAX_LEN]{};
+        cap::cap_token  token{};
+        memory::objects::memory_object_ref authority{};
+
+        service_entry() noexcept = default;
+    };
+    assert_offset(service_entry, ko, 0);
+
+    /// @brief Initialize the service registry.
+    auto init() noexcept -> void;
+
+    /// @brief Remove service entries owned by a domain entering teardown.
+    auto destroy_for_domain(u32 domain_id) noexcept -> void;
+
+    auto register_service_cap_lookup() noexcept -> void;
+
+    /// @brief Register a service.
+    /// @param[in]  name       Service name (max 63 chars).
+    /// @param[in]  token      Capability token for the service.
+    /// @param[in]  owner_id   Domain ID of the registering domain.
+    /// @return  service_id on success, kernel_error on failure.
+    [[nodiscard]] auto register_service(
+        std::string_view name,
+        cap::cap_token   token,
+        u32              owner_id
+    ) noexcept -> std::expected<u32, lib::kernel_error>;
+
+    /// @brief Look up a service by name.
+    /// @param[in]  name  NUL-terminated service name.
+    /// @return  Capability token on success, kernel_error if not found.
+    /// @note  The returned token is a new capability acquired from the
+    ///        registry entry.
+    [[nodiscard]] auto lookup_service(
+        std::string_view name,
+        u32              caller_id
+    ) noexcept -> std::expected<cap::cap_token, lib::kernel_error>;
+
+    /// @brief Unregister a service.
+    /// @param[in]  service_id  The service ID returned by register_service.
+    /// @param[in]  caller_id   Domain ID of the caller (must match owner).
+    /// @return  Success, or kernel_error if not found / wrong owner.
+    [[nodiscard]] auto unregister_service(
+        u32 service_id,
+        u32 caller_id
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Return the number of currently registered services.
+    [[nodiscard]] auto service_count() noexcept -> u32;
+
+} // namespace zxfoundation::sys::service
+
+} // end export

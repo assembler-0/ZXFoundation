@@ -5,14 +5,15 @@
 export module zxfoundation.memory.memory_objects;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.scoms.scoms_ref;
-import zxfoundation.scoms.scoms_table;
-import zxfoundation.scoms.scoms_object_core;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.scoms.table;
+import zxfoundation.scoms.metadata.core;
 import zxfoundation.dgp.memory_contract;
 import zxfoundation.dgp.isolation_types;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
 import lib.error;
 import std;
 
@@ -23,57 +24,32 @@ namespace zxfoundation::memory::objects {
     inline constexpr u32 MAX_MEMORY_OBJECTS = 8192U;
 
     /// @brief Discriminator for the typed views layered on top of a
-    ///        memory_object.  By SCOMS convention this is redundant with
-    ///        @c scoms::kobject_type but it reflects the *memory*
-    ///        classification specifically.  Any SCOMS kobject can be a
-    ///        memory authority; this enum narrows the closed C++ union
-    ///        of bodies interpretable as @c memory_object views today.
+    ///        memory_object.
     enum class memory_view_kind : u8 {
-        /// @brief No typed view layered over this object — the body union
-        ///        is unused.  Used by anonymous grants, mappings,
-        ///        address-spaces and other pure-authority objects.
         none              = 0,
-        /// @brief A VM mapping authority backed by demand paged memory.
-        ///        Interpreted via @c vm_region_view (placed in @c body).
         vm_region         = 1,
-        /// @brief A SLUB slab-cache descriptor.
-        ///        Interpreted via @c kmem_cache_view.
         kmem_cache        = 2,
-        /// @brief A registered policy plane provider.
-        ///        Interpreted via @c policy_server_view.
         policy_server     = 3,
-        /// @brief A registry entry for a named kernel service.
-        ///        Interpreted via @c service_entry_view.
         service_entry     = 4,
-        /// @brief Reserved: an MMIO / CCW device binding.  Will hold a
-        ///        pointer to the device-binding descriptor when the
-        ///        driver framework lands (see docs/MEMORY_REFACTOR_TODO).
         device_binding    = 5,
-        /// @brief Reserved: a VFS dataset extent (file/sequential/DASD).
-        ///        Populated when VFS becomes SCOMS-backed.
         dataset_extent    = 6,
     };
 
     struct memory_object;
 
     /// @brief Generation-checked identity used across memory-object APIs.
-    /// @note @c type is preserved as @c scoms::kobject_type for compatibility
-    ///       with SCOMS path interop — but @c view_kind (in the object body)
-    ///       carries the *memory* classification.
     struct memory_object_ref {
-        scoms::kobject_type type{scoms::kobject_type::none};
-        u32 id{scoms::KOBJECT_ID_INVALID};
+        scoms::kobject::kobject_type type{scoms::kobject::kobject_type::none};
+        u32 id{scoms::kobject::KOBJECT_ID_INVALID};
         u32 generation{0};
 
         [[nodiscard]] explicit operator bool() const noexcept {
-            return type != scoms::kobject_type::none &&
-                   id != scoms::KOBJECT_ID_INVALID && generation != 0U;
+            return type != scoms::kobject::kobject_type::none &&
+                   id != scoms::kobject::KOBJECT_ID_INVALID && generation != 0U;
         }
     };
 
     /// @brief Immutable policy stamped into a memory authority at creation.
-    /// VM/DGP callers create authorities from this complete record instead of
-    /// publishing default metadata and trying to repair it afterwards.
     struct memory_object_policy {
         u8 storage_key{0};
         u32 storage_key_generation{0};
@@ -87,15 +63,6 @@ namespace zxfoundation::memory::objects {
     };
 
     /// @brief Tagged body for the typed views over a memory_object.
-    ///
-    /// Each non-@c none variant is a pointer into a separately-allocated
-    /// descriptor object owned by its own subsystem — but the SCOMS
-    /// identity, lifecycle, refcount, owner, rights and DGP generation
-    /// remain in the unified @c memory_object below.  This is the
-    /// *unification* primitive: every representation of a memory
-    /// authority in the kernel MUST layer under one of these variants
-    /// (or be @c none for an authority-only object), with no parallel
-    /// SCOMS table.
     union view_body {
         void* generic{nullptr};       ///< @c none — unused, or opaque pointer.
         void* vm_region;              ///< @c vm_region — @c vm::vm_region*.
@@ -106,24 +73,18 @@ namespace zxfoundation::memory::objects {
         void* dataset_extent;         ///< @c dataset_extent — reserved.
     };
 
-    /// @brief THE single authority representation for any memory-bearing
-    ///        resource in the kernel.  Reachable by SCOMS identity id
-    ///        or by physical @ref frame_desc::object_id back-pointer.
-    ///
-    /// @note Range fields (radius) are descriptive metadata.  The only
-    ///       per-frame link is the reverse pointer in @c frame_desc.
-    ///       Physical and VA realities belong to @c frame_desc and
-    ///       @c vm_region respectively — NOT to this object.
+    /// @brief single authority representation for any memory-bearing
+    ///        resource in the kernel.
     struct memory_object {
-        scoms::kobject ko{};
+        scoms::kobject::bobject ko{};
         memory_view_kind view_kind{memory_view_kind::none};
         u8 _pad0[3]{};
         u64 range_start{0};
         u64 range_length{0};
-        u32 owner_domain{scoms::KOBJECT_ID_INVALID};
-        scoms::kobject_type related_type{scoms::kobject_type::none};
+        u32 owner_domain{scoms::kobject::KOBJECT_ID_INVALID};
+        scoms::kobject::kobject_type related_type{scoms::kobject::kobject_type::none};
         u8 _pad_related[3]{};
-        u32 related_id{scoms::KOBJECT_ID_INVALID};
+        u32 related_id{scoms::kobject::KOBJECT_ID_INVALID};
         u32 related_generation{0};
         dgp::isolation_rights authority_rights{dgp::isolation_rights::none};
         u8  storage_key{0};
@@ -157,16 +118,14 @@ namespace zxfoundation::memory::objects {
     ) noexcept -> std::expected<memory_object*, lib::kernel_error>;
 
     /// @brief Resolve by raw SCOMS object id (used by frame back-pointer).
-    /// @return Pointer, or nullptr when the slot does not hold an active
-    ///         memory authority object of the requested view.
     [[nodiscard]] auto memory_object_resolve_id(
         u32 id, memory_view_kind expected_kind = memory_view_kind::none
     ) noexcept -> memory_object*;
 
     [[nodiscard]] auto memory_object_create(
-        scoms::kobject_type type,
+        scoms::kobject::kobject_type type,
         u32 owner_domain,
-        scoms::kobject* parent = nullptr,
+        scoms::kobject::bobject* parent = nullptr,
         u64 range_start = 0,
         u64 range_length = 0,
         dgp::isolation_rights authority_rights = dgp::isolation_rights::none,
@@ -179,18 +138,13 @@ namespace zxfoundation::memory::objects {
     /// @param[in] body  Subsystem-owned descriptor pointer to attach.
     /// @return Success or invalid-argument when @p kind is @c none or
     ///         @p ref does not resolve to an active object.
-    /// @note The owning subsystem retains lifecycle and storage responsibility
-    ///       for @p body.  This call only stamps the discriminator so callers
-    ///       such as @c handle_page_fault can @c memory_object_resolve_id
-    ///       and reach the right view.
     [[nodiscard]] auto memory_object_attach_view(
         memory_object_ref ref,
         memory_view_kind kind, void* body
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Detach the typed view descriptor from an object, leaving
-    ///        it as a pure authority.  The owning subsystem is still
-    ///        responsible for freeing @c body's pointed-to storage.
+    ///        it as a pure authority.
     [[nodiscard]] auto memory_object_detach_view(
         memory_object_ref ref
     ) noexcept -> std::expected<void, lib::kernel_error>;
@@ -201,17 +155,11 @@ namespace zxfoundation::memory::objects {
     ) noexcept -> std::expected<memory_object_ref, lib::kernel_error>;
 
     /// @brief Recover the policy published by one authority object.
-    /// Storage policy describes backing allocation. Mapping policy describes
-    /// one address-space view and may diverge after a partial mprotect.
     [[nodiscard]] auto memory_object_policy_for(
         memory_object_ref ref
     ) noexcept -> std::expected<memory_object_policy, lib::kernel_error>;
 
     /// @brief Replace the complete policy record on mutable memory authority.
-    /// @note Storage and mapping objects carry mutable policy. Grants are
-    /// immutable authority ceilings. Policy changes are whole-record
-    /// publications; callers must not mutate individual metadata fields after
-    /// object activation.
     [[nodiscard]] auto memory_object_update_policy(
         memory_object_ref storage, const memory_object_policy& policy
     ) noexcept -> std::expected<void, lib::kernel_error>;
@@ -254,7 +202,7 @@ namespace zxfoundation::memory::objects {
 
 namespace zxfoundation::memory::objects::_internal {
 
-static scoms::kobject_table<memory_object, MAX_MEMORY_OBJECTS> g_table{};
+static scoms::scoms_table<memory_object, MAX_MEMORY_OBJECTS> g_table{};
 static bool g_initialized{false};
 
 [[nodiscard]] auto policy_from(const memory_object& object) noexcept
@@ -287,24 +235,24 @@ auto assign_policy(memory_object& object, const memory_object_policy& policy)
     object.mapping_generation = policy.mapping_generation;
 }
 
-[[nodiscard]] auto valid_memory_type(scoms::kobject_type type) noexcept -> bool {
+[[nodiscard]] auto valid_memory_type(scoms::kobject::kobject_type type) noexcept -> bool {
     switch (type) {
-        case scoms::kobject_type::memory_resource:
-        case scoms::kobject_type::memory_extent:
-        case scoms::kobject_type::memory_folio:
-        case scoms::kobject_type::page:
-        case scoms::kobject_type::storage:
-        case scoms::kobject_type::grant:
-        case scoms::kobject_type::mapping:
-        case scoms::kobject_type::address_space:
-        case scoms::kobject_type::page_table:
-        case scoms::kobject_type::key:
-        case scoms::kobject_type::vm_region:
-        case scoms::kobject_type::kmem_cache:
-        case scoms::kobject_type::policy_server:
-        case scoms::kobject_type::service_entry:
-        case scoms::kobject_type::device_binding:
-        case scoms::kobject_type::dataset_extent:
+        case scoms::kobject::kobject_type::memory_resource:
+        case scoms::kobject::kobject_type::memory_extent:
+        case scoms::kobject::kobject_type::memory_folio:
+        case scoms::kobject::kobject_type::page:
+        case scoms::kobject::kobject_type::storage:
+        case scoms::kobject::kobject_type::grant:
+        case scoms::kobject::kobject_type::mapping:
+        case scoms::kobject::kobject_type::address_space:
+        case scoms::kobject::kobject_type::page_table:
+        case scoms::kobject::kobject_type::key:
+        case scoms::kobject::kobject_type::vm_region:
+        case scoms::kobject::kobject_type::kmem_cache:
+        case scoms::kobject::kobject_type::policy_server:
+        case scoms::kobject::kobject_type::service_entry:
+        case scoms::kobject::kobject_type::device_binding:
+        case scoms::kobject::kobject_type::dataset_extent:
             return true;
         default:
             return false;
@@ -319,7 +267,7 @@ namespace zxfoundation::memory::objects {
 
     auto memory_objects_init() noexcept -> void {
         if (_internal::g_initialized) return;
-        _internal::g_table.init(scoms::kobject_type::none);
+        _internal::g_table.init(scoms::kobject::kobject_type::none);
         _internal::g_initialized = true;
     }
 
@@ -358,9 +306,9 @@ namespace zxfoundation::memory::objects {
     }
 
     [[nodiscard]] auto memory_object_create(
-        scoms::kobject_type type,
+        scoms::kobject::kobject_type type,
         u32 owner_domain,
-        scoms::kobject* parent,
+        scoms::kobject::bobject* parent,
         u64 range_start,
         u64 range_length,
         dgp::isolation_rights authority_rights,
@@ -370,7 +318,7 @@ namespace zxfoundation::memory::objects {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        if (type == scoms::kobject_type::memory_extent &&
+        if (type == scoms::kobject::kobject_type::memory_extent &&
             (range_start == 0U || range_length == 0U ||
              (range_start & (PAGE_SIZE - 1U)) != 0U ||
              (range_length & (PAGE_SIZE - 1U)) != 0U ||
@@ -382,7 +330,7 @@ namespace zxfoundation::memory::objects {
         auto result = _internal::g_table.alloc(type);
         if (!result) return std::unexpected(result.error());
         auto embryo_ref = static_cast<
-            scoms::kobject_ref<memory_object, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<memory_object, base::lifecycle_state::embryo>&&
         >(result.value());
         auto& object = *embryo_ref;
         object.view_kind = memory_view_kind::none;
@@ -390,8 +338,8 @@ namespace zxfoundation::memory::objects {
         object.owner_domain = owner_domain;
         object.range_start = range_start;
         object.range_length = range_length;
-        object.related_type = scoms::kobject_type::none;
-        object.related_id = scoms::KOBJECT_ID_INVALID;
+        object.related_type = scoms::kobject::kobject_type::none;
+        object.related_id = scoms::kobject::KOBJECT_ID_INVALID;
         object.related_generation = 0U;
         object.authority_rights = authority_rights;
         _internal::assign_policy(object, policy);
@@ -414,7 +362,7 @@ namespace zxfoundation::memory::objects {
         }
 
         auto active_ref = static_cast<
-            scoms::kobject_ref<memory_object, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<memory_object, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
         if (!active_ref) {
             discard_value scoms::object_core::detach(object.ko);
@@ -434,7 +382,7 @@ namespace zxfoundation::memory::objects {
         auto r = memory_object_resolve(ref);
         if (!r) return std::unexpected(r.error());
         auto& obj = **r;
-        const locking::irq_lock_guard guard{obj.ko.lock};
+        const sync::irq_lock_guard guard{obj.ko.lock};
         if (obj.view_kind != memory_view_kind::none) return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         obj.view_kind = kind;
@@ -456,7 +404,7 @@ namespace zxfoundation::memory::objects {
         auto r = memory_object_resolve(ref);
         if (!r) return std::unexpected(r.error());
         auto& obj = **r;
-        const locking::irq_lock_guard guard{obj.ko.lock};
+        const sync::irq_lock_guard guard{obj.ko.lock};
         obj.view_kind = memory_view_kind::none;
         obj.body = {};
         return {};
@@ -470,7 +418,7 @@ namespace zxfoundation::memory::objects {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        const locking::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard guard{object.ko.lock};
         object.related_type = related.ko.type;
         object.related_id = related.ko.id;
         object.related_generation = related.ko.generation;
@@ -483,8 +431,8 @@ namespace zxfoundation::memory::objects {
         if (!object) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
         bool extent_was_retiring = false;
-        if (object->ko.type == scoms::kobject_type::memory_extent) {
-            const locking::irq_lock_guard guard{object->ko.lock};
+        if (object->ko.type == scoms::kobject::kobject_type::memory_extent) {
+            const sync::irq_lock_guard guard{object->ko.lock};
             if (object->active_mappings.load(std::memory_order::acquire) != 0U) {
                 return std::unexpected(lib::kernel_error::from_driver(
                     lib::driver_error::busy));
@@ -493,7 +441,7 @@ namespace zxfoundation::memory::objects {
                 true, std::memory_order::acq_rel);
         }
         if (scoms::object_core::has_dependents(object->ko)) {
-            if (object->ko.type == scoms::kobject_type::memory_extent &&
+            if (object->ko.type == scoms::kobject::kobject_type::memory_extent &&
                 !extent_was_retiring) {
                 object->extent_retiring.store(false, std::memory_order::release);
             }
@@ -501,7 +449,7 @@ namespace zxfoundation::memory::objects {
                 lib::driver_error::busy));
         }
         auto result = _internal::g_table.release(id);
-        if (!result && object->ko.type == scoms::kobject_type::memory_extent &&
+        if (!result && object->ko.type == scoms::kobject::kobject_type::memory_extent &&
             !extent_was_retiring) {
             object->extent_retiring.store(false, std::memory_order::release);
         }
@@ -515,7 +463,7 @@ namespace zxfoundation::memory::objects {
         auto source_result = memory_object_resolve(source);
         if (!source_result) return std::unexpected(source_result.error());
         auto& original = **source_result;
-        if (original.ko.type != scoms::kobject_type::grant ||
+        if (original.ko.type != scoms::kobject::kobject_type::grant ||
             caller_domain != original.owner_domain ||
             owner_domain == caller_domain ||
             authority_rights == dgp::isolation_rights::none ||
@@ -528,7 +476,7 @@ namespace zxfoundation::memory::objects {
         auto policy = memory_object_policy_for(source);
         if (!policy) return std::unexpected(policy.error());
         auto delegated = memory_object_create(
-            scoms::kobject_type::grant, owner_domain, &original.ko,
+            scoms::kobject::kobject_type::grant, owner_domain, &original.ko,
             original.range_start, original.range_length, authority_rights, *policy);
         if (!delegated) return std::unexpected(delegated.error());
         return memory_object_ref_of(**delegated);
@@ -540,7 +488,7 @@ namespace zxfoundation::memory::objects {
         auto object_result = memory_object_resolve(ref);
         if (!object_result) return std::unexpected(object_result.error());
         auto& object = **object_result;
-        const locking::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard guard{object.ko.lock};
         return _internal::policy_from(object);
     }
 
@@ -550,12 +498,12 @@ namespace zxfoundation::memory::objects {
         auto object_result = memory_object_resolve(storage);
         if (!object_result) return std::unexpected(object_result.error());
         auto& object = **object_result;
-        if (object.ko.type != scoms::kobject_type::storage &&
-            object.ko.type != scoms::kobject_type::mapping) {
+        if (object.ko.type != scoms::kobject::kobject_type::storage &&
+            object.ko.type != scoms::kobject::kobject_type::mapping) {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        const locking::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard guard{object.ko.lock};
         _internal::assign_policy(object, policy);
         return {};
     }
@@ -585,11 +533,11 @@ namespace zxfoundation::memory::objects {
         auto object_result = memory_object_resolve(extent);
         if (!object_result) return std::unexpected(object_result.error());
         auto& object = **object_result;
-        if (object.ko.type != scoms::kobject_type::memory_extent) {
+        if (object.ko.type != scoms::kobject::kobject_type::memory_extent) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
-        const locking::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard guard{object.ko.lock};
         if (object.ko.state != base::lifecycle_state::active ||
             object.extent_retiring.load(std::memory_order::acquire)) {
             return std::unexpected(lib::kernel_error::from_generic(
@@ -605,7 +553,7 @@ namespace zxfoundation::memory::objects {
         auto object_result = memory_object_resolve(extent);
         if (!object_result) return std::unexpected(object_result.error());
         auto& object = **object_result;
-        if (object.ko.type != scoms::kobject_type::memory_extent) {
+        if (object.ko.type != scoms::kobject::kobject_type::memory_extent) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
@@ -625,7 +573,7 @@ namespace zxfoundation::memory::objects {
         auto object_result = memory_object_resolve(extent);
         if (!object_result) return std::unexpected(object_result.error());
         auto& object = **object_result;
-        if (object.ko.type != scoms::kobject_type::memory_extent) {
+        if (object.ko.type != scoms::kobject::kobject_type::memory_extent) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
@@ -638,11 +586,11 @@ namespace zxfoundation::memory::objects {
         auto object_result = memory_object_resolve(extent);
         if (!object_result) return std::unexpected(object_result.error());
         auto& object = **object_result;
-        if (object.ko.type != scoms::kobject_type::memory_extent) {
+        if (object.ko.type != scoms::kobject::kobject_type::memory_extent) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
-        const locking::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard guard{object.ko.lock};
         if (object.active_mappings.load(std::memory_order::acquire) != 0U ||
             object.extent_retiring.exchange(true, std::memory_order::acq_rel)) {
             return std::unexpected(lib::kernel_error::from_driver(

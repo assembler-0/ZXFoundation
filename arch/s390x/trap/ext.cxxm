@@ -9,17 +9,17 @@ import arch.s390x.cpu.cputimer;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.psw;
-import arch.s390x.css.css;
-import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sys.irq.consts;
+import zxfoundation.sys.irq.core;
 import zxfoundation.sched.sched;
 import zxfoundation.sched.sched_topology;
 import zxfoundation.domain.domain_types;
 import zxfoundation.base.types;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.timer;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.timer_types;
-import zxfoundation.smp.smp;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.timer.types;
+import zxfoundation.smp.csd.core;
 import lib.error;
 import lib.softirq;
 
@@ -79,7 +79,7 @@ namespace arch::s390x::trap::ext {
 
         namespace irq = zxfoundation::sys::irq;
         if (irq::deferred_test_clear(irq::DEFERRED_RESCHED_BIT)) {
-            // zxfoundation::sched::sched_resched_current();
+            zxfoundation::sched::sched_resched_current();
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_MCCK_PENDING_BIT)) {
@@ -94,7 +94,7 @@ namespace arch::s390x::trap::ext {
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_CALL_FUNCTION_BIT)) {
-            zxfoundation::smp::smp_csd_drain_cpu();
+            zxfoundation::smp::csd::drain_cpu();
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {

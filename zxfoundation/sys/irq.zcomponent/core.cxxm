@@ -1,0 +1,68 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/irq.zcomponent/irqdesc.cxxm
+/// @brief Generic IRQ descriptor table
+
+export module zxfoundation.sys.irq.core;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sys::irq {
+
+    using handler_fn = auto (*)(
+        u16                                           irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void*                                         data
+    ) noexcept -> void;
+
+    /// @brief Dispatch an IRQ — called from C interrupt entry stubs (trap.cxxm).
+    /// @param[in] irq   Vector number inside [0,IRQ_NR_MAX]
+    /// @param[in] frame Pointer to the saved interrupt frame (entry.S layout).
+    /// @param[in] cls   Architectural interruption class (PoP §6 "Interruption
+    ///                  Definitions").  Determines IRQ-nesting accounting width.
+    auto irq_dispatch(
+        u16                               irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        arch::s390x::cpu::irq::irq_class  cls
+    ) noexcept -> void;
+
+    /// @brief Register a handler for a vector.
+    /// @param[in] irq     Vector slot within the relevant IRQ_BASE_* span.
+    /// @param[in] handler Cancellable handler.  Must not block indefinitely;
+    ///                    the dispatch path is IRQ-disabled.
+    /// @param[in] data    Opaque handler-private cookie.
+    /// @param[in] flags   Bitmask of @c IRQF_* values.
+    [[nodiscard]] auto irq_register(
+        u16        irq,
+        handler_fn handler,
+        void*      data  = nullptr,
+        u32        flags = 0
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Unregister the handler for a vector and release the SCOMS slot.
+    /// @param[in] irq  Vector slot to clear.
+    auto irq_unregister(u16 irq) noexcept -> void;
+
+    /// @brief Initialize the IRQ subsystem with the SCOMS scoms_table.
+    /// @note Idempotent — safe to invoke from `main` after `printk::init()`.
+    auto init() noexcept -> void;
+
+    /// @brief Set one deferred-work bit on the calling CPU's
+    ///        @c percpu::s390x_percpu_data::deferred_pending field.
+    /// @param[in] bit  One of @c DEFERRED_*_BIT masks above.
+    /// @note Memory order is release so the bit set is visible before any
+    ///       IRQ return path context restore.
+    auto deferred_set(u32 bit) noexcept -> void;
+
+    /// @brief Test-and-clear a deferred-work bit.
+    /// @return @c true if the bit was set (and is now cleared).
+    /// @note Drains the bit atomically so the caller cannot accidentally
+    ///       re-process work after a context switch.
+    [[nodiscard]] auto deferred_test_clear(u32 bit) noexcept -> bool;
+
+} // namespace zxfoundation::sys::irq
+
+} // end export

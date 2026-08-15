@@ -1,0 +1,602 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/nnpa.cxxm
+/// @brief nnpa cpu support module
+
+export module arch.s390x.cpu.nnpa;
+import zxfoundation.base.types;
+import lib.bit;
+import std;
+
+__endian__(BIG);
+__machine__(z16);
+
+export {
+
+namespace arch::s390x::cpu::nnpa {
+
+    enum class status_code : u8 {
+        range_violation = 0b10000000
+    };
+
+    enum class response_code : u16 {
+        format_not_supported           = 0x0001,
+        function_not_installed         = 0x0002,
+        tensor_layout_not_supported    = 0x0010,
+        tensor_type_not_supported      = 0x0020,
+        tensor_index_size_invalid      = 0x0012,
+        tensor_size_invalid            = 0x0013,
+        tensor_address_alignment       = 0x0014,
+        fn_save_area_address_alignment = 0x0015
+    };
+
+    enum class fn_code : u8 {
+        qaf            = 0x00,
+        add            = 0x10,
+        sub            = 0x11,
+        mul            = 0x12,
+        div            = 0x13,
+        min            = 0x14,
+        max            = 0x15,
+        log            = 0x20,
+        exp            = 0x21,
+        sqrt           = 0x22,
+        invsqrt        = 0x23,
+        relu           = 0x31,
+        tanh           = 0x32,
+        sigmoid        = 0x33,
+        softmax        = 0x34,
+        gelu           = 0x35,
+        batchnorm      = 0x40,
+        moments        = 0x41,
+        layernorm      = 0x42,
+        norm           = 0x43,
+        maxpool2d      = 0x50,
+        avgpool2d      = 0x51,
+        lstmact        = 0x60,
+        gruact         = 0x61,
+        convolution    = 0x70,
+        matmul_op         = 0x71,
+        matmul_op_bcast23 = 0x72,
+        matmul_op_bcast1  = 0x73,
+        transform         = 0xf0,
+        reduce            = 0xf1
+    };
+
+    enum class data_layout_format : u8 {
+        feature_tensor_4d     = 0,
+        kernel_tensor_4d      = 1,
+        weights_tensor_4d     = 2,
+        generic_tensor_4d     = 31
+    };
+
+    enum class data_type : u8 {
+        nnp_data_type1        = 0,
+        bfp_short_format      = 6,
+        signed_binary_int     = 8,
+        signed_unsigned_int   = 10
+    };
+
+    struct result {
+        response_code response_code{};
+        status_code   status_code{};
+    };
+
+    template <fn_code Fc> struct fn_pb;
+    template <> struct fn_pb<fn_code::qaf>                { static constexpr usize value = 256; };
+    template <> struct fn_pb<fn_code::add>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::sub>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::mul>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::div>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::min>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::max>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::log>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::exp>                { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::sqrt>               { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::invsqrt>            { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::relu>               { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::tanh>               { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::sigmoid>            { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::softmax>            { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::gelu>               { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::batchnorm>          { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::moments>            { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::layernorm>          { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::norm>               { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::maxpool2d>          { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::avgpool2d>          { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::lstmact>            { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::gruact>             { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::convolution>        { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::matmul_op>          { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::matmul_op_bcast23>  { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::matmul_op_bcast1>   { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::transform>          { static constexpr usize value = 4096; };
+    template <> struct fn_pb<fn_code::reduce>             { static constexpr usize value = 4096; };
+    template <fn_code Fc> inline constexpr usize pb_v = fn_pb<Fc>::value;
+    template <fn_code Fc, typename Pb> concept pb_for = sizeof(Pb) >= pb_v<Fc>;
+
+    struct [[gnu::packed]] qaf_pb {
+        std::array<std::byte, 32> installed_functions_vector{};
+        std::array<std::byte, 16> installed_param_block_formats{};
+        union {
+            u16 installed_dt_vector;
+            struct {
+                bitfield(nnp_data_type1);
+                bitrsvd(5);
+                bitfield(binary_fp_short_fmt);
+                bitrsvd(1);
+                bitfield(sign_unsigned_8bit);
+                bitrsvd(1);
+                bitfield(sign_unsigned_32bit);
+                bitrsvd(5);
+            };
+        };
+        bytersvd(tobytes(hw, 1));
+        union {
+            u32 installed_data_layout_fmt_vector;
+            struct {
+                bitfield(feature_tensor_4d);
+                bitfield(kernel_tensor_4d);
+                bitfield(weights_tensor_4d);
+                bitrsvd(28);
+                bitfield(generic_tensor_4d);
+            };
+        };
+        bytersvd(tobytes(w, 1));
+        u32 maximum_dimension_idx_size{};
+        u64 maximum_tensor_size{};
+        union {
+            u16 installed_nnp_dt1_conv_vector;
+            struct {
+                bitrsvd(1);
+                bitfield(bfp_tiny_fmt);
+                bitfield(bfp_short_fmt);
+                bitrsvd(12);
+            };
+        };
+        bytersvd(tobytes(hw, 1) + tobytes(w, 1));
+        bytersvd(tobytes(dw, 1));
+        std::array<u32, 4> maximum_dimension_idx_sizes{};
+        bytersvd(tobytes(dw, 19));
+
+        [[nodiscard]] auto installed_functions() const noexcept
+            -> std::span<const std::byte, 32> {
+            return { installed_functions_vector };
+        }
+
+        [[nodiscard]] auto installed_param_block_fmts() const noexcept
+            -> std::span<const std::byte, 16> {
+            return { installed_param_block_formats };
+        }
+
+        template <fn_code Fc>
+        [[nodiscard]] auto is_function_installed() const noexcept -> bool {
+            return (std::to_integer<u8>(installed_functions()[static_cast<u8>(Fc)]) & ibmbitmask8(static_cast<u8>(Fc))) != 0;
+        }
+
+        template <data_layout_format Fmt>
+        [[nodiscard]] auto is_param_block_fmt_installed() const noexcept -> bool {
+            return (std::to_integer<u8>(installed_param_block_fmts()[static_cast<u8>(Fmt)]) & ibmbitmask8(static_cast<u8>(Fmt))) != 0;
+        }
+    };
+    assert_size(qaf_pb, fn_pb<fn_code::qaf>::value);
+
+    struct [[gnu::packed]] tensor_descriptor {
+        data_layout_format  layout_format{};
+        data_type           type{};
+        bytersvd(6){};
+        std::array<u32, 4>       dimse{};
+        u64                      tensor_addr{};
+
+        static constexpr usize idx_E4 = 0;
+        static constexpr usize idx_E3 = 1;
+        static constexpr usize idx_E2 = 2;
+        static constexpr usize idx_E1 = 3;
+
+        [[nodiscard]] constexpr auto e4() const noexcept -> u32 { return (dimse[idx_E4]); }
+        [[nodiscard]] constexpr auto e3() const noexcept -> u32 { return (dimse[idx_E3]); }
+        [[nodiscard]] constexpr auto e2() const noexcept -> u32 { return (dimse[idx_E2]); }
+        [[nodiscard]] constexpr auto e1() const noexcept -> u32 { return (dimse[idx_E1]); }
+
+        constexpr auto set_dims(u32 e4, u32 e3,
+                                 u32 e2, u32 e1) noexcept -> void {
+            dimse[idx_E4] = (e4);
+            dimse[idx_E3] = (e3);
+            dimse[idx_E2] = (e2);
+            dimse[idx_E1] = (e1);
+        }
+
+        [[nodiscard]] constexpr auto tensor_address() const noexcept -> u32 {
+            return (tensor_addr);
+        }
+        constexpr auto set_tensor_address(u32 addr) noexcept -> void {
+            tensor_addr = (addr);
+        }
+
+        [[nodiscard]] constexpr auto is_generic() const noexcept -> bool {
+            return layout_format == data_layout_format::generic_tensor_4d;
+        }
+    };
+    assert_size(tensor_descriptor, 32);
+
+    struct [[gnu::packed]] format0_pb {
+        bytersvd(1){};
+        bitrsvd(1){};
+        bitsfield(7, pm_version_number){};
+        u8 model_version_number{};
+        bitrsvd(39){};
+        bitfield(continuation_flag){};
+        bytersvd(tobytes(dw, 6)){};
+        u64 function_specific_save_area_addr{};
+        std::array<tensor_descriptor, 2> output_tensor_descriptors{};
+        bytersvd(tobytes(dw, 8)){};
+        std::array<tensor_descriptor, 3> input_tensor_descriptors{};
+        bytersvd(tobytes(dw, 12)){};
+        std::array<u32, 5> function_specific_parameters{};
+        bytersvd(tobytes(dw, 5) + tobytes(w, 1)){};
+        bytersvd(tobytes(dw, 456)){};
+    };
+    assert_size(format0_pb, 4096);
+
+    struct [[gnu::packed]] format1_pb {
+        bytersvd(1){};
+        bitrsvd(1){};
+        bitsfield(7, pm_version_number){};
+        u8 model_version_number{};
+        bitrsvd(38){};
+        bitfield(lf){};
+        bitfield(continuation_flag){};
+        bytersvd(tobytes(dw, 6)){};
+        u64 function_specific_save_area_addr{};
+        std::array<tensor_descriptor, 2> output_tensor_descriptors{};
+        bytersvd(tobytes(dw, 8)){};
+        std::array<tensor_descriptor, 3> input_tensor_descriptors{};
+        bytersvd(tobytes(dw, 12)){};
+        std::array<u32, 16> function_specific_parameters{};
+        bytersvd(tobytes(dw, 456)){};
+    };
+    assert_size(format1_pb, 4096);
+
+    namespace detail {
+
+        inline constexpr usize stick_bytes = 128;
+
+        [[nodiscard]] constexpr auto element_size(data_type dt) noexcept -> usize {
+            switch (dt) {
+                case data_type::nnp_data_type1:      return 2;
+                case data_type::bfp_short_format:    return 4;
+                case data_type::signed_binary_int:   return 1;
+                case data_type::signed_unsigned_int: return 4;
+            }
+            return 0;
+        }
+
+        [[nodiscard]] constexpr auto elements_per_stick(data_type dt) noexcept -> usize {
+            const usize sz = element_size(dt);
+            return sz == 0 ? 0 : stick_bytes / sz;
+        }
+
+        enum class slot_kind : u8 {
+            data,
+            e1_pad,
+            e2_pad
+        };
+
+        [[nodiscard]] constexpr slot_kind classify(u32 E1, u32 E2,
+                                                    u32 e1x, u32 e2x) noexcept {
+            if (e2x >= E2) return slot_kind::e2_pad;
+            if (e1x >= E1) return slot_kind::e1_pad;
+            return slot_kind::data;
+        }
+
+        [[nodiscard]] constexpr auto ceil_to(usize n, usize group) noexcept -> usize {
+            return group == 0 ? n : ((n + group - 1) / group) * group;
+        }
+
+        struct data_layout_feature_tensor {
+            static constexpr auto layout_format = data_layout_format::feature_tensor_4d;
+
+            [[nodiscard]] static constexpr auto e2_limit(u32 E2) noexcept -> usize {
+                return ceil_to(E2, 32);
+            }
+            [[nodiscard]] static constexpr auto e1_limit(u32 E1, usize eps) noexcept -> usize {
+                return ceil_to(E1, eps);
+            }
+
+            [[nodiscard]] static constexpr usize offset(
+                u32 E3, u32, usize eps,
+                usize e2_lim, usize e1_lim,
+                u32 e4x, u32 e3x, u32 e2x, u32 e1x) noexcept {
+                return  usize{E3} * e2_lim * e1_lim * e4x
+                      + e2_lim * usize{e3x} * eps
+                      + usize{e2x} * eps
+                      + (usize{e1x} / eps) * e2_lim * E3 * eps
+                      + (usize{e1x} % eps);
+            }
+
+            [[nodiscard]] static constexpr auto unit_bytes(usize element_sz) noexcept -> usize {
+                return element_sz;
+            }
+        };
+
+        struct data_layout_kernel_tensor {
+            static constexpr auto layout_format = data_layout_format::kernel_tensor_4d;
+
+            [[nodiscard]] static constexpr auto e2_limit(u32 E2) noexcept -> usize {
+                return ceil_to(E2, 32);
+            }
+            [[nodiscard]] static constexpr auto e1_limit(u32 E1, usize eps) noexcept -> usize {
+                return ceil_to(E1, eps);
+            }
+
+            [[nodiscard]] static constexpr auto offset(
+                u32 E3, u32 E4, usize eps,
+                usize e2_lim, usize,
+                u32 e4x, u32 e3x, u32 e2x, u32 e1x) noexcept -> usize
+            {
+                return  (usize{e1x} / eps) * E4 * E3 * e2_lim * eps
+                      + e2_lim * usize{e3x} * eps
+                      + usize{e2x} * eps
+                      + usize{e4x} * E3 * e2_lim * eps
+                      + (usize{e1x} % eps);
+            }
+
+            [[nodiscard]] static constexpr auto unit_bytes(usize element_sz) noexcept -> usize {
+                return element_sz;
+            }
+        };
+
+        struct data_layout_weights_tensor {
+            static constexpr auto layout_format = data_layout_format::kernel_tensor_4d;
+            static constexpr usize group = 64;
+
+            [[nodiscard]] static constexpr auto e2_limit(u32 E2) noexcept -> usize {
+                return ceil_to(E2, group);
+            }
+            [[nodiscard]] static constexpr auto e1_limit(u32 E1, usize) noexcept -> usize {
+                return ceil_to(E1, group);
+            }
+
+            [[nodiscard]] static constexpr auto offset(
+                u32 E3, u32, usize,
+                usize e2_lim, usize e1_lim,
+                u32 e4x, u32 e3x, u32 e2x, u32 e1x) noexcept -> usize {
+                return  usize{e4x} * E3 * e2_lim * e1_lim
+                      + usize{e3x} * e2_lim * group
+                      + (usize{e2x} / 2) * 128
+                      + (usize{e1x} / group) * e2_lim * E3 * group
+                      + (usize{e1x} * 2 % 128)
+                      + (usize{e2x} % 2);
+            }
+
+            [[nodiscard]] static constexpr auto unit_bytes(usize) noexcept -> usize {
+                return 1;
+            }
+        };
+
+        template <class Policy>
+        constexpr auto transform_to_stickified_bytes(
+            std::span<const std::byte> generic, std::span<std::byte> stick,
+            data_type dt, u32 E4, u32 E3, u32 E2, u32 E1,
+            std::byte pad_fill) noexcept -> void {
+            const usize eps    = elements_per_stick(dt);
+            const usize esz    = element_size(dt);
+            const usize e2_lim = Policy::e2_limit(E2);
+            const usize e1_lim = Policy::e1_limit(E1, eps);
+            const usize unit   = Policy::unit_bytes(esz);
+
+            if (stick.size() >= usize{E4} * E3 * e2_lim * e1_lim * unit) __builtin_trap();
+            if (generic.size() >= usize{E4} * E3 * E2 * E1 * esz) __builtin_trap();
+
+            for (u32 e4x = 0; e4x < E4; ++e4x)
+            for (u32 e3x = 0; e3x < E3; ++e3x)
+            for (u32 e2x = 0; e2x < e2_lim; ++e2x)
+            for (u32 e1x = 0; e1x < e1_lim; ++e1x) {
+                const usize dst_off = Policy::offset(E3, E4, eps, e2_lim, e1_lim, e4x, e3x, e2x, e1x) * unit;
+                if (classify(E1, E2, e1x, e2x) == slot_kind::data) {
+                    const usize src_off = (((usize{e4x} * E3 + e3x) * E2 + e2x) * E1 + e1x) * esz;
+                    for (usize b = 0; b < unit; ++b) stick[dst_off + b] = generic[src_off + b];
+                } else {
+                    for (usize b = 0; b < unit; ++b) stick[dst_off + b] = pad_fill;
+                }
+            }
+        }
+
+        template <class Policy>
+        constexpr auto transform_from_stickified_bytes(
+            std::span<const std::byte> stick, std::span<std::byte> generic,
+            data_type dt, u32 E4, u32 E3, u32 E2, u32 E1) noexcept -> void {
+            const usize eps    = elements_per_stick(dt);
+            const usize esz    = element_size(dt);
+            const usize e2_lim = Policy::e2_limit(E2);
+            const usize e1_lim = Policy::e1_limit(E1, eps);
+            const usize unit   = Policy::unit_bytes(esz);
+
+            if (generic.size() >= usize{E4} * E3 * E2 * E1 * esz) return;
+            if (stick.size() >= usize{E4} * E3 * e2_lim * e1_lim * unit) return;
+
+            for (u32 e4x = 0; e4x < E4; ++e4x)
+            for (u32 e3x = 0; e3x < E3; ++e3x)
+            for (u32 e2x = 0; e2x < E2; ++e2x)
+            for (u32 e1x = 0; e1x < E1; ++e1x) {
+                const usize src_off = Policy::offset(E3, E4, eps, e2_lim, e1_lim, e4x, e3x, e2x, e1x) * unit;
+                const usize dst_off = (((usize{e4x} * E3 + e3x) * E2 + e2x) * E1 + e1x) * esz;
+                for (usize b = 0; b < unit; ++b) generic[dst_off + b] = stick[src_off + b];
+            }
+        }
+
+    }
+
+    template <class Policy>
+    class stickified_tensor_view {
+    public:
+        constexpr stickified_tensor_view() noexcept = default;
+
+        constexpr stickified_tensor_view(std::span<std::byte> storage,
+                                          data_type dt,
+                                          u32 E4, u32 E3,
+                                          u32 E2, u32 E1) noexcept
+            : storage_(storage), dt_(dt), E4_(E4), E3_(E3), E2_(E2), E1_(E1)
+            , eps_(detail::elements_per_stick(dt))
+            , e2_lim_(Policy::e2_limit(E2))
+            , e1_lim_(Policy::e1_limit(E1, eps_))
+        {}
+
+        [[nodiscard]] constexpr u32 e4() const noexcept { return E4_; }
+        [[nodiscard]] constexpr u32 e3() const noexcept { return E3_; }
+        [[nodiscard]] constexpr u32 e2() const noexcept { return E2_; }
+        [[nodiscard]] constexpr u32 e1() const noexcept { return E1_; }
+        [[nodiscard]] constexpr data_type type() const noexcept { return dt_; }
+
+        [[nodiscard]] constexpr auto required_bytes() const noexcept -> usize {
+            const usize units = usize{E4_} * E3_ * e2_lim_ * e1_lim_;
+            return units * Policy::unit_bytes(detail::element_size(dt_));
+        }
+
+        [[nodiscard]] constexpr auto byte_offset(u32 e4, u32 e3, u32 e2, u32 e1) const noexcept -> usize {
+            const usize units = Policy::offset(E3_, E4_, eps_, e2_lim_, e1_lim_, e4, e3, e2, e1);
+            return units * Policy::unit_bytes(detail::element_size(dt_));
+        }
+
+        [[nodiscard]] constexpr auto classify(u32 e2, u32 e1) const noexcept -> detail::slot_kind {
+            return detail::classify(E1_, E2_, e1, e2);
+        }
+
+        [[nodiscard]] constexpr auto element_bytes(u32 e4, u32 e3, u32 e2, u32 e1) noexcept -> std::span<std::byte> {
+            const usize off = byte_offset(e4, e3, e2, e1);
+            const usize n   = (Policy::layout_format == data_layout_format::weights_tensor_4d)
+                                       ? 1 : detail::element_size(dt_);
+            return storage_.subspan(off, n);
+        }
+
+        [[nodiscard]] constexpr std::span<std::byte> storage() const noexcept { return storage_; }
+
+    private:
+        std::span<std::byte> storage_{};
+        data_type dt_{};
+        u32 E4_ = 0, E3_ = 0, E2_ = 0, E1_ = 0;
+        usize eps_ = 0, e2_lim_ = 0, e1_lim_ = 0;
+    };
+
+    using feature_tensor_view = stickified_tensor_view<detail::data_layout_feature_tensor>;
+    using kernel_tensor_view  = stickified_tensor_view<detail::data_layout_kernel_tensor>;
+    using weights_tensor_view = stickified_tensor_view<detail::data_layout_weights_tensor>;
+
+    template <class T>
+    concept TensorElement = std::is_trivially_copyable_v<T> && !std::is_pointer_v<T>;
+
+    template <TensorElement T>
+    class generic_tensor_view {
+    public:
+        constexpr generic_tensor_view() noexcept = default;
+
+        constexpr generic_tensor_view(std::span<T> storage, u32 e4, u32 e3, u32 e2, u32 e1) noexcept
+            : storage_(storage), E4_(e4), E3_(e3), E2_(e2), E1_(e1) {}
+
+        [[nodiscard]] constexpr auto e4() const noexcept -> u32 { return E4_; }
+        [[nodiscard]] constexpr auto e3() const noexcept -> u32 { return E3_; }
+        [[nodiscard]] constexpr auto e2() const noexcept -> u32 { return E2_; }
+        [[nodiscard]] constexpr auto e1() const noexcept -> u32 { return E1_; }
+
+        [[nodiscard]] constexpr auto linear_index(u32 e4, u32 e3, u32 e2, u32 e1) const noexcept -> usize {
+            return ((usize{e4} * E3_ + e3) * E2_ + e2) * E1_ + e1;
+        }
+
+        [[nodiscard]] constexpr auto operator[](u32 e4, u32 e3, u32 e2, u32 e1) noexcept -> T& {
+            return storage_[linear_index(e4, e3, e2, e1)];
+        }
+
+        [[nodiscard]] constexpr auto operator[](u32 e4, u32 e3, u32 e2, u32 e1) const noexcept -> T& {
+            return storage_[linear_index(e4, e3, e2, e1)];
+        }
+
+        [[nodiscard]] constexpr auto storage() const noexcept -> std::span<T> { return storage_; }
+
+    private:
+        std::span<T> storage_{};
+        u32 E4_{0}, E3_{0}, E2_{0}, E1_{0};
+    };
+
+    constexpr auto transform_generic_to_stickified(
+        std::span<const std::byte> generic, std::span<std::byte> stick,
+        data_layout_format dst_format, data_type dt,
+        u32 E4, u32 E3, u32 E2, u32 E1,
+        std::byte pad_fill = std::byte{0})
+    noexcept -> void {
+        switch (dst_format) {
+            case data_layout_format::feature_tensor_4d:
+                detail::transform_to_stickified_bytes<detail::data_layout_feature_tensor>(generic, stick, dt, E4, E3, E2, E1, pad_fill);
+                return;
+            case data_layout_format::kernel_tensor_4d:
+                detail::transform_to_stickified_bytes<detail::data_layout_kernel_tensor>(generic, stick, dt, E4, E3, E2, E1, pad_fill);
+                return;
+            case data_layout_format::weights_tensor_4d:
+                detail::transform_to_stickified_bytes<detail::data_layout_weights_tensor>(generic, stick, dt, E4, E3, E2, E1, pad_fill);
+                return;
+            default:
+                __builtin_trap();
+                return;
+        }
+    }
+
+    constexpr auto transform_stickified_to_generic(
+        std::span<const std::byte> stick, std::span<std::byte> generic,
+        data_layout_format src_format, data_type dt,
+        u32 E4, u32 E3, u32 E2, u32 E1)
+    noexcept -> void {
+        switch (src_format) {
+            case data_layout_format::feature_tensor_4d:
+                detail::transform_from_stickified_bytes<detail::data_layout_feature_tensor>(stick, generic, dt, E4, E3, E2, E1);
+                return;
+            case data_layout_format::kernel_tensor_4d:
+                detail::transform_from_stickified_bytes<detail::data_layout_kernel_tensor>(stick, generic, dt, E4, E3, E2, E1);
+                return;
+            case data_layout_format::weights_tensor_4d:
+                detail::transform_from_stickified_bytes<detail::data_layout_weights_tensor>(stick, generic, dt, E4, E3, E2, E1);
+                return;
+            default:
+                __builtin_trap();
+                return;
+        }
+    }
+
+    template <class Policy, TensorElement T>
+    constexpr auto transform_to_stickified(const generic_tensor_view<T>& src,
+                                            stickified_tensor_view<Policy>& dst,
+                                            std::byte pad_fill = std::byte{0}) noexcept -> void {
+        auto src_bytes = std::as_bytes(src.storage());
+        detail::transform_to_stickified_bytes<Policy>(
+            src_bytes, dst.storage(), dst.type(), src.E4(), src.E3(), src.E2(), src.E1(), pad_fill);
+    }
+
+    template <class Policy, TensorElement T>
+    constexpr auto transform_from_stickified(const stickified_tensor_view<Policy>& src,
+                                              generic_tensor_view<T>& dst) noexcept -> void {
+        auto dst_bytes = std::as_writable_bytes(dst.storage());
+        detail::transform_from_stickified_bytes<Policy>(
+            src.storage(), dst_bytes, src.type(), dst.E4(), dst.E3(), dst.E2(), dst.E1());
+    }
+
+    template <fn_code Fc, typename Pb>
+        requires pb_for<Fc, Pb>
+    [[nodiscard]] auto invoke(Pb& pb) noexcept -> result {
+        u64 function_control{static_cast<u64>(Fc)};
+        __asm__ volatile(
+            "   lgr     0,%[fc]\n"
+            "   lgr     1,%[pb]\n"
+            "0: nnpa           \n"
+            "	brc	    1,0b   \n"
+            "   lgr     %[fc],0\n"
+            : [fc] "+&d" (function_control)
+            : [pb] "d"   (reinterpret_cast<u64>(&pb))
+            : "cc", "memory", "0", "1"
+        );
+        return {
+            static_cast<response_code>(lib::bit_extract_msb<u64>(function_control, 0, 15)),
+            static_cast<status_code>(lib::bit_extract_msb<u64>(function_control, 24, 31))
+        };
+    }
+
+} // namespace arch::s390x::cpu::nnpa
+
+} // end export

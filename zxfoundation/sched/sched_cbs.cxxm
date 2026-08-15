@@ -5,9 +5,9 @@
 
 export module zxfoundation.sched.sched_cbs;
 import zxfoundation.sched.sched_entity_types;
-import zxfoundation.sys.timer_types;
-import zxfoundation.sys.timer;
-import zxfoundation.sys.time;
+import zxfoundation.sys.timer.types;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.time.core;
 import zxfoundation.base.types;
 import lib.error;
 import std;

@@ -29,12 +29,13 @@ macro(_zx_kernel_flags _tgt)
     target_include_directories(${_tgt} SYSTEM PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${LIBSTDCXX_INCLUDE}
+        ${ZXLIBSTDCXX_INCLUDE}
     )
     target_compile_options(${_tgt} PRIVATE
         -include ${ZX_VALIDATE_HEADER}
         ${ZX_CXX_FLAGS}
     )
+    target_link_libraries(${_tgt} PRIVATE zxlibstdc++ zxlibsupc++)
     target_compile_definitions(${_tgt} PUBLIC
         __zxfoundation__
     )
@@ -65,8 +66,8 @@ else()
         PUBLIC
             FILE_SET cxx_std_modules
             TYPE CXX_MODULES
-            BASE_DIRS ${LIBSTDCXX_BASE}
-            FILES ${LIBSTDCXX_MODS}
+            BASE_DIRS ${ZXLIBSTDCXX_BASE}
+            FILES ${ZXLIBSTDCXX_MODULES}
     )
     _zx_kernel_flags(core.zxfoundation.nucleus)
 endif()

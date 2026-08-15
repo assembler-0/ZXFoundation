@@ -10,11 +10,11 @@ import zxfoundation.memory.vm_types;
 import zxfoundation.memory.kmalloc;
 import zxfoundation.memory.page_cache;
 import zxfoundation.memory.hhdm;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_tlb;
+import arch.s390x.mmu.core;
+import arch.s390x.mmu.tlb;
 import arch.s390x.cpu.skey;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
 import zxfoundation.base.types;
 import lib.error;
 import std;
@@ -37,7 +37,7 @@ namespace zxfoundation::memory::rmap {
         inline entry**          g_rmap_chunks[RMAP_MAX_CHUNKS]{};
         inline u64              g_chunk_count{0};
         inline u64              g_max_pfn{0};
-        alignas(64) inline locking::qspinlock::qspinlock
+        alignas(64) inline sync::qspinlock::qspinlock
                               g_rmap_locks[RMAP_LOCK_STRIPE]{};
 
         [[nodiscard]] inline auto pfn_of(u64 phys) noexcept -> u64 {
@@ -145,7 +145,7 @@ namespace zxfoundation::memory::rmap {
         node->next       = nullptr;
 
         const u32 s = stripe_of(pfn);
-        const zxfoundation::locking::irq_lock_guard guard{g_rmap_locks[s]};
+        const zxfoundation::sync::irq_lock_guard guard{g_rmap_locks[s]};
         for (entry* cur = head_for_pfn(pfn); cur; cur = cur->next) {
             if (cur->region == &rgn && cur->slot_index == slot_index) {
                 zxfoundation::memory::kmalloc::kfree(node);
@@ -164,7 +164,7 @@ namespace zxfoundation::memory::rmap {
         if (pfn >= g_max_pfn) return;
 
         const u32 s = stripe_of(pfn);
-        const zxfoundation::locking::irq_lock_guard guard{g_rmap_locks[s]};
+        const zxfoundation::sync::irq_lock_guard guard{g_rmap_locks[s]};
         entry** pp = &head_for_pfn(pfn);
         while (*pp) {
             entry* cur = *pp;
@@ -189,7 +189,7 @@ namespace zxfoundation::memory::rmap {
         if (pfn >= g_max_pfn) return false;
 
         const u32 s = stripe_of(pfn);
-        const zxfoundation::locking::irq_lock_guard guard{g_rmap_locks[s]};
+        const zxfoundation::sync::irq_lock_guard guard{g_rmap_locks[s]};
         for (entry* cur = head_for_pfn(pfn); cur; cur = cur->next) {
             if (cur->region == &from && cur->slot_index == from_slot) {
                 cur->region = &to;
@@ -208,7 +208,7 @@ namespace zxfoundation::memory::rmap {
 
         u32 visited = 0U;
         const u32 s = stripe_of(pfn);
-        const zxfoundation::locking::irq_lock_guard guard{g_rmap_locks[s]};
+        const zxfoundation::sync::irq_lock_guard guard{g_rmap_locks[s]};
         for (entry* cur = head_for_pfn(pfn); cur; cur = cur->next) {
             if (!cur->region) continue;
             if (cur->slot_index >= cur->region->pages.count) continue;
@@ -237,7 +237,7 @@ namespace zxfoundation::memory::rmap {
 
         u32 n = 0U;
         const u32 s = stripe_of(pfn);
-        const zxfoundation::locking::irq_lock_guard guard{g_rmap_locks[s]};
+        const zxfoundation::sync::irq_lock_guard guard{g_rmap_locks[s]};
         for (entry* cur = head_for_pfn(pfn); cur; cur = cur->next) {
             if (!cur->region) continue;
             if (cur->region == &self && cur->slot_index == self_slot) continue;
@@ -310,7 +310,7 @@ namespace zxfoundation::memory::rmap {
 
         u32 count = 0U;
         const u32 s = stripe_of(pfn);
-        const zxfoundation::locking::irq_lock_guard guard{g_rmap_locks[s]};
+        const zxfoundation::sync::irq_lock_guard guard{g_rmap_locks[s]};
         for (entry* cur = head_for_pfn(pfn); cur; cur = cur->next) {
             if (!cur->region) continue;
             if (cur->slot_index >= cur->region->pages.count) continue;

@@ -10,14 +10,14 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.domain.domain;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import zxfoundation.sys.cap;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.printk;
+import zxfoundation.sys.cap.core;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.printk.core;
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
 import arch.s390x.cpu.lowcore;
 import lib.error;
 import std;
@@ -39,7 +39,7 @@ namespace zxfoundation::gate::dispatch_table::_internal {
     };
 
     static entry s_table[DISPATCH_TABLE_SIZE]{};
-    static locking::qspinlock::qspinlock s_lock{};
+    static sync::qspinlock::qspinlock s_lock{};
 
     [[nodiscard]] auto acquire_caller_domain() noexcept
         -> zxfoundation::domain::domain * {
@@ -308,7 +308,7 @@ export {
                     lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
             }
 
-            const locking::irq_lock_guard guard{_internal::s_lock};
+            const sync::irq_lock_guard guard{_internal::s_lock};
 
             if (_internal::s_table[packed_nr].handler) {
                 return std::unexpected(

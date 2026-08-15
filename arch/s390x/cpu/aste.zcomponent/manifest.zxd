@@ -1,5 +1,6 @@
 !files : !compile_group -> [auto] {
     common.cxxm
+    consts.cxxm
     aste.cxxm
     aste.cxx
 }

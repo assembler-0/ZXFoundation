@@ -103,7 +103,7 @@ namespace arch::s390x::cpu::ecag {
     /// @brief Full topology summary (ASI=cache, AI=extract_topo_summary).
     union [[gnu::packed]] cache_summary {
         u64 value{};
-        cache_summary_entry entry[8];
+        std::array<cache_summary_entry, 8> entry;
 
         [[nodiscard]] constexpr auto operator[](cache_level level) const noexcept
             -> const cache_summary_entry& {
@@ -117,11 +117,10 @@ namespace arch::s390x::cpu::ecag {
 
     /// @brief CPU-speed result (ASI=cpu, AI=extract_cpu_speed).
     struct cpu_speed {
-        u32 dynamic; ///< bits 0-31: dynamic (current/turbo) CPU speed
-        u32 static_; ///< bits 32-63: static (nominal) CPU speed
+        u32 dynamic{}; ///< bits 0-31: dynamic (current/turbo) CPU speed
+        u32 static_{}; ///< bits 32-63: static (nominal) CPU speed
     };
-    static_assert(sizeof(cpu_speed) == sizeof(u64));
-    static_assert(std::is_trivially_copyable_v<cpu_speed>);
+    assert_size(cpu_speed, 8);
 
     /// @brief Extract the per-level cache topology summary.
     [[nodiscard]] auto query_topology() noexcept -> std::expected<cache_summary, lib::kernel_error> {

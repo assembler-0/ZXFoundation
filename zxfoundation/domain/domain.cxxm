@@ -7,32 +7,33 @@ import zxfoundation.domain.domain_types;
 import zxfoundation.domain.strand_types;
 import zxfoundation.domain.signal;
 import zxfoundation.domain.signal_types;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.scoms.scoms_ref;
-import zxfoundation.scoms.scoms_table;
-import zxfoundation.scoms.scoms_object_core;
-import zxfoundation.sys.transaction;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.scoms.table;
+import zxfoundation.scoms.metadata.core;
+import zxfoundation.base.transaction;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.syschk;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.syschk.core;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.memory.vm;
 import zxfoundation.memory.memory_objects;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.sync_contract;
 import zxfoundation.memory.kmalloc;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.mmu.mmu_const;
+import arch.s390x.mmu.core;
+import arch.s390x.mmu.types;
+import arch.s390x.mmu.consts;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.aste;
@@ -51,13 +52,13 @@ namespace zxfoundation::domain::_internal {
     /// @brief Buddy order for kernel stack allocation: 2^2 = 4 pages.
     static constexpr u32 DOMAIN_KERNEL_STACK_ORDER = 2;
 
-    /// @brief The global domain table — SCOMS kobject_table.
-    scoms::kobject_table<domain, MAX_DOMAINS> g_domain_table{};
+    /// @brief The global domain table — SCOMS scoms_table.
+    scoms::scoms_table<domain, MAX_DOMAINS> g_domain_table{};
 
     static constexpr u32 MAX_SECONDARY_STRAND_IDS = MAX_DOMAINS * MAX_STRANDS_PER_DOMAIN;
 
     /// @brief Secondary strand SCOMS table.
-    static scoms::kobject_table<strand, MAX_SECONDARY_STRAND_IDS> g_strand_table{};
+    static scoms::scoms_table<strand, MAX_SECONDARY_STRAND_IDS> g_strand_table{};
 
     /// @brief Nucleus domain — the kernel itself, represented as the
     ///        first permanently-resident entity in @c g_domain_table.
@@ -86,7 +87,7 @@ namespace zxfoundation::domain::_internal {
 
     [[nodiscard]] auto claim_domain_destroy(domain& d) noexcept
         -> std::expected<void, lib::kernel_error> {
-        const locking::irq_lock_guard guard{d.ko.lock};
+        const sync::irq_lock_guard guard{d.ko.lock};
         if (d.ko.state != base::lifecycle_state::active
             || d.teardown_phase != dgp::teardown_phase::none
             || !d.ko.transition(base::lifecycle_state::dying)) {
@@ -100,7 +101,7 @@ namespace zxfoundation::domain::_internal {
         dgp::teardown_phase expected,
         dgp::teardown_phase requested
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const locking::irq_lock_guard guard{d.ko.lock};
+        const sync::irq_lock_guard guard{d.ko.lock};
         return dgp::sync_contract_advance_teardown_phase(
             d.teardown_phase, expected, requested);
     }
@@ -133,7 +134,7 @@ namespace zxfoundation::domain::_internal {
         if (!result) return std::unexpected(result.error());
 
         auto embryo_ref = static_cast<
-            scoms::kobject_ref<strand, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<strand, base::lifecycle_state::embryo>&&
         >(result.value());
 
         strand& s = *embryo_ref;
@@ -180,7 +181,7 @@ namespace zxfoundation::domain::_internal {
         s.ksp         = s.kstack_top;
 
         discard_value static_cast<
-            scoms::kobject_ref<strand, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<strand, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
         s.substate = sched_substate::runnable;
@@ -208,7 +209,7 @@ namespace zxfoundation::domain::_internal {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        discard_value scoms::mark_dying(&s);
+        discard_value scoms::kobject::mark_dying(&s);
         lib::list_head::remove(s.body->strand_list);
         discard_value scoms::object_core::detach(s.ko);
 
@@ -222,7 +223,7 @@ namespace zxfoundation::domain::_internal {
 
         memory::kmalloc::kfree_t(s.body);
 
-        discard_value scoms::mark_destroyed(&s);
+        discard_value scoms::kobject::mark_destroyed(&s);
         auto release_result = g_strand_table.release(s.ko.id);
         if (!release_result) return std::unexpected(release_result.error());
         return {};
@@ -241,7 +242,7 @@ namespace zxfoundation::domain::_internal {
         if (!result) return std::unexpected(result.error());
 
         auto embryo_ref = static_cast<
-            scoms::kobject_ref<strand, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<strand, base::lifecycle_state::embryo>&&
         >(result.value());
 
         strand& s = *embryo_ref;
@@ -279,7 +280,7 @@ namespace zxfoundation::domain::_internal {
         s.ksp         = s.kstack_top;
 
         discard_value static_cast<
-            scoms::kobject_ref<strand, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<strand, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
         return &s;
@@ -298,7 +299,7 @@ namespace zxfoundation::domain::_internal {
                 lib::kernel_error::from_driver(lib::driver_error::busy));
         }
 
-        discard_value scoms::mark_dying(&s);
+        discard_value scoms::kobject::mark_dying(&s);
 
         if (s.kstack_top != 0U) {
             const u64 stack_phys = hhdm::virt_to_phys(s.kstack_top - DOMAIN_KERNEL_STACK_SIZE);
@@ -308,15 +309,15 @@ namespace zxfoundation::domain::_internal {
             pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
         }
 
-        discard_value scoms::mark_destroyed(&s);
+        discard_value scoms::kobject::mark_destroyed(&s);
         auto release_result = g_strand_table.release(s.ko.id);
         if (!release_result) return std::unexpected(release_result.error());
         return {};
     }
 
     /// @brief Transactional domain creation.
-    class domain_create_txn : public zxfoundation::transaction<domain_create_txn> {
-        friend class zxfoundation::transaction<domain_create_txn>;
+    class domain_create_txn : public zxfoundation::base::transaction<domain_create_txn> {
+        friend class zxfoundation::base::transaction<domain_create_txn>;
 
         u32  m_slot{~0U};
         u8   m_skey{0};
@@ -330,7 +331,7 @@ namespace zxfoundation::domain::_internal {
         bool m_has_root{false};
         bool m_has_stack{false};
         bool m_has_art{false};
-        u32  m_address_space_id{scoms::KOBJECT_ID_INVALID};
+        u32  m_address_space_id{scoms::kobject::KOBJECT_ID_INVALID};
         bool m_has_address_space{false};
 
         /// @brief Rollback handler — releases resources in reverse allocation order.
@@ -500,7 +501,7 @@ namespace zxfoundation::domain::_internal {
                     });
                 if (!as_auth) return std::unexpected(as_auth.error());
                 auto as_object_result = zxfoundation::memory::objects::memory_object_create(
-                    scoms::kobject_type::address_space,
+                    scoms::kobject::kobject_type::address_space,
                     active_ref->ko.id,
                     &active_ref->ko,
                     0,
@@ -586,7 +587,7 @@ namespace zxfoundation::domain {
     /// @brief Initialize the strand SCOMS table.
     auto strand_init() noexcept -> void {
         using namespace _internal;
-        g_strand_table.init(scoms::kobject_type::strand);
+        g_strand_table.init(scoms::kobject::kobject_type::strand);
         sys::printk::pinfo("domain: strand SCOMS table initialized ({} slots)",
             lib::format::dec{static_cast<u64>(MAX_SECONDARY_STRAND_IDS)});
     }
@@ -875,7 +876,7 @@ namespace zxfoundation::domain {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
 
-        if (!scoms::swap_state_to(scoms::lifecycle_state::active, d))
+        if (!scoms::kobject::swap_state_to(scoms::lifecycle_state::active, d))
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
@@ -909,7 +910,7 @@ namespace zxfoundation::domain {
     auto register_domain_cap_lookup() noexcept -> void {
         discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::domain,
-            [](u16 obj_id) noexcept -> scoms::kobject* {
+            [](u16 obj_id) noexcept -> scoms::kobject::bobject* {
                 auto* d = domain_find(static_cast<domain_id>(obj_id));
                 return d ? &d->ko : nullptr;
             });
@@ -919,7 +920,7 @@ namespace zxfoundation::domain {
     auto domain_init() noexcept -> void {
         using namespace _internal;
 
-        g_domain_table.init(scoms::kobject_type::domain);
+        g_domain_table.init(scoms::kobject::kobject_type::domain);
 
         register_domain_cap_lookup();
 
@@ -967,7 +968,7 @@ namespace zxfoundation::domain {
         }
 
         auto embryo_ref = static_cast<
-            scoms::kobject_ref<domain, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<domain, base::lifecycle_state::embryo>&&
         >(slot_r.value());
 
         domain* d = embryo_ref.raw();
@@ -1008,7 +1009,7 @@ namespace zxfoundation::domain {
         d->primary_strand.body       = nullptr;
         d->primary_strand.flags      = strand_flags::idle;
 
-        if (!scoms::swap_state_to(zxfoundation::base::lifecycle_state::active, d)) {
+        if (!scoms::kobject::swap_state_to(zxfoundation::base::lifecycle_state::active, d)) {
             sys::printk::pcrit("domain: nucleus state swap failed\n");
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::internal_error));
@@ -1023,8 +1024,6 @@ namespace zxfoundation::domain {
             }
         }
 
-        sys::printk::pnotice("domain: nucleus domain created (id={}, asce={:#x}, root={:#x})\n",
-                          d->ko.id, d->asce.raw(), d->root_phys);
         return {};
     }
 

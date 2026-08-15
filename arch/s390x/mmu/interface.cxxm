@@ -1,0 +1,5 @@
+export module arch.s390x.mmu;
+export import arch.s390x.mmu.types;
+export import arch.s390x.mmu.consts;
+export import arch.s390x.mmu.tlb;
+export import arch.s390x.mmu.core;

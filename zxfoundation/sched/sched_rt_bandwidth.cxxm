@@ -4,9 +4,9 @@
 ///        enforcement.
 
 export module zxfoundation.sched.sched_rt_bandwidth;
-import zxfoundation.sys.timer_types;
-import zxfoundation.sys.timer;
-import zxfoundation.sys.time;
+import zxfoundation.sys.timer.types;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.time.core;
 import arch.s390x.cpu.clock;
 import zxfoundation.base.types;
 import zxfoundation.base.config;

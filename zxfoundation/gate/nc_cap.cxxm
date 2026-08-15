@@ -4,9 +4,9 @@
 
 export module zxfoundation.gate.nc_cap;
 import zxfoundation.gate.gate_types;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
-import zxfoundation.sys.printk;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
+import zxfoundation.sys.printk.core;
 import zxfoundation.base.types;
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;

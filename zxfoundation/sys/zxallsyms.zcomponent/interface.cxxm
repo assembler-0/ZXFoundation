@@ -1,0 +1,2 @@
+export module zxfoundation.sys.zxallsyms;
+export import zxfoundation.sys.zxallsyms.core;

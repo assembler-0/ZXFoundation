@@ -18,35 +18,35 @@ import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sched.sched;
 import zxfoundation.sched.sched_topology;
-import zxfoundation.smp.smp;
-import zxfoundation.sys.printk;
+import zxfoundation.smp.csd.core;
+import zxfoundation.sys.printk.core;
 import lib.error;
 import lib.static_vector;
 import std;
 
 namespace arch::s390x::cpu::hotplug::_internal {
 
-    __internal__ std::atomic<u32> g_hotplug_initialized{0};
+    no_export std::atomic<u32> g_hotplug_initialized{0};
 
-    __internal__ std::array<cpu_hotplug_state, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cpu_states{};
+    no_export std::array<cpu_hotplug_state, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cpu_states{};
 
-    __internal__ ::lib::static_vector<hotplug_callback, HOTPLUG_NOTIFIER_MAX> g_notifiers{};
+    no_export ::lib::static_vector<hotplug_callback, HOTPLUG_NOTIFIER_MAX> g_notifiers{};
 
-    [[nodiscard]] __internal__ constexpr auto is_initialized() noexcept -> bool {
+    [[nodiscard]] no_export constexpr auto is_initialized() noexcept -> bool {
         return g_hotplug_initialized.load(std::memory_order::acquire) != 0U;
     }
 
-    __internal__ auto set_initialized() noexcept -> void {
+    no_export auto set_initialized() noexcept -> void {
         g_hotplug_initialized.store(1, std::memory_order::release);
     }
 
-    __internal__ auto fire_notify(u16 cpu_id, cpu_hotplug_notify reason) noexcept -> void {
+    no_export auto fire_notify(u16 cpu_id, cpu_hotplug_notify reason) noexcept -> void {
         for (auto& n : g_notifiers) {
             if (n) n(cpu_id, reason);
         }
     }
 
-    [[nodiscard]] __internal__ auto sigp_stop_cpu(u16 cpu_addr) noexcept -> bool {
+    [[nodiscard]] no_export auto sigp_stop_cpu(u16 cpu_addr) noexcept -> bool {
         auto r = arch::s390x::cpu::sigp::issue(cpu_addr,
                     arch::s390x::cpu::sigp::SIGP_STOP, 0);
         if (r.cc == arch::s390x::cpu::sigp::SIGP_CC_ORDER_CODE_ACCEPTED)
@@ -60,7 +60,7 @@ namespace arch::s390x::cpu::hotplug::_internal {
         return r.cc == arch::s390x::cpu::sigp::SIGP_CC_ORDER_CODE_ACCEPTED;
     }
 
-    __internal__ auto purge_alb_on_cpu(u64, void*) noexcept -> void {
+    no_export auto purge_alb_on_cpu(u64, void*) noexcept -> void {
         arch::s390x::cpu::ar::purge_alb();
     }
 
@@ -174,25 +174,25 @@ namespace arch::s390x::cpu::hotplug {
 
         // Purge first while remote dispatch remains admitted. Closing admission
         // afterwards waits out every CSD accepted before the target is stopped.
-        auto purge_result = zxfoundation::smp::smp_call_function_single_sync(
+        auto purge_result = zxfoundation::smp::csd::call_function_single_sync(
             cpu_id, _internal::purge_alb_on_cpu, nullptr, 0U);
         if (!purge_result) {
             _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::failed;
             return std::unexpected(purge_result.error());
         }
-        zxfoundation::smp::smp_csd_disable_cpu(cpu_id);
+        zxfoundation::smp::csd::disable_cpu(cpu_id);
         cpumask::cpu_clear_online(cpu_id);
 
         auto* lc = lowcore::get_for_cpu(cpu_id);
         if (!lc) {
-            zxfoundation::smp::smp_csd_enable_cpu(cpu_id);
+            zxfoundation::smp::csd::enable_cpu(cpu_id);
             cpumask::cpu_set_online(cpu_id);
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::cpu_not_available));
         }
         const u16 cpu_addr = lc->percpu.cpu_addr;
         if (!_internal::sigp_stop_cpu(cpu_addr)) {
-            zxfoundation::smp::smp_csd_enable_cpu(cpu_id);
+            zxfoundation::smp::csd::enable_cpu(cpu_id);
             cpumask::cpu_set_online(cpu_id);
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::sigp_busy));

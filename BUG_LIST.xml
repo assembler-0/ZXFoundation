@@ -49,7 +49,7 @@
                 timer, IPI, etc.)
             </Description>
             <Behavior>
-                irq_register() called g_irq_table.alloc() which pulled an
+                register() called g_irq_table.alloc() which pulled an
                 arbitrary free-list slot index S, populating m_slots[S] with
                 the handler.  irq_dispatch() and find_raw() look up slots by
                 the IRQ vector number V (so m_slots[V]), which remained with
@@ -68,10 +68,10 @@
                 stall), or undefined spin-wait hangs.
             </Behavior>
             <Solution>
-                Introduced kobject_table::alloc_at(u32 id) which claims a
+                Introduced scoms_table::alloc_at(u32 id) which claims a
                 specific slot index by unlinking it from the SCOMS free-list
                 rather than taking an arbitrary slot from the free-list head.
-                irqdesc::irq_register() now calls alloc_at(irq) so the
+                irqdesc::register() now calls alloc_at(irq) so the
                 irq_desc for vector V always occupies m_slots[V], making
                 find_raw(V) reach the correct descriptor.
 
@@ -266,7 +266,7 @@
             <FoundDate>2026-07-29</FoundDate>
             <Severity>Critical</Severity>
             <Description>
-                vm_region alloc_region double-constructed the slot, wiping the SCOMS id assigned by kobject_table::alloc
+                vm_region alloc_region double-constructed the slot, wiping the SCOMS id assigned by scoms_table::alloc
             </Description>
             <Behavior>
                 alloc_region() called ::new(static_cast<void*>(rgn)) vm_region{} after g_region_table.alloc() had already
@@ -278,7 +278,7 @@
             <Solution>
                 Removed the redundant placement-new and the ko.type reassignment. alloc_region now only fills in
                 the user-visible fields (va_start, va_end, prot, flags, backing, phys_base) and activates the
-                embryo ref. ko.id and ko.type are preserved from kobject_table::alloc().
+                embryo ref. ko.id and ko.type are preserved from scoms_table::alloc().
             </Solution>
             <AffectedBuilds>
                 <Range>

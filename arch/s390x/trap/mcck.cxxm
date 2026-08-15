@@ -7,16 +7,16 @@ import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.psw;
-import arch.s390x.css.css;
 import arch.s390x.cpu.percpu;
-import zxfoundation.sys.irq.irqdesc;
+import zxfoundation.sys.irq.core;
+import zxfoundation.sys.irq.consts;
 import zxfoundation.base.types;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.printk;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.printk.core;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.signal;
 import zxfoundation.domain.signal_types;
-import zxfoundation.scoms.scoms_ref;
+import zxfoundation.scoms.kobject.ref;
 import zxfoundation.sched.sched;
 import lib.error;
 
@@ -303,7 +303,7 @@ namespace arch::s390x::trap::mcck {
                     *d,
                     zxfoundation::domain::signal::signal_kind::fault,
                     static_cast<u64>(lc->failing_storage_address));
-                // zxfoundation::sched::sched_resched_current();
+                zxfoundation::sched::sched_resched_current();
             }
             _internal::dump_mcesa(*lc);
         }

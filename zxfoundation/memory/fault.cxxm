@@ -14,17 +14,18 @@ import zxfoundation.memory.rmap;
 import zxfoundation.memory.reclaim;
 import zxfoundation.memory.oom;
 import zxfoundation.dgp.memory_contract;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
-import zxfoundation.rcu.rcu;
-import zxfoundation.sys.syschk;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.printk_types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
+import zxfoundation.sync.rcu.core;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.printk.types;
 import zxfoundation.base.types;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.mmu.mmu_const;
+import arch.s390x.mmu.core;
+import arch.s390x.mmu.types;
+import arch.s390x.mmu.consts;
 import arch.s390x.cpu.skey;
 import lib.error;
 import lib.rbtree;
@@ -62,14 +63,6 @@ namespace zxfoundation::memory::vm {
     /// @param[in] is_write     True if the fault was a store operation.
     /// @param[in] is_exec      True if the fault was an instruction fetch.
     /// @return The resolution action.
-    /// @note File-backed misses are handled in three phases: a locked
-    ///       validation phase that captures the file coordinates, an
-    ///       unlocked phase that may perform real device I/O via
-    ///       @ref page_cache::acquire_page, and a second locked phase that
-    ///       re-validates the region and installs the PTE.  This CPU
-    ///       cannot service the I/O completion interrupt that makes a
-    ///       blocking read return while holding an IRQ-disabled VM-space
-    ///       spinlock, so the read must never run under @c space.lock.
     [[nodiscard]] auto handle_page_fault(
         vm_space& space,
         u64 root_phys,
@@ -87,7 +80,7 @@ namespace zxfoundation::memory::vm {
         bool need_file_io = false;
 
         {
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
         auto* rgn = vm_find(space, fault_va);
 
         if (rgn) {
@@ -225,7 +218,7 @@ namespace zxfoundation::memory::vm {
                     phys,
                     nearest_above->storage_object
                         ? nearest_above->storage_object.id
-                        : scoms::KOBJECT_ID_INVALID,
+                        : scoms::kobject::KOBJECT_ID_INVALID,
                     nearest_above->storage_object
                         ? nearest_above->storage_object.generation : 0U,
                     !!(nearest_above->prot & vm_prot::write));
@@ -312,7 +305,7 @@ namespace zxfoundation::memory::vm {
                 auto metadata = pmm::frame_set_mapping_metadata(
                     new_phys,
                     rgn->storage_object ? rgn->storage_object.id
-                                         : scoms::KOBJECT_ID_INVALID,
+                                         : scoms::kobject::KOBJECT_ID_INVALID,
                     rgn->storage_object ? rgn->storage_object.generation : 0U,
                     !!(rgn->prot & vm_prot::write));
                 if (!metadata) {
@@ -433,7 +426,7 @@ namespace zxfoundation::memory::vm {
             auto metadata = pmm::frame_set_mapping_metadata(
                 phys,
                 rgn->storage_object ? rgn->storage_object.id
-                                     : scoms::KOBJECT_ID_INVALID,
+                                     : scoms::kobject::KOBJECT_ID_INVALID,
                 rgn->storage_object ? rgn->storage_object.generation : 0U,
                 !!(rgn->prot & vm_prot::write));
             if (!metadata) {
@@ -574,7 +567,7 @@ namespace zxfoundation::memory::vm {
         auto lease = std::move(*page_result);
 
         // ---- Locked phase: re-validate, then install. ----
-        const locking::irq_lock_guard guard2{space.lock};
+        const sync::irq_lock_guard guard2{space.lock};
 
         auto* rgn = vm_find(space, fault_va);
         if (!rgn || rgn->backing != vm_backing::file ||

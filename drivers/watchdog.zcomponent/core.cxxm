@@ -1,0 +1,17 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file watchdog.cxxm
+/// @brief SMP watchdog — detects CPUs stuck without scheduler ticks.
+
+export module drivers.watchdog.core;
+
+export {
+
+namespace drivers::watchdog {
+
+    auto disarm() noexcept -> void;
+
+    auto init() noexcept -> void;
+
+} // namespace zxfoundation::sys::watchdog
+
+} // end export

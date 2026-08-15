@@ -9,20 +9,20 @@ import zxfoundation.memory.numa_types;
 import zxfoundation.memory.numa;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import lib.cpumask;
-import lib.error;
-import std;
+import zxfoundation.sys.syschk.core;
 import arch.s390x.cpu.stsi;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.lowcore;
-import zxfoundation.sys.syschk;
+import lib.cpumask;
+import lib.error;
+import std;
 
 namespace _internal {
 
     using namespace zxfoundation::memory::numa;
 
     /// @brief Per-CPU NUMA node assignment cached for fast topology lookups.
-    u8 g_stsi_cpu_to_node[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
+    no_export u8 g_stsi_cpu_to_node[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
     /// @brief Build a synthetic 16×16 SLIT using @c cpu_relation placement tiers.
     auto build_synthetic_slit_to(slit_matrix& out) noexcept -> void {
@@ -44,76 +44,90 @@ namespace _internal {
         }
     }
 
+    /// @brief Which nesting level's container ID we treat as the NUMA node.
+    inline constexpr u8 NUMA_NODE_TOPOLOGY_LEVEL = 1;
+
     /// @brief Parse one STSI 15.1.x output block into the staging SLIT matrix.
     auto parse_stsi_15_x_block(
-        arch::s390x::cpu::stsi::sysinfo_15_1_x* info,
-        u32 length,
+        std::span<const std::byte, PAGE_SIZE> page,
+        u32 threads_per_core,
         slit_matrix& out_matrix,
         bool& wrote_node
-    ) noexcept -> void {
-        if (info == nullptr || length < sizeof(*info)) return;
-        auto* cur = reinterpret_cast<unsigned char*>(&info->tle[0]);
-        auto* end = reinterpret_cast<unsigned char*>(info) + length;
+    ) noexcept -> arch::s390x::cpu::stsi::topology_parse_result {
+        using namespace arch::s390x::cpu::stsi;
 
-        u8 container_id_stack[arch::s390x::cpu::stsi::TOPOLOGY_NR_MAG];
-        u32 stack_top = 0U;
-
-        while (cur < end) {
-            auto* ent = reinterpret_cast<arch::s390x::cpu::stsi::topology_entry*>(cur);
-            const u8 nl = ent->nl;
-
-            if (nl < arch::s390x::cpu::stsi::TOPOLOGY_NR_MAG - 1U) {
-                if (stack_top < arch::s390x::cpu::stsi::TOPOLOGY_NR_MAG) {
-                    container_id_stack[stack_top++] = ent->container.id;
-                }
-                cur += sizeof(arch::s390x::cpu::stsi::topology_container);
-                continue;
-            }
-            // Core TLE.
-            if (cur + sizeof(ent->cpu) <= end) {
-                u8 node_id = (stack_top > 0) ? container_id_stack[0] : 0U;
+        const configuration_topology_view view{page};
+        const auto result = view.entries().visit_cpu_entries(
+            [&](const topology_cpu_record& rec) {
+                u8 node_id = rec.path.id_at(NUMA_NODE_TOPOLOGY_LEVEL).value_or(NUMA_NODE_BOOT);
                 if (node_id >= MAX_NUMA_NODES) node_id = NUMA_NODE_BOOT;
-                for (u32 bit = 0; bit < 64U; ++bit) {
-                    const u64 b = (ent->cpu.mask >> bit) & 1ULL;
-                    if (b != 0ULL) {
-                        if (bit < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
-                            g_stsi_cpu_to_node[bit] = node_id;
-                            wrote_node = true;
-                        }
+
+                rec.cpu.for_each_cpu(threads_per_core, [&](u16 cpu_id) {
+                    if (cpu_id < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[likely]] {
+                        g_stsi_cpu_to_node[cpu_id] = node_id;
+                        wrote_node = true;
                     }
-                }
-                cur += sizeof(ent->cpu);
-            } else {
-                break;
-            }
-        }
+                });
+            });
 
         for (u32 a = 0; a < MAX_NUMA_NODES; ++a) {
             for (u32 b = 0; b < MAX_NUMA_NODES; ++b) {
-                if (a == b)            out_matrix.distances[a][b] = 10U;
-                else if (a == 0 || b == 0) out_matrix.distances[a][b] = 20U;
-                else                   out_matrix.distances[a][b] = 40U;
+                if (a == b)                 out_matrix.distances[a][b] = 10U;
+                else if (a == 0 || b == 0)  out_matrix.distances[a][b] = 20U;
+                else                        out_matrix.distances[a][b] = 40U;
             }
         }
+        return result;
     }
 
-    /// @brief Probe STSI 15.1.x (information on machine topology nesting
-    ///        levels 1..3) by issuing @c stsi(buf, 15, 1, sel2).
+    /// @brief Probe STSI 15.1.x
     /// @return True on success (CC=0); false on CC=3 (not available).
     auto probe_stsi_15_1_x(
         u32 sel2,
+        u32 threads_per_core,
         slit_matrix& out_matrix,
         bool& wrote_node
     ) noexcept -> bool {
-        alignas(8) u8 buffer[4096];
-        auto* info = reinterpret_cast<arch::s390x::cpu::stsi::sysinfo_15_1_x*>(buffer);
-        const auto r = arch::s390x::cpu::stsi::invoke(buffer, 15, 1, static_cast<int>(sel2));
+        using namespace arch::s390x::cpu;
+        alignas(PAGE_SIZE) std::array<std::byte, PAGE_SIZE> buffer{};
+        auto* info = reinterpret_cast<stsi::configuration_topology*>(buffer.data());
+        const auto r = stsi::invoke<
+            stsi::configuration_topology,
+            stsi::stsi_fc::current_configuration_level,
+            stsi::selector1::configuration_level_fc
+        >(*info, sel2);
         if (!r) return false;
         if (*r == 3) return false;   // CC=3 → not available
-        const u32 length = static_cast<u32>(info->length);
-        if (length == 0U || length > sizeof(buffer)) return false;
-        parse_stsi_15_x_block(info, length, out_matrix, wrote_node);
-        return true;
+
+        const auto parsed = parse_stsi_15_x_block(buffer, threads_per_core, out_matrix, wrote_node);
+        return parsed.ok();
+    }
+
+    auto detected_threads_per_core() noexcept -> u32 {
+        using namespace arch::s390x::cpu::stsi;
+
+        alignas(PAGE_SIZE) lpar_cpus lpar_page;
+        if (const auto r = invoke<
+                lpar_cpus, stsi_fc::logical_partition_information,
+                selector1::configuration_level_multi_cpu, selector2_2::configuration_level_all_cpu
+            >(lpar_page); r && *r == 0) {
+            if (lpar_page.mt_installed) {
+                return static_cast<u32>(lpar_page.pmstid) + 1U;
+            }
+        }
+
+        alignas(PAGE_SIZE) std::array<std::byte, PAGE_SIZE> basic_page{};
+        if (const auto r = invoke<
+                std::array<std::byte, PAGE_SIZE>, stsi_fc::basic_machine_information,
+                selector1::configuration_level_multi_cpu, selector2_2::configuration_level_all_cpu
+            >(basic_page); r && *r == 0) {
+            const basic_machine_cpus_view view{basic_page};
+            if (view.header().mt_installed) {
+                return static_cast<u32>(view.header().max_tid_core) + 1U;
+            }
+        }
+
+        return 1U;
     }
 
 } // namespace _internal
@@ -131,7 +145,7 @@ namespace zxfoundation::sched::numa_distance {
         bool stsi_ok = false;
         bool wrote_node = false;
         for (u32 sel2 = 1; sel2 <= 3; ++sel2) {
-            if (_internal::probe_stsi_15_1_x(sel2, matrix, wrote_node)) {
+            if (_internal::probe_stsi_15_1_x(sel2, _internal::detected_threads_per_core(), matrix, wrote_node)) {
                 stsi_ok = true;
             }
         }

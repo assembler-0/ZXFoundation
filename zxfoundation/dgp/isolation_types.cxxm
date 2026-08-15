@@ -5,7 +5,7 @@
 export module zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import arch.s390x.mmu.mmu_types;
+import arch.s390x.mmu.types;
 
 export {
 

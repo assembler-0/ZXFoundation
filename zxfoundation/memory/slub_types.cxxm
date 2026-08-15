@@ -6,9 +6,9 @@ export module zxfoundation.memory.slub_types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.base.config;
-import zxfoundation.rcu.rcu_types;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.sync.rcu.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.scoms.kobject.base;
 import zxfoundation.memory.memory_objects;
 import zxfoundation.memory.numa_types;
 
@@ -95,13 +95,13 @@ namespace zxfoundation::memory::slub {
         u8             node_id{0};                 ///< PMM-selected NUMA owner node.
         u8             on_node_partial{0};         ///< Linked in its owner's partial list.
         u8             _pad{0};
-        rcu::rcu_head  rcu{};                      ///< For typesafe_by_rcu deferred free.
+        sync::rcu::rcu_head  rcu{};                      ///< For typesafe_by_rcu deferred free.
     };
     static_assert(sizeof(slab_header) <= 112, "slab_header must fit well within PAGE_SIZE");
 
     /// @brief Per-NUMA-node slab state.
     struct kmem_cache_node {
-        locking::qspinlock::qspinlock list_lock{};
+        sync::qspinlock::qspinlock list_lock{};
         slab_header*  partial{nullptr};       ///< Partially-filled slabs.
         u32           nr_partial{0};          ///< Count of partial slabs.
         u32           min_partial{SLUB_MIN_PARTIAL}; ///< Reclaim threshold.

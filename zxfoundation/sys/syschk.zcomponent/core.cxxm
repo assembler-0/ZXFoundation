@@ -1,0 +1,108 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/syschk.cxxm
+/// @brief Last-resort global system teardown (system check).
+
+export module zxfoundation.sys.syschk.core;
+import zxfoundation.sys.syschk.types;
+import arch.s390x.init.zxfl.protocol;
+import lib.error;
+import lib.format;
+import std;
+
+export {
+
+namespace zxfoundation::sys::syschk {
+
+    /// @brief Initialize the system-check subsystem.
+    /// @param[in] proto  The ZXFL boot protocol.
+    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void;
+
+    /// @brief Record a kernel error. Conditionally halt.
+    /// @param[in] err      The @c lib::kernel_error that triggered this check.
+    ///                     Its @c category and @c code are stored verbatim in the
+    ///                     crash record — no translation occurs.
+    /// @param[in] sev      Severity annotation.  Affects the log level used and the
+    ///                     @c severity byte of the crash record.  All severity levels
+    ///                     currently result in an unconditional halt.
+    /// @param[in] msg      Human-readable reason string.  Truncated to
+    ///                     @c ZX_CRASH_MSG_LEN - 1 bytes.
+    /// @param[in] location Source location of the call site.
+    auto system_check(
+        lib::kernel_error    err,
+        syschk_severity      sev,
+        std::string_view     msg,
+        std::source_location location
+    ) noexcept -> void;;
+
+    /// @brief Issue a fatal system check with a formatted message.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    ///                  Implicitly constructed from a string literal; the
+    ///                  source_location is captured at the call site.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1
+    ///        bytes.  No allocation occurs — the buffer is stack-local.
+    template <typename... Args>
+    [[noreturn]] auto syschk_fatal(
+        lib::kernel_error err,
+        fmt_loc           fl,
+        Args&&...         args
+    ) noexcept -> void {
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(std::span(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::fatal, std::string_view(buf), fl.loc);
+        __builtin_unreachable();
+    }
+
+    /// @brief Issue a critical system check with a formatted message.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1 bytes.
+    template <typename... Args>
+    [[noreturn]] auto syschk_critical(
+        lib::kernel_error err,
+        fmt_loc           fl,
+        Args&&...         args
+    ) noexcept -> void {
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(std::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::critical, std::string_view(buf), fl.loc);
+        __builtin_unreachable();
+    }
+
+    /// @brief Issue a warning-level system check with a formatted message.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1 bytes.
+    template <typename... Args>
+    auto syschk_warning(
+        lib::kernel_error err,
+        fmt_loc           fl,
+        Args&&...         args
+    ) noexcept -> void {
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(std::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::warning, std::string_view(buf), fl.loc);
+    }
+
+    /// @brief Issue a notice-level system check with a formatted message.
+    /// @param[in] err   The @c lib::kernel_error that triggered the check.
+    /// @param[in] fl    Format string literal and call-site source location.
+    /// @param[in] args  Format arguments forwarded to @c lib::format::format_to.
+    /// @note  The formatted output is truncated to @c ZX_CRASH_MSG_LEN - 1 bytes.
+    template <typename... Args>
+    auto syschk_notice(
+        lib::kernel_error err,
+        fmt_loc           fl,
+        Args&&...         args
+    ) noexcept -> void {
+        char buf[ZX_CRASH_MSG_LEN];
+        lib::format::format_to(std::span<char>(buf, ZX_CRASH_MSG_LEN), fl.fmt, args...);
+        system_check(err, syschk_severity::notice, std::string_view(buf), fl.loc);
+    }
+
+} // namespace zxfoundation::sys::syschk
+
+} // end export

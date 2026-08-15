@@ -1,6 +1,7 @@
 !files : !compile_group -> [auto] {
-    mmu_types.cxxm
-    mmu_const.cxxm
-    mmu_tlb.cxxm
-    mmu.cxxm
+    interface.cxxm
+    types.cxxm
+    consts.cxxm
+    tlb.cxxm
+    core.cxxm
 }

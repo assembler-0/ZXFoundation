@@ -526,7 +526,7 @@ _start:
     cgr     %r2, %r1
     jne     t31_fail
 
-    // io_ccw at DMA offset 0: NOP, no data transfer.
+    // ccw1 at DMA offset 0: NOP, no data transfer.
     lghi    %r1, 3
     stc     %r1, 0(%r6)
     lghi    %r1, 0

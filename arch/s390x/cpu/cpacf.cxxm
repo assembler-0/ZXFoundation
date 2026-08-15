@@ -5,53 +5,62 @@
 export module arch.s390x.cpu.cpacf;
 import arch.s390x.cpu.types;
 import zxfoundation.base.types;
+import lib.bit;
 import std;
+
+__endian__(BIG);
 
 export {
 
 namespace arch::s390x::cpu::cpacf {
 
-    enum class cpacf_opcodes : u64 {
-        kmac  = 0xb91e,
-        km    = 0xb92e,
-        kmc   = 0xb92f,
-        kimd  = 0xb93e,
-        klmd  = 0xb93f,
-        pckmo = 0xb928,
-        kmf   = 0xb92a,
-        kmo   = 0xb92b,
-        pcc   = 0xb92c,
-        kmctr = 0xb92d,
-        prno  = 0xb93c,
-        kma   = 0xb929,
-        kdsa  = 0xb93a,
-    };
-
-    /// KDSA function codes.
-    /// @todo no implementation yet
-    enum class kdsa_fc : u64 {
-        query             = 0x00,
-        ecdsa_verify_p256 = 0x01,
-        ecdsa_verify_p384 = 0x02,
-        ecdsa_verify_p521 = 0x03,
-        ecdsa_sign_p256   = 0x09,
-        ecdsa_sign_p384   = 0x0a,
-        ecdsa_sign_p521   = 0x0b,
-        enc_ecdsa_sign_p256  = 0x11,
-        enc_ecdsa_sign_p384  = 0x12,
-        enc_ecdsa_sign_p521  = 0x13,
-        eddsa_verify_ed25519 = 0x20,
-        eddsa_verify_ed448   = 0x24,
-        eddsa_sign_ed25519   = 0x28,
-        eddsa_sign_ed448     = 0x2c,
-        enc_eddsa_sign_ed25519 = 0x30,
-        enc_eddsa_sign_ed448   = 0x34,
-    };
-
-    /// Encrypt/Decrypt modifier for CIPHER facilities (KM/KMC)
+    /// @brief Encrypt/Decrypt modifier for CIPHER*
     enum class cipher_modifiers : u64 {
         encrypt = 0x00,
         decrypt = 0x80,
+    };
+
+    template <typename T>
+        requires (std::is_arithmetic_v<T> || std::is_enum_v<T>)
+    consteval auto operator|(T a, cipher_modifiers b) -> u32 {
+        return static_cast<u32>(a) | static_cast<u32>(b);
+    }
+
+    template <typename T>
+        requires (std::is_arithmetic_v<T> || std::is_enum_v<T>)
+    constexpr auto make_cipher_function_control(T fc, cipher_modifiers mod, std::optional<u8> lcfb = std::nullopt) -> u64 {
+        u64 gr0{fc | mod};
+        lib::bit_insert_msb<u64>(gr0, 32, 39, lcfb.value());
+        return gr0;
+    }
+
+    template <typename Ta, typename Tb>
+        requires (std::is_arithmetic_v<Ta> || std::is_enum_v<Ta>)
+              && (std::is_arithmetic_v<Ta> || std::is_enum_v<Ta>)
+    constexpr auto make_digest_function_control(Ta fc, Tb flg) -> u64 {
+        return static_cast<u64>(fc) | static_cast<u64>(flg);
+    }
+
+    /// @brief Common Query Information Parameter Block
+    struct [[gnu::packed]] common_query_pb {
+        u128 status{};
+    };
+
+    /// @brief Common Query Authentication Parameter Block
+    struct [[gnu::packed]] common_qai_pb {
+        bytersvd(tobytes(hw, 1) + 1){};
+        u8 format{};
+        bytersvd(tobytes(hw, 1)){};
+        u16 ifcl_hash_length{};
+        bytersvd(tobytes(w, 1)){};
+        u32 ifcl_version{};
+        std::array<std::byte, tobytes(w, 16)> ifcl_hash{};
+        bytersvd(tobytes(w, 44)){};
+
+        [[nodiscard]] auto hash() const noexcept
+            -> std::span<const std::byte, tobytes(w, 16)>  {
+            return std::span{ ifcl_hash };
+        }
     };
 
     /// @name KM - CIPHER MESSAGE
@@ -111,17 +120,141 @@ namespace arch::s390x::cpu::cpacf {
     template <km_fc Fc, cipher_modifiers Mod, typename Pb>
         requires km_pb_for<Fc, Pb>
     auto km(Pb& pb, u8& dest, std::span<const u8> src) -> i32 {
+        const u64 fc = make_cipher_function_control(Fc, Mod);
         processor::register_pair
-            d { .even = dest, .odd = 0 },
+            d { .even = reinterpret_cast<u64>(&dest), .odd = 0 },
             s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rre,%[opc] << 16,%[dst],%[src]\n"
-            "	brc	1,0b"
-            : [src] "+&d" (s.pair), [dst] "+&d" (d.pair)
-            : [fc] "i" (static_cast<u32>(Fc) | static_cast<u32>(Mod)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::km)
+            "	lgr 	0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	km      %[dst],%[src]\n"
+            "	brc	    1,0b"
+            : [src] "+&d" (s.pair),
+              [dst] "+&d" (d.pair)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
+            : "cc", "memory", "0", "1"
+        );
+        return static_cast<i32>(src.size() - s.odd);
+    }
+
+    /// @}
+
+    /// @name KMF - CIPHER MESSAGE WITH CIPHER FEEDBACK
+    /// @{
+
+    enum class kmf_fc : u64 {
+        query       = 0x0,
+        dea         = 0x1,
+        tdea128     = 0x2,
+        tdea192     = 0x3,
+        pdea        = 0x09,
+        ptdea128    = 0x0a,
+        ptdea192    = 0x0b,
+        aes128      = 0x12,
+        aes192      = 0x13,
+        aes256      = 0x14,
+        paes128     = 0x1a,
+        paes192     = 0x1b,
+        paes256     = 0x1c,
+        query_qai   = 0x7f,
+    };
+
+    template <kmf_fc Fc> struct kmf_pb;
+    template <> struct kmf_pb<kmf_fc::query>       { static constexpr usize value = 16; };
+    template <> struct kmf_pb<kmf_fc::dea>         { static constexpr usize value = 16;  };
+    template <> struct kmf_pb<kmf_fc::tdea128>     { static constexpr usize value = 24; };
+    template <> struct kmf_pb<kmf_fc::tdea192>     { static constexpr usize value = 32; };
+    template <> struct kmf_pb<kmf_fc::pdea>        { static constexpr usize value = 40; };
+    template <> struct kmf_pb<kmf_fc::ptdea128>    { static constexpr usize value = 48; };
+    template <> struct kmf_pb<kmf_fc::ptdea192>    { static constexpr usize value = 56; };
+    template <> struct kmf_pb<kmf_fc::aes128>      { static constexpr usize value = 32; };
+    template <> struct kmf_pb<kmf_fc::aes192>      { static constexpr usize value = 40; };
+    template <> struct kmf_pb<kmf_fc::aes256>      { static constexpr usize value = 48; };
+    template <> struct kmf_pb<kmf_fc::paes128>     { static constexpr usize value = 64; };
+    template <> struct kmf_pb<kmf_fc::paes192>     { static constexpr usize value = 72; };
+    template <> struct kmf_pb<kmf_fc::paes256>     { static constexpr usize value = 80; };
+    template <> struct kmf_pb<kmf_fc::query_qai>   { static constexpr usize value = 256; };
+    template <kmf_fc Fc> inline constexpr usize kmf_pb_v = kmf_pb<Fc>::value;
+    template <kmf_fc Fc, typename Pb> concept kmf_pb_for = sizeof(Pb) == kmf_pb_v<Fc>;
+
+    template <kmf_fc Fc, cipher_modifiers Mod, typename Pb>
+        requires kmf_pb_for<Fc, Pb>
+    auto kmf(Pb& pb, u8& dest, u8 lfcb, std::span<const u8> src) -> i32 {
+        const u64 fc = make_cipher_function_control(Fc, Mod, lfcb);
+        processor::register_pair
+            d { .even = reinterpret_cast<u64>(&dest), .odd = 0 },
+            s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
+        __asm__ volatile(
+            "	lgr	    0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	kmf     %[dst],%[src]\n"
+            "	brc	    1,0b"
+            : [src] "+&d" (s.pair),
+              [dst] "+&d" (d.pair)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
+            : "cc", "memory", "0", "1"
+        );
+        return static_cast<i32>(src.size() - s.odd);
+    }
+
+    /// @}
+
+    /// @name KMO - CIPHER MESSAGE WITH OUTPUT FEEDBACK
+    /// @{
+
+    enum class kmo_fc : u64 {
+        query       = 0x0,
+        dea         = 0x1,
+        tdea128     = 0x2,
+        tdea192     = 0x3,
+        pdea        = 0x09,
+        ptdea128    = 0x0a,
+        ptdea192    = 0x0b,
+        aes128      = 0x12,
+        aes192      = 0x13,
+        aes256      = 0x14,
+        paes128     = 0x1a,
+        paes192     = 0x1b,
+        paes256     = 0x1c,
+        query_qai   = 0x7f,
+    };
+
+    template <kmo_fc Fc> struct kmo_pb;
+    template <> struct kmo_pb<kmo_fc::query>       { static constexpr usize value = 16; };
+    template <> struct kmo_pb<kmo_fc::dea>         { static constexpr usize value = 16;  };
+    template <> struct kmo_pb<kmo_fc::tdea128>     { static constexpr usize value = 24; };
+    template <> struct kmo_pb<kmo_fc::tdea192>     { static constexpr usize value = 32; };
+    template <> struct kmo_pb<kmo_fc::pdea>        { static constexpr usize value = 40; };
+    template <> struct kmo_pb<kmo_fc::ptdea128>    { static constexpr usize value = 48; };
+    template <> struct kmo_pb<kmo_fc::ptdea192>    { static constexpr usize value = 56; };
+    template <> struct kmo_pb<kmo_fc::aes128>      { static constexpr usize value = 32; };
+    template <> struct kmo_pb<kmo_fc::aes192>      { static constexpr usize value = 40; };
+    template <> struct kmo_pb<kmo_fc::aes256>      { static constexpr usize value = 48; };
+    template <> struct kmo_pb<kmo_fc::paes128>     { static constexpr usize value = 64; };
+    template <> struct kmo_pb<kmo_fc::paes192>     { static constexpr usize value = 72; };
+    template <> struct kmo_pb<kmo_fc::paes256>     { static constexpr usize value = 80; };
+    template <> struct kmo_pb<kmo_fc::query_qai>   { static constexpr usize value = 256; };
+    template <kmo_fc Fc> inline constexpr usize kmo_pb_v = kmo_pb<Fc>::value;
+    template <kmo_fc Fc, typename Pb> concept kmo_pb_for = sizeof(Pb) == kmo_pb_v<Fc>;
+
+    template <kmo_fc Fc, cipher_modifiers Mod, typename Pb>
+        requires kmo_pb_for<Fc, Pb>
+    auto kmf(Pb& pb, u8& dest, std::span<const u8> src) -> i32 {
+        const u64 fc = make_cipher_function_control(Fc, Mod);
+        processor::register_pair
+            d { .even = reinterpret_cast<u64>(&dest), .odd = 0 },
+            s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
+        __asm__ volatile(
+            "	lgr	    0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	kmf     %[dst],%[src]\n"
+            "	brc	    1,0b"
+            : [src] "+&d" (s.pair),
+              [dst] "+&d" (d.pair)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
             : "cc", "memory", "0", "1"
         );
         return static_cast<i32>(src.size() - s.odd);
@@ -153,9 +286,9 @@ namespace arch::s390x::cpu::cpacf {
 
     template <kmc_fc Fc> struct kmc_pb;
     template <> struct kmc_pb<kmc_fc::query>       { static constexpr usize value = 16; };
-    template <> struct kmc_pb<kmc_fc::dea>         { static constexpr usize value = 8;  };
-    template <> struct kmc_pb<kmc_fc::tdea128>     { static constexpr usize value = 16; };
-    template <> struct kmc_pb<kmc_fc::tdea192>     { static constexpr usize value = 24; };
+    template <> struct kmc_pb<kmc_fc::dea>         { static constexpr usize value = 16;  };
+    template <> struct kmc_pb<kmc_fc::tdea128>     { static constexpr usize value = 24; };
+    template <> struct kmc_pb<kmc_fc::tdea192>     { static constexpr usize value = 32; };
     template <> struct kmc_pb<kmc_fc::pdea>        { static constexpr usize value = 40; };
     template <> struct kmc_pb<kmc_fc::ptdea128>    { static constexpr usize value = 48; };
     template <> struct kmc_pb<kmc_fc::ptdea192>    { static constexpr usize value = 56; };
@@ -173,17 +306,19 @@ namespace arch::s390x::cpu::cpacf {
     template <kmc_fc Fc, cipher_modifiers Mod, typename Pb>
         requires kmc_pb_for<Fc, Pb>
     auto kmc(Pb& pb, u8& dest, std::span<const u8> src) -> i32 {
+        const u64 fc = make_cipher_function_control(Fc, Mod);
         processor::register_pair
-            d { .even = dest, .odd = 0 },
+            d { .even = reinterpret_cast<u64>(&dest), .odd = 0 },
             s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rre,%[opc] << 16,%[dst],%[src]\n"
-            "	brc	1,0b"
-            : [src] "+&d" (s.pair), [dst] "+&d" (d.pair)
-            : [fc] "i" (static_cast<u32>(Fc) | static_cast<u32>(Mod)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::kmc)
+            "	lgr 	0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	kmc 	%[dst],%[src]\n"
+            "	brc	    1,0b"
+            : [src] "+&d" (s.pair),
+              [dst] "+&d" (d.pair)
+            : [fc] "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
             : "cc", "memory", "0", "1"
         );
         return static_cast<i32>(src.size() - s.odd);
@@ -194,12 +329,17 @@ namespace arch::s390x::cpu::cpacf {
     /// @name KIMD - COMPUTE INTERMEDIATE MESSAGE DIGEST
     /// @{
 
-    enum class kimd_flags : u64 {
-        none       = 0x0,
-        nip        = 0x8000
+    enum class kimd_fv_flag : u8 {
+        flags_field_valid   = 0b1000,
+        none                = 0
     };
 
-    constexpr kimd_flags operator|(kimd_flags a, kimd_flags b) {
+    enum class kimd_flags : u64 {
+        none       = 0x0,
+        nip        = ibmbitmask64(48)
+    };
+
+    consteval auto operator|(kimd_flags a, kimd_flags b) -> kimd_flags {
         return static_cast<kimd_flags>(static_cast<u32>(a) | static_cast<u32>(b));
     }
 
@@ -233,18 +373,23 @@ namespace arch::s390x::cpu::cpacf {
     template <kimd_fc Fc> inline constexpr usize kimd_pb_v = kimd_pb<Fc>::value;
     template <kimd_fc Fc, typename Pb> concept kimd_pb_for = sizeof(Pb) >= kimd_pb_v<Fc>;
 
-    template <kimd_fc Fc, kimd_flags Fl, typename Pb>
+    template <kimd_fc Fc, kimd_flags Fl, kimd_fv_flag Fvl = kimd_fv_flag::flags_field_valid, typename Pb>
         requires kimd_pb_for<Fc, Pb>
     auto kimd(Pb& pb, std::span<const u8> src) -> void {
+        constexpr u64 fc = make_digest_function_control(Fc, Fl);
         processor::register_pair s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rrf,%[opc] << 16,0,%[src],8,0\n"
+            "	lgr 	0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            __asm_machine_begin()
+            __asm_machine(z17)
+            "0:	kimd    0,%[src],%[fvl]\n"
+            __asm_machine_end()
             "	brc	1,0b"
             : [src] "+&d" (s.pair)
-            : [fc] "i" (static_cast<u32>(Fc) | static_cast<u32>(Fl)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::kimd)
+            : [fc]  "d"   (fc),
+              [pba] "d"   (reinterpret_cast<u64>(&pb)),
+              [fvl] "i"   (Fvl)
             : "cc", "memory", "0", "1"
         );
     }
@@ -254,13 +399,19 @@ namespace arch::s390x::cpu::cpacf {
     /// @name KLMD - COMPUTE LAST MESSAGE DIGEST
     /// @{
 
-    enum class klmd_flags : u64 {
-        none       = 0x0,
-        nip        = 0x8000,
-        dufop      = 0x4000,
+    enum class klmd_fv_flag : u8 {
+        flags_field_valid   = 0b1000,
+        none                = 0
     };
 
-    constexpr klmd_flags operator|(klmd_flags a, klmd_flags b) {
+    enum class klmd_flags : u64 {
+        none       = 0x0,
+        nip        = ibmbitmask64(48),
+        dufop      = ibmbitmask64(49),
+        ps         = ibmbitmask64(55)
+    };
+
+    consteval auto operator|(klmd_flags a, klmd_flags b) -> klmd_flags {
         return static_cast<klmd_flags>(static_cast<u32>(a) | static_cast<u32>(b));
     }
 
@@ -284,6 +435,7 @@ namespace arch::s390x::cpu::cpacf {
     template <> struct klmd_pb<klmd_fc::sha256>      { static constexpr usize value = 40;  };
     template <> struct klmd_pb<klmd_fc::sha512>      { static constexpr usize value = 80;  };
     template <> struct klmd_pb<klmd_fc::sha3_224>    { static constexpr usize value = 200; };
+    template <> struct klmd_pb<klmd_fc::sha3_256>    { static constexpr usize value = 200; };
     template <> struct klmd_pb<klmd_fc::sha3_384>    { static constexpr usize value = 200; };
     template <> struct klmd_pb<klmd_fc::sha3_512>    { static constexpr usize value = 200; };
     template <> struct klmd_pb<klmd_fc::shake128>    { static constexpr usize value = 200; };
@@ -292,18 +444,23 @@ namespace arch::s390x::cpu::cpacf {
     template <klmd_fc Fc> inline constexpr usize klmd_pb_v = klmd_pb<Fc>::value;
     template <klmd_fc Fc, typename Pb> concept klmd_pb_for = sizeof(Pb) >= klmd_pb_v<Fc>;
 
-    template <klmd_fc Fc, klmd_flags Fl, typename Pb>
+    template <klmd_fc Fc, klmd_flags Fl, klmd_fv_flag Fvl = klmd_fv_flag::flags_field_valid, typename Pb>
         requires klmd_pb_for<Fc, Pb>
     auto klmd(Pb& pb, std::span<const u8> src) -> void {
+        constexpr u64 fc = make_digest_function_control(Fc, Fl);
         processor::register_pair s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rrf,%[opc] << 16,0,%[src],8,0\n"
-            "	brc	1,0b"
+            "	lgr	    0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            __asm_machine_begin()
+            __asm_machine(z17)
+            "0:	klmd    0,%[src],%[fvl]\n"
+            __asm_machine_end()
+            "	brc	    1,0b"
             : [src] "+&d" (s.pair)
-            : [fc] "i" (static_cast<u64>(Fc) | static_cast<u64>(Fl)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::klmd)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb)),
+              [fvl] "i" (Fvl)
             : "cc", "memory", "0", "1"
         );
     }
@@ -315,12 +472,12 @@ namespace arch::s390x::cpu::cpacf {
 
     enum class kmac_flags : u64 {
         none = 0x000,
-        ikp  = 0x100,
-        iimp = 0x200,
-        ccup = 0x400,
+        ikp  = ibmbitmask64(48),
+        iimp = ibmbitmask64(49),
+        ccup = ibmbitmask64(50),
     };
 
-    constexpr kmac_flags operator|(kmac_flags a, kmac_flags b) {
+    constexpr auto operator|(kmac_flags a, kmac_flags b) -> kmac_flags {
         return static_cast<kmac_flags>(static_cast<u32>(a) | static_cast<u32>(b));
     }
 
@@ -380,15 +537,16 @@ namespace arch::s390x::cpu::cpacf {
     template <kmac_fc Fc, kmac_flags Fl, typename Pb>
         requires kmac_pb_for<Fc, Pb> && (!kmac_is_hmac<Fc> || Fl != kmac_flags::none)
     auto kmac(Pb& pb, std::span<const u8> src) -> i32 {
+        constexpr u64 fc = static_cast<u64>(Fc) | static_cast<u64>(Fl);
         processor::register_pair s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
         __asm__ volatile(
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rre,%[opc] << 16,0,%[src]\n"
-            "	brc	1,0b"
+            "	lgr     0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	kmac    0,%[src]\n"
+            "	brc	    1,0b"
             : [src] "+&d" (s.pair)
-            : [fc] "i" (static_cast<u64>(Fc) | static_cast<u64>(Fl)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::kmac)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
             : "cc", "memory", "0", "1"
         );
         return static_cast<i32>(src.size() - s.odd);
@@ -401,18 +559,18 @@ namespace arch::s390x::cpu::cpacf {
 
     enum class kma_flags : u64 {
         none = 0x0,
-        lpc  = 0x100,
-        laad = 0x200,
-        hs   = 0x400,
+        hs   = ibmbitmask64(53),
+        laad = ibmbitmask64(54),
+        lpc  = ibmbitmask64(55),
     };
 
-    constexpr kma_flags operator|(kma_flags a, kma_flags b) {
+    consteval auto operator|(kma_flags a, kma_flags b) -> kma_flags{
         return static_cast<kma_flags>(static_cast<u64>(a) | static_cast<u64>(b));
     }
-    constexpr kma_flags operator&(kma_flags a, kma_flags b) {
+    consteval auto operator&(kma_flags a, kma_flags b) -> kma_flags {
         return static_cast<kma_flags>(static_cast<u64>(a) & static_cast<u64>(b));
     }
-    constexpr bool kma_has_flag(kma_flags value, kma_flags flag) {
+    consteval auto kma_has_flag(kma_flags value, kma_flags flag) -> bool {
         return (value & flag) == flag;
     }
 
@@ -448,19 +606,21 @@ namespace arch::s390x::cpu::cpacf {
         std::span<const u8> src,
         std::span<const u8> aad
     ) -> void {
+        constexpr u64 fc = make_cipher_function_control(Fc, Mod) | static_cast<u64>(Fl);
         processor::register_pair
-            d { .even = dest, .odd = 0 },
+            d { .even = reinterpret_cast<u64>(&dest), .odd = 0 },
             s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() },
             a { .even = reinterpret_cast<u64>(aad.data()), .odd = aad.size() };
         __asm__ volatile(
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rrf,%[opc] << 16,%[dst],%[src],%[aad],0\n"
-            "	brc	1,0b"	/* handle partial completion */
-            : [dst] "+&d" (d.pair), [src] "+&d" (s.pair),
+            "	lgr 	0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	kma 	%[dst],%[src],%[aad]\n"
+            "	brc	    1,0b"
+            : [dst] "+&d" (d.pair),
+              [src] "+&d" (s.pair),
               [aad] "+&d" (a.pair)
-            : [fc] "i" (static_cast<u64>(Fc) | static_cast<u64>(Fl) | static_cast<u64>(Mod)),
-              [pba] "d" (reinterpret_cast<u64>(&pb)), [opc] "i" (cpacf_opcodes::kma)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
             : "cc", "memory", "0", "1"
         );
     }
@@ -508,19 +668,21 @@ namespace arch::s390x::cpu::cpacf {
     template <kmctr_fc Fc, cipher_modifiers Mod, typename Pb>
         requires kmctr_pb_for<Fc, Pb>
     auto kmctr(Pb& pb, u8& dest, std::span<const u8> src, u8& counter) -> i32 {
+        constexpr u64 fc = make_cipher_function_control(Fc, Mod);
         processor::register_pair
-            d { .even = dest, .odd = 0 },
+            d { .even = reinterpret_cast<u64>(&dest), .odd = 0 },
             s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() },
             c { .even = counter, .odd = 0 };
         __asm__ volatile(
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rrf,%[opc] << 16,%[dst],%[src],%[ctr],0\n"
-            "	brc	1,0b"
-            : [src] "+&d" (s.pair), [dst] "+&d" (d.pair),
+            "	lgr 	0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	kmctr	%[dst],%[src],%[ctr]\n"
+            "	brc	    1,0b"
+            : [src] "+&d" (s.pair),
+              [dst] "+&d" (d.pair),
               [ctr] "+&d" (c.pair)
-            : [fc] "i" (static_cast<u64>(Fc) | static_cast<u64>(Mod)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::kmctr)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
             : "cc", "memory", "0", "1"
         );
         return static_cast<i32>(src.size() - s.odd);
@@ -528,7 +690,7 @@ namespace arch::s390x::cpu::cpacf {
 
     /// @}
 
-    /// PRNO/TRNG - PERFORM RANDOM NUMBER OPERATION/TRUE RANDOM NUMBER GENERATOR
+    /// @brief PRNO/TRNG - PERFORM RANDOM NUMBER OPERATION/TRUE RANDOM NUMBER GENERATOR
     /// @{
 
     enum class prno_fc : u64 {
@@ -553,17 +715,22 @@ namespace arch::s390x::cpu::cpacf {
     template <prno_fc Fc, typename Pb>
         requires prno_pb_for<Fc, Pb>
     auto prno(Pb& pb, std::span<u8> dest, std::span<u8> seed) -> void {
+        constexpr u64 fc = static_cast<u64>(Fc);
         processor::register_pair
             d { .even = reinterpret_cast<u64>(dest.data()), .odd = dest.size() },
             s { .even = reinterpret_cast<u64>(seed.data()), .odd = seed.size() };
         __asm__ volatile (
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rre,%[opc] << 16,%[dst],%[seed]\n"
-            "	brc	1,0b"	  /* handle partial completion */
-            : [dst] "+&d" (d.pair)
-            : [fc] "i" (static_cast<u64>(Fc)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [seed] "d" (s.pair), [opc] "i" (cpacf_opcodes::prno)
+            "	lgr 	0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            __asm_machine_begin()
+            __asm_machine(z14)
+            "0:	prno    %[dst],%[seed]\n"
+            __asm_machine_end()
+            "	brc	    1,0b"
+            : [dst]  "+&d" (d.pair)
+            : [fc]   "d" (fc),
+              [pba]  "d" (reinterpret_cast<u64>(&pb)),
+              [seed] "d" (s.pair)
             : "cc", "memory", "0", "1"
         );
     }
@@ -638,23 +805,27 @@ namespace arch::s390x::cpu::cpacf {
     template <pcc_fc Fc, typename Pb>
         requires pcc_pb_for<Fc, Pb>
     auto pcc(Pb& pb) -> condition_code {
+        constexpr u64 fc = static_cast<u64>(Fc);
         condition_code cc;
         __asm__ volatile (
-            "	lghi	0,%[fc]\n"
-            "	lgr	1,%[pba]\n"
-            "0:	.insn	rre,%[opc] << 16,0,0\n"
-            "	brc	1,0b\n"	  /* handle partial completion */
+            "	lgr 	0,%[fc]\n"
+            "	lgr 	1,%[pba]\n"
+            "0:	pcc             \n"
+            "	brc	    1,0b\n"
             "   ipm  %[cc]\n"
             "   srl  %[cc],28"
             : [cc] "=d" (cc)
-            : [fc] "i" (static_cast<u64>(Fc)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::prno)
+            : [fc] "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
             : "cc", "memory", "0", "1"
         );
         return cc;
     }
 
     /// @}
+
+    /// @name PERFORM CRYPTOGRAPHIC KEY MANAGEMENT OPERATION
+    /// @{
 
     enum class pckmo_fc : u64 {
         query           = 0x0,
@@ -700,16 +871,88 @@ namespace arch::s390x::cpu::cpacf {
     template <pckmo_fc Fc, typename Pb>
         requires pckmo_pb_for<Fc, Pb>
     auto pckmo(Pb& pb) -> void {
+        constexpr u64 fc = static_cast<u64>(Fc);
         __asm__ volatile (
-            "	lghi	0,%[fc]\n"
+            "	lgr 	0,%[fc]\n"
             "	lgr	    1,%[pba]\n"
-            "	.insn	rre,%[opc] << 16,0,0\n"
+            "	pckmo           \n"
             :
-            : [fc] "i" (static_cast<u64>(Fc)), [pba] "d" (reinterpret_cast<u64>(&pb)),
-              [opc] "i" (cpacf_opcodes::pckmo)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
             : "cc", "memory", "0", "1"
         );
     }
+
+    /// @}
+
+    /// @name KDSA - COMPUTE DIGITAL SIGNATURE AUTHENTICATION
+    /// @{
+
+    enum class kdsa_deterministic_bit : u64 {
+        non_deterministic = 0x0,
+        deterministic     = ibmbitmask64(56),
+    };
+
+    enum class kdsa_fc : u64 {
+        query             = 0x00,
+        ecdsa_verify_p256 = 0x01,
+        ecdsa_verify_p384 = 0x02,
+        ecdsa_verify_p521 = 0x03,
+        ecdsa_sign_p256   = 0x09,
+        ecdsa_sign_p384   = 0x0a,
+        ecdsa_sign_p521   = 0x0b,
+        enc_ecdsa_sign_p256  = 0x11,
+        enc_ecdsa_sign_p384  = 0x12,
+        enc_ecdsa_sign_p521  = 0x13,
+        eddsa_verify_ed25519 = 0x20,
+        eddsa_verify_ed448   = 0x24,
+        eddsa_sign_ed25519   = 0x28,
+        eddsa_sign_ed448     = 0x2c,
+        enc_eddsa_sign_ed25519 = 0x30,
+        enc_eddsa_sign_ed448   = 0x34,
+        query_qai              = 0x7f
+    };
+
+    template <kdsa_fc Fc> struct kdsa_pb;
+    template <> struct kdsa_pb<kdsa_fc::query>                  { static constexpr usize value = 16;   };
+    template <> struct kdsa_pb<kdsa_fc::ecdsa_verify_p256>      { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::ecdsa_verify_p384>      { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::ecdsa_verify_p521>      { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::ecdsa_sign_p256>        { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::ecdsa_sign_p384>        { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::ecdsa_sign_p521>        { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::enc_ecdsa_sign_p256>    { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::enc_ecdsa_sign_p384>    { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::enc_ecdsa_sign_p521>    { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::eddsa_verify_ed25519>   { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::eddsa_verify_ed448>     { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::eddsa_sign_ed25519>     { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::eddsa_sign_ed448>       { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::enc_eddsa_sign_ed25519> { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::enc_eddsa_sign_ed448>   { static constexpr usize value = 4096; };
+    template <> struct kdsa_pb<kdsa_fc::query_qai>              { static constexpr usize value = 256;  };
+    template <kdsa_fc Fc> inline constexpr usize kdsa_pb_v = kdsa_pb<Fc>::value;
+    template <kdsa_fc Fc, typename Pb> concept kdsa_pb_for = sizeof(Pb) == kdsa_pb_v<Fc>;
+
+    template <kdsa_fc Fc, kdsa_deterministic_bit Fl, typename Pb>
+       requires kdsa_pb_for<Fc, Pb>
+   auto kdsa(Pb& pb, std::span<const u8> src) -> i32 {
+        constexpr u64 fc = static_cast<u64>(Fc) | static_cast<u64>(Fl);
+        processor::register_pair s { .even = reinterpret_cast<u64>(src.data()), .odd = src.size() };
+        __asm__ volatile(
+            "	lgr     0,%[fc]\n"
+            "	lgr	    1,%[pba]\n"
+            "0:	kdsa    0,%[src]\n"
+            "	brc	    1,0b"
+            : [src] "+&d" (s.pair)
+            : [fc]  "d" (fc),
+              [pba] "d" (reinterpret_cast<u64>(&pb))
+            : "cc", "memory", "0", "1"
+        );
+        return static_cast<i32>(src.size() - s.odd);
+    }
+
+    /// @}
 
 } // namespace arch::s390x::cpu::cpacf
 

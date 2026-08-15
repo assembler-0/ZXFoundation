@@ -1,0 +1,96 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/smp/smp.cxxm
+/// @brief Cross-CPU function-call IPI subsystem — queue, completion, RCU free.
+
+export module zxfoundation.smp.csd.core;
+import zxfoundation.smp.csd.types;
+import zxfoundation.base.types;
+import zxfoundation.sync.rcu.types;
+import arch.s390x.cpu.cpumask;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::smp::csd {
+
+    /// @brief Initialise a csd before enqueue.
+    /// @param[out] csd  CSD node to initialise.
+    /// @param[in]  func Callback invoked on the target CPU.
+    /// @param[in]  data Opaque @c data pointer passed back to @c func.
+    /// @param[in]  info Caller-supplied fixed-width word passed to @c func.
+    /// @param[in]  flags One of @c SMP_CSD_F_SYNC / @c SMP_CSD_F_ASYNC, may
+    ///             be ORed with @c SMP_CSD_F_RCU_FREE (async-only).
+    auto init(call_single_data& csd, csd_fn func, void* data,
+                  u64 info, u32 flags) noexcept -> void;
+
+    /// @brief Wait until the target CPU has completed dispatch of @c csd.
+    /// @param[in] csd CSD node with @c SMP_CSD_F_SYNC set by the producer.
+    auto lock_wait(const call_single_data& csd) noexcept -> void;
+
+    /// @brief Test whether @c csd has completed dispatch.
+    /// @return True when @c SMP_CSD_F_DONE is observed on @c csd.flags.
+    [[nodiscard]] auto is_done(const call_single_data& csd) noexcept -> bool;
+
+    /// @brief Register an RCU-freeing callback on a csd flagged with
+    ///        @c SMP_CSD_F_RCU_FREE.
+    /// @param[out] csd CSD node flagged @c SMP_CSD_F_RCU_FREE.
+    /// @param[in]  fn  Callback invoked by @c call_rcu after a grace period.
+    auto set_rcu_free(call_single_data& csd,
+                          void (*fn)(sync::rcu::rcu_head*) noexcept) noexcept -> void;
+
+    /// @brief Drain all pending CSD nodes for the running CPU.
+    auto drain_cpu() noexcept -> void;
+
+    /// @brief Enqueue a pre-initialised csd onto a target CPU.
+    /// @param[in] cpu  Target CPU id.
+    /// @param[in] csd  CSD node, fully initialised via @c csd_init.
+    /// @note Suppresses self-IPI when @c cpu == this_cpu (caller-local pass).
+    auto call_function_single_async(u16 cpu, call_single_data* csd) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Prevent new remote CSD enqueues to @p cpu and wait until all
+    ///        already accepted callbacks have completed on the target.
+    /// @note CPU teardown keeps the target runnable until this wait completes.
+    auto disable_cpu(u16 cpu) noexcept -> void;
+
+    /// @brief Allow remote CSD enqueues to @p cpu after it has been initialized.
+    auto enable_cpu(u16 cpu) noexcept -> void;
+
+    /// @brief Synchronous single-CPU function-call IPI.
+    /// @param[in] cpu   Target CPU id.
+    /// @param[in] func  Callback invoked on the target CPU.
+    /// @param[in] data  Opaque data passed to @c func.
+    /// @param[in] info  Fixed-width word passed to @c func.
+    /// @return Success when the target CPU completed dispatch; @c invalid_arg
+    ///         on bad CPU id or null callback.
+    auto call_function_single_sync(u16 cpu, csd_fn func, void* data,
+                                       u64 info) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Fan-out a synchronous callback to many CPUs at once.
+    /// @param[in] mask          CPU mask of target CPUs.
+    /// @param[in] func          Callback invoked on each target CPU.
+    /// @param[in] data          Opaque data shared by all target invocations.
+    /// @param[in] info          Fixed-width word shared by all target invocations.
+    /// @param[out] csd_pool     Caller-owned descriptors, one per remote CPU.
+    /// @param[in] pool_capacity Number of descriptors available in @p csd_pool.
+    /// @return Number of CPUs whose callbacks completed.
+    /// @note All remote callbacks are queued before any completion is waited
+    ///       on.  This avoids serialising the IPI round trips.
+    auto call_function_many(const ::lib::cpumask& mask, csd_fn func,
+                                void* data, u64 info,
+                                call_single_data* csd_pool,
+                                u32 pool_capacity) noexcept
+        -> std::expected<u32, lib::kernel_error>;
+
+    /// @brief Test whether the running CPU has any pending csd nodes.
+    /// @return True when the running CPU's CSD queue is non-empty.
+    [[nodiscard]] auto pending() noexcept -> bool;
+
+    /// @brief Read the per-CPU CSD statistics block for diagnostics.
+    [[nodiscard]] auto stats_of(u16 cpu) noexcept -> csd_stats;
+
+} // namespace zxfoundation::smp
+
+} // end export

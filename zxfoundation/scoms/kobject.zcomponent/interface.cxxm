@@ -1,0 +1,4 @@
+export module zxfoundation.scoms.kobject;
+export import zxfoundation.scoms.kobject.types;
+export import zxfoundation.scoms.kobject.base;
+export import zxfoundation.scoms.kobject.ref;

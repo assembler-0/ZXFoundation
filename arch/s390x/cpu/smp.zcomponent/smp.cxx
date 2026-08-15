@@ -18,23 +18,23 @@ import arch.s390x.cpu.ipi;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.sys.irq.irqdesc;
 import zxfoundation.sched.sched;
 import zxfoundation.sched.sched_topology;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import zxfoundation.sys.printk;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.irq.core;
 import lib.error;
 import std;
 
 namespace arch::s390x::cpu::smp::_internal {
-    __internal__ std::atomic<u32> g_ap_online{0};
-    __internal__ std::atomic<u32> g_sched_ready{0};
-    __internal__ std::atomic<u32> g_aps_initialized{0};
-    __internal__ u32 g_total_aps{0};
+    no_export std::atomic<u32> g_ap_online{0};
+    no_export std::atomic<u32> g_sched_ready{0};
+    no_export std::atomic<u32> g_aps_initialized{0};
+    no_export u32 g_total_aps{0};
 }
 
-extern "C" {
+no_mangle {
 
 auto ap_entry() -> void;
 
@@ -67,7 +67,7 @@ auto ap_entry() -> void;
     zxfoundation::sched::sched_idle_enter();
 }
 
-} // extern "C"
+} // no_mangle
 
 namespace arch::s390x::cpu::smp {
 
@@ -94,14 +94,14 @@ namespace arch::s390x::cpu::smp {
         u32 sigp_status{};
     };
 
-    __internal__ constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
-    __internal__ constexpr u64 AP_ONLINE_TIMEOUT_TOD = TOD_UNITS_PER_MILLISECOND * 30'000ULL;
-    __internal__ constexpr u64 LOWCORE_PREFIX_ALIGNMENT = 8'192ULL;
-    __internal__ constexpr u64 SIGP_PREFIX_MAX_PHYS = 1ULL << 31U;
+    no_export constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
+    no_export constexpr u64 AP_ONLINE_TIMEOUT_TOD = TOD_UNITS_PER_MILLISECOND * 30'000ULL;
+    no_export constexpr u64 LOWCORE_PREFIX_ALIGNMENT = 8'192ULL;
+    no_export constexpr u64 SIGP_PREFIX_MAX_PHYS = 1ULL << 31U;
 
-    __internal__ std::array<ap_boot_record,zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_ap_boot_records{};
+    no_export std::array<ap_boot_record,zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_ap_boot_records{};
 
-    __internal__ auto apply_cpu_evidence(
+    no_export auto apply_cpu_evidence(
         arch::s390x::cpu::percpu::percpu_data& pcp,
         const arch::s390x::init::zxfl::cpu_info& ci
     ) noexcept -> void {
@@ -113,18 +113,18 @@ namespace arch::s390x::cpu::smp {
         pcp.capacity = (ci.capacity == 0U) ? 100U : ci.capacity;
     }
 
-    [[nodiscard]] __internal__ auto tod_elapsed(const u64 start) noexcept -> u64 {
+    [[nodiscard]] no_export auto tod_elapsed(const u64 start) noexcept -> u64 {
         return arch::s390x::cpu::clock::stck() - start;
     }
 
-    [[nodiscard]] __internal__ auto prefix_block_is_valid(const u64 phys) noexcept -> bool {
+    [[nodiscard]] no_export auto prefix_block_is_valid(const u64 phys) noexcept -> bool {
         return phys != 0 && phys < SIGP_PREFIX_MAX_PHYS &&
             ((phys & (LOWCORE_PREFIX_ALIGNMENT - 1U)) == 0);
     }
 
     /// @brief Free AP resources allocated via PMM after a mid-sequence failure.
     ///        Called only after txn.commit() so pages must be freed individually.
-    __internal__ auto rollback_ap_resources(ap_boot_record& record) noexcept -> void {
+    no_export auto rollback_ap_resources(ap_boot_record& record) noexcept -> void {
         using namespace zxfoundation::memory::pmm;
 
         auto free_if = [](u64 phys, u32 order, purpose p) noexcept -> void {
@@ -143,7 +143,7 @@ namespace arch::s390x::cpu::smp {
         record = {};
     }
 
-    [[nodiscard]] __internal__ auto sigp_failure_error(const arch::s390x::cpu::sigp::sigp_result& result) noexcept -> lib::kernel_error {
+    [[nodiscard]] no_export auto sigp_failure_error(const arch::s390x::cpu::sigp::sigp_result& result) noexcept -> lib::kernel_error {
         if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_BUSY)
             return lib::kernel_error::from_arch(lib::arch_error::sigp_busy);
         if (result.cc == arch::s390x::cpu::sigp::SIGP_CC_NOT_OPERATIONAL)
@@ -158,7 +158,7 @@ namespace arch::s390x::cpu::smp {
         return lib::kernel_error::from_generic(lib::generic_error::internal_error);
     }
 
-    [[nodiscard]] __internal__ auto reject_sigp_and_rollback(
+    [[nodiscard]] no_export auto reject_sigp_and_rollback(
         ap_boot_record& record,
         const u8 order,
         const arch::s390x::cpu::sigp::sigp_result& result
@@ -174,7 +174,7 @@ namespace arch::s390x::cpu::smp {
         return err;
     }
 
-    [[nodiscard]] __internal__ auto wait_ap_online(const u32 target) noexcept -> bool {
+    [[nodiscard]] no_export auto wait_ap_online(const u32 target) noexcept -> bool {
         const u64 start = arch::s390x::cpu::clock::stck();
         while (g_ap_online.load(std::memory_order::seq_cst) < target) {
             if (tod_elapsed(start) >= AP_ONLINE_TIMEOUT_TOD)
@@ -184,7 +184,7 @@ namespace arch::s390x::cpu::smp {
         return true;
     }
     
-    __internal__ auto setup_bsp() noexcept -> void {
+    no_export auto setup_bsp() noexcept -> void {
         discard_value zxfoundation::sys::irq::irq_register(IPI_IRQ_EMERGENCY, ipi::handle_ipi, nullptr, 0);
         discard_value zxfoundation::sys::irq::irq_register(IPI_IRQ_EXTCALL,   ipi::handle_ipi, nullptr, 0);
         ctlreg::ctl_set_bit<0>(37);
@@ -195,7 +195,7 @@ namespace arch::s390x::cpu::smp {
         hotplug::hotplug_mark_possible(0U);
     }
 
-    __internal__ auto init_aps(const init::zxfl::protocol& proto) noexcept
+    no_export auto init_aps(const init::zxfl::protocol& proto) noexcept
         -> ::std::expected<u32, ::lib::kernel_error> {
         using namespace zxfoundation::memory::pmm;
 
@@ -387,12 +387,12 @@ namespace arch::s390x::cpu::smp {
     }
 
     /// @brief Signal APs that the scheduler is ready.
-    __internal__ auto ap_release_all() noexcept -> void {
+    no_export auto ap_release_all() noexcept -> void {
         g_sched_ready.store(1, std::memory_order::release);
     }
 
     /// @brief BSP waits until all APs have finished sched_init_ap().
-    __internal__ auto wait_aps_initialized() noexcept -> void {
+    no_export auto wait_aps_initialized() noexcept -> void {
         while (g_aps_initialized.load(std::memory_order::seq_cst) < g_total_aps)
             sync::cpu_relax();
     }

@@ -1,87 +1,22 @@
-memory, sched, arch/s390x/cpu, sys, lib, build: memory overhaul, reverse-map/reclaim/OOM stack, CPU source .zcomponent migration, full libstdc++ integration, IPC and policy subsystems
+arch/s390x, zxfoundation, drivers, build: NNPA facility API, STSI configuration wrapper, and kernel-wide source refactorization
 
-    This change set is the largest restructuring since the initial
-    monolithic commit (d42c372).  It reworks the memory subsystem
-    end to end — introducing a reverse-map, a bounded page cache,
-    unified reclaim with OOM fallback and an explicit object
-    ontology backed by SCOMS — retires the hand-rolled C++ support
-    library in favour of a vendored, freestanding-capable libstdc++
-    consumed through `import std;`, migrates the s390x CPU sources to
-    the directory-scoped `.zcomponent` build model, fixes a large
-    number of memory and scheduling defects, and lands new IPC and
-    policy subsystems.
+    This change set adds new architecture API surface and reorganizes
+    the kernel sources under the directory-scoped zx-discovery
+    component model, consolidating module layout across the tree.
 
-    * Memory overhaul.  The VM layer was rewritten around an interval
-      rb-tree keyed by va_start with explicit split/merge bookkeeping,
-      committed-page accounting and a per-domain budget with atomic
-      reservation and charge refund.  Mapping teardown no longer
-      guesses whether a mapped frame is PMM-owned; it drops PTEs first
-      and lets the reverse map release the pin beneath, and the
-      vm_txn rollback path now tears the mapping down before returning
-      any frames so live PTEs can never alias buddy-owned memory.
+    * Architecture API.  Adds the NNPA (Neural Network Processing
+      Assist) facility interface for the z16 machine generation — facility
+      query, tensor operation functions and parameter block definitions —
+      and a typed C++ wrapper for the STSI 15 (current configuration
+      level) query, including the configuration topology view.
 
-    * New reverse map (rmap) stripes a bounded chunked table over the
-      physical frame index, giving every page a set of resident mapping
-      views, used both for physical-range eviction and for migrate/
-      compaction.  A new bounded, hashed, file-backed page cache with
-      explicit residency and mapping pins sits above the pager.
+    * Source refactorization.  Nearly all of arch/s390x and about forty
+      percent of zxfoundation are restructured into component-scoped
+      layout: each subsystem now carries a manifest, an interface module
+      and a separate implementation unit.  The lock/RCU infrastructure
+      is consolidated under sync/, the channel subsystem moves under
+      io/, and device drivers move under drivers/.  The vendored
+      libstdc++ dependency is renamed to zxlibstdc++ and the build glue
+      is adjusted accordingly.
 
-    * Unified reclaim walks the page cache and every VMA through the
-      object graph, evicts anonymous, resident, non-pinned pages, and
-      falls back to a deterministic global OOM selection and kill
-      callback when nothing else can be reclaimed.
-
-    * The memory object hierarchy now forms a single SCOMS-backed
-      closed enriched union (memory_objects), discriminated by kind,
-      that carries VM-region, kmem-cache, page-cache, grant and
-      address-space views and powers the global rmap/page-cache table.
-
-    * PMM NUMA grading was corrected: a drawer id is a topology
-      coordinate, not a node id, so the boot fallback now resolves to
-      the boot node; frames retired after validation or MCCK failure
-      are recorded in a pending dead-pool and excluded from the buddy
-      until an offline-recovery path can verify them.
-
-    * dom/flat cpu source management migrates to component-scoped
-      layout: each cpu facility (ar, aste, clock, cpumask, cputimer,
-      diag, features, hotplug, ipi, irq, lowcore, pcp, psw, sclp,
-      sigp, smp, stsi, sync, uaccess, ...) now lives in its own
-      `<name>.zcomponent/` directory carrying a `manifest.zxd`, a
-      `.cxxm` interface module and a `.cxx` implementation, in place
-      of the previous single flat `.cxxm` per facility.  This is the
-      zx-discovery component model applied to `arch/s390x/cpu`.
-
-    * The hand-rolled `lib/*` support library (array, algorithm,
-      concepts, expected, optional, pair, span, string_view, tuple,
-      type_traits, variant, compare, util, ...) is removed in favour of
-      the vendored ZXFoundation-LIBSTDCXX submodule.  Kernel sources
-      now `import std;` and use `std::expected`, `std::optional`,
-      `std::move` and the standard algorithmics directly throughout,
-      with `-nostdlink++`/`-nostdinc++` retained and the kernel CRTSE
-      keeping only the freestanding runtime glue (terminate, pure
-      virtual, guard, unwinding hooks).  The C++ extensions option is
-      enabled. LLVM-specific flags are added to suppress warnings
-      generated by the addition of libstdc++
-
-    * New subsystems: `zxfoundation::sys::ipc` (bounded endpoint and
-      message objects with capability and grant attachment transfer),
-      delivered through `sys_op::ipc_*` gate operations, and
-      `zxfoundation::policy` (nucleus-owned policy-server
-      registration).  SCOMS gains the nucleus-owned object metadata
-      core (ordered, generation-counted `kobject_table`) and the
-      `scoms_ref` shared handle.
-
-    * A large number of memory and scheduler defects were closed.  The
-      retired page accounting no longer lets frames re-enter the
-      buddy; earlier NUMA node fallback misused the drawer id as a
-      node id; the `vm_region` slot was double-constructed and
-      wiped its SCOMS id, breaking every legitimately issued region
-      capability (BUG-008 class); domain names no longer alias
-      transient user buffers and secondary strands are detached before
-      their domain's final release (BUG-006/BUG-007 class).  Scheduler
-      admission is now a DGP-gated path (`sched.admit`) and
-      sched_softirq context work was split into a leaf module.
-
-    * Architecture API: Introduced IBM z/VM-compatible STHYI API and table walker.
-      Introduced PTF (PERFORM TOPOLOGY FUNCTION) support. Refactored ECAG, AR, ASTE,
-      API are now more reliable and convenient to use.
+    The kernel behaviour is unchanged; this change is structural.

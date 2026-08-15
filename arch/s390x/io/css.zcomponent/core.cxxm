@@ -1,0 +1,220 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/io/core.cxxm
+/// @brief Channel Subsystem core
+
+export module arch.s390x.io.css.core;
+import arch.s390x.io.types;
+import zxfoundation.base.types;
+import lib.bit;
+import std;
+
+export {
+
+namespace arch::s390x::io::css {
+
+    /// @brief Issue XSCH (Cancel Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @return Condition code: 0=canceled, 1=status pending, 2=not applicable, 3=not operational.
+    [[nodiscard]] auto xsch(subchannel_id schid) noexcept -> condition_code {
+        condition_code cc{};
+        register u64 r1 asm("1") = schid.to_raw();
+        __asm__ volatile(
+            "xsch\n"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r" (r1)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue CSCH (Clear Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @return Condition code: 0=cleared, 3=not operational.
+    [[nodiscard]] auto csch(subchannel_id schid) noexcept -> condition_code {
+        condition_code cc;
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        __asm__ volatile(
+            "csch\n\t"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue HSCH (Halt Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @return Condition code: 0=halted, 1=status pending, 2=busy, 3=not operational.
+    [[nodiscard]] auto hsch(subchannel_id schid) noexcept -> condition_code {
+        condition_code cc;
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        __asm__ volatile(
+            "hsch\n\t"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue RSCH (Resume Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @return Condition code: 0=canceled, 1=status pending, 2=not applicable, 3=not operational.
+    [[nodiscard]] auto rsch(subchannel_id schid) noexcept -> condition_code {
+        condition_code cc{};
+        register u64 r1 asm("1") = schid.to_raw();
+        __asm__ volatile(
+            "rsch\n"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r" (r1)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    enum class schm_flags : u64 {
+        block_update_control = ibmbitmask64(62),
+        connect_time_control = ibmbitmask64(63),
+    };
+
+    [[nodiscard]] consteval auto operator|(schm_flags a, schm_flags b) noexcept -> u64 {
+        return static_cast<u64>(a) | static_cast<u64>(b);
+    }
+
+    /// @brief Issue SCHM (Set Channel Monitor) instruction.
+    /// @param mbk Measurement-Block Key
+    /// @param mbo_addr Measurement-Block-Origin Address
+    /// @return Condition code: 0=started, 1=status pending, 2=busy, 3=not operational.
+    template <schm_flags Fl>
+    [[nodiscard]] auto schm(bit_int<4> mbk, u64 mbo_addr) noexcept -> condition_code {
+        condition_code cc;
+        u64 _r1{0};
+        lib::bit_insert_msb(_r1, 32, 35, static_cast<u64>(mbk));
+        mbk |= static_cast<u64>(Fl);
+        register u64 r1 asm("1") = _r1;
+        register u64 r2 asm("2") = mbo_addr;
+        __asm__ volatile(
+            "schm\n"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1), "r"(r2)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue SAL (Set Address Limit) instruction.
+    /// @param address_limit Set address limit (loaded into GR1).
+    /// @return Condition code: 0=canceled, 1=status pending, 2=not applicable, 3=not operational.
+    [[nodiscard]] auto sal(bit_int<31> address_limit) noexcept -> condition_code {
+        condition_code cc{};
+        u64 limit{0};
+        lib::bit_insert_msb<u64>(limit, 33, 63, address_limit);
+        register u64 r1 asm("1") = limit;
+        __asm__ volatile(
+            "rsch\n"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r" (r1)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue SSCH (Start Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @param orb_ref Operation Request Block.
+    /// @return Condition code: 0=started, 1=status pending, 2=busy, 3=not operational.
+    [[nodiscard]] auto ssch(subchannel_id schid, const orb& orb_ref) noexcept -> condition_code {
+        condition_code cc;
+        register u64 r1 asm("1") = schid.to_raw();
+        __asm__ volatile(
+            "ssch 0(%[orb])\n\t"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1),
+              [orb] "a"(&orb_ref)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue RCHP (Reset Channel Path) instruction.
+    /// @param chpid Channel-Path Identifier (loaded into GR1).
+    /// @return Condition code: 0=initiated, 1=_, 2=busy, 3=not operational.
+    [[nodiscard]] auto rchp(u8 chpid) noexcept -> condition_code {
+        condition_code cc;
+        u64 _r1{0};
+        lib::bit_insert_msb<u64>(_r1, 56, 63, chpid);
+        register u64 r1 asm("1") = _r1;
+        __asm__ volatile(
+            "rchp  \n"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue TSCH (Test Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @param irb_ref Interruption Response Block (output).
+    /// @return Condition code: 0=status stored, 1=no status pending, 3=not operational.
+    [[nodiscard]] auto tsch(subchannel_id schid, irb& irb_ref) noexcept -> condition_code {
+        condition_code cc;
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        __asm__ volatile(
+            "tsch 0(%[irb])\n\t"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1),
+              [irb] "a"(&irb_ref)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue STSCH (Store Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @param schib_ref Subchannel Information Block (output).
+    /// @return Condition code: 0=stored, 3=not operational.
+    [[nodiscard]] auto stsch(subchannel_id schid, schib& schib_ref) noexcept -> condition_code {
+        condition_code cc;
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        __asm__ volatile(
+            "stsch 0(%[schib])\n\t"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1),
+              [schib] "a"(&schib_ref)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+    /// @brief Issue MSCH (Modify Subchannel) instruction.
+    /// @param schid Subchannel identifier (loaded into GR1).
+    /// @param schib_ref Subchannel Information Block (input).
+    /// @return Condition code: 0=modified, 1=status pending, 2=busy, 3=not operational.
+    [[nodiscard]] auto msch(subchannel_id schid, const schib& schib_ref) noexcept -> condition_code {
+        condition_code cc;
+        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        __asm__ volatile(
+            "msch 0(%[schib])\n\t"
+            __asm_capture_cc()
+            : __asm_cc_out(cc)
+            : "r"(r1),
+              [schib] "a"(&schib_ref)
+            : "cc", "memory"
+        );
+        return cc;
+    }
+
+}
+
+}

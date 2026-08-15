@@ -12,7 +12,7 @@ import std;
 namespace arch::s390x::cpu::features {
 
     /// Internal facility list cache — same size as the STFLE maximum.
-    __internal__ std::array<u64, STFLE_MAX_DWORDS> g_fac_list{};
+    no_export std::array<u64, STFLE_MAX_DWORDS> g_fac_list{};
 
     auto init(std::optional<const u64*> stfle_fac) noexcept -> void {
         if (!stfle_fac) discard_value detect<STFLE_MAX_DWORDS>(g_fac_list);

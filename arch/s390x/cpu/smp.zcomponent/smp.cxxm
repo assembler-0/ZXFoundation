@@ -3,9 +3,9 @@
 /// @brief smp types
 
 export module arch.s390x.cpu.smp;
-import zxfoundation.base.types;
-import zxfoundation.sys.irq.irqdesc;
 import arch.s390x.init.zxfl.protocol;
+import zxfoundation.base.types;
+import zxfoundation.sys.irq.consts;
 
 export {
 

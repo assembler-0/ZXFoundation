@@ -32,13 +32,11 @@
 #endif
 
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
-    #define ZX_HAS_PRE 1
 #else
     #define pre(expr)
 #endif
 
 #if defined(__cpp_contracts) && __cpp_contracts >= 202400L
-    #define ZX_HAS_POST 1
 #else
     #define post(expr)
 #endif
@@ -62,15 +60,12 @@
 #define EX_TYPE_UA_MVCOS_TO  4   
 #define EX_TYPE_UA_MVCOS_FROM 5
 
-#define __internal__ static
-#define __external__ extern "C"
-
 #define __endian__(endian) \
-    static_assert(__BYTE_ORDER__ == concat(__ORDER_##endian,_ENDIAN__), stringify(__FILE_NAME__) ": requested endian " stringify(concat(__ORDER_##endian,_ENDIAN__)) " but got " stringify(__BYTE_ORDER__))
+    static_assert(__BYTE_ORDER__ == concat(concat(__ORDER_,endian),_ENDIAN__), stringify(__FILE_NAME__) ": requested endian " stringify(concat(concat(__ORDER_,endian),_ENDIAN__)) " but got " stringify(__BYTE_ORDER__))
 
 #define __zinit__(c, p, entry, a)                                                 \
-    extern "C" {                                                                  \
-    constexpr zxfoundation::sys::zinit::zi_desc __zi_desc_##entry                 \
+    no_mangle {                                                                   \
+    constinit zxfoundation::sys::zinit::zi_desc __zi_desc_##entry                 \
     [[gnu::used, gnu::section(".zinit_data." stringify(c) "." stringify(entry))]] \
     {                                                                             \
         .name = stringify(entry),                                                 \
@@ -82,30 +77,64 @@
     }
 
 #define discard_value (void)
+#define no_export static
+#define no_mangle extern "C"
+#define from_global_reference extern
+#define from_global_nomangle extern "C"
+#define from_global(T) concat(from_global_,T)
 
 #define bitsfield(size, name) ubit_int<size> name : (size)
 #define bitfield(name) bitsfield(1, name)
-#define bitrsvd(size) bitsfield(size, concat(__bitrsvd_, __COUNTER__))
-#define bytersvd(size) u8 concat(__bytersvd_, __COUNTER__)[size]
+#define bitlimit(expr, bits) expr : bits
+#define bitrsvd(size) bitsfield(size, concat(__bitrsvd_,__COUNTER__))
+#define bytersvd(size) u8 concat(__bytersvd_,__COUNTER__)[size]
+
+#define __asm_machine_begin() \
+    ".machine push\n"
+#define __asm_machine(x) \
+    ".machine " stringify(x) "\n"
+#define __asm_machine_end() \
+    ".machine pop\n"
+
+#define __machine__(mac)      \
+    __asm__ (                 \
+        __asm_machine_begin() \
+        __asm_machine(mac)    \
+    )
+
+#define __asm_capture_cc()     \
+    "ipm  %[__cc__]\n"         \
+    "srl  %[__cc__],28\n"
+#define __asm_cc_out(c)        \
+    [__cc__] "=d" (c)
+
+#define symaliasname(fn) concat(__symalias_,fn)
+#define symalias_reference(fn) __asm__(stringify(symaliasname(fn)))
+#define symalias(fn) no_mangle auto symaliasname(fn)
+
+/// @name NOTE: this is for System/360 lineup (incl. z/Architecture)
+/// @{
+#define __b_TO_BYTES(bytes) (bytes)
+#define __hw_TO_BYTES(hwords) __b_TO_BYTES((hwords) * 2)
+#define __w_TO_BYTES(words)   __hw_TO_BYTES((words) * 2)
+#define __dw_TO_BYTES(dwords) __w_TO_BYTES((dwords) * 2)
+#define __qw_TO_BYTES(qwords) __dw_TO_BYTES((qwords) * 2)
+#define tobytes(type, val) concat(concat(__,type),_TO_BYTES)(val)
+
+#define __b_BITS 7
+#define __hw_BITS 15
+#define __w_BITS  31
+#define __dw_BITS 63
+#define ibmbit(type, x) (concat(concat(__,type),_BITS) - (x))
+#define ibmbitmask(type, x) (1ULL << (concat(concat(__,type),_BITS) - (x)))
+#define ibmbitmask8(x)  ibmbitmask(b, x)
+#define ibmbitmask16(x) ibmbitmask(hw, x)
+#define ibmbitmask32(x) ibmbitmask(w, x)
+#define ibmbitmask64(x) ibmbitmask(dw, x)
+/// @}
 
 #define assert_size(s, sz) \
-    static_assert(sizeof(s) == (sz), stringify(s) " != " stringify(sz));
+    static_assert(sizeof(s) == (sz), stringify(s) " != " stringify(sz))
 
-#if defined(__cpp_contracts) && __cpp_contracts >= 202400L
-    #define assert(expr) contract_assert(expr)
-#else
-#define assert(expr) \
-    do { if (!(expr)) [[unlikely]] zxfoundation::sys::syschk::syschk_fatal(lib::kernel_error::from_generic(lib::generic_error::internal_error), stringify(expr)); } while (0)
-#endif
-
-#if 0
-
-#define CC_IPM(sym)		                \
-    "	ipm	%[" stringify(sym) "]\n"    \
-    "	srl %[" stringify(sym) "],28\n"
-#define CC_OUT(sym, var)	[sym] "=d" (var)
-#define CC_TRANSFORM(cc)	({ (cc); })
-#define CC_CLOBBER		"cc"
-#define CC_CLOBBER_LIST(...)	CC_CLOBBER, __VA_ARGS__
-
-#endif
+#define assert_offset(t, m, o)  \
+    static_assert(__builtin_offsetof(t, m) == (o), "offsetof(" stringify(t) "," stringify(m) ") != " stringify(o))

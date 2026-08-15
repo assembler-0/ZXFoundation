@@ -5,14 +5,14 @@
 export module zxfoundation.memory.vm_txn;
 import zxfoundation.memory.vm_types;
 import zxfoundation.memory.vm;
-import zxfoundation.sys.transaction;
+import zxfoundation.base.transaction;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.sys.syschk;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.mmu.mmu_const;
+import zxfoundation.sys.syschk.core;
+import arch.s390x.mmu.core;
+import arch.s390x.mmu.types;
+import arch.s390x.mmu.consts;
 import zxfoundation.base.types;
 import lib.error;
 import std;
@@ -32,8 +32,8 @@ namespace zxfoundation::memory::vm {
     inline constexpr u32 VM_TXN_MAX_PAGES = 64U;
 
     /// @brief Transactional vm_map — ensures atomicity of map + physical allocation.
-    class vm_map_txn : public zxfoundation::transaction<vm_map_txn> {
-        friend class zxfoundation::transaction<vm_map_txn>;
+    class vm_map_txn : public zxfoundation::base::transaction<vm_map_txn> {
+        friend class zxfoundation::base::transaction<vm_map_txn>;
 
         /// @brief Allocated physical pages to be freed on rollback.
         lib::static_vector<txn_page_record, VM_TXN_MAX_PAGES> m_pages{};

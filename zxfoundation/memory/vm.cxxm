@@ -6,12 +6,12 @@ export module zxfoundation.memory.vm;
 import zxfoundation.memory.vm_types;
 import zxfoundation.dgp.memory_contract;
 import zxfoundation.dgp.isolation_types;
-import zxfoundation.rcu.rcu;
-import zxfoundation.rcu.rcu_types;
-import zxfoundation.scoms.scoms_types;
-import zxfoundation.scoms.scoms_table;
-import zxfoundation.scoms.scoms_ref;
-import zxfoundation.scoms.scoms_object_core;
+import zxfoundation.sync.rcu;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.table;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.scoms.metadata.core;
 import zxfoundation.memory.memory_objects;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm_types;
@@ -21,19 +21,16 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.memory.page_cache;
 import zxfoundation.memory.page_cache_types;
 import zxfoundation.memory.rmap;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_tlb;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.mmu.mmu_const;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.locking.lock;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.printk_types;
-import zxfoundation.sys.syschk;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.printk.types;
+import zxfoundation.sys.syschk.core;
 import zxfoundation.base.typestate;
 import zxfoundation.base.types;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
+import arch.s390x.mmu;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.skey;
@@ -47,7 +44,7 @@ namespace zxfoundation::memory::vm::_internal {
 
     using namespace zxfoundation::memory;
 
-    static scoms::kobject_table<vm_region, MAX_VM_REGIONS> g_region_table{};
+    static scoms::scoms_table<vm_region, MAX_VM_REGIONS> g_region_table{};
     static bool g_vme_initialized{false};
 
     auto destroy_region_memory_objects(vm_region& rgn) noexcept -> void;
@@ -122,8 +119,8 @@ namespace zxfoundation::memory::vm::_internal {
     }
 
     /// @brief RCU callback: free a vm_region back to the SCOMS table after a grace period.
-    auto rcu_free_region_cb(rcu::rcu_head* head) noexcept -> void {
-        auto* rgn = lib::container_of<vm_region, rcu::rcu_head,
+    auto rcu_free_region_cb(sync::rcu::rcu_head* head) noexcept -> void {
+        auto* rgn = lib::container_of<vm_region, sync::rcu::rcu_head,
             &vm_region::rcu>(head);
         discard_value g_region_table.release(rgn->ko.id);
     }
@@ -135,7 +132,7 @@ namespace zxfoundation::memory::vm::_internal {
         space.region_count -= 1;
         destroy_region_memory_objects(*rgn);
         discard_value scoms::object_core::detach(rgn->ko);
-        rcu::call_rcu(&rgn->rcu, rcu_free_region_cb);
+        sync::rcu::call_rcu(&rgn->rcu, rcu_free_region_cb);
     }
 
     /// @brief Discard a temporary split region without changing mapped bytes.
@@ -146,18 +143,18 @@ namespace zxfoundation::memory::vm::_internal {
         space.region_count -= 1;
         destroy_region_memory_objects(*rgn);
         discard_value scoms::object_core::detach(rgn->ko);
-        rcu::call_rcu(&rgn->rcu, rcu_free_region_cb);
+        sync::rcu::call_rcu(&rgn->rcu, rcu_free_region_cb);
     }
 
-    /// @brief RCU-safe tree walk — each pointer load uses rcu_dereference.
+    /// @brief RCU-safe tree walk — each pointer load uses dereference.
     [[nodiscard]] auto rb_find_rcu(const vm_space& space, u64 va) noexcept -> vm_region* {
-        lib::rb_node* node = rcu::rcu_dereference(space.tree.root.node);
+        lib::rb_node* node = sync::rcu::dereference(space.tree.root.node);
         while (node) {
             const auto* rgn = region_of(node);
             if (va < rgn->va_start) {
-                node = rcu::rcu_dereference(node->left);
+                node = sync::rcu::dereference(node->left);
             } else if (va >= rgn->va_end) {
-                node = rcu::rcu_dereference(node->right);
+                node = sync::rcu::dereference(node->right);
             } else {
                 return const_cast<vm_region*>(rgn);
             }
@@ -372,7 +369,7 @@ namespace zxfoundation::memory::vm::_internal {
         if (!result) return std::unexpected(result.error());
 
         auto embryo_ref = static_cast<
-            scoms::kobject_ref<vm_region, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<vm_region, base::lifecycle_state::embryo>&&
         >(result.value());
 
         vm_region* rgn = &(*embryo_ref);
@@ -384,7 +381,7 @@ namespace zxfoundation::memory::vm::_internal {
         rgn->phys_base = phys_base;
 
         discard_value static_cast<
-            scoms::kobject_ref<vm_region, base::lifecycle_state::embryo>&&
+            scoms::kobject::robject<vm_region, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
         return rgn;
@@ -417,12 +414,12 @@ namespace zxfoundation::memory::vm::_internal {
         const objects::memory_object_policy& policy
     ) noexcept -> std::expected<void, lib::kernel_error> {
         auto grant_result = objects::memory_object_resolve(grant);
-        if (!grant_result || (*grant_result)->ko.type != scoms::kobject_type::grant) {
+        if (!grant_result || (*grant_result)->ko.type != scoms::kobject::kobject_type::grant) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
         auto mapping_result = objects::memory_object_create(
-            scoms::kobject_type::mapping, space.owner_domain,
+            scoms::kobject::kobject_type::mapping, space.owner_domain,
             &(*grant_result)->ko, rgn.va_start, rgn.size(),
             policy.dgp_rights, policy);
         if (!mapping_result) return std::unexpected(mapping_result.error());
@@ -435,14 +432,14 @@ namespace zxfoundation::memory::vm::_internal {
         const objects::memory_object_policy& policy
     ) noexcept -> std::expected<void, lib::kernel_error> {
         auto storage_result = objects::memory_object_create(
-            scoms::kobject_type::storage, space.owner_domain,
+            scoms::kobject::kobject_type::storage, space.owner_domain,
             space.address_space_object, rgn.va_start, rgn.size(),
             dgp::isolation_rights::none, policy);
         if (!storage_result) return std::unexpected(storage_result.error());
         rgn.storage_object = objects::memory_object_ref_of(**storage_result);
 
         auto grant_result = objects::memory_object_create(
-            scoms::kobject_type::grant, space.owner_domain,
+            scoms::kobject::kobject_type::grant, space.owner_domain,
             &(*storage_result)->ko, rgn.va_start, rgn.size(),
             policy.dgp_rights, policy);
         if (!grant_result) {
@@ -702,7 +699,7 @@ namespace zxfoundation::memory::vm {
     [[nodiscard]] auto vm_space_set_commit_limit(
         vm_space& space, u64 limit_pages
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
         if (limit_pages < space.total_committed) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::out_of_memory));
@@ -716,7 +713,7 @@ namespace zxfoundation::memory::vm {
     [[nodiscard]] auto vm_space_try_charge_commit(
         vm_space& space, u64 pages
     ) noexcept -> bool {
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
         if (!vm_commit_admitted(space, pages)) return false;
         space.total_committed += pages;
         return true;
@@ -724,7 +721,7 @@ namespace zxfoundation::memory::vm {
 
     /// @brief Return a page charge obtained from @ref vm_space_try_charge_commit.
     auto vm_space_uncharge_commit(vm_space& space, u64 pages) noexcept -> void {
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
         if (pages > space.total_committed) {
             sys::syschk::syschk_fatal(
                 lib::kernel_error::from_memory(lib::memory_error::purpose_mismatch),
@@ -736,9 +733,9 @@ namespace zxfoundation::memory::vm {
     /// @brief RCU-protected lookup: find the vm_region containing VA.
     /// @return Pointer to the region, or nullptr if no region contains va.
     [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region* {
-        rcu::rcu_read_lock();
+        sync::rcu::read_lock();
         auto* rgn = _internal::rb_find_rcu(space, va);
-        rcu::rcu_read_unlock();
+        sync::rcu::read_unlock();
         return rgn;
     }
 
@@ -750,7 +747,7 @@ namespace zxfoundation::memory::vm {
         vm_space& space, objects::memory_object_ref grant
     ) noexcept -> vm_region* {
         if (!grant) return nullptr;
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
         for (lib::rb_node* node = lib::rb_first_cached(space.tree);
              node; node = lib::rb_next(node)) {
             auto* region = _internal::region_of(node);
@@ -808,7 +805,7 @@ namespace zxfoundation::memory::vm {
     ) noexcept -> u32 {
         if (phys_end <= phys_start) return 0U;
 
-        locking::lock_guard g{space.lock};
+        sync::lock_guard g{space.lock};
 
         u32 freed = 0U;
         for (lib::rb_node* node = lib::rb_first_cached(space.tree);
@@ -1277,7 +1274,7 @@ namespace zxfoundation::memory::vm {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::code::invalid_arg));
 
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
 
         if (space.region_count >= space.max_regions)
             return std::unexpected(lib::kernel_error::from_memory(
@@ -1370,7 +1367,7 @@ namespace zxfoundation::memory::vm {
         }
         if (mapped_extent) {
             auto extent = objects::memory_object_resolve(mapped_extent);
-            if (!extent || (*extent)->ko.type != scoms::kobject_type::memory_extent ||
+            if (!extent || (*extent)->ko.type != scoms::kobject::kobject_type::memory_extent ||
                 phys_base < (*extent)->range_start ||
                 phys_base + size < phys_base ||
                 phys_base + size > (*extent)->range_start + (*extent)->range_length) {
@@ -1382,7 +1379,7 @@ namespace zxfoundation::memory::vm {
             if (!frame_check) return std::unexpected(frame_check.error());
         }
 
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
 
         const auto request = build_contract_request(
             space, va, size, prot, flags, backing, phys_base, 0U, 0U);
@@ -1480,7 +1477,7 @@ namespace zxfoundation::memory::vm {
         }
 
         auto extent_result = objects::memory_object_resolve(extent_ref);
-        if (!extent_result || (*extent_result)->ko.type != scoms::kobject_type::memory_extent ||
+        if (!extent_result || (*extent_result)->ko.type != scoms::kobject::kobject_type::memory_extent ||
             extent_offset + length > (*extent_result)->range_length) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
@@ -1679,7 +1676,7 @@ namespace zxfoundation::memory::vm {
         auto contract_result = zxfoundation::dgp::memory_contract_validate_range(va, unmap_end);
         if (!contract_result) return std::unexpected(contract_result.error());
 
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
 
         // Find the first region that could overlap [va, unmap_end).
         lib::rb_node* node = space.tree.root.node;
@@ -1820,7 +1817,7 @@ namespace zxfoundation::memory::vm {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
 
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
 
         const u64 prot_end = va + size;
 
@@ -1988,7 +1985,7 @@ namespace zxfoundation::memory::vm {
     auto vm_destroy_space(vm_space& space) noexcept -> void {
         using namespace _internal;
 
-        const locking::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard guard{space.lock};
 
         lib::rb_node* cleanup_node = space.tree.leftmost;
         while (cleanup_node) {
@@ -2053,10 +2050,10 @@ namespace zxfoundation::memory::vm {
     auto register_vm_cap_lookup() noexcept -> void {
         discard_value zxfoundation::sys::cap::register_lookup(
             zxfoundation::sys::cap::cap_type::memory,
-            [](u16 obj_id) noexcept -> scoms::kobject* {
+            [](u16 obj_id) noexcept -> scoms::kobject::bobject* {
                 auto* object = objects::memory_object_resolve_id(
                     static_cast<u32>(obj_id));
-                return object && object->ko.type == scoms::kobject_type::grant
+                return object && object->ko.type == scoms::kobject::kobject_type::grant
                     ? &object->ko : nullptr;
             });
     }
@@ -2067,7 +2064,7 @@ namespace zxfoundation::memory::vm {
 
         if (g_vme_initialized) return;
 
-        g_region_table.init(scoms::kobject_type::vm_region);
+        g_region_table.init(scoms::kobject::kobject_type::vm_region);
         g_vme_initialized = true;
 
         register_vm_cap_lookup();

@@ -9,7 +9,7 @@ export {
 
 namespace zxfoundation::base::linksym {
 
-    extern "C" {
+    no_mangle {
 
     extern u8 __rodata_start[];
     extern u8 __rodata_end[];

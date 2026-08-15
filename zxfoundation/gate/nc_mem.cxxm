@@ -11,23 +11,21 @@ import zxfoundation.memory.pmm_types;
 import zxfoundation.memory.vm;
 import zxfoundation.memory.vm_types;
 import zxfoundation.memory.memory_objects;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
 import zxfoundation.base.types;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
-import zxfoundation.sys.printk;
-import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.uaccess;
-import arch.s390x.cpu.skey;
-import arch.s390x.mmu.mmu;
-import arch.s390x.mmu.mmu_tlb;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.mmu.mmu_const;
-import lib.error;
-import std;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
+import zxfoundation.sys.printk.core;
 import zxfoundation.dgp.memory_contract;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.dgp_authorize;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.uaccess;
+import arch.s390x.cpu.skey;
+import arch.s390x.mmu;
+import lib.error;
+import std;
 
 #define NC_ERROR ~0ULL
 
@@ -162,7 +160,7 @@ namespace __mem_detail {
         }
         auto* extent = reinterpret_cast<zxfoundation::memory::objects::memory_object*>(
             *extent_object);
-        if (extent->ko.type != zxfoundation::scoms::kobject_type::memory_extent ||
+        if (extent->ko.type != zxfoundation::scoms::kobject::kobject_type::memory_extent ||
             extent->owner_domain != d->ko.id ||
             extent_offset + length < extent_offset ||
             extent_offset + length > extent->range_length) {

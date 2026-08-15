@@ -6,15 +6,15 @@ export module zxfoundation.gate.nc_sys;
 import zxfoundation.gate.gate_types;
 import zxfoundation.domain.domain_types;
 import zxfoundation.domain.domain;
-import zxfoundation.sys.printk;
-import zxfoundation.sys.time;
-import zxfoundation.sys.timer;
-import zxfoundation.sys.timer_types;
-import zxfoundation.sys.cap_types;
-import zxfoundation.sys.cap;
-import zxfoundation.sys.service;
-import zxfoundation.sys.ipc;
-import zxfoundation.sys.ipc_types;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.time.core;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.timer.types;
+import zxfoundation.sys.cap.types;
+import zxfoundation.sys.cap.core;
+import zxfoundation.sys.service.core;
+import zxfoundation.sys.ipc.core;
+import zxfoundation.sys.ipc.types;
 import zxfoundation.policy.policy;
 import zxfoundation.policy.policy_types;
 import zxfoundation.memory.memory_objects;
@@ -124,12 +124,12 @@ namespace __sys_detail {
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
-            zxfoundation::dgp::operation_kind::service_register,
+            zxfoundation::dgp::operation_kind::register_service,
             zxfoundation::dgp::dgp_authorization_metadata{
                 .requested_rights = zxfoundation::dgp::isolation_rights::service,
             });
         if (!dgp_r) {
-            zxfoundation::sys::printk::perr("service_register: DGP authorization denied");
+            zxfoundation::sys::printk::perr("register_service: DGP authorization denied");
             return NC_SYS_ERROR;
         }
 
@@ -137,20 +137,20 @@ namespace __sys_detail {
         const u64 name_user_ptr = a1;
 
         if (name_user_ptr == 0) {
-            zxfoundation::sys::printk::perr("service_register: null name");
+            zxfoundation::sys::printk::perr("register_service: null name");
             return NC_SYS_ERROR;
         }
 
         char name_buf[64]{};
         if (copy_from_user(name_buf, name_user_ptr, 63, d) != 0) {
-            zxfoundation::sys::printk::perr("service_register: copy_from_user failed");
+            zxfoundation::sys::printk::perr("register_service: copy_from_user failed");
             return NC_SYS_ERROR;
         }
         name_buf[63] = '\0';
 
-        auto result = service_register(name_buf, token, d->ko.id);
+        auto result = register_service(name_buf, token, d->ko.id);
         if (!result) {
-            zxfoundation::sys::printk::perr("service_register: failed for \"{}\"", name_buf);
+            zxfoundation::sys::printk::perr("register_service: failed for \"{}\"", name_buf);
             return NC_SYS_ERROR;
         }
 
@@ -165,32 +165,32 @@ namespace __sys_detail {
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
-            zxfoundation::dgp::operation_kind::service_lookup,
+            zxfoundation::dgp::operation_kind::lookup_service,
             zxfoundation::dgp::dgp_authorization_metadata{
                 .requested_rights = zxfoundation::dgp::isolation_rights::service,
             });
         if (!dgp_r) {
-            zxfoundation::sys::printk::perr("service_lookup: DGP authorization denied");
+            zxfoundation::sys::printk::perr("lookup_service: DGP authorization denied");
             return NC_SYS_ERROR;
         }
 
         const u64 name_user_ptr = a0;
 
         if (name_user_ptr == 0) {
-            zxfoundation::sys::printk::perr("service_lookup: null name");
+            zxfoundation::sys::printk::perr("lookup_service: null name");
             return NC_SYS_ERROR;
         }
 
         char name_buf[64]{};
         if (copy_from_user(name_buf, name_user_ptr, 63, d) != 0) {
-            zxfoundation::sys::printk::perr("service_lookup: copy_from_user failed");
+            zxfoundation::sys::printk::perr("lookup_service: copy_from_user failed");
             return NC_SYS_ERROR;
         }
         name_buf[63] = '\0';
 
-        auto result = service_lookup(name_buf, d->ko.id);
+        auto result = lookup_service(name_buf, d->ko.id);
         if (!result) {
-            zxfoundation::sys::printk::perr("service_lookup: \"{}\" not found", name_buf);
+            zxfoundation::sys::printk::perr("lookup_service: \"{}\" not found", name_buf);
             return NC_SYS_ERROR;
         }
 
@@ -205,21 +205,21 @@ namespace __sys_detail {
 
         auto dgp_r = zxfoundation::dgp::dgp_authorize(
             *d, *d,
-            zxfoundation::dgp::operation_kind::service_unregister,
+            zxfoundation::dgp::operation_kind::unregister_service,
             zxfoundation::dgp::dgp_authorization_metadata{
                 .requested_rights = zxfoundation::dgp::isolation_rights::service
                                   | zxfoundation::dgp::isolation_rights::lifecycle,
             });
         if (!dgp_r) {
-            zxfoundation::sys::printk::perr("service_unregister: DGP authorization denied");
+            zxfoundation::sys::printk::perr("unregister_service: DGP authorization denied");
             return NC_SYS_ERROR;
         }
 
         const auto service_id = static_cast<u32>(a0);
 
-        auto result = service_unregister(service_id, d->ko.id);
+        auto result = unregister_service(service_id, d->ko.id);
         if (!result) {
-            zxfoundation::sys::printk::perr("service_unregister: id={} failed", service_id);
+            zxfoundation::sys::printk::perr("unregister_service: id={} failed", service_id);
             return NC_SYS_ERROR;
         }
 
@@ -229,28 +229,28 @@ namespace __sys_detail {
     auto nc_ipc_endpoint_create(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
         if (!d) return NC_SYS_ERROR;
-        auto result = zxfoundation::ipc::endpoint_create(*d, static_cast<u32>(a0));
+        auto result = zxfoundation::sys::ipc::endpoint_create(*d, static_cast<u32>(a0));
         return result ? static_cast<u64>(*result) : NC_SYS_ERROR;
     }
 
     auto nc_ipc_endpoint_destroy(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
         if (!d) return NC_SYS_ERROR;
-        auto result = zxfoundation::ipc::endpoint_destroy(*d, static_cast<u32>(a0));
+        auto result = zxfoundation::sys::ipc::endpoint_destroy(*d, static_cast<u32>(a0));
         return result ? 0U : NC_SYS_ERROR;
     }
 
     auto nc_ipc_send(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
         if (!d || !a1) return NC_SYS_ERROR;
-        zxfoundation::ipc::user_message_request request{};
+        zxfoundation::sys::ipc::user_message_request request{};
         if (copy_from_user(&request, a1, sizeof(request), d) != 0 ||
-            request.length > zxfoundation::ipc::IPC_MESSAGE_BYTES ||
-            request.capability_count > zxfoundation::ipc::IPC_MESSAGE_CAPS ||
-            request.grant_count > zxfoundation::ipc::IPC_MESSAGE_GRANTS) return NC_SYS_ERROR;
-        u8 payload[zxfoundation::ipc::IPC_MESSAGE_BYTES]{};
-        zxfoundation::sys::cap::cap_token caps[zxfoundation::ipc::IPC_MESSAGE_CAPS]{};
-        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::ipc::IPC_MESSAGE_GRANTS]{};
+            request.length > zxfoundation::sys::ipc::IPC_MESSAGE_BYTES ||
+            request.capability_count > zxfoundation::sys::ipc::IPC_MESSAGE_CAPS ||
+            request.grant_count > zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS) return NC_SYS_ERROR;
+        u8 payload[zxfoundation::sys::ipc::IPC_MESSAGE_BYTES]{};
+        zxfoundation::sys::cap::cap_token caps[zxfoundation::sys::ipc::IPC_MESSAGE_CAPS]{};
+        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS]{};
         if (request.length && (!request.payload ||
             copy_from_user(payload, request.payload, request.length, d) != 0))
             return NC_SYS_ERROR;
@@ -262,7 +262,7 @@ namespace __sys_detail {
             copy_from_user(grants, request.grants,
                 request.grant_count * sizeof(grants[0]), d) != 0))
             return NC_SYS_ERROR;
-        auto result = zxfoundation::ipc::message_send(*d, static_cast<u32>(a0), payload, request.length,
+        auto result = zxfoundation::sys::ipc::message_send(*d, static_cast<u32>(a0), payload, request.length,
             caps, request.capability_count, grants, request.grant_count);
         return result ? 0U : NC_SYS_ERROR;
     }
@@ -270,13 +270,13 @@ namespace __sys_detail {
     auto nc_ipc_receive(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
         if (!d || !a1) return NC_SYS_ERROR;
-        u8 payload[zxfoundation::ipc::IPC_MESSAGE_BYTES]{};
-        zxfoundation::sys::cap::cap_token caps[zxfoundation::ipc::IPC_MESSAGE_CAPS]{};
-        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::ipc::IPC_MESSAGE_GRANTS]{};
-        u32 length = zxfoundation::ipc::IPC_MESSAGE_BYTES;
+        u8 payload[zxfoundation::sys::ipc::IPC_MESSAGE_BYTES]{};
+        zxfoundation::sys::cap::cap_token caps[zxfoundation::sys::ipc::IPC_MESSAGE_CAPS]{};
+        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS]{};
+        u32 length = zxfoundation::sys::ipc::IPC_MESSAGE_BYTES;
         u32 cap_count = 0;
         u32 grant_count = 0;
-        zxfoundation::ipc::user_message_result requested{};
+        zxfoundation::sys::ipc::user_message_result requested{};
         if (!a2) {
             // Attachments are capabilities, not discardable message metadata.
             // Require a result descriptor whenever the caller may receive them.
@@ -286,11 +286,11 @@ namespace __sys_detail {
             return NC_SYS_ERROR;
         cap_count = requested.capability_count;
         grant_count = requested.grant_count;
-        if (cap_count > zxfoundation::ipc::IPC_MESSAGE_CAPS ||
-            grant_count > zxfoundation::ipc::IPC_MESSAGE_GRANTS)
+        if (cap_count > zxfoundation::sys::ipc::IPC_MESSAGE_CAPS ||
+            grant_count > zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS)
             return NC_SYS_ERROR;
-        auto result = zxfoundation::ipc::message_receive(*d, static_cast<u32>(a0), payload,
-            zxfoundation::ipc::IPC_MESSAGE_BYTES, length, caps, cap_count, grants, grant_count);
+        auto result = zxfoundation::sys::ipc::message_receive(*d, static_cast<u32>(a0), payload,
+            zxfoundation::sys::ipc::IPC_MESSAGE_BYTES, length, caps, cap_count, grants, grant_count);
         if (!result) return NC_SYS_ERROR;
         if (copy_to_user(a1, payload, length, d) != 0) return NC_SYS_ERROR;
         if (cap_count && (!requested.capabilities || copy_to_user(
@@ -311,14 +311,14 @@ namespace __sys_detail {
     auto nc_shm_export(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
         if (!d) return NC_SYS_ERROR;
-        auto result = zxfoundation::ipc::shm_export(*d, a0, a1, static_cast<u32>(a2));
+        auto result = zxfoundation::sys::ipc::shm_export(*d, a0, a1, static_cast<u32>(a2));
         return result ? result->raw : NC_SYS_ERROR;
     }
 
     auto nc_shm_import(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
         auto* d = current_domain();
         if (!d) return NC_SYS_ERROR;
-        auto result = zxfoundation::ipc::shm_import(*d,
+        auto result = zxfoundation::sys::ipc::shm_import(*d,
             zxfoundation::sys::cap::cap_token{a0}, a1, a2);
         return result ? static_cast<u64>(result->ar_num) : NC_SYS_ERROR;
     }
@@ -364,11 +364,11 @@ namespace zxfoundation::gate::nc_sys {
             return __sys_detail::nc_time_now(a0, a1, a2, a3, a4);
         case sys_op::console_write:
             return __sys_detail::nc_console_write(a0, a1, a2, a3, a4);
-        case sys_op::service_register:
+        case sys_op::register_service:
             return __sys_detail::nc_service_register(a0, a1, a2, a3, a4);
-        case sys_op::service_lookup:
+        case sys_op::lookup_service:
             return __sys_detail::nc_service_lookup(a0, a1, a2, a3, a4);
-        case sys_op::service_unregister:
+        case sys_op::unregister_service:
             return __sys_detail::nc_service_unregister(a0, a1, a2, a3, a4);
         case sys_op::ipc_endpoint_create:
             return __sys_detail::nc_ipc_endpoint_create(a0, a1, a2, a3, a4);

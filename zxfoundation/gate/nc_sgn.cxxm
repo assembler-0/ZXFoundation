@@ -10,7 +10,7 @@ import zxfoundation.domain.signal;
 import zxfoundation.dgp.dgp_authorize;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.base.types;
-import zxfoundation.sys.printk;
+import zxfoundation.sys.printk.core;
 import zxfoundation.domain.domain;
 import zxfoundation.sched.sched;
 import lib.error;

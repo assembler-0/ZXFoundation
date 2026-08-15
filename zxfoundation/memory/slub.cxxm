@@ -10,19 +10,20 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.memory.memory_objects;
 import zxfoundation.memory.numa;
 import zxfoundation.memory.numa_types;
-import zxfoundation.rcu.rcu;
-import zxfoundation.rcu.rcu_types;
+import zxfoundation.sync.rcu.core;
+import zxfoundation.sync.rcu.types;
 import zxfoundation.sched.context;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import zxfoundation.locking.lock;
-import zxfoundation.locking.qspinlock;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.sync.lockable;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
-import zxfoundation.sys.syschk;
+import zxfoundation.sys.syschk.core;
 import lib.error;
 import lib.align;
 import std;
@@ -34,7 +35,7 @@ namespace zxfoundation::memory::slub::_internal {
     /// @brief Dynamically allocated pool of kmem_cache objects
     static kmem_cache* g_cache_table_ptr{nullptr};
     static u32         g_cache_count{0};
-    static locking::qspinlock::qspinlock g_cache_table_lock{};
+    alignas(4) static sync::qspinlock::qspinlock g_cache_table_lock{};
     static bool        g_initialized{false};
 
 
@@ -115,7 +116,7 @@ namespace zxfoundation::memory::slub::_internal {
     }
 
     /// @brief RCU callback: free a slab page to PMM after grace period.
-    auto free_slab_rcu_cb(rcu::rcu_head* head) noexcept -> void {
+    auto free_slab_rcu_cb(sync::rcu::rcu_head* head) noexcept -> void {
         const u64 rcu_off = __builtin_offsetof(slab_header, rcu);
         auto* sh = reinterpret_cast<slab_header*>(
             reinterpret_cast<u8*>(head) - rcu_off);
@@ -132,7 +133,7 @@ namespace zxfoundation::memory::slub::_internal {
         const bool use_rcu = !!(cache.flags & slub_flags::typesafe_by_rcu);
         if (use_rcu) [[unlikely]] {
             sh->rcu_order = cache.order;
-            rcu::call_rcu(&sh->rcu, free_slab_rcu_cb);
+            sync::rcu::call_rcu(&sh->rcu, free_slab_rcu_cb);
         } else {
             pmm::free({ sh->phys, cache.order, purpose::slab, zone::normal });
         }
@@ -240,7 +241,7 @@ namespace zxfoundation::memory::slub::_internal {
         auto* sh = cs.slab;
         if (!sh) return;
         auto& node = node_state(cache, sh->node_id);
-        const locking::irq_lock_guard guard{node.list_lock};
+        const sync::irq_lock_guard guard{node.list_lock};
         if (cs.freelist) {
             void* tail = cs.freelist;
             while (void* next = get_fp(cache, tail)) tail = next;
@@ -293,7 +294,7 @@ namespace zxfoundation::memory::slub::_internal {
                 sh->cpu_partial_next = nullptr;
                 cs.partial_count -= sh->objects - sh->inuse.load(memory_order::relaxed);
                 auto& node = node_state(cache, sh->node_id);
-                const locking::irq_lock_guard node_guard{node.list_lock};
+                const sync::irq_lock_guard node_guard{node.list_lock};
                 activate_slab(cache, cs, sh);
                 // Retry fast path inline.
                 void* obj = cs.freelist;
@@ -328,7 +329,7 @@ namespace zxfoundation::memory::slub::_internal {
             if (node_id == numa::NUMA_NODE_ANY) break;
             inspected_nodes |= static_cast<u16>(1U << node_id);
             auto& node = node_state(cache, node_id);
-            const locking::irq_lock_guard guard{node.list_lock};
+            const sync::irq_lock_guard guard{node.list_lock};
 
             if (node.partial) {
                 slab_header* sh = node.partial;
@@ -398,7 +399,7 @@ namespace zxfoundation::memory::slub::_internal {
         discard_value cache.live_objects.fetch_sub(1, memory_order::relaxed);
 
         auto& node = node_state(cache, sh->node_id);
-        const locking::irq_lock_guard guard{node.list_lock};
+        const sync::irq_lock_guard guard{node.list_lock};
 
         // Encode and push object to slab's freelist.
         set_fp(cache, obj, sh->freelist);
@@ -474,12 +475,12 @@ namespace zxfoundation::memory::slub {
         using namespace _internal;
         using namespace objects;
         if (!g_initialized) return;
-        const locking::irq_lock_guard guard{g_cache_table_lock};
+        const sync::irq_lock_guard guard{g_cache_table_lock};
         for (u32 i = 0; i < g_cache_count; ++i) {
             kmem_cache& slot = g_cache_table_ptr[i];
             if (slot.authority) continue;
             auto mo_result = memory_object_create(
-                scoms::kobject_type::kmem_cache, 0, nullptr, 0, 0);
+                scoms::kobject::kobject_type::kmem_cache, 0, nullptr, 0, 0);
             if (!mo_result) continue;
             slot.authority = memory_object_ref_of(**mo_result);
             discard_value memory_object_attach_view(
@@ -534,7 +535,7 @@ namespace zxfoundation::memory::slub {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::code::invalid_arg));
 
-        const locking::irq_lock_guard guard{g_cache_table_lock};
+        const sync::irq_lock_guard guard{g_cache_table_lock};
         if (g_cache_count >= SLUB_MAX_CACHES)
             return std::unexpected(
                 lib::kernel_error::from_memory(lib::memory_error::code::out_of_memory));
@@ -597,7 +598,7 @@ namespace zxfoundation::memory::slub {
                 sh->frozen = 0U;
                 sh->cpu_partial_next = nullptr;
                 auto& node = node_state(*cache, sh->node_id);
-                const locking::irq_lock_guard nl{node.list_lock};
+                const sync::irq_lock_guard nl{node.list_lock};
                 if (sh->inuse.load(memory_order::acquire) < sh->objects)
                     node_add_partial(*cache, sh);
                 sh = nx;
@@ -611,7 +612,7 @@ namespace zxfoundation::memory::slub {
 
         for (u8 node_id = 0U; node_id < numa::MAX_NUMA_NODES; ++node_id) {
             auto& node = node_state(*cache, node_id);
-            const locking::irq_lock_guard guard{node.list_lock};
+            const sync::irq_lock_guard guard{node.list_lock};
             slab_header* sh = node.partial;
             while (sh) {
                 slab_header* nx = sh->next;
@@ -636,7 +637,7 @@ namespace zxfoundation::memory::slub {
         u32 freed = 0;
         for (u8 node_id = 0U; node_id < numa::MAX_NUMA_NODES; ++node_id) {
             auto& node = node_state(*cache, node_id);
-            const locking::irq_lock_guard guard{node.list_lock};
+            const sync::irq_lock_guard guard{node.list_lock};
             slab_header* sh = node.partial;
             while (sh) {
                 slab_header* nx = sh->next;

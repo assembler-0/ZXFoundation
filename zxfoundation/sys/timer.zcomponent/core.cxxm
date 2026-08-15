@@ -1,0 +1,47 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/timer.cxxm
+/// @brief Generic kernel timer subsystem — per-CPU min-heap with clock comparator arming.
+
+export module zxfoundation.sys.timer.core;
+import zxfoundation.sys.timer.types;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sys::timer {
+
+    /// @brief Convert nanoseconds to TOD clock units.
+    [[nodiscard]] constexpr auto ns_to_tod(u64 ns) noexcept -> u64 {
+        return static_cast<u64>(
+            (static_cast<u128>(ns) * 4096ULL) / 1000ULL);
+    }
+
+    /// @brief Convert TOD clock units to nanoseconds.
+    [[nodiscard]] constexpr auto tod_to_ns(u64 tod) noexcept -> u64 {
+        return static_cast<u64>(
+            (static_cast<u128>(tod) * 1000ULL) / 4096ULL);
+    }
+
+    /// @brief Initialize the timer subsystem on an application processor.
+    constexpr auto init_ap(u16 cpu_id) noexcept -> void { discard_value cpu_id; }
+
+    /// @brief Add a timer to the current CPU's heap and arm the clock comparator.
+    [[nodiscard]] auto timer_add(kernel_timer& t) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Cancel an armed timer.
+    [[nodiscard]] auto timer_cancel(kernel_timer& t) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Clock comparator interrupt handler.
+    auto timer_interrupt() noexcept -> void;
+
+    /// @brief Initialize the timer subsystem on the BSP (CPU 0).
+    auto init() noexcept -> void;
+
+} // namespace zxfoundation::sys::timer
+
+} // end export

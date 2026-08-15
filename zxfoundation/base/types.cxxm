@@ -3,6 +3,9 @@
 /// @brief foundational types
 
 export module zxfoundation.base.types;
+#ifdef ZX_NO_BITINT
+import std;
+#endif
 
 export {
     // ZXFoundation types
@@ -148,9 +151,6 @@ export {
 
     /// @brief Page-frame number (physical address >> PAGE_SHIFT).
     using pfn_t = u64;
-
-    /// @brief value for an unassigned kernel-object id.
-    inline constexpr u32 KOBJECT_ID_INVALID = ~0U;
 
     template<typename Derived, usize Size>
     struct FixedSizeBase {

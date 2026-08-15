@@ -1,0 +1,6 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    mcs.cxxm
+    core.cxxm
+    core.cxx
+}

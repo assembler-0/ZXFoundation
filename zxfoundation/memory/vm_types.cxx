@@ -4,6 +4,7 @@
 
 module zxfoundation.memory.vm_types;
 import zxfoundation.memory.kmalloc;
+import std;
 
 namespace zxfoundation::memory::vm {
 
@@ -22,7 +23,7 @@ namespace zxfoundation::memory::vm {
             kmalloc::kmalloc(static_cast<u64>(new_cap) * sizeof(vm_page_slot)));
         if (!new_slots) return false;
         for (u32 i = 0; i < count; ++i) {
-            new (static_cast<void*>(&new_slots[i])) vm_page_slot{slots[i]};
+            std::construct_at(&new_slots[i], slots[i]);
         }
         if (slots) kmalloc::kfree(slots);
         slots = new_slots;
@@ -45,7 +46,7 @@ namespace zxfoundation::memory::vm {
         }
         if (count == capacity && !reserve_capacity(count + 1U)) return nullptr;
         auto* s = &slots[count++];
-        new (static_cast<void*>(s)) vm_page_slot{};
+        std::construct_at(s);
         s->va_page = page_va;
         return s;
     }
@@ -54,9 +55,6 @@ namespace zxfoundation::memory::vm {
         for (u32 i = 0; i < count; ++i) {
             if (slots[i].matches(page_va)) {
                 slots[i].clear();
-                // rmap entries retain this slot index.  Do not compact by
-                // moving the tail into a hole: that would retarget a live
-                // reverse-map entry at a different VA/physical frame.
                 while (count != 0U &&
                        slots[count - 1U].state == vm_page_state::empty) {
                     --count;

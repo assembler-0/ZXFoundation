@@ -5,13 +5,12 @@
 export module zxfoundation.domain.domain_types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import zxfoundation.scoms.scoms_types;
+import zxfoundation.scoms.kobject.base;
 import zxfoundation.domain.strand_types;
-import arch.s390x.mmu.mmu_types;
-import arch.s390x.cpu.aste;
-import std;
+import arch.s390x.mmu.types;
+import arch.s390x.cpu.aste.consts;
 import zxfoundation.memory.vm_types;
-import zxfoundation.locking.qspinlock;
+import zxfoundation.sync.qspinlock.core;
 import zxfoundation.domain.signal_types;
 import zxfoundation.dgp.isolation_types;
 import zxfoundation.dgp.sync_contract;
@@ -22,6 +21,7 @@ import zxfoundation.sched.sched_rt_bandwidth;
 import zxfoundation.sched.sched_nohz;
 import lib.rbtree;
 import lib.list;
+import std;
 
 export {
 
@@ -85,7 +85,7 @@ namespace zxfoundation::domain {
 
     /// @brief The domain struct — the central entity of the DGP kernel.
     struct domain {
-        scoms::kobject                                                  ko{};
+        scoms::kobject::bobject                                                  ko{};
 
         const char*                                                     name{nullptr};
 
@@ -146,8 +146,8 @@ namespace zxfoundation::domain {
 
     /// @brief Per-CPU run queue — schedules strands (execution contexts).
     struct run_queue {
-        locking::qspinlock::qspinlock   lock{};          ///< Protects run queue data (enqueue/dequeue/select).
-        locking::qspinlock::qspinlock   context_lock{};  ///< Serializes ASCE / CR1 loads during context switch.
+        sync::qspinlock::qspinlock   lock{};          ///< Protects run queue data (enqueue/dequeue/select).
+        sync::qspinlock::qspinlock   context_lock{};  ///< Serializes ASCE / CR1 loads during context switch.
         u32                             nr_running{0};   ///< Total runnable strands on this CPU.
 
         strand*                         curr{nullptr};   ///< Currently running strand.

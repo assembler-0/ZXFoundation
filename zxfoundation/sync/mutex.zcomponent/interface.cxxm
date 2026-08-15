@@ -1,0 +1,2 @@
+export module zxfoundation.sync.mutex;
+export import zxfoundation.sync.mutex.core;

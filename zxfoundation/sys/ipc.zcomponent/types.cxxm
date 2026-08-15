@@ -1,0 +1,86 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file ipc_types.cxxm
+/// @brief Bounded nucleus IPC object types.
+
+export module zxfoundation.sys.ipc.types;
+import zxfoundation.base.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.memory.memory_objects;
+import zxfoundation.sys.cap.types;
+
+export {
+
+namespace zxfoundation::sys::ipc {
+
+    inline constexpr u32 MAX_ENDPOINTS = 1024U;
+    inline constexpr u32 MAX_MESSAGES = 4096U;
+    inline constexpr u32 IPC_QUEUE_DEPTH = 64U;
+    inline constexpr u32 IPC_MESSAGE_BYTES = 256U;
+    inline constexpr u32 IPC_MESSAGE_CAPS = 8U;
+    inline constexpr u32 IPC_MESSAGE_GRANTS = 8U;
+
+    struct capability_attachment {
+        cap::cap_token token{};
+        u32 rights{0};
+    };
+
+    struct grant_attachment {
+        memory::objects::memory_object_ref grant{};
+        u32 rights{0};
+    };
+
+    struct message_body {
+        u8 payload[IPC_MESSAGE_BYTES]{};
+        capability_attachment capabilities[IPC_MESSAGE_CAPS]{};
+        grant_attachment grants[IPC_MESSAGE_GRANTS]{};
+    };
+
+    struct endpoint_queue {
+        u32 message_ids[IPC_QUEUE_DEPTH]{};
+    };
+
+    struct message_object {
+        scoms::kobject::bobject ko{};
+        u32 sender_domain{scoms::kobject::KOBJECT_ID_INVALID};
+        u32 length{0};
+        u32 capability_count{0};
+        u32 grant_count{0};
+        message_body* body{nullptr};
+    };
+
+    struct endpoint_object {
+        scoms::kobject::bobject ko{};
+        u32 owner_domain{scoms::kobject::KOBJECT_ID_INVALID};
+        u32 peer_domain{scoms::kobject::KOBJECT_ID_INVALID};
+        u32 queue_head{0};
+        u32 queue_tail{0};
+        u32 queue_count{0};
+        u32 dropped_messages{0};
+        endpoint_queue* queue{nullptr};
+    };
+
+    struct user_message_request {
+        u64 payload{0};
+        u64 capabilities{0};
+        u64 grants{0};
+        u32 length{0};
+        u16 capability_count{0};
+        u16 grant_count{0};
+    };
+
+    struct user_message_result {
+        u64 payload{0};
+        u64 capabilities{0};
+        u64 grants{0};
+        u32 length{0};
+        u16 capability_count{0};
+        u16 grant_count{0};
+    };
+
+    static_assert(__builtin_offsetof(message_object, ko) == 0);
+    static_assert(__builtin_offsetof(endpoint_object, ko) == 0);
+
+} // namespace zxfoundation::sys::ipc
+
+} // end export

@@ -6,7 +6,7 @@ export module arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.percpu;
 import arch.s390x.init.zxfl.protocol;
-import zxfoundation.sys.syschk_types;
+import zxfoundation.sys.syschk.types;
 import zxfoundation.base.types;
 
 export {

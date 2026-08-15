@@ -1,0 +1,62 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/scoms/scoms_types.cxxm
+/// @brief SCOMS — Scalable Object Management System — core types.
+
+export module zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::scoms::kobject {
+
+    /// @brief The kernel object header — embedded at offset 0 of every
+    ///        SCOMS-managed resource.
+    struct bobject {
+        u32                                  id{~0U};
+        kobject::kobject_type                type{kobject::kobject_type::none};
+        lifecycle_state                      state{lifecycle_state::embryo};
+        u8                                   _pad0[2]{};
+        kref                                 ref{};
+        u32                                  generation{0};
+        sync::qspinlock::qspinlock           lock{};
+        u32                                  object_flags{0};
+
+        bobject() noexcept = default;
+
+        /// @brief Validate and perform one canonical lifecycle transition.
+        [[nodiscard]] auto transition(lifecycle_state target) noexcept -> bool;
+
+        /// @brief Acquire a lifetime reference without resurrecting retirement.
+        [[nodiscard]] auto try_get() noexcept -> bool;
+
+        /// @brief Drop a lifetime reference and reclaim on the final put.
+        auto put() noexcept -> void;
+
+        /// @brief Reset identity and relationship metadata for a new slot use.
+        auto initialize(u32 object_id, kobject::kobject_type object_type) noexcept -> void;
+
+        // Non-copyable, non-movable — identity object.
+        bobject(const bobject&)            = delete;
+        auto operator=(const bobject&)     = delete;
+        bobject(bobject&&)                 = delete;
+        auto operator=(bobject&&)          = delete;
+    };
+
+    static_assert(sizeof(bobject) == 24, "kobject ABI must remain exactly 24 bytes");
+    static_assert(__builtin_offsetof(bobject, id)         ==  0);
+    static_assert(__builtin_offsetof(bobject, type)       ==  4);
+    static_assert(__builtin_offsetof(bobject, state)      ==  5);
+    static_assert(__builtin_offsetof(bobject, ref)        ==  8);
+    static_assert(__builtin_offsetof(bobject, generation) == 12);
+    static_assert(__builtin_offsetof(bobject, lock)       == 16);
+
+    using bobject_finalizer_fn = void (*)(bobject&) noexcept;
+
+    /// @brief Install the SCOMS metadata finalizer used after the last put.
+    auto install_bobject_finalizer(bobject_finalizer_fn finalizer) noexcept -> void;
+
+} // namespace zxfoundation::scoms
+
+} // end export

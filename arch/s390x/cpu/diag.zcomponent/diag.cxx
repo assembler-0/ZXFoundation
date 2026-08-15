@@ -16,12 +16,12 @@ namespace arch::s390x::cpu::diag {
     /// @param  r2    Value placed in R2 (and R2+1).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] __internal__ auto diagnose12(u64& r1, u64& r2) noexcept -> condition_code {
+    [[gnu::always_inline]] no_export auto diagnose12(u64& r1, u64& r2) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
             "0: diag    %[r1],%[r2],%[code]\n"
             "1: ipm     %[cc]\n"
-            "     srl     %[cc],28\n"
+            "   srl     %[cc],28\n"
             EX_TABLE(0b, 1b, EX_TYPE_FIXUP, 0)
             : [r1] "+d" (r1), [r2] "+d" (r2), [cc] "=d" (cc)
             : [code] "K" (Code)
@@ -37,7 +37,7 @@ namespace arch::s390x::cpu::diag {
     /// @param  r2    128-bit register pair (even=high, odd=low).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] __internal__ auto diagnose12(
+    [[gnu::always_inline]] no_export auto diagnose12(
         processor::register_pair& r1,
         processor::register_pair& r2
     ) noexcept -> condition_code {
@@ -60,7 +60,7 @@ namespace arch::s390x::cpu::diag {
     /// @param  r3    Value placed in R2 (and R2+1).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] __internal__ auto diagnose23(u64& r2, u64& r3) noexcept -> condition_code {
+    [[gnu::always_inline]] no_export auto diagnose23(u64& r2, u64& r3) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
             "0: diag    %[r2],%[r3],%[code]\n"
@@ -81,7 +81,7 @@ namespace arch::s390x::cpu::diag {
     /// @param  r3    128-bit register pair (even=high, odd=low).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] __internal__ auto diagnose23(
+    [[gnu::always_inline]] no_export auto diagnose23(
         processor::register_pair& r2,
         processor::register_pair& r3
     ) noexcept -> condition_code {
@@ -104,7 +104,7 @@ namespace arch::s390x::cpu::diag {
     /// @param  r3    Value placed in R3 (and R2+1).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] __internal__ auto diagnose13(u64& r1, u64& r3) noexcept -> condition_code {
+    [[gnu::always_inline]] no_export auto diagnose13(u64& r1, u64& r3) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(
             "0: diag    %[r1],%[r3],%[code]\n"
@@ -125,7 +125,7 @@ namespace arch::s390x::cpu::diag {
     /// @param  r3    128-bit register pair (even=high, odd=low).
     /// @return       Condition code (0–3) set by the hypervisor/hardware.
     template <u16 Code>
-    [[gnu::always_inline]] __internal__ auto diagnose13(
+    [[gnu::always_inline]] no_export auto diagnose13(
         processor::register_pair& r1,
         processor::register_pair& r3
     ) noexcept -> condition_code {
