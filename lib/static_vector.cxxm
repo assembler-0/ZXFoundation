@@ -10,7 +10,7 @@ import std;
 
 export {
 
-namespace lib{
+namespace lib {
 
     /// @brief A contiguous sequence of up to @p N elements stored entirely
     /// @tparam T  Element type.

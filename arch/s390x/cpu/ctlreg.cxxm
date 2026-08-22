@@ -13,7 +13,7 @@ namespace arch::s390x::cpu::ctlreg {
     struct ctlreg {
         u64 val;
     };
-    
+
     union cr0 {
         u64 val;
         ctlreg reg;

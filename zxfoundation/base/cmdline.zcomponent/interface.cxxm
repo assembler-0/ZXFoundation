@@ -1,0 +1,2 @@
+export module zxfoundation.base.cmdline;
+export import zxfoundation.base.cmdline.core;

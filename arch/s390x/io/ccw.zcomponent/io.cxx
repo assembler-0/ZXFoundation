@@ -14,7 +14,7 @@ import arch.s390x.cpu.clock;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk.core;
 import zxfoundation.memory.pmm;
-import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
 import lib.error;
 import lib.format;

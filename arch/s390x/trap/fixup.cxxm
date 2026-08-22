@@ -24,29 +24,29 @@ namespace arch::s390x::trap::fixup {
     static_assert(sizeof(fixup_entry) == 12,
                   "exception-table entries must be 12 bytes");
 
-    namespace _internal {
+    namespace detail {
 
-    [[nodiscard]] auto base() noexcept -> const fixup_entry* {
-        return reinterpret_cast<const fixup_entry*>(
-            zxfoundation::base::linksym::__ex_table_start);
-    }
+        [[nodiscard]] auto base() noexcept -> const fixup_entry* {
+            return reinterpret_cast<const fixup_entry*>(
+                zxfoundation::base::linksym::__ex_table_start);
+        }
 
-    [[nodiscard]] auto end_ptr() noexcept -> const fixup_entry* {
-        return reinterpret_cast<const fixup_entry*>(
-            zxfoundation::base::linksym::__ex_table_end);
-    }
+        [[nodiscard]] auto end_ptr() noexcept -> const fixup_entry* {
+            return reinterpret_cast<const fixup_entry*>(
+                zxfoundation::base::linksym::__ex_table_end);
+        }
 
-    [[nodiscard]] auto count() noexcept -> usize {
-        const auto* b = base();
-        const auto* e = end_ptr();
-        return (!b || !e || b >= e) ? 0 : static_cast<usize>(e - b);
-    }
+        [[nodiscard]] auto count() noexcept -> usize {
+            const auto* b = base();
+            const auto* e = end_ptr();
+            return (!b || !e || b >= e) ? 0 : static_cast<usize>(e - b);
+        }
 
-    [[nodiscard]] auto extract_reg(u16 data) noexcept -> u8 {
-        return static_cast<u8>((data >> 12) & 0xF);
-    }
+        [[nodiscard]] auto extract_reg(u16 data) noexcept -> u8 {
+            return static_cast<u8>((data >> 12) & 0xF);
+        }
 
-    } // namespace _internal
+    } // namespace detail
 
     /// @brief Search exception table and apply entry-type-specific recovery.
     /// @param faulting_addr  PSW instruction address at fault.
@@ -56,10 +56,10 @@ namespace arch::s390x::trap::fixup {
         u64 faulting_addr,
         arch::s390x::cpu::irq::irq_frame* frame
     ) noexcept -> bool {
-        const usize n = _internal::count();
+        const usize n = detail::count();
         if (n == 0) return false;
 
-        const auto* entries = _internal::base();
+        const auto* entries = detail::base();
         const auto field_address = [](const fixup_entry* entry,
                                       usize offset,
                                       i32 delta) noexcept -> u64 {
@@ -81,7 +81,7 @@ namespace arch::s390x::trap::fixup {
                 break;
 
             case EX_TYPE_UA_LOAD_REG: {
-                const u8 reg = _internal::extract_reg(e.data);
+                const u8 reg = detail::extract_reg(e.data);
                 auto* lc = arch::s390x::cpu::lowcore::get_current();
                 const u64 fsa = lc->failing_storage_address;
                 if (frame) {
@@ -91,7 +91,7 @@ namespace arch::s390x::trap::fixup {
             }
 
             case EX_TYPE_UA_LOAD_RP: {
-                const u8 reg = _internal::extract_reg(e.data);
+                const u8 reg = detail::extract_reg(e.data);
                 if (frame) {
                     frame->gprs[reg]     = 0ULL;
                     frame->gprs[reg + 1] = 0ULL;
@@ -100,7 +100,7 @@ namespace arch::s390x::trap::fixup {
             }
 
             case EX_TYPE_UA_STORE: {
-                const u8 reg = _internal::extract_reg(e.data);
+                const u8 reg = detail::extract_reg(e.data);
                 if (frame) {
                     frame->gprs[reg] = 0ULL;
                 }
@@ -109,7 +109,7 @@ namespace arch::s390x::trap::fixup {
 
             case EX_TYPE_UA_MVCOS_TO:
             case EX_TYPE_UA_MVCOS_FROM: {
-                const u8 reg = _internal::extract_reg(e.data);
+                const u8 reg = detail::extract_reg(e.data);
                 if (frame) {
                     frame->gprs[reg] = 0ULL;
                 }

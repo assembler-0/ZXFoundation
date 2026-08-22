@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // @file user/init/init.S
-// @brief ZXFoundation user-space init binary — tests ALL nucleus gate calls.
+// @brief ZXFoundation user-space init binary — tests all nucleus gate calls.
 //
 // Calling convention:
 //   All nucleus calls go through SVC.  The SVC instruction's 8-bit number
@@ -677,7 +677,7 @@ _start:
     NCALL   MEM_SHARE
     // BUG-004: MEM_SHARE expects ERR_SENTINEL — the DGP isolation gate
     // refuses cross-domain share because the bootstrap domain does not
-    // hold isolation_rights::share against the child domain (child was
+    // hold dgp::isolation::isolation_rights::share against the child domain (child was
     // created with no_rights_cap).  Asserting the failure makes this a
     // real negative test, not a "accept either" no-op.
     lghi    %r1, ERR_SENTINEL

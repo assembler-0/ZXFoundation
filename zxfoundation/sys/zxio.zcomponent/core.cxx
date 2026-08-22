@@ -10,19 +10,19 @@ import zxfoundation.scoms.table;
 import zxfoundation.scoms.kobject.ref;
 import zxfoundation.scoms.kobject.types;
 import zxfoundation.scoms.metadata.core;
-import zxfoundation.sys.cap.types;
-import zxfoundation.sys.cap.core;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.dgp.cap.core;
 import zxfoundation.sys.printk.core;
 import zxfoundation.memory.pmm;
-import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.memory.memory_objects;
-import zxfoundation.dgp.isolation_types;
+import zxfoundation.memory.objects;
+import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.memory_contract;
-import zxfoundation.domain.domain;
-import zxfoundation.domain.domain_types;
-import zxfoundation.domain.signal;
-import zxfoundation.domain.signal_types;
+import zxfoundation.dgp.domain.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.signal;
+import zxfoundation.dgp.domain.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import zxfoundation.base.typestate;
@@ -40,7 +40,7 @@ namespace zxfoundation::sys::zxio::detail {
     using namespace zxfoundation::memory;
     using namespace arch::s390x::io;
     using namespace scoms;
-    using namespace cap;
+    using namespace dgp::cap;
 
     no_export scoms_table<io_binding, MAX_IO_BINDINGS> g_io_table{};
     no_export bool g_initialized{false};
@@ -220,9 +220,9 @@ namespace zxfoundation::sys::zxio::detail {
         if (!binding) return;
         const u32 owner = binding->owner_domain;
         if (!enqueue_completion(*binding, status)) return;
-        if (auto* domain = zxfoundation::domain::domain_find(owner)) {
-            zxfoundation::domain::signal::signal_enqueue(
-                *domain, zxfoundation::domain::signal::signal_kind::io,
+        if (auto* domain = zxfoundation::dgp::domain::domain_find(owner)) {
+            zxfoundation::dgp::signal::signal_enqueue(
+                *domain, zxfoundation::dgp::signal::signal_kind::io,
                 binding_id);
         }
     }
@@ -314,7 +314,7 @@ namespace zxfoundation::sys::zxio::detail {
 
 namespace zxfoundation::sys::zxio {
 
-    using namespace cap;
+    using namespace dgp::cap;
 
     auto init() noexcept -> void {
         using namespace detail;
@@ -328,14 +328,13 @@ namespace zxfoundation::sys::zxio {
                 return binding ? &binding->ko : nullptr;
             });
         g_initialized = true;
-        sys::printk::pinfo("io: capability-bound CSS/DMA subsystem initialized");
     }
 
     [[nodiscard]] auto bind(
         u16 dev_no, u32 domain_id, cap_token& out_token
     ) noexcept -> std::expected<void, lib::kernel_error> {
         using namespace detail;
-        auto* domain = zxfoundation::domain::domain_find(domain_id);
+        auto* domain = zxfoundation::dgp::domain::domain_find(domain_id);
         if (!domain || domain->ko.state != lifecycle_state::active) {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::not_found));
@@ -386,15 +385,15 @@ namespace zxfoundation::sys::zxio {
             .storage_key = binding.storage_key,
             .storage_key_generation = binding.storage_key_generation,
             .numa_node = domain->numa_node,
-            .dgp_scope = dgp::memory_scope::private_domain,
-            .dgp_access = dgp::memory_access::read | dgp::memory_access::write,
-            .dgp_rights = dgp::isolation_rights::map,
-            .invalidate = dgp::invalidation_scope::address_space,
+            .dgp_scope = dgp::memory_contract::memory_scope::private_domain,
+            .dgp_access = dgp::memory_contract::memory_access::read | dgp::memory_contract::memory_access::write,
+            .dgp_rights =  dgp::isolation::isolation_rights::map,
+            .invalidate = dgp::memory_contract::invalidation_scope::address_space,
             .mapping_generation = 1U,
         };
         auto storage = zxfoundation::memory::objects::memory_object_create(
             scoms::kobject::kobject_type::storage, domain_id, &binding.ko,
-            binding.dma_base, binding.dma_size, dgp::isolation_rights::map, policy);
+            binding.dma_base, binding.dma_size,  dgp::isolation::isolation_rights::map, policy);
         if (!storage) return std::unexpected(storage.error());
         binding.dma_storage = zxfoundation::memory::objects::memory_object_ref_of(**storage);
         txn.take_storage(binding.dma_storage);
@@ -402,7 +401,7 @@ namespace zxfoundation::sys::zxio {
         auto extent = zxfoundation::memory::objects::memory_object_create(
             scoms::kobject::kobject_type::memory_extent, domain_id, &(*storage)->ko,
             binding.dma_base + DRIVER_DMA_OFFSET, DRIVER_DMA_BYTES,
-            dgp::isolation_rights::map, policy);
+             dgp::isolation::isolation_rights::map, policy);
         if (!extent) return std::unexpected(extent.error());
         binding.dma_extent = zxfoundation::memory::objects::memory_object_ref_of(**extent);
         txn.take_extent(binding.dma_extent);

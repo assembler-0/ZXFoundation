@@ -1,0 +1,11 @@
+export module zxfoundation.dgp;
+export import zxfoundation.dgp.authorize;
+export import zxfoundation.dgp.cap;
+export import zxfoundation.dgp.domain;
+export import zxfoundation.dgp.gate;
+export import zxfoundation.dgp.isolation;
+export import zxfoundation.dgp.memory_contract;
+export import zxfoundation.dgp.policy;
+export import zxfoundation.dgp.portal;
+export import zxfoundation.dgp.signal;
+export import zxfoundation.dgp.sync_contract;

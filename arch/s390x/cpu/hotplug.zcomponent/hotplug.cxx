@@ -14,17 +14,17 @@ import arch.s390x.cpu.ar;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
 import zxfoundation.memory.pmm;
-import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.sched.sched;
-import zxfoundation.sched.sched_topology;
+import zxfoundation.sched.core;
+import zxfoundation.sched.topology.core;
 import zxfoundation.smp.csd.core;
 import zxfoundation.sys.printk.core;
 import lib.error;
 import lib.static_vector;
 import std;
 
-namespace arch::s390x::cpu::hotplug::_internal {
+namespace arch::s390x::cpu::hotplug::detail {
 
     no_export std::atomic<u32> g_hotplug_initialized{0};
 
@@ -64,17 +64,17 @@ namespace arch::s390x::cpu::hotplug::_internal {
         arch::s390x::cpu::ar::purge_alb();
     }
 
-} // namespace _internal
+} // namespace detail
 
 namespace arch::s390x::cpu::hotplug {
 
     /// @brief Initialize the hotplug subsystem — mark BSP online.
     auto hotplug_init() noexcept -> void {
-        for (auto & g_cpu_state : _internal::g_cpu_states) {
+        for (auto & g_cpu_state : detail::g_cpu_states) {
             g_cpu_state = cpu_hotplug_state::absent;
         }
-        _internal::g_cpu_states[0] = cpu_hotplug_state::online;
-        _internal::set_initialized();
+        detail::g_cpu_states[0] = cpu_hotplug_state::online;
+        detail::set_initialized();
     }
 
     /// @brief Register a hotplug notifier.
@@ -82,7 +82,7 @@ namespace arch::s390x::cpu::hotplug {
     /// @return true if registered, false if the table is full.
     auto hotplug_register_notifier(hotplug_callback cb) noexcept -> bool {
         if (!cb) return false;
-        if (!_internal::g_notifiers.emplace_back(cb)) return false;
+        if (!detail::g_notifiers.emplace_back(cb)) return false;
         return true;
     }
 
@@ -90,9 +90,9 @@ namespace arch::s390x::cpu::hotplug {
     /// @param[in] cpu_id Logical CPU ID.
     auto hotplug_mark_present(u16 cpu_id) noexcept -> void {
         if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) return;
-        if (_internal::g_cpu_states[cpu_id] == cpu_hotplug_state::absent) {
-            _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::present;
-            _internal::fire_notify(cpu_id, cpu_hotplug_notify::pre_setup);
+        if (detail::g_cpu_states[cpu_id] == cpu_hotplug_state::absent) {
+            detail::g_cpu_states[cpu_id] = cpu_hotplug_state::present;
+            detail::fire_notify(cpu_id, cpu_hotplug_notify::pre_setup);
         }
     }
 
@@ -100,9 +100,9 @@ namespace arch::s390x::cpu::hotplug {
     /// @param[in] cpu_id Logical CPU ID.
     auto hotplug_mark_possible(u16 cpu_id) noexcept -> void {
         if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) return;
-        if (_internal::g_cpu_states[cpu_id] == cpu_hotplug_state::present ||
-            _internal::g_cpu_states[cpu_id] == cpu_hotplug_state::offline) {
-            _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::possible;
+        if (detail::g_cpu_states[cpu_id] == cpu_hotplug_state::present ||
+            detail::g_cpu_states[cpu_id] == cpu_hotplug_state::offline) {
+            detail::g_cpu_states[cpu_id] = cpu_hotplug_state::possible;
         }
     }
 
@@ -112,7 +112,7 @@ namespace arch::s390x::cpu::hotplug {
     [[nodiscard]] auto cpu_up(u16 cpu_id) noexcept
         -> ::std::expected<void, ::lib::kernel_error>
     {
-        if (!_internal::is_initialized())
+        if (!detail::is_initialized())
             return ::std::unexpected(::lib::kernel_error::from_generic(
                 ::lib::generic_error::uninitialized));
 
@@ -120,7 +120,7 @@ namespace arch::s390x::cpu::hotplug {
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::invalid_cpu_id));
 
-        const auto current = _internal::g_cpu_states[cpu_id];
+        const auto current = detail::g_cpu_states[cpu_id];
         if (current == cpu_hotplug_state::online)
             return {};
 
@@ -129,16 +129,16 @@ namespace arch::s390x::cpu::hotplug {
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::cpu_not_available));
 
-        _internal::fire_notify(cpu_id, cpu_hotplug_notify::pre_up);
+        detail::fire_notify(cpu_id, cpu_hotplug_notify::pre_up);
 
-        auto sched_result = zxfoundation::sched::sched_cpu_up(cpu_id);
+        auto sched_result = zxfoundation::sched::cpu_up(cpu_id);
         if (!sched_result) {
-            _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::failed;
+            detail::g_cpu_states[cpu_id] = cpu_hotplug_state::failed;
             return ::std::unexpected(sched_result.error());
         }
 
-        _internal::fire_notify(cpu_id, cpu_hotplug_notify::post_up);
-        _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::online;
+        detail::fire_notify(cpu_id, cpu_hotplug_notify::post_up);
+        detail::g_cpu_states[cpu_id] = cpu_hotplug_state::online;
         return {};
     }
 
@@ -150,7 +150,7 @@ namespace arch::s390x::cpu::hotplug {
     [[nodiscard]] auto cpu_down(u16 cpu_id) noexcept
         -> ::std::expected<void, ::lib::kernel_error>
     {
-        if (!_internal::is_initialized())
+        if (!detail::is_initialized())
             return ::std::unexpected(::lib::kernel_error::from_generic(
                 ::lib::generic_error::uninitialized));
 
@@ -158,7 +158,7 @@ namespace arch::s390x::cpu::hotplug {
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::invalid_cpu_id));
 
-        if (_internal::g_cpu_states[cpu_id] != cpu_hotplug_state::online)
+        if (detail::g_cpu_states[cpu_id] != cpu_hotplug_state::online)
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::cpu_not_available));
 
@@ -170,14 +170,14 @@ namespace arch::s390x::cpu::hotplug {
             return ::std::unexpected(::lib::kernel_error::from_generic(
                 ::lib::generic_error::invalid_arg));
 
-        _internal::fire_notify(cpu_id, cpu_hotplug_notify::pre_down);
+        detail::fire_notify(cpu_id, cpu_hotplug_notify::pre_down);
 
         // Purge first while remote dispatch remains admitted. Closing admission
         // afterwards waits out every CSD accepted before the target is stopped.
         auto purge_result = zxfoundation::smp::csd::call_function_single_sync(
-            cpu_id, _internal::purge_alb_on_cpu, nullptr, 0U);
+            cpu_id, detail::purge_alb_on_cpu, nullptr, 0U);
         if (!purge_result) {
-            _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::failed;
+            detail::g_cpu_states[cpu_id] = cpu_hotplug_state::failed;
             return std::unexpected(purge_result.error());
         }
         zxfoundation::smp::csd::disable_cpu(cpu_id);
@@ -191,23 +191,23 @@ namespace arch::s390x::cpu::hotplug {
                 ::lib::arch_error::cpu_not_available));
         }
         const u16 cpu_addr = lc->percpu.cpu_addr;
-        if (!_internal::sigp_stop_cpu(cpu_addr)) {
+        if (!detail::sigp_stop_cpu(cpu_addr)) {
             zxfoundation::smp::csd::enable_cpu(cpu_id);
             cpumask::cpu_set_online(cpu_id);
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::sigp_busy));
         }
 
-        auto sched_result = zxfoundation::sched::sched_cpu_down(cpu_id);
+        auto sched_result = zxfoundation::sched::cpu_down(cpu_id);
         if (!sched_result) {
-            _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::failed;
+            detail::g_cpu_states[cpu_id] = cpu_hotplug_state::failed;
             return ::std::unexpected(sched_result.error());
         }
 
         zxfoundation::sched::topology::topology_offline_cpu(cpu_id);
 
-        _internal::fire_notify(cpu_id, cpu_hotplug_notify::post_down);
-        _internal::g_cpu_states[cpu_id] = cpu_hotplug_state::offline;
+        detail::fire_notify(cpu_id, cpu_hotplug_notify::post_down);
+        detail::g_cpu_states[cpu_id] = cpu_hotplug_state::offline;
         return {};
     }
 
@@ -215,7 +215,7 @@ namespace arch::s390x::cpu::hotplug {
     [[nodiscard]] auto cpu_state(u16 cpu_id) noexcept -> cpu_hotplug_state {
         if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
             return cpu_hotplug_state::absent;
-        return _internal::g_cpu_states[cpu_id];
+        return detail::g_cpu_states[cpu_id];
     }
 
     /// @brief Check if a CPU is online.

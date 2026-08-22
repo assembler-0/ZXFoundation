@@ -1,0 +1,42 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/policy.zcomponent/types.cxxm
+/// @brief Nucleus-side policy-server registration types.
+
+export module zxfoundation.dgp.policy.types;
+import zxfoundation.base.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.memory.objects;
+
+export {
+
+namespace zxfoundation::dgp::policy {
+
+    inline constexpr u32 MAX_POLICY_SERVERS = 64U;
+
+    enum class server_kind : u8 {
+        pager = 0,
+        loader = 1,
+        vfs = 2,
+        reclaim = 3,
+        services = 4,
+        jobs = 5,
+        datasets = 6,
+        drivers = 7,
+        count = 8,
+    };
+
+    struct policy_server {
+        scoms::kobject::bobject ko{};
+        server_kind kind{server_kind::pager};
+        u8 _pad[3]{};
+        u32 endpoint_id{0};
+        memory::objects::memory_object_ref authority{};
+
+        policy_server() noexcept = default;
+    };
+
+    static_assert(__builtin_offsetof(policy_server, ko) == 0);
+
+} // namespace zxfoundation::dgp::policy
+
+} // end export

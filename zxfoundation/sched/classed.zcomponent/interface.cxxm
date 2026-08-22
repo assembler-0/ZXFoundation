@@ -1,0 +1,2 @@
+export module zxfoundation.sched.classed;
+export import zxfoundation.sched.classed.core;

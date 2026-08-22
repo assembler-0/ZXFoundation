@@ -1,0 +1,1248 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/pmm.zcomponent/core.cxx
+/// @brief Physical Memory Manager
+
+module zxfoundation.memory.pmm.core;
+import zxfoundation.memory.pmm.types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa;
+import zxfoundation.memory.numa.types;
+import zxfoundation.sched.context.core;
+import zxfoundation.base.transaction;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
+import zxfoundation.base.types;
+import zxfoundation.base.linksym;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.scoms.kobject.types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.init.zxfl.protocol;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.skey;
+import lib.error;
+import lib.static_vector;
+import std;
+
+
+namespace zxfoundation::memory::pmm::detail {
+
+    /// @brief Intrusive doubly-linked free-list node, written into the first
+    ///        16 bytes of each free buddy block via HHDM.
+    struct free_node {
+        u64 next_phys{0};
+        u64 prev_phys{0};
+    };
+    static_assert(sizeof(free_node) == 16);
+    static_assert(sizeof(free_node) <= PAGE_SIZE);
+
+    /// @brief Intrusive singly-linked PCP node, written into the first 8 bytes
+    ///        of each PCP-cached page.
+    struct pcp_node {
+        u64 next_phys{0};
+    };
+    static_assert(sizeof(pcp_node) <= PAGE_SIZE);
+
+    /// @brief Per-zone buddy allocator state.
+    struct buddy_zone {
+        static constexpr u64 EMPTY = 0;
+
+        u64 heads[MAX_ORDER + 1]{};  ///< Head physical address of each order's free list.
+        u64 counts[MAX_ORDER + 1]{}; ///< Count of free blocks at each order.
+
+        /// @brief Push block to the head of order-ord free list.
+        auto push(u32 ord, u64 phys) noexcept -> void {
+            auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(phys));
+            n->next_phys = heads[ord];
+            n->prev_phys = 0;
+            if (heads[ord])
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(heads[ord]))->prev_phys = phys;
+            heads[ord] = phys;
+            ++counts[ord];
+        }
+
+        /// @brief Pop head block from order-ord free list.
+        /// @return Physical base address, or 0 if empty.
+        auto pop(u32 ord) noexcept -> u64 {
+            const u64 p = heads[ord];
+            if (!p) return 0;
+            auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(p));
+            heads[ord] = n->next_phys;
+            if (n->next_phys)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->next_phys))->prev_phys = 0;
+            --counts[ord];
+            return p;
+        }
+
+        /// @brief Remove a specific block from the order-ord free list (O(1)).
+        auto remove(u32 ord, u64 phys) noexcept -> void {
+            auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(phys));
+            if (n->prev_phys)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->prev_phys))->next_phys = n->next_phys;
+            else
+                heads[ord] = n->next_phys;
+            if (n->next_phys)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->next_phys))->prev_phys = n->prev_phys;
+            --counts[ord];
+        }
+    };
+
+    /// @brief Per-node allocator state.
+    struct numa_zone_set {
+        buddy_zone zones[static_cast<u32>(zone::count)]{};
+        sync::qspinlock::qspinlock locks[static_cast<u32>(zone::count)]{};
+        u64 free_pages[static_cast<u32>(zone::count)]{};
+        u64 total_pages[static_cast<u32>(zone::count)]{};
+    };
+
+    /// @brief Node-owned buddy, lock, and accounting state.
+    static numa_zone_set g_node_zones[numa::MAX_NUMA_NODES]{};
+
+    /// @brief Flat frame descriptor table.
+    static frame_desc* g_frame_table{nullptr};
+
+    /// @brief Highest PFN ever observed in the boot memory map.
+    static u64 g_max_pfn{0};
+
+    /// @brief Frames deliberately retired after validation or MCCK failure.
+    static u64 g_retired_pages{0};
+
+    static bool g_initialized{false};
+
+    allocation_retry_fn g_allocation_retry{nullptr};
+    std::atomic<u32> g_reclaim_active{0U};
+
+    [[nodiscard]] constexpr auto zone_of(u64 phys) noexcept -> zone {
+        return (phys < ZONE_DMA_LIMIT) ? zone::dma31 : zone::normal;
+    }
+
+    [[nodiscard]] constexpr auto normalize_node_id(u8 node_id) noexcept -> u8 {
+        return numa::node_id_is_valid(node_id) ? node_id : numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] auto node_is_allocatable(u8 node_id) noexcept -> bool {
+        if (!numa::node_id_is_valid(node_id)) return false;
+        auto node = numa::node_at(node_id);
+        if (!node) return node_id == numa::NUMA_NODE_BOOT;
+        return numa::node_state_is_allocatable((*node)->state);
+    }
+
+    [[nodiscard]] auto local_node_id() noexcept -> u8 {
+        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        if (auto node = numa::node_for_cpu(pcp.cpu_id)) return normalize_node_id(*node);
+        return numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] auto desc_of(u64 phys) noexcept -> std::expected<frame_desc*, lib::kernel_error>;
+
+    [[nodiscard]] auto frame_node_id(u64 phys) noexcept -> u8 {
+        auto desc = desc_of(phys);
+        if (!desc) [[unlikely]] return numa::NUMA_NODE_BOOT;
+        const u8 recorded = (*desc)->numa_node;
+        if (numa::node_id_is_valid(recorded)) return recorded;
+
+        auto node = numa::node_for_phys(phys);
+        if (node) return normalize_node_id(*node);
+
+        return numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] auto boot_region_node_id(
+        const arch::s390x::init::zxfl::mem_region& region,
+        u64 phys
+    ) noexcept -> u8 {
+        if (numa::node_id_is_valid(region.numa_node)) return region.numa_node;
+
+        auto node = numa::node_for_phys(phys);
+        if (node) return normalize_node_id(*node);
+
+        return numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] constexpr auto owner_for_purpose(purpose p) noexcept -> frame_owner {
+        return
+            (p == purpose::page_table) ? frame_owner::page_table :
+            (p == purpose::stack)      ? frame_owner::stack      :
+            (p == purpose::device_dma) ? frame_owner::device     :
+            (p == purpose::slab)       ? frame_owner::slab       :
+            (p == purpose::file_cache) ? frame_owner::domain :
+                                          frame_owner::domain;
+    }
+
+    /// @brief Access the frame_desc for a given physical address.
+    /// @warning Only valid after pmm::init() has set g_frame_table.
+    [[nodiscard]] auto desc_of(u64 phys) noexcept -> std::expected<frame_desc*, lib::kernel_error> {
+        if (!g_frame_table) [[unlikely]] {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+        }
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) [[unlikely]] {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        }
+        return &g_frame_table[pfn];
+    }
+
+    /// @brief Fail-closed validation of a frame handed back by the buddy / PCP layer.
+    /// @param[in] phys  Candidate physical base address taken from a free list.
+    /// @warning Triggers syschk_fatal on any inconsistency and does not return
+    ///          in that case.
+    auto assert_allocatable_frame(u64 phys) noexcept -> void {
+        const u64 max_phys = g_max_pfn << PAGE_SHIFT;
+        auto desc = desc_of(phys);
+        bool owned_by_buddy = desc && (*desc)->owner() == frame_owner::buddy;
+        if (phys == 0U
+            || (phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U
+            || phys >= max_phys
+            || !owned_by_buddy) [[unlikely]] {
+            u64 owner_val = 0xFF;
+            u64 order_val = 0xFF;
+            if (desc) {
+                owner_val = static_cast<u64>((*desc)->owner());
+                order_val = static_cast<u64>((*desc)->order());
+            }
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_address),
+                "pmm: free list corruption at phys={:#010x} owner={} order={} max_phys={:#010x}",
+                phys, owner_val, order_val, max_phys);
+        }
+    }
+
+    [[nodiscard]] auto validate_page_table_allocation(
+        u64 phys,
+        u32 order,
+        zone z,
+        u8 node_id
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        const u64 size = static_cast<u64>(PAGE_SIZE) << order;
+        const u64 max_phys = g_max_pfn << PAGE_SHIFT;
+
+        if (!g_frame_table || order > MAX_ORDER || size == 0U) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+        if ((phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U
+            || (phys & (size - 1U)) != 0U) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::alignment_error));
+        }
+        if (phys >= max_phys || phys + size < phys || phys + size > max_phys) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+        if (!hhdm::phys_range_is_mapped(phys, size)) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed));
+        }
+        if (zone_of(phys) != z || !node_is_allocatable(node_id)) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+        }
+
+        auto fde = desc_of(phys);
+        if (!fde) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+        auto* fd = *fde;
+        if (fd->owner() != frame_owner::page_table || fd->order() != order || fd->numa_node != node_id) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::purpose_mismatch));
+        }
+        if ((fd->load_flags() & (ff_offline | ff_shared)) != 0U) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
+        }
+
+        return {};
+    }
+
+    /// @brief Retire an allocation that failed post-allocation validation.
+    auto quarantine_failed_allocation(u64 phys, u32 order, u8 node_id) noexcept -> void {
+        if (!g_frame_table || (phys >> PAGE_SHIFT) >= g_max_pfn) return;
+        const u8 node = normalize_node_id(node_id);
+        if (auto fde = desc_of(phys); fde) [[likely]] {
+            (*fde)->set(static_cast<u8>(order), frame_owner::reserved,
+                        node, ff_suspect);
+            g_retired_pages += 1ULL << order;
+        }
+    }
+
+    /// @brief Allocate a block of the given order from a node-owned zone.
+    /// @pre  Caller holds the selected node-zone lock.
+    /// @return Physical base address of the allocated block, or 0 on failure.
+    auto alloc_locked(u32 order, zone z, u8 node_id) noexcept -> u64 {
+        const u8 node = normalize_node_id(node_id);
+        const u32 zi = static_cast<u32>(z);
+        auto& bz     = g_node_zones[node].zones[zi];
+
+        for (u32 ord = order; ord <= MAX_ORDER; ++ord) {
+            const u64 phys = bz.pop(ord);
+            if (!phys) continue;
+
+            assert_allocatable_frame(phys);
+
+            for (u32 s = ord; s > order; --s) {
+                const u64 buddy_phys = phys + (static_cast<u64>(PAGE_SIZE) << (s - 1));
+                bz.push(s - 1, buddy_phys);
+                auto fde = desc_of(buddy_phys);
+                if (fde) [[likely]] {
+                    (*fde)->set(static_cast<u8>(s - 1), frame_owner::buddy, node);
+                }
+            }
+
+            g_node_zones[node].free_pages[zi] -= 1ULL << order;
+            return phys;
+        }
+        return 0;
+    }
+
+    /// @brief Return a block to a node-owned zone, coalescing with same-node free buddies.
+    /// @pre  Caller holds the selected node-zone lock.
+    auto free_locked(u64 phys, u32 order, zone z, u8 node_id) noexcept -> void {
+        const u8 node = normalize_node_id(node_id);
+        const u32 zi = static_cast<u32>(z);
+        auto& bz     = g_node_zones[node].zones[zi];
+
+        u32 ord = order;
+        for (; ord < MAX_ORDER; ++ord) {
+            const u64 buddy = phys ^ (static_cast<u64>(PAGE_SIZE) << ord);
+
+            if (zone_of(buddy) != z) break;
+
+            auto bde = desc_of(buddy);
+            if (!bde) break;
+            auto* bd = *bde;
+            if (bd->owner() != frame_owner::buddy) break;
+            if (bd->numa_node != node) break;
+
+            if (bd->load_flags() & ff_offline) {
+                auto pde = desc_of(phys);
+                if (pde) [[likely]] (*pde)->or_flags(ff_suspect);
+                break;
+            }
+
+            if (bd->order() != static_cast<u8>(ord)) break;
+
+            bz.remove(ord, buddy);
+            g_node_zones[node].free_pages[zi] -= 1ULL << ord;
+            auto fde = desc_of(buddy);
+            if (fde) [[likely]] (*fde)->set(0, frame_owner::none, node);
+            phys = std::min(phys, buddy);
+        }
+
+        auto pde = desc_of(phys);
+        if (pde) [[likely]] {
+            const u8 flags = static_cast<u8>(
+                (*pde)->load_flags(std::memory_order::acquire) & ff_suspect);
+            (*pde)->set(static_cast<u8>(ord), frame_owner::buddy, node, flags);
+        }
+        bz.push(ord, phys);
+        g_node_zones[node].free_pages[zi] += 1ULL << ord;
+    }
+
+    struct node_allocation {
+        u64 phys{0ULL};
+        u8 node_id{numa::NUMA_NODE_BOOT};
+        u8 fallback_distance{0U};
+        bool remote{false};
+    };
+
+    [[nodiscard]] auto try_alloc_node(u32 order, zone z, u8 node_id) noexcept -> node_allocation {
+        const u8 node = normalize_node_id(node_id);
+        if (!node_is_allocatable(node)) return {};
+
+        const u32 zi = static_cast<u32>(z);
+        const u64 required_pages = 1ULL << order;
+        if (g_node_zones[node].free_pages[zi] < required_pages) return {};
+
+        const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+        const u64 phys = alloc_locked(order, z, node);
+        if (!phys) return {};
+
+        return node_allocation{
+            .phys = phys,
+            .node_id = node,
+            .fallback_distance = 0U,
+            .remote = false,
+        };
+    }
+
+    [[nodiscard]] auto alloc_node_aware(
+        u32 order,
+        zone z,
+        const numa::allocation_policy& policy,
+        u8 local_node
+    ) noexcept -> node_allocation {
+        const u8 preferred = normalize_node_id(
+            policy.preferred_node == numa::NUMA_NODE_ANY ? local_node : policy.preferred_node);
+
+        auto first = try_alloc_node(order, z, preferred);
+        if (first.phys) return first;
+
+        if (policy.fallback == numa::fallback_mode::strict_local || !policy.allow_remote) {
+            return {};
+        }
+
+        for (u8 distance = 1U; distance < numa::MAX_NUMA_NODES; ++distance) {
+            const u8 candidate = static_cast<u8>((static_cast<u32>(preferred) + distance) % numa::MAX_NUMA_NODES);
+            auto attempt = try_alloc_node(order, z, candidate);
+            if (!attempt.phys) continue;
+            attempt.fallback_distance = distance;
+            attempt.remote = candidate != preferred;
+            return attempt;
+        }
+
+        if (policy.fallback == numa::fallback_mode::emergency_any) {
+            for (u8 candidate = 0U; candidate < numa::MAX_NUMA_NODES; ++candidate) {
+                auto attempt = try_alloc_node(order, z, candidate);
+                if (!attempt.phys) continue;
+                attempt.fallback_distance = static_cast<u8>((candidate + numa::MAX_NUMA_NODES - preferred) % numa::MAX_NUMA_NODES);
+                attempt.remote = candidate != preferred;
+                return attempt;
+            }
+        }
+
+        return {};
+    }
+
+    /// @brief Pop one page of order `ord` from a PCP list.
+    /// @return Physical base address, or 0 if list is empty.
+    [[nodiscard]] auto pcp_pop(pcp_list& lst) noexcept -> u64 {
+        if (!lst.head_phys) return 0;
+        const u64 phys = lst.head_phys;
+        assert_allocatable_frame(phys);
+        const auto* node = reinterpret_cast<const pcp_node*>(hhdm::phys_to_virt(phys));
+        lst.head_phys = node->next_phys;
+        --lst.count;
+        return phys;
+    }
+
+    /// @brief Push one page onto a PCP list head.
+    auto pcp_push(pcp_list& lst, u64 phys) noexcept -> void {
+        auto* node = reinterpret_cast<pcp_node*>(hhdm::phys_to_virt(phys));
+        node->next_phys = lst.head_phys;
+        lst.head_phys = phys;
+        ++lst.count;
+    }
+
+    /// @brief Refill a PCP list by bulk-allocating PCP_BATCH pages from buddy.
+    auto pcp_refill(pcp_list& lst, u32 ord, zone z, u8 node_id) noexcept -> void {
+        const u8 node = normalize_node_id(node_id);
+        const u32 zi = static_cast<u32>(z);
+        const sync::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
+        for (u32 i = 0; i < PCP_BATCH; ++i) {
+            const u64 phys = alloc_locked(ord, z, node);
+            if (!phys) break;
+            auto fde = desc_of(phys);
+            if (fde) [[likely]] (*fde)->set(static_cast<u8>(ord), frame_owner::buddy, node);
+            pcp_push(lst, phys);
+        }
+    }
+
+    /// @brief Drain PCP_BATCH/2 pages from a list back to the buddy.
+    ///        Takes the zone spinlock internally (IRQs already disabled by caller).
+    auto pcp_drain(pcp_list& lst, u32 ord, zone z, u8 node_id) noexcept -> void {
+        const u8 node = normalize_node_id(node_id);
+        const u32 zi     = static_cast<u32>(z);
+        const u32 target = PCP_HIGH / 2U;
+        const sync::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
+        while (lst.count > target) {
+            const u64 phys = pcp_pop(lst);
+            if (!phys) break;
+            free_locked(phys, ord, z, node);
+        }
+    }
+
+    constexpr u32 MAX_RESERVATIONS =
+        arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX + 5U;
+
+    struct resv_entry {
+        u64 start{0}; ///< Inclusive, page-aligned.
+        u64 end{0};   ///< Exclusive, page-aligned.
+    };
+
+    static auto sort_merge_reservations(resv_entry* resv, u32& count) noexcept -> void {
+        for (u32 i = 1; i < count; ++i) {
+            resv_entry key = resv[i];
+            i32 j = static_cast<i32>(i) - 1;
+            while (j >= 0 && resv[j].start > key.start) { resv[j + 1] = resv[j]; --j; }
+            resv[j + 1] = key;
+        }
+        u32 out = 0;
+        for (u32 i = 0; i < count; ++i) {
+            if (out > 0 && resv[i].start <= resv[out - 1].end)
+                resv[out - 1].end = std::max(resv[out - 1].end, resv[i].end);
+            else
+                resv[out++] = resv[i];
+        }
+        count = out;
+    }
+
+    static constexpr auto align_resv(resv_entry r) noexcept -> resv_entry {
+        return {
+            .start = r.start & ~static_cast<u64>(PAGE_SIZE - 1),
+            .end   = (r.end + PAGE_SIZE - 1) & ~static_cast<u64>(PAGE_SIZE - 1),
+        };
+    }
+
+    static auto resv_skip_end(u64 phys, const resv_entry* resv, u32 count) noexcept -> u64 {
+        for (u32 i = 0; i < count; ++i) {
+            if (phys < resv[i].start) return 0;
+            if (phys < resv[i].end)   return resv[i].end;
+        }
+        return 0;
+    }
+
+    static auto next_resv_start(u64 phys, u64 limit,
+                                const resv_entry* resv, u32 count) noexcept -> u64 {
+        u64 nearest = limit;
+        for (u32 i = 0; i < count; ++i)
+            if (resv[i].start > phys && resv[i].start < nearest)
+                nearest = resv[i].start;
+        return nearest;
+    }
+
+} // namespace zxfoundation::memory::pmm::detail
+
+namespace zxfoundation::memory::pmm {
+
+    /// @brief Install the allocation-pressure reclaim callback.
+    [[nodiscard]] auto install_allocation_retry(
+        allocation_retry_fn callback
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!callback) return std::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::invalid_arg));
+        detail::g_allocation_retry = callback;
+        return {};
+    }
+
+    auto reserve(u64 phys, u32 order) noexcept -> void;
+
+    /// @brief Initialize the PMM from the ZXFL boot protocol.
+    /// @param[in] proto  Validated ZXFL boot protocol.
+    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {
+        using namespace detail;
+        if (g_initialized) return;
+
+        const auto* map = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
+            proto.mem_map_addr);
+        if (proto.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
+            || (proto.mem_map_count != 0U && !map)) {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
+                "pmm: invalid ZXFL memory map descriptor");
+        }
+
+        for (u32 i = 0; i < proto.mem_map_count; ++i) {
+            if (map[i].length != 0U
+                && map[i].base > ~0ULL - map[i].length) {
+                sys::syschk::syschk_fatal(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
+                    "pmm: ZXFL memory-map range overflow at entry {}", i);
+            }
+            const u64 region_end = map[i].base + map[i].length;
+            const u64 pfn_end = (region_end + PAGE_SIZE - 1U) >> PAGE_SHIFT;
+            if (pfn_end > g_max_pfn) g_max_pfn = pfn_end;
+        }
+
+        lib::static_vector<resv_entry, MAX_RESERVATIONS> resv{};
+        auto push_resv = [&](resv_entry e) noexcept -> void {
+            auto pushed = resv.push_back(e);
+            if (!pushed) {
+                sys::syschk::syschk_fatal(
+                    pushed.error(), "pmm: reservation staging capacity exhausted");
+            }
+        };
+
+        // Reserve low 1 MiB (lowcore + hardware-defined area).
+        push_resv(align_resv({ 0, 1ULL << 20 }));
+
+        // Reserve the loader region (1–2 MiB).
+        push_resv(align_resv({ 1ULL << 20, 2ULL << 20 }));
+
+        const u64 bss_phys = hhdm::virt_to_phys(
+            reinterpret_cast<u64>(base::linksym::__bss_end));
+        push_resv(align_resv({
+            proto.kernel_phys_start,
+            std::max(std::max(proto.kernel_phys_end, bss_phys), proto.pgtbl_pool_end)
+        }));
+        if (proto.pgtbl_pool_end > proto.kernel_phys_end)
+            push_resv(align_resv({ proto.kernel_phys_end, proto.pgtbl_pool_end }));
+
+        {
+            u32 n = static_cast<u32>(resv.size());
+            sort_merge_reservations(resv.data(), n);
+            while (resv.size() > n) resv.pop_back();
+        }
+
+        for (u32 i = 0; i < proto.mem_map_count; ++i) {
+            if (map[i].type != arch::s390x::init::zxfl::ZXFL_MEM_RESERVED
+                && map[i].type != arch::s390x::init::zxfl::ZXFL_MEM_LOADER)
+                continue;
+            push_resv(align_resv({ map[i].base, map[i].base + map[i].length }));
+        }
+        {
+            u32 n = static_cast<u32>(resv.size());
+            sort_merge_reservations(resv.data(), n);
+            while (resv.size() > n) resv.pop_back();
+        }
+
+        // Allocate the frame descriptor table immediately after all reservations.
+        const u64 table_bytes = g_max_pfn * sizeof(frame_desc);
+        const u64 table_pages = (table_bytes + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+        u64 table_phys = 0;
+        for (usize i = 0; i < resv.size(); ++i)
+            if (resv[i].end > table_phys) table_phys = resv[i].end;
+        table_phys = (table_phys + PAGE_SIZE - 1) & ~static_cast<u64>(PAGE_SIZE - 1);
+
+        const u64 table_end = table_phys + (table_pages << PAGE_SHIFT);
+        if (table_end < table_phys
+            || table_end > (g_max_pfn << PAGE_SHIFT)
+            || !hhdm::phys_range_is_mapped(table_phys, table_pages << PAGE_SHIFT)) {
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed),
+                "pmm: frame table extent exceeds HHDM coverage / installed RAM");
+        }
+
+        g_frame_table = reinterpret_cast<frame_desc*>(hhdm::phys_to_virt(table_phys));
+
+        std::fill_n(reinterpret_cast<u8*>(g_frame_table), table_bytes, u8{0});
+
+        push_resv(align_resv({ table_phys, table_phys + (table_pages << PAGE_SHIFT) }));
+        {
+            u32 n = static_cast<u32>(resv.size());
+            sort_merge_reservations(resv.data(), n);
+            while (resv.size() > n) resv.pop_back();
+        }
+
+        for (u32 i = 0; i < proto.mem_map_count; ++i) {
+            if (map[i].type != arch::s390x::init::zxfl::ZXFL_MEM_USABLE) continue;
+
+            const u64 region_start = (map[i].base + PAGE_SIZE - 1) & ~static_cast<u64>(PAGE_SIZE - 1);
+            const u64 region_end   = (map[i].base + map[i].length) & ~static_cast<u64>(PAGE_SIZE - 1);
+            if (region_start >= region_end) continue;
+
+            u64 cur = region_start;
+            while (cur < region_end) {
+                const u64 skip_to = resv_skip_end(cur, resv.data(), static_cast<u32>(resv.size()));
+                if (skip_to) {
+                    const u64 resv_end = std::min(skip_to, region_end);
+                    for (u64 p = cur; p < resv_end; p += PAGE_SIZE) {
+                        auto fde = desc_of(p);
+                        if (fde) [[likely]] (*fde)->set(0, frame_owner::reserved, 0);
+                    }
+                    cur = resv_end;
+                    continue;
+                }
+
+                const u64 run_end = next_resv_start(cur, region_end, resv.data(),
+                                                    static_cast<u32>(resv.size()));
+                u64 run = cur;
+                while (run < run_end) {
+                    const zone z = zone_of(run);
+                    const u64 zone_end = (z == zone::dma31)
+                        ? std::min(run_end, ZONE_DMA_LIMIT)
+                        : run_end;
+                    u32 ord = MAX_ORDER;
+                    while (ord > 0) {
+                        const u64 block_size = static_cast<u64>(PAGE_SIZE) << ord;
+                        const bool aligned   = (run & (block_size - 1)) == 0;
+                        const bool fits      = (run + block_size) <= zone_end;
+                        if (aligned && fits) break;
+                        --ord;
+                    }
+                    const u32 zi = static_cast<u32>(z);
+                    const u8 node = boot_region_node_id(map[i], run);
+                    g_node_zones[node].zones[zi].push(ord, run);
+                    auto fde = desc_of(run);
+                    if (fde) [[likely]] (*fde)->set(static_cast<u8>(ord), frame_owner::buddy, node);
+
+                    const u64 block_pages = 1ULL << ord;
+                    g_node_zones[node].free_pages[zi] += block_pages;
+                    g_node_zones[node].total_pages[zi] += block_pages;
+                    run += static_cast<u64>(PAGE_SIZE) << ord;
+                }
+                cur = run_end;
+            }
+        }
+
+        reserve(proto.lowcore_phys, 1);
+
+        g_initialized = true;
+    }
+
+    /// @brief Mark a physical range as permanently reserved (runtime call).
+    /// @param[in] phys   Start of the range (page-aligned).
+    /// @param[in] order  log2 of the number of pages to reserve.
+    auto reserve(u64 phys, u32 order) noexcept -> void {
+        using namespace detail;
+        const zone z = zone_of(phys);
+        const u32 zi = static_cast<u32>(z);
+        const u64 end = phys + (static_cast<u64>(PAGE_SIZE) << order);
+
+        for (u8 node = 0U; node < numa::MAX_NUMA_NODES; ++node) {
+            auto& node_zones = g_node_zones[node];
+            // Quick early exit: skip nodes with no pages in this zone.
+            if (node_zones.total_pages[zi] == 0) [[likely]]
+                continue;
+
+            // Check NUMA node phys range for overlap before scanning free lists.
+            const auto node_result = numa::node_at(node);
+            if (node_result) {
+                const auto& n = *node_result.value();
+                if (phys >= n.phys_end || end <= n.phys_start)
+                    continue;
+            }
+
+            const sync::irq_lock_guard guard{node_zones.locks[zi]};
+            auto& bz = node_zones.zones[zi];
+
+            for (u32 ord = 0; ord <= MAX_ORDER; ++ord) {
+                u64 cur = bz.heads[ord];
+                while (cur) {
+                    const auto* n = reinterpret_cast<const free_node*>(hhdm::phys_to_virt(cur));
+                    const u64 nxt = n->next_phys;
+                    const u64 blk_end = cur + (static_cast<u64>(PAGE_SIZE) << ord);
+
+                    if (cur < end && blk_end > phys) {
+                        bz.remove(ord, cur);
+                        node_zones.free_pages[zi] -= 1ULL << ord;
+                        node_zones.total_pages[zi] -= 1ULL << ord;
+                        {
+                            auto fde = desc_of(cur);
+                            if (fde) [[likely]] (*fde)->set(static_cast<u8>(ord), frame_owner::reserved, node);
+                        }
+
+                        // Return pages below the reserved range.
+                        if (cur < phys) {
+                            u64 ret = cur;
+                            while (ret < phys) {
+                                u32 ret_ord = 0;
+                                while (ret_ord + 1 <= ord) {
+                                    const u64 ns = static_cast<u64>(PAGE_SIZE) << (ret_ord + 1);
+                                    if ((ret & (ns - 1)) == 0 && ret + ns <= phys) ++ret_ord;
+                                    else break;
+                                }
+                                bz.push(ret_ord, ret);
+                                {
+                                auto fde = desc_of(ret);
+                                if (fde) [[likely]] (*fde)->set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                }
+                                node_zones.free_pages[zi] += 1ULL << ret_ord;
+                                node_zones.total_pages[zi] += 1ULL << ret_ord;
+                                ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
+                            }
+                        }
+
+                        // Return pages above the reserved range.
+                        if (blk_end > end) {
+                            u64 ret = end;
+                            while (ret < blk_end) {
+                                u32 ret_ord = 0;
+                                while (ret_ord + 1 <= ord) {
+                                    const u64 ns = static_cast<u64>(PAGE_SIZE) << (ret_ord + 1);
+                                    if ((ret & (ns - 1)) == 0 && ret + ns <= blk_end) ++ret_ord;
+                                    else break;
+                                }
+                                bz.push(ret_ord, ret);
+                                {
+                                auto fde = desc_of(ret);
+                                if (fde) [[likely]] (*fde)->set(static_cast<u8>(ret_ord), frame_owner::buddy, node);
+                                }
+                                node_zones.free_pages[zi] += 1ULL << ret_ord;
+                                node_zones.total_pages[zi] += 1ULL << ret_ord;
+                                ret += static_cast<u64>(PAGE_SIZE) << ret_ord;
+                            }
+                        }
+                    }
+                    cur = nxt;
+                }
+            }
+        }
+    }
+
+
+        auto transaction::on_rollback() noexcept -> void {
+            using namespace detail;
+            for (u32 i = 0; i < m_count; ++i) {
+                auto fde = desc_of(m_slots[i].phys);
+                if (!fde) continue;
+                if ((*fde)->load_flags() & ff_offline) {
+                    (*fde)->set(static_cast<u8>(m_slots[i].order),
+                        frame_owner::reserved,
+                        normalize_node_id(m_slots[i].node_id),
+                        static_cast<u8>(ff_offline | ff_suspect));
+                    g_retired_pages += 1ULL << m_slots[i].order;
+                    continue;
+                }
+                const u32 zi = static_cast<u32>(m_slots[i].z);
+                const u8 node = normalize_node_id(m_slots[i].node_id);
+                const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+                free_locked(m_slots[i].phys, m_slots[i].order, m_slots[i].z, node);
+            }
+        }
+
+        [[nodiscard]] auto transaction::alloc(
+            u32       order,
+            zone      z,
+            purpose   p,
+            page_init init
+        ) noexcept -> std::expected<folio_embryo, lib::kernel_error> {
+            using namespace detail;
+
+            if (committed() || m_count >= TXN_MAX)
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+
+            if (sched::context::in_mcck())
+                sys::syschk::syschk_fatal(
+                    lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                    "pmm::transaction::alloc forbidden in MCCK context");
+            if (sched::context::in_hardirq() && order > 0U)
+                sys::syschk::syschk_fatal(
+                    lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                    "pmm::transaction::alloc order > 0 forbidden in hard-IRQ context");
+
+            const u8 local_node = local_node_id();
+            const numa::allocation_policy placement{
+                .preferred_node = local_node,
+                .fallback = numa::fallback_mode::local_first,
+                .require_dma31 = z == zone::dma31,
+                .allow_remote = true,
+            };
+            const node_allocation allocation = alloc_node_aware(order, z, placement, local_node);
+            if (!allocation.phys)
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::zone_exhausted));
+
+            const frame_owner fo = owner_for_purpose(p);
+            {
+                auto fde_txn = desc_of(allocation.phys);
+                if (fde_txn) [[likely]] (*fde_txn)->set(static_cast<u8>(order), fo, allocation.node_id);
+            }
+
+            if (p == purpose::page_table) {
+                auto validation = validate_page_table_allocation(allocation.phys, order, z, allocation.node_id);
+                if (!validation) {
+                    quarantine_failed_allocation(allocation.phys, order, allocation.node_id);
+                    return std::unexpected(validation.error());
+                }
+            }
+
+            if (init == page_init::zeroed)
+                std::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
+                            static_cast<u64>(PAGE_SIZE) << order, u8{0});
+
+            m_slots[m_count++] = { allocation.phys, order, z, p, allocation.node_id };
+            return folio_embryo{ allocation.phys, order, p, z };
+        }
+
+        [[nodiscard]] auto transaction::count() const noexcept -> u32 { return m_count; }
+
+        [[nodiscard]] auto transaction::phys(u32 i) const noexcept -> u64 {
+            return (i < m_count) ? m_slots[i].phys : 0;
+        }
+
+
+
+    /// @brief Allocate a single folio.
+    /// @param[in] request Node-aware allocation request.
+    /// @return Allocation result containing the folio and resolved placement metadata.
+    /// @note Order-zero through PCP_MAX_ORDER allocations attempt the current CPU's node-local PCP first.
+    /// @warning Allocation is forbidden in MCCK context and multi-page allocation is forbidden in hard IRQ context.
+    [[nodiscard]] auto alloc(
+        const allocation_request& request
+    ) noexcept -> std::expected<allocation_result, lib::kernel_error> {
+        using namespace detail;
+
+        if (sched::context::in_mcck())
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::alloc forbidden in MCCK context");
+        if (sched::context::in_hardirq() && request.order > 0U)
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::alloc order>0 forbidden in hard-IRQ context");
+        if (request.order > MAX_ORDER)
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+
+        const zone z = request.mem_zone;
+        const u32 zi = static_cast<u32>(z);
+        const u8 local_node = local_node_id();
+        numa::allocation_policy placement = request.placement;
+        if (placement.preferred_node == numa::NUMA_NODE_ANY) {
+            placement.preferred_node = local_node;
+        }
+        if (placement.require_dma31 && z != zone::dma31)
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::zone_exhausted));
+
+        node_allocation allocation{};
+
+        if (request.order <= PCP_MAX_ORDER) {
+            const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+            auto& percpu = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            const u8 pcp_node = normalize_node_id(placement.preferred_node);
+            pcp_list& lst = percpu.pcp.lists[pcp_node][zi][request.order];
+
+            if (!lst.head_phys)
+                pcp_refill(lst, request.order, z, pcp_node); // takes node-zone lock internally
+
+            allocation.phys = pcp_pop(lst);
+            allocation.node_id = pcp_node;
+            allocation.fallback_distance = 0U;
+            allocation.remote = pcp_node != local_node;
+            arch::s390x::cpu::irq::irq_restore(irq_flags);
+        }
+
+        if (!allocation.phys) {
+            allocation = alloc_node_aware(request.order, z, placement, local_node);
+        }
+
+        if (!allocation.phys && detail::g_allocation_retry
+            && sched::context::can_sleep()) {
+            u32 expected = 0U;
+            if (detail::g_reclaim_active.compare_exchange_strong(
+                    expected, 1U, std::memory_order::acq_rel,
+                    std::memory_order::acquire)) {
+                const u32 target_pages = 1U << request.order;
+                discard_value detail::g_allocation_retry(
+                    placement.preferred_node, target_pages);
+                detail::g_reclaim_active.store(0U, std::memory_order::release);
+                allocation = alloc_node_aware(request.order, z, placement, local_node);
+            }
+        }
+
+        if (!allocation.phys)
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::zone_exhausted));
+
+        const frame_owner fo = owner_for_purpose(request.use);
+        {
+            auto fde = desc_of(allocation.phys);
+            if (fde) [[likely]] (*fde)->set(static_cast<u8>(request.order), fo, allocation.node_id);
+        }
+
+        if (request.use == purpose::page_table) {
+            auto validation = validate_page_table_allocation(allocation.phys, request.order, z, allocation.node_id);
+            if (!validation) {
+                quarantine_failed_allocation(allocation.phys, request.order, allocation.node_id);
+                return std::unexpected(validation.error());
+            }
+        }
+
+        if (request.init == page_init::zeroed)
+            std::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
+                        static_cast<u64>(PAGE_SIZE) << request.order, u8{0});
+
+        return allocation_result{
+            .phys_base = allocation.phys,
+            .order = request.order,
+            .use = request.use,
+            .mem_zone = z,
+            .placement = numa::placement_result{
+                .selected_node = allocation.node_id,
+                .fallback_distance = allocation.fallback_distance,
+                .remote = allocation.remote,
+                .strict_violation = false,
+            },
+        };
+    }
+
+    /// @brief Allocate a single folio.
+    /// @param[in] order  Buddy order (0–MAX_ORDER).
+    /// @param[in] z      Zone constraint.
+    /// @param[in] p      Semantic purpose annotation.
+    /// @param[in] init   Initialization policy.
+    /// @return folio_embryo on success, kernel_error on failure.
+    [[nodiscard]] auto alloc(
+        u32       order,
+        zone      z,
+        purpose   p,
+        page_init init
+    ) noexcept -> std::expected<folio_embryo, lib::kernel_error> {
+        numa::allocation_policy placement{
+            .preferred_node = numa::NUMA_NODE_ANY,
+            .fallback = numa::fallback_mode::local_first,
+            .require_dma31 = z == zone::dma31,
+            .allow_remote = true,
+        };
+        auto result = alloc(allocation_request{
+            .order = order,
+            .mem_zone = z,
+            .use = p,
+            .init = init,
+            .placement = placement,
+        });
+        if (!result) return std::unexpected(result.error());
+        return result->into_folio();
+    }
+
+
+    /// @brief Return a folio to the allocator.
+    /// @param[in] f  The folio to free.  Must not be empty.
+    auto free(folio_active f) noexcept -> void {
+        if (!f) return;
+        using namespace detail;
+
+        const u32   order = f.order;
+        const zone  z     = f.mem_zone;
+        const u64   phys  = f.phys_base;
+        const u8    node  = frame_node_id(phys);
+
+        // Reset frame_desc so the frame shows as buddy-owned.
+        {
+            auto fde = desc_of(phys);
+            if (fde) [[likely]] (*fde)->set(static_cast<u8>(order), frame_owner::buddy, node);
+        }
+        if (order <= PCP_MAX_ORDER && !sched::context::in_interrupt()) {
+            const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+            pcp_list& lst = arch::s390x::cpu::lowcore::this_cpu_percpu()
+                                .pcp.lists[node][static_cast<u32>(z)][order];
+            pcp_push(lst, phys);
+            if (lst.count > PCP_HIGH)
+                pcp_drain(lst, order, z, node); // drains under node-zone lock
+            arch::s390x::cpu::irq::irq_restore(irq_flags);
+        } else {
+            const u32 zi = static_cast<u32>(z);
+            const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+            free_locked(phys, order, z, node);
+        }
+    }
+
+
+    /// @brief Atomically increment a frame's refcount.
+    /// @param[in] phys  Physical base address of the frame.
+    /// @return New refcount on success, kernel_error on invalid address.
+    [[nodiscard]] auto frame_ref(u64 phys) noexcept
+        -> std::expected<u16, lib::kernel_error>
+    {
+        using namespace detail;
+        if (!g_frame_table) return std::unexpected(
+            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) return std::unexpected(
+            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        auto& fd = g_frame_table[pfn];
+        u16 current = fd.refcount.load(std::memory_order::acquire);
+        for (;;) {
+            if (current == 0xFFFFU) {
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::out_of_memory));
+            }
+            const u16 desired = static_cast<u16>(current + 1U);
+            if (fd.refcount.compare_exchange_weak(
+                    current, desired,
+                    std::memory_order::acq_rel,
+                    std::memory_order::acquire)) {
+                return desired;
+            }
+        }
+    }
+
+
+    /// @brief Fail-closed frame-descriptor accessor.
+    /// @param[in] phys  Physical address (lower PAGE_SHIFT bits are ignored).
+    /// @return Pointer into the frame descriptor table, or a kernel_error when
+    ///         the PMM is uninitialized or @p phys is outside the managed
+    ///         physical range.
+    [[nodiscard]] auto desc_of_checked(u64 phys) noexcept
+        -> std::expected<frame_desc*, lib::kernel_error> {
+        using namespace detail;
+        if (!g_frame_table) [[unlikely]]
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) [[unlikely]]
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        return &g_frame_table[pfn];
+    }
+
+    /// @brief Atomically decrement a frame's refcount.
+    /// @param[in] phys  Physical base address of the frame.
+    /// @return New refcount on success, kernel_error on invalid address.
+    [[nodiscard]] auto frame_unref(u64 phys) noexcept
+        -> std::expected<u16, lib::kernel_error> {
+        using namespace detail;
+        if (!g_frame_table) return std::unexpected(
+            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) return std::unexpected(
+            lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
+        auto& fd = g_frame_table[pfn];
+        u16 current = fd.refcount.load(std::memory_order::acquire);
+        for (;;) {
+            if (current == 0U) {
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::purpose_mismatch));
+            }
+            const u16 desired = static_cast<u16>(current - 1U);
+            if (fd.refcount.compare_exchange_weak(
+                    current, desired,
+                    std::memory_order::acq_rel,
+                    std::memory_order::acquire)) {
+                return desired;
+            }
+        }
+    }
+
+    /// @brief Release one order-zero mapping pin and return the frame
+    /// @return True when this call returned the frame to buddy/PCP, false when
+    ///         another pin still owns it.
+    /// @note The frame descriptor supplies the NUMA node and physical zone
+    [[nodiscard]] auto frame_release_pin(u64 phys) noexcept
+        -> std::expected<bool, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        if ((*desc)->order() != 0U) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::purpose_mismatch));
+        }
+
+        auto remaining = frame_unref(phys);
+        if (!remaining) return std::unexpected(remaining.error());
+        if (*remaining != 0U) return false;
+
+        arch::s390x::cpu::skey::sske(phys,
+            arch::s390x::cpu::skey::make_skey(0U, false));
+        free(folio_active{phys, 0U, purpose::generic, detail::zone_of(phys)});
+        return true;
+    }
+
+    /// @brief Stamp the SCOMS memory_object id that authorizes this frame.
+    /// @param[in] phys Physical frame address.
+    /// @param[in] object_id SCOMS id of the authoritative memory_object
+    ///                      (typically a vm_region's storage_object grant,
+    ///                      or KOBJECT_ID_INVALID to clear).
+    /// @param[in] object_generation SCOMS generation paired with @p object_id.
+    /// @param[in] writable True when the frame backs a writable mapping.
+    /// @return Success or a checked physical-address error.
+    [[nodiscard]] auto frame_set_mapping_metadata(
+        u64 phys, u32 object_id, u32 object_generation, bool writable
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        (*desc)->object_generation.store(object_generation, std::memory_order::release);
+        (*desc)->object_id.store(object_id, std::memory_order::release);
+        if (writable) {
+            u8 cur = (*desc)->load_flags(std::memory_order::acquire);
+            while (cur & ff_zeroed) {
+                const u8 desired = static_cast<u8>(cur & ~ff_zeroed);
+                if ((*desc)->flags.compare_exchange_weak(
+                        cur, desired,
+                        std::memory_order::acq_rel,
+                        std::memory_order::acquire)) break;
+            }
+        }
+        return {};
+    }
+
+    /// @brief Clear the authority identity stamped on one physical frame.
+    [[nodiscard]] auto frame_clear_mapping_metadata(u64 phys) noexcept
+        -> std::expected<void, lib::kernel_error> {
+        return frame_set_mapping_metadata(
+            phys, scoms::kobject::KOBJECT_ID_INVALID, 0U, false);
+    }
+
+    /// @brief Return the current atomic reference count of a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return Reference count or a checked physical-address error.
+    [[nodiscard]] auto frame_refcount(u64 phys) noexcept
+        -> std::expected<u16, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->refcount.load(std::memory_order::acquire);
+    }
+
+    /// @brief Validate that a physical range is owned by one SCOMS object.
+    /// @param[in] phys_start Page-aligned physical range start.
+    /// @param[in] length Range length in bytes.
+    /// @param[in] object_id Required SCOMS id (must match @ref frame_desc::object_id).
+    /// @param[in] object_generation Required paired SCOMS generation.
+    /// @return Success only when every page carries the exact live object
+    ///         identity and generation, and is not MCCK-offline.
+    [[nodiscard]] auto frame_validate_mapping(
+        u64 phys_start, u64 length, u32 object_id, u32 object_generation
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (length == 0U || (phys_start & (PAGE_SIZE - 1U)) != 0U ||
+            (length & (PAGE_SIZE - 1U)) != 0U ||
+            phys_start + length < phys_start) {
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::invalid_address));
+        }
+
+        const u64 end = phys_start + length;
+        for (u64 phys = phys_start; phys < end; phys += PAGE_SIZE) {
+            auto desc = desc_of_checked(phys);
+            if (!desc) return std::unexpected(desc.error());
+            auto* frame = *desc;
+            if (frame->object_id.load(std::memory_order::acquire) != object_id ||
+                frame->object_generation.load(std::memory_order::acquire) != object_generation ||
+                (frame->load_flags() & ff_offline) != 0U) {
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::capability_invalid));
+            }
+        }
+        return {};
+    }
+
+    /// @brief Resolve the SCOMS memory_object_id that authorizes a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return SCOMS id, or @ref KOBJECT_ID_INVALID when the frame is not
+    ///         bound to a memory authority (buddy-owned, reserved, page-table).
+    [[nodiscard]] auto frame_object_id_of(u64 phys) noexcept
+        -> std::expected<u32, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->object_id.load(std::memory_order::acquire);
+    }
+
+    /// @brief Resolve the SCOMS generation paired with a frame authority id.
+    [[nodiscard]] auto frame_object_generation_of(u64 phys) noexcept
+        -> std::expected<u32, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->object_generation.load(std::memory_order::acquire);
+    }
+
+    /// @brief Return the NUMA node id recorded for a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return NUMA node id, or a checked physical-address error.
+    [[nodiscard]] auto frame_node_of(u64 phys) noexcept
+        -> std::expected<u8, lib::kernel_error> {
+        auto desc = desc_of_checked(phys);
+        if (!desc) return std::unexpected(desc.error());
+        return (*desc)->numa_node;
+    }
+
+
+    /// @brief Advisory free page count (sum across all zones).
+    [[nodiscard]] auto free_page_count() noexcept -> u64 {
+        u64 total = 0;
+        for (auto & g_node_zone : detail::g_node_zones)
+            for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
+                total += g_node_zone.free_pages[zi];
+        return total;
+    }
+
+    /// @brief Total managed page count (sum across all zones).
+    [[nodiscard]] auto total_page_count() noexcept -> u64 {
+        u64 total = 0;
+        for (auto & g_node_zone : detail::g_node_zones)
+            for (u32 zi = 0; zi < static_cast<u32>(zone::count); ++zi)
+                total += g_node_zone.total_pages[zi];
+        return total;
+    }
+
+    [[nodiscard]] auto max_pfn() noexcept -> u64 { return detail::g_max_pfn; }
+
+    /// @brief Return a pointer to the frame_desc for a physical address.
+    /// @param[in] phys  Physical address (lower PAGE_SHIFT bits are ignored).
+    /// @return Pointer into the frame descriptor table, or nullptr if the
+    ///         address is out of range or init() has not been called.
+    [[nodiscard]] auto frame_desc_of(u64 phys) noexcept -> frame_desc* {
+        using namespace detail;
+        if (!g_frame_table) return nullptr;
+        const u64 pfn = phys >> PAGE_SHIFT;
+        if (pfn >= g_max_pfn) return nullptr;
+        return &g_frame_table[pfn];
+    }
+
+
+} // namespace zxfoundation::memory::pmm

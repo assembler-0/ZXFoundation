@@ -1,0 +1,16 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/numa_distance.cxxm
+/// @brief STSI 15.1.x topology-list probe — feeds PMM's single-source SLIT.
+
+export module zxfoundation.sched.numa.core;
+
+export {
+
+namespace zxfoundation::sched::numa {
+
+    /// @brief Probe STSI 15.1.x and install the resulting SLIT into PMM.
+    auto slit_load() noexcept -> void;
+
+} // namespace zxfoundation::sched::numa
+
+} // end export

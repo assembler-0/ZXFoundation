@@ -1,0 +1,291 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/domain.zcomponent/types.cxxm
+/// @brief Domain subsystem types — the central DGP entity, its strands, and
+///        its asynchronous signal mechanism.
+
+export module zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.memory.vm.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.signal.types;
+import zxfoundation.dgp.sync_contract;
+import zxfoundation.sched.policy;
+import zxfoundation.sched.entity;
+import zxfoundation.sched.sd.types;
+import zxfoundation.sched.rt.bandwidth;
+import zxfoundation.sched.nohz.core;
+import zxfoundation.sched.cbs.core;
+import arch.s390x.cpu.aste.consts;
+import arch.s390x.mmu.types;
+import arch.s390x.sched.types;
+import lib.error;
+import lib.rbtree;
+import lib.list;
+import std;
+
+export {
+
+namespace zxfoundation::dgp::domain {
+
+    /// @brief Opaque strand identifier.
+    using strand_id = u32;
+
+    /// @brief Sentinel value: no strand.
+    constexpr strand_id STRAND_ID_INVALID = 0xFFFF'FFFFU;
+
+    /// @brief Maximum strands per domain.
+    constexpr u32 MAX_STRANDS_PER_DOMAIN = 64U;
+
+    /// @brief Domain entry function type used by executor-style strand creation.
+    using strand_entry_fn = auto (*)(void*) noexcept -> void;
+
+    /// @brief Request used to create a secondary strand inside a domain.
+    struct strand_create_request {
+        u32 owner_domain{0xFFFF'FFFFU}; ///< Owning domain identifier.
+        strand_entry_fn entry{nullptr}; ///< Kernel entry fn (kthread mode);
+                                        /// null + non-null @c uregs selects user mode.
+                                        /// null + null @c uregs selects bare mode.
+        void* arg{nullptr};             ///< Opaque argument passed to @c entry (kthread mode only).
+        arch::s390x::sched::user_regs* uregs{nullptr};      ///< User register snapshot (user mode only).
+                                        /// Required when @c entry is null
+                                        /// and the strand is to be runnable.
+                                        /// Must have @c psw_addr != 0.
+        u16 cpu{0};                     ///< Initial CPU affinity; zero is the deterministic bootstrap CPU.
+        u32 stack_order{2U};            ///< Kernel stack allocation order; currently constrained to the domain stack order.
+        bool enqueue{true};             ///< True when the scheduler should admit the strand immediately.
+                                        /// Must be false in bare mode.
+    };
+
+    /// @brief Per-strand flags (bitfield, stored in strand::flags).
+    enum class strand_flags : u8 {
+        none = 0,
+        idle = 1U << 0,   ///< Idle strand (per-CPU, owner is nullptr).
+    };
+
+    [[nodiscard]] constexpr auto operator|(strand_flags a, strand_flags b) noexcept -> strand_flags {
+        return static_cast<strand_flags>(static_cast<u8>(a) | static_cast<u8>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(strand_flags a, strand_flags b) noexcept -> strand_flags {
+        return static_cast<strand_flags>(static_cast<u8>(a) & static_cast<u8>(b));
+    }
+    constexpr auto operator|=(strand_flags& a, strand_flags b) noexcept -> strand_flags& {
+        a = a | b;
+        return a;
+    }
+    constexpr auto operator&=(strand_flags& a, strand_flags b) noexcept -> strand_flags& {
+        a = a & b;
+        return a;
+    }
+
+    struct strand_body;
+
+    /// @brief Strand — the DGP kernel's unit of schedulable execution.
+    struct strand {
+        scoms::kobject::bobject         ko{};
+
+        void*                           owner{nullptr};
+
+        sched::sched_substate           substate{sched::sched_substate::idle};
+        u8                              _pad0[3]{};
+        u16                             cpu{0};
+        bool                            on_rq{false};
+        strand_flags                    flags{strand_flags::none};
+
+        zxfoundation::sched::sched_entity se{};
+
+        strand_body*                    body{nullptr};  ///< allocated cold-fields body.
+        u64                             kstack_top{0};  ///< Virtual kernel stack top (offset 112).
+        u64                             ksp{0};         ///< Current kernel stack pointer (offset 120).
+
+        lib::list_node                  sched_link{};
+
+        zxfoundation::sched::sched_policy sched_policy{};
+        zxfoundation::sched::sched_admission_result sched_admission{};
+
+        strand() noexcept = default;
+        strand(const strand&)            = delete;
+        auto operator=(const strand&)    = delete;
+        strand(strand&&)                 = delete;
+        auto operator=(strand&&)         = delete;
+    };
+
+
+    static_assert(__builtin_offsetof(strand, ko) == 0,
+        "strand::ko must be at offset 0");
+
+    static_assert(__builtin_offsetof(strand, se) == 40,
+        "strand::se must be at offset 40");
+
+    static_assert(__builtin_offsetof(strand, kstack_top) == 112,
+        "strand::kstack_top must be at offset 112");
+
+    static_assert(__builtin_offsetof(strand, ksp) == 120,
+        "strand::ksp must be at offset 120 — __switch_to_asm depends on this");
+
+
+    /// @brief Cold-field body for a strand
+    struct strand_body {
+        u64             kstack_base{0};           ///< Base VA of the kernel stack.
+        lib::list_node  strand_list{};            ///< Link into domain's strand list.
+
+        u64             rt_runtime_used_ns{0};     /// Runtime consumed during current RT period.
+        u64             rt_period_start_ns{0};     /// RT accounting period start.
+        u64             deadline_runtime_used_ns{0}; /// Runtime consumed during current deadline period.
+        u64             absolute_deadline_ns{0};   /// Conservative absolute deadline key.
+
+        /// @brief PELT averaging state
+        sched::sched_avg  pelt_avg{};
+
+        /// @note Only meaningful when @c sched_policy.class_id == deadline.
+        sched::cbs::cbs_replen  cbs{};
+
+        void*           blocked_on{nullptr};
+        lib::list_node  pi_waiters{};
+        u8              boosted_prio{0};
+        sched::sched_class_id saved_class{zxfoundation::sched::sched_class_id::fair};
+        u8              saved_prio{0};
+        u8              _pad_pi[1]{};
+
+        arch::s390x::sched::user_regs       uregs{};                   ///< User-mode register save area.
+
+        strand_body() noexcept = default;
+        strand_body(const strand_body&)            = delete;
+        auto operator=(const strand_body&)         = delete;
+        strand_body(strand_body&&)                 = delete;
+        auto operator=(strand_body&&)              = delete;
+    };
+
+    /// @brief Check whether a strand is an idle (per-CPU) strand.
+    [[nodiscard]] inline auto is_idle_strand(const strand& s) noexcept -> bool {
+        return (s.flags & strand_flags::idle) != strand_flags::none;
+    }
+
+    /// @brief Opaque domain identifier.
+    using domain_id = u32;
+
+    /// @brief Sentinel value: no domain.
+    constexpr domain_id DOMAIN_ID_INVALID = 0xFFFF'FFFFU;
+
+    /// @brief The nucleus itself is always domain 0.
+    constexpr domain_id DOMAIN_ID_NUCLEUS = 0U;
+
+    /// @brief Maximum number of domains in the system.
+    constexpr u32 MAX_DOMAINS = 256U;
+
+    /// @brief Key 0 = nucleus.
+    constexpr u8 SKEY_NUCLEUS  = 0U;
+
+    /// @brief First user-assignable storage key.
+    constexpr u8 SKEY_USER_BASE = 8U;
+
+    /// @brief Last user-assignable storage key.
+    constexpr u8 SKEY_USER_MAX  = 15U;
+
+    /// @brief Per-domain flags (bitfield).
+    enum class domain_flags : u32 {
+        none         = 0,
+        idle         = 1U << 1,   ///< Idle domain (per-CPU).
+        need_resched = 1U << 2,   ///< Reschedule requested.
+        nucleus      = 1U << 3,   ///< The kernel itself — immortal, never destroyed.
+    };
+
+    /// @brief Must match TIF_NEED_RESCHED = 4 in arch/s390x/trap/entry.S.
+    static_assert(static_cast<u32>(domain_flags::need_resched) == 4U,
+        "domain_flags::need_resched must match TIF_NEED_RESCHED in entry.S");
+
+    [[nodiscard]] constexpr auto operator|(domain_flags a, domain_flags b) noexcept -> domain_flags {
+        return static_cast<domain_flags>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(domain_flags a, domain_flags b) noexcept -> domain_flags {
+        return static_cast<domain_flags>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator~(domain_flags f) noexcept -> domain_flags {
+        return static_cast<domain_flags>(~static_cast<u32>(f));
+    }
+    [[nodiscard]] constexpr auto operator!(domain_flags f) noexcept -> bool {
+        return static_cast<u32>(f) == 0;
+    }
+    constexpr auto operator|=(domain_flags& a, domain_flags b) noexcept -> domain_flags& {
+        a = a | b;
+        return a;
+    }
+    constexpr auto operator&=(domain_flags& a, domain_flags b) noexcept -> domain_flags& {
+        a = a & b;
+        return a;
+    }
+
+    /// @brief The domain struct — the central entity of the DGP kernel.
+    struct domain {
+        scoms::kobject::bobject                                         ko{};
+
+        const char*                                                     name{nullptr};
+
+        domain_flags                                                    flags{domain_flags::none};
+        u8                                                              storage_key{0};
+        u8                                                              _pad0[3]{};
+        u64                                                             root_phys{0};
+
+        strand                                                          primary_strand{};
+
+        char                                                              name_storage[64]{};
+
+        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce{};
+        arch::s390x::cpu::aste::art_context                             art{};
+        u16                                                             portal_ar_mask{0};
+        u16                                                             _pad_art{0};
+
+        u32                                                             gate_count{0};
+        u32                                                             portal_count{0};
+
+        zxfoundation::dgp::isolation::isolation_rights                  granted_rights{zxfoundation::dgp::isolation::isolation_rights::none};
+        u8                                                              numa_node{0};
+        std::atomic<u16>                                                revocation_epoch{0};
+        u32                                                             storage_key_generation{0};
+        zxfoundation::dgp::isolation::skey_revocation_state             storage_key_state{zxfoundation::dgp::isolation::skey_revocation_state::none};
+        zxfoundation::dgp::sync_contract::teardown_phase                teardown_phase{zxfoundation::dgp::sync_contract::teardown_phase::none};
+
+        u32                                                             pending_rights_revoke_raw{0};
+        u8                                                              _pad_dgp_rev{0};
+        lib::list_node                                                  domain_list{};
+        lib::list_head                                                  strands{};
+        memory::vm::vm_space                                            vm_space{};
+        signal::signal_queue                                            signal_queue{};
+        u64                                                             admin_token{0};
+
+        u64                                                             rt_capability_token{0};
+        u64                                                             rt_period_ns{100'000'000ULL};
+        u64                                                             rt_budget_ns{20'000'000ULL};
+        u64                                                             rt_reserved_ns{0};
+        u64                                                             deadline_period_ns{100'000'000ULL};
+        u64                                                             deadline_budget_ns{10'000'000ULL};
+        u64                                                             deadline_reserved_ns{0};
+        zxfoundation::sched::sched_mask                                 allowed_cpus{};
+        zxfoundation::sched::sched_mask                                 allowed_numa_nodes{};
+
+        domain() noexcept = default;
+        domain(const domain&)            = delete;
+        auto operator=(const domain&)    = delete;
+        domain(domain&&)                 = delete;
+        auto operator=(domain&&)         = delete;
+    };
+
+    static_assert(__builtin_offsetof(domain, ko) == 0,
+        "domain::ko must be at offset 0 — kobject layout constraint");
+
+    static_assert(__builtin_offsetof(domain, primary_strand) == 48,
+        "domain::primary_strand must be at offset 48");
+
+    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
+        return (d.flags & domain_flags::idle) != domain_flags::none;
+    }
+
+    [[nodiscard]] auto is_active_domain(const domain& d) noexcept -> bool {
+        return d.ko.state == zxfoundation::base::lifecycle_state::active;
+    }
+
+} // namespace zxfoundation::dgp::domain
+
+} // end export

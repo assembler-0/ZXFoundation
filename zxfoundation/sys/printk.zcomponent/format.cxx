@@ -6,7 +6,7 @@ module zxfoundation.sys.printk.format;
 import zxfoundation.sys.printk.types;
 import zxfoundation.base.types;
 import zxfoundation.sys.time.core;
-import zxfoundation.domain.domain_types;
+import zxfoundation.dgp.domain.types;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
@@ -42,7 +42,7 @@ namespace zxfoundation::sys::printk {
         {
             if (const auto* dom_ptr = arch::s390x::cpu::lowcore::current_domain_ptr();
                 dom_ptr != nullptr) [[likely]] {
-                if (auto* dom = static_cast<const zxfoundation::domain::domain*>(dom_ptr);
+                if (auto* dom = static_cast<const zxfoundation::dgp::domain::domain*>(dom_ptr);
                     dom->name != nullptr && dom->name[0] != '\0') {
                     logged_domain_name = dom->name;
                 }

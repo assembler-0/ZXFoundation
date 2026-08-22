@@ -1,0 +1,35 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/smt.cxxm
+/// @brief SMT-aware strand-group or co-scheduling decisions
+
+export module zxfoundation.sched.smt.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import lib.cpumask;
+
+export {
+
+namespace zxfoundation::sched::smt {
+
+    /// @brief Check whether two strands are eligible to share an SMT core
+    [[nodiscard]] auto sibling_ok(const zxfoundation::dgp::domain::strand& a,
+                                       const zxfoundation::dgp::domain::strand& b) noexcept -> bool;
+
+    /// @brief Return a mask of SMT siblings of @c cpu that are currently online
+    ///        and have no running strand (are idle).
+    /// @param[in] cpu  Source CPU.
+    /// @param[out] out_f candidates mask filled by the function.
+    /// @note O(CPUS) walk; filtered by @c cpu_relation::same_smt_core only.
+    auto sibling_idle_candidates(u16 cpu, ::lib::cpumask& out_f) noexcept -> void;
+
+    /// @brief Return True when the requested strand placement to a candidate CPU
+    ///        would violate DGP isolation-sensitive SMT separation
+    /// @param[in] strand  Strand under consideration.
+    /// @param[in] target_cpu Candidate CPU.
+    /// @note Accepts the strand by designer; consults the target's core sibling list.
+    [[nodiscard]] auto isolation_violation(const zxfoundation::dgp::domain::strand& strand,
+                                                u16 target_cpu) noexcept -> bool;
+
+} // namespace zxfoundation::sched::smt
+
+} // end export

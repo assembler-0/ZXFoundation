@@ -6,7 +6,7 @@ export module arch.s390x.cpu.percpu;
 import arch.s390x.cpu.types;
 import zxfoundation.base.types;
 import zxfoundation.sync.qspinlock.mcs;
-import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.pmm.types;
 import std;
 
 export {

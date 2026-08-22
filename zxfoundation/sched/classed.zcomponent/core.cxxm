@@ -1,0 +1,86 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/classed.cxxm
+/// @brief Strict-priority scheduler class dispatch surface.
+
+export module zxfoundation.sched.classed.core;
+import zxfoundation.sched.policy;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sched.rq.types;
+import lib.error;
+import std;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::sched::rq::run_queue;
+using zxfoundation::dgp::domain::strand;
+
+export {
+
+namespace zxfoundation::sched::classed {
+
+    /// @brief Scheduler class — vtable of typed function pointers.
+    struct sched_class {
+        void    (*enqueue_strand)(run_queue& rq, strand& s){};    ///< Add strand to the run queue.
+        void    (*dequeue_strand)(run_queue& rq, strand& s){};    ///< Remove strand from the run queue.
+        strand* (*pick_next_strand)(run_queue& rq){};              ///< Select the next strand to run.
+        void    (*strand_tick)(run_queue& rq, strand& s){};        ///< Called on each timer tick.
+        void    (*check_preempt)(run_queue& rq, strand& s){};     ///< Check if s should preempt curr.
+    };
+
+    /// @brief Return the effective class used for a currently existing strand.
+    /// @param[in] s Strand whose owner and policy are inspected.
+    [[nodiscard]] auto effective_class(const strand& s) noexcept -> sched_class_id;
+
+    /// @brief Validate a scheduler policy against the current class surface.
+    /// @param[in] owner Domain requesting admission for one of its strands.
+    /// @param[in] policy Requested scheduler policy.
+    /// @return Admission result for accepted fair/idle policy, or a kernel error for unsupported classes.
+    [[nodiscard]] auto validate_policy(
+        const domain& owner,
+        const sched_policy& policy
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error>;
+
+    /// @brief Admit a concrete strand into a scheduler policy before enqueue.
+    /// @param[in,out] owner Domain that owns the strand and any class budget.
+    /// @param[in,out] s Strand receiving scheduler admission metadata.
+    /// @param[in] policy Requested policy.
+    /// @return Admission record, or kernel_error when DGP authority or class limits deny the request.
+    [[nodiscard]] auto admit_policy(
+        domain& owner,
+        strand& s,
+        const sched_policy& policy
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error>;
+
+    /// @brief Enqueue a strand through its scheduler class backend.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Strand to insert into the selected class queue.
+    /// @return Success when the class accepts the strand, or an error if the
+    ///         class is unsupported or SMT isolation-sensitive placement
+    ///         is violated on the target CPU.
+    [[nodiscard]] auto enqueue(
+        run_queue& rq,
+        strand& s
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Remove a strand through its scheduler class backend.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Strand to remove from the selected class queue.
+    auto dequeue(run_queue& rq, strand& s) noexcept -> void;
+
+    /// @brief Select the next runnable strand in strict scheduler class order.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @return Selected strand, or the run queue idle strand when no runnable work exists.
+    [[nodiscard]] auto select_next(run_queue& rq) noexcept -> strand*;
+
+    /// @brief Account one scheduler tick against the running strand's class.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Currently running strand.
+    auto tick(run_queue& rq, strand& s) noexcept -> void;
+
+    /// @brief Evaluate preemption through the waking strand's scheduler class.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] waking Runnable strand that may preempt the current strand.
+    auto check_preempt(run_queue& rq, strand& waking) noexcept -> void;
+
+} // namespace zxfoundation::sched::classed
+
+} // end export

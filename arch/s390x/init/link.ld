@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* arch/s390x/init/link.ld — ZXFoundation Kernel Linker Script */
 
+OUTPUT_FORMAT("elf64-s390", "elf64-s390", "elf64-s390")
+OUTPUT_ARCH(s390:64-bit)
 ENTRY(__zx_start_kernel64)
 
 PHDRS {

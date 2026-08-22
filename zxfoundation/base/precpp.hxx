@@ -82,12 +82,16 @@
 #define from_global_reference extern
 #define from_global_nomangle extern "C"
 #define from_global(T) concat(from_global_,T)
+#define declscope(s) extern stringify(s)
 
 #define bitsfield(size, name) ubit_int<size> name : (size)
 #define bitfield(name) bitsfield(1, name)
 #define bitlimit(expr, bits) expr : bits
 #define bitrsvd(size) bitsfield(size, concat(__bitrsvd_,__COUNTER__))
 #define bytersvd(size) u8 concat(__bytersvd_,__COUNTER__)[size]
+
+#define trap_assert(cond) (static_cast<bool>(cond) ? (void)0 : __builtin_trap())
+#define trap_on(cond) (static_cast<bool>(cond) ? __builtin_trap() : (void)0)
 
 #define __asm_machine_begin() \
     ".machine push\n"

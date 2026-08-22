@@ -1,0 +1,29 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/exec/loader.cxxm
+/// @brief ELF64 loader — loads s390x executables into domain address spaces.
+
+export module fs.exec.elf.core;
+import fs.exec.elf.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace fs::exec::elf {
+
+    /// @brief Load an ELF64 binary into a domain's address space.
+    /// @param d         Target domain (must have valid root_phys and storage_key).
+    /// @param elf_data  Pointer to the ELF binary in kernel memory.
+    /// @param elf_size  Size of the ELF binary in bytes.
+    /// @return Entry point virtual address on success, or kernel_error.
+    [[nodiscard]] auto load(
+        zxfoundation::dgp::domain::domain* d,
+        const void* elf_data,
+        u64 elf_size
+    ) noexcept -> std::expected<u64, lib::kernel_error>;
+
+} // namespace zxfoundation::exec
+
+} // end export

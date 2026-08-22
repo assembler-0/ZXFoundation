@@ -147,7 +147,7 @@ export {
 
     inline constexpr u32 PAGE_SHIFT = 12U;
     inline constexpr u64 PAGE_SIZE  = 1ULL << PAGE_SHIFT;
-    inline constexpr u64 PAGE_MASK  = PAGE_SIZE - 1ULL;
+    inline constexpr u64 PAGE_MASK  = ~(PAGE_SIZE - 1ULL);
 
     /// @brief Page-frame number (physical address >> PAGE_SHIFT).
     using pfn_t = u64;

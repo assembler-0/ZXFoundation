@@ -1,0 +1,2 @@
+export module zxfoundation.init.bootstrap;
+export import zxfoundation.init.bootstrap.core;

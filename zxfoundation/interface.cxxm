@@ -1,0 +1,10 @@
+export module zxfoundation;
+export import zxfoundation.base;
+export import zxfoundation.dgp;
+export import zxfoundation.init;
+export import zxfoundation.memory;
+export import zxfoundation.sched;
+export import zxfoundation.scoms;
+export import zxfoundation.smp;
+export import zxfoundation.sync;
+export import zxfoundation.sys;

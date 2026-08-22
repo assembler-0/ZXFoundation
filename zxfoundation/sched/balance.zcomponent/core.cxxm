@@ -1,0 +1,61 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/balance.cxxm
+/// @brief Topology-aware DGP scheduler balancing policy helpers.
+
+export module zxfoundation.sched.balance.core;
+import zxfoundation.sched.topology.types;
+import zxfoundation.sched.softirq.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sched::balance {
+
+    /// @brief Build the scheduler placement policy for a strand from its owning DGP domain.
+    /// @param[in] s Strand whose owner provides placement metadata.
+    /// @return Placement policy describing preferred NUMA node and SMT isolation sensitivity.
+    [[nodiscard]] auto placement_policy_for(
+        const zxfoundation::dgp::domain::strand& s
+    ) noexcept -> topology::strand_placement_policy;
+
+    /// @brief Test whether a candidate CPU may run a strand under its placement policy.
+    /// @param[in] s Strand being migrated or admitted.
+    /// @param[in] target_cpu Candidate logical CPU.
+    /// @return Success when the CPU is online and satisfies the DGP placement constraints.
+    [[nodiscard]] auto validate_cpu_for_strand(
+        const zxfoundation::dgp::domain::strand& s,
+        u16 target_cpu
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Score a source CPU as a steal candidate for a local CPU.
+    /// @param[in] local_cpu  Logical CPU requesting work.
+    /// @param[in] source_cpu  Logical CPU that may donate work.
+    /// @param[in] source_load Atomic counter (PELT load_avg preferred)
+    ///                        on the source CPU.
+    /// @param[in] source_capacity CPU capacity divisor (1024 = full).
+    /// @param[in] tier       Maximum allowed topology distance for this balancing pass.
+    /// @return A non-zero score when the source is eligible; higher scores are preferred.
+    [[nodiscard]] auto steal_source_score(
+        u16 local_cpu,
+        u16 source_cpu,
+        u32 source_load,
+        u32 source_capacity,
+        topology::cpu_relation tier
+    ) noexcept -> u32;
+
+    /// @brief Walk the @c sched_domain hierarchy and pull the busiest peer's
+    ///        rightmost fair strand to the local CPU.
+    /// @param[in] cpu  CPU id the softirq fired on (the pulling / "this" CPU).
+    /// @param[in] kind Balance kind (periodic / nohz_idle / forced).  Currently
+    ///                 @e any kind drives a pull attempt.
+    /// @param[out] req Per-CPU balance request carrier — updated with the
+    ///                 pass outcome ( @c last_migration_ok set to 1 on success).
+    auto balance_dispatch(u16 cpu, softirq::balance_kind kind,
+                           softirq::balance_req& req) noexcept -> void;
+
+} // namespace zxfoundation::sched::balance
+
+} // end export

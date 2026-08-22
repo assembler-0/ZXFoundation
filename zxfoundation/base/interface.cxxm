@@ -1,0 +1,10 @@
+export module zxfoundation.base;
+export import zxfoundation.base.cmdline;
+export import zxfoundation.base.cxxrtse.builtins;
+export import zxfoundation.base.cxxrtse.cxxabi;
+export import zxfoundation.base.config;
+export import zxfoundation.base.endian;
+export import zxfoundation.base.linksym;
+export import zxfoundation.base.transaction;
+export import zxfoundation.base.types;
+export import zxfoundation.base.typestate;

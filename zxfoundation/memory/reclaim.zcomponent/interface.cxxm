@@ -1,0 +1,2 @@
+export module zxfoundation.memory.reclaim;
+export import zxfoundation.memory.reclaim.core;

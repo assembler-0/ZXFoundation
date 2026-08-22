@@ -1,0 +1,576 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/vm.zcomponent/fault.cxx
+/// @brief page fault handler — implementation.
+
+module zxfoundation.memory.vm.fault;
+import zxfoundation.memory.vm.types;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm.types;
+import zxfoundation.memory.hhdm;
+import zxfoundation.memory.page_cache;
+import zxfoundation.memory.page_cache.types;
+import zxfoundation.memory.rmap;
+import zxfoundation.memory.reclaim;
+import zxfoundation.memory.oom;
+import zxfoundation.dgp.memory_contract;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
+import zxfoundation.sync.rcu.core;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.printk.types;
+import zxfoundation.base.types;
+import arch.s390x.mmu.core;
+import arch.s390x.mmu.types;
+import arch.s390x.mmu.consts;
+import arch.s390x.cpu.skey;
+import lib.error;
+import lib.rbtree;
+import lib.container_of;
+import std;
+
+namespace zxfoundation::memory::vm {
+
+    [[nodiscard]] auto handle_page_fault(
+        vm_space& space,
+        u64 root_phys,
+        u8 storage_key,
+        u64 fault_va,
+        bool is_write,
+        bool is_exec
+    ) noexcept -> fault_action {
+        using namespace arch::s390x::mmu;
+        using namespace zxfoundation::memory;
+
+        const u64 page_va = fault_va & ~(PAGE_SIZE - 1ULL);
+
+        _fault_file_request file_req{};
+        bool need_file_io = false;
+
+        {
+        const sync::irq_lock_guard guard{space.lock};
+        auto* rgn = vm_find(space, fault_va);
+
+        if (rgn) {
+            const u64 current_gen = zxfoundation::dgp::memory_contract::contract_generation();
+            const auto requested_access = is_write
+                ? zxfoundation::dgp::memory_contract::memory_access::write
+                : (is_exec ? zxfoundation::dgp::memory_contract::memory_access::execute
+                           : zxfoundation::dgp::memory_contract::memory_access::read);
+            if (!zxfoundation::dgp::memory_contract::memory_access_has(
+                    rgn->dgp_access(), requested_access)) {
+                return fault_action::killed;
+            }
+            if (current_gen != rgn->dgp_generation()) {
+                rgn->set_dgp_generation(current_gen);
+
+                const u8 region_key = rgn->storage_key();
+                const bool region_fp =
+                    (rgn->prot & vm_prot::write) == vm_prot::none;
+                if (rgn->pages.slots && rgn->pages.count > 0U) {
+                    for (u32 i = 0U; i < rgn->pages.count; ++i) {
+                        const auto& slot = rgn->pages.slots[i];
+                        if (slot.state == vm_page_state::empty) continue;
+                        if (slot.state == vm_page_state::portal) continue;
+                        if (slot.phys == 0ULL) continue;
+                        arch::s390x::cpu::skey::sske_preserve_rc(
+                            slot.phys, region_key, region_fp);
+                    }
+                }
+            }
+        }
+
+        if (!rgn) {
+            lib::rb_node* node = space.tree.root.node;
+            vm_region* nearest_above = nullptr;
+
+            while (node) {
+                auto* candidate = lib::container_of<vm_region, lib::rb_node,
+                    &vm_region::rb>(node);
+                if (fault_va < candidate->va_start) {
+                    nearest_above = candidate;
+                    node = node->left;
+                } else {
+                    node = node->right;
+                }
+            }
+
+            if (nearest_above &&
+                !!(nearest_above->flags & vm_flags::stack) &&
+                fault_va >= (nearest_above->va_start - PAGE_SIZE))
+            {
+                const u64 new_start = nearest_above->va_start - PAGE_SIZE;
+
+                // Refuse to grow below the user VA floor.
+                if (new_start < VM_USER_START) {
+                    return fault_action::killed;
+                }
+
+                // Check that the new page doesn't overlap an existing region.
+                if (vm_find(space, new_start)) {
+                    return fault_action::killed;
+                }
+
+                if (!vm_commit_admitted(space, 1U)) {
+                    return fault_action::oom;
+                }
+
+                // Allocate a zeroed page.
+                auto alloc_r = pmm::alloc(0, pmm::zone::normal,
+                    pmm::purpose::generic, pmm::page_init::zeroed);
+                if (!alloc_r) return fault_action::killed;
+
+                auto embryo = std::move(*alloc_r);
+                const u64 phys = embryo.phys_base;
+                auto active = std::move(embryo).make_active();
+                auto ref = pmm::frame_ref(phys);
+                if (!ref) {
+                    pmm::free(std::move(active));
+                    return fault_action::oom;
+                }
+                // Map the page into the domain's DAT tables.
+                const dat_table<dat_level::region_1> root{root_phys};
+
+                // Convert protection to MMU page_prot.
+                const bool can_write = !!(nearest_above->prot & vm_prot::write);
+                const bool can_exec  = !!(nearest_above->prot & vm_prot::exec);
+                u64 prot_bits = 0;
+                if (!can_write) prot_bits |= PTE_PROTECT;
+                if (!can_exec)  prot_bits |= PTE_NOEXEC;
+                const page_prot pp{prot_bits};
+
+                auto map_r = map_page<dat_level::region_1>(root, new_start, phys, pp);
+                if (!map_r) {
+                    // Free the page and kill.
+                    discard_value pmm::frame_unref(phys);
+                    pmm::free(std::move(active));
+                    return fault_action::killed;
+                }
+
+                arch::s390x::cpu::skey::sske_preserve_rc(phys, storage_key, false);
+
+                // Re-key the tree node before publishing the lower interval.
+                const u64 old_start = nearest_above->va_start;
+                if (!vm_rekey_region(space, *nearest_above, new_start)) {
+                    discard_value unmap_page<dat_level::region_1>(root, new_start);
+                    discard_value pmm::frame_unref(phys);
+                    pmm::free(std::move(active));
+                    return fault_action::killed;
+                }
+                auto* slot = nearest_above->reserve_page(new_start);
+                if (!slot) {
+                    discard_value pmm::frame_unref(phys);
+                    discard_value unmap_page<dat_level::region_1>(root, new_start);
+                    pmm::free(std::move(active));
+                    discard_value vm_rekey_region(space, *nearest_above, old_start);
+                    return fault_action::oom;
+                }
+                slot->phys = phys;
+                slot->state = (nearest_above->flags & vm_flags::cow) != vm_flags::none
+                    ? vm_page_state::cow : vm_page_state::resident;
+                const u32 slot_index = static_cast<u32>(
+                    slot - nearest_above->pages.slots);
+                auto rmap_result = rmap::insert(*nearest_above, slot_index, phys);
+                if (!rmap_result) {
+                    slot->clear();
+                    discard_value unmap_page<dat_level::region_1>(root, new_start);
+                    discard_value pmm::frame_unref(phys);
+                    pmm::free(std::move(active));
+                    discard_value vm_rekey_region(space, *nearest_above, old_start);
+                    return fault_action::oom;
+                }
+                auto metadata = pmm::frame_set_mapping_metadata(
+                    phys,
+                    nearest_above->storage_object
+                        ? nearest_above->storage_object.id
+                        : scoms::kobject::KOBJECT_ID_INVALID,
+                    nearest_above->storage_object
+                        ? nearest_above->storage_object.generation : 0U,
+                    !!(nearest_above->prot & vm_prot::write));
+                if (!metadata) {
+                    rmap::remove(*nearest_above, slot_index, phys);
+                    slot->clear();
+                    discard_value unmap_page<dat_level::region_1>(root, new_start);
+                    discard_value pmm::frame_unref(phys);
+                    pmm::free(std::move(active));
+                    discard_value vm_rekey_region(space, *nearest_above, old_start);
+                    return fault_action::oom;
+                }
+                discard_value nearest_above->resident.fetch_add(1,
+                    std::memory_order::relaxed);
+                discard_value nearest_above->committed.fetch_add(1,
+                    std::memory_order::relaxed);
+                space.total_mapped   += PAGE_SIZE;
+                space.total_resident += 1;
+                space.total_committed += 1;
+
+                return fault_action::stack_grew;
+            }
+
+            // No region and no stack growth possible → killed.
+            return fault_action::killed;
+        }
+
+        if (!!(rgn->flags & vm_flags::guard)) {
+            return fault_action::guard_hit;
+        }
+
+        const bool cow_write = is_write &&
+            ((rgn->flags & (vm_flags::cow | vm_flags::shared_read)) != vm_flags::none);
+        if (is_write && !(rgn->prot & vm_prot::write) && !cow_write) {
+            // Write to a read-only, non-CoW region.
+            return fault_action::killed;
+        }
+        if (is_exec && !(rgn->prot & vm_prot::exec)) {
+            // Execute on no-execute region.
+            return fault_action::killed;
+        }
+
+        if (auto* existing = rgn->find_page(page_va)) {
+            if (is_write && (existing->state == vm_page_state::cow ||
+                               existing->state == vm_page_state::file_cache ||
+                               existing->state == vm_page_state::ipc) && cow_write) {
+                const auto old_state = existing->state;
+                const bool needs_commit = old_state == vm_page_state::file_cache;
+                if (needs_commit && !vm_commit_admitted(space, 1U)) {
+                    return fault_action::oom;
+                }
+                auto alloc_r = pmm::alloc(0, pmm::zone::normal, pmm::purpose::generic,
+                                          pmm::page_init::uninitialized);
+                if (!alloc_r) return fault_action::oom;
+                auto embryo = std::move(*alloc_r);
+                const u64 new_phys = embryo.phys_base;
+                auto active = std::move(embryo).make_active();
+                auto ref = pmm::frame_ref(new_phys);
+                if (!ref) {
+                    pmm::free(std::move(active));
+                    return fault_action::oom;
+                }
+                const auto* old_data = reinterpret_cast<const u8*>(
+                    hhdm::phys_to_virt(existing->phys));
+                auto* new_data = reinterpret_cast<u8*>(hhdm::phys_to_virt(new_phys));
+                std::copy_n(old_data, PAGE_SIZE, new_data);
+                const dat_table<dat_level::region_1> root{root_phys};
+                u64 prot_bits = 0;
+                if (!(rgn->prot & vm_prot::exec)) prot_bits |= PTE_NOEXEC;
+                const u64 old_phys = existing->phys;
+                const u32 slot_index = static_cast<u32>(
+                    existing - rgn->pages.slots);
+                discard_value unmap_page<dat_level::region_1>(root, page_va);
+                auto map_r = map_page<dat_level::region_1>(root, page_va, new_phys,
+                    page_prot{prot_bits & ~PTE_PROTECT});
+                if (!map_r) {
+                    discard_value map_page<dat_level::region_1>(root, page_va,
+                        old_phys, page_prot{PTE_PROTECT | prot_bits});
+                    discard_value pmm::frame_unref(new_phys);
+                    pmm::free(std::move(active));
+                    return fault_action::killed;
+                }
+
+                auto metadata = pmm::frame_set_mapping_metadata(
+                    new_phys,
+                    rgn->storage_object ? rgn->storage_object.id
+                                         : scoms::kobject::KOBJECT_ID_INVALID,
+                    rgn->storage_object ? rgn->storage_object.generation : 0U,
+                    !!(rgn->prot & vm_prot::write));
+                if (!metadata) {
+                    discard_value unmap_page<dat_level::region_1>(root, page_va);
+                    discard_value map_page<dat_level::region_1>(root, page_va,
+                        old_phys, page_prot{PTE_PROTECT | prot_bits});
+                    discard_value pmm::frame_unref(new_phys);
+                    pmm::free(std::move(active));
+                    return fault_action::oom;
+                }
+
+                rmap::remove(*rgn, slot_index, old_phys);
+                existing->phys = new_phys;
+                auto rmap_result = rmap::insert(*rgn, slot_index, new_phys);
+                if (!rmap_result) {
+                    discard_value unmap_page<dat_level::region_1>(root, page_va);
+                    discard_value map_page<dat_level::region_1>(root, page_va,
+                        old_phys, page_prot{PTE_PROTECT | prot_bits});
+                    existing->phys = old_phys;
+                    existing->state = old_state;
+                    discard_value rmap::insert(*rgn, slot_index, old_phys);
+                    discard_value pmm::frame_unref(new_phys);
+                    pmm::free(std::move(active));
+                    return fault_action::oom;
+                }
+                if (existing->cache_binding) {
+                    auto released = page_cache::release_binding(existing->cache_binding);
+                    if (!released) {
+                        sys::syschk::syschk_fatal(released.error(),
+                            "fault: file-cache CoW lost its mapping lease");
+                    }
+                } else {
+                    auto released = pmm::frame_release_pin(old_phys);
+                    if (!released) {
+                        sys::syschk::syschk_fatal(released.error(),
+                            "fault: failed to release CoW source pin");
+                    }
+                }
+                existing->state = vm_page_state::resident;
+                arch::s390x::cpu::skey::sske_preserve_rc(
+                    new_phys, storage_key,
+                    !(rgn->prot & vm_prot::write));
+                if (needs_commit) {
+                    discard_value rgn->committed.fetch_add(1,
+                        std::memory_order::relaxed);
+                    ++space.total_committed;
+                }
+                return fault_action::resolved;
+            }
+            return fault_action::resolved;
+        }
+
+        if (rgn->backing == vm_backing::anonymous) {
+            if (!vm_commit_admitted(space, 1U)) {
+                return fault_action::oom;
+            }
+            auto alloc_r = pmm::alloc(0, pmm::zone::normal,
+                pmm::purpose::generic, pmm::page_init::zeroed);
+            if (!alloc_r) return fault_action::oom;
+
+            auto embryo = std::move(*alloc_r);
+            const u64 phys = embryo.phys_base;
+            auto active = std::move(embryo).make_active();
+            auto ref = pmm::frame_ref(phys);
+            if (!ref) {
+                pmm::free(std::move(active));
+                return fault_action::oom;
+            }
+            // Map into domain's page tables.
+            const dat_table<dat_level::region_1> root{root_phys};
+
+            // Convert VME prot → MMU page_prot.
+            const bool can_write = !!(rgn->prot & vm_prot::write);
+            const bool can_exec  = !!(rgn->prot & vm_prot::exec);
+            u64 prot_bits = 0;
+            if (!can_write) prot_bits |= PTE_PROTECT;
+            if (!can_exec)  prot_bits |= PTE_NOEXEC;
+            if (!is_write && (rgn->flags & (vm_flags::cow | vm_flags::shared_read)) != vm_flags::none)
+                prot_bits |= PTE_PROTECT;
+            const page_prot pp{prot_bits};
+
+            // Align fault_va to page boundary for the mapping.
+            const u64 page_va = fault_va & ~(PAGE_SIZE - 1);
+
+            auto map_r = map_page<dat_level::region_1>(root, page_va, phys, pp);
+            if (!map_r) {
+                discard_value pmm::frame_unref(phys);
+                pmm::free(std::move(active));
+                return fault_action::killed;
+            }
+
+            auto* slot = rgn->reserve_page(page_va);
+            if (!slot) {
+                discard_value unmap_page<dat_level::region_1>(root, page_va);
+                discard_value pmm::frame_unref(phys);
+                pmm::free(std::move(active));
+                return fault_action::oom;
+            }
+            slot->phys = phys;
+            slot->state = (!is_write && (rgn->flags & (vm_flags::cow | vm_flags::shared_read)) != vm_flags::none)
+                ? vm_page_state::cow : vm_page_state::resident;
+
+            const u32 slot_index = static_cast<u32>(slot - rgn->pages.slots);
+            auto rmap_result = rmap::insert(*rgn, slot_index, phys);
+            if (!rmap_result) {
+                slot->clear();
+                discard_value unmap_page<dat_level::region_1>(root, page_va);
+                discard_value pmm::frame_unref(phys);
+                pmm::free(std::move(active));
+                return fault_action::oom;
+            }
+            auto metadata = pmm::frame_set_mapping_metadata(
+                phys,
+                rgn->storage_object ? rgn->storage_object.id
+                                     : scoms::kobject::KOBJECT_ID_INVALID,
+                rgn->storage_object ? rgn->storage_object.generation : 0U,
+                !!(rgn->prot & vm_prot::write));
+            if (!metadata) {
+                rmap::remove(*rgn, slot_index, phys);
+                slot->clear();
+                discard_value unmap_page<dat_level::region_1>(root, page_va);
+                discard_value pmm::frame_unref(phys);
+                pmm::free(std::move(active));
+                return fault_action::oom;
+            }
+
+            arch::s390x::cpu::skey::sske_preserve_rc(phys, storage_key, false);
+
+            // Update accounting.
+            discard_value rgn->resident.fetch_add(1,
+                std::memory_order::relaxed);
+            discard_value rgn->committed.fetch_add(1,
+                std::memory_order::relaxed);
+            space.total_resident  += 1;
+            space.total_committed += 1;
+
+            return fault_action::resolved;
+        } else if (rgn->backing == vm_backing::file) {
+            if (!rgn->file_node) return fault_action::killed;
+            const u64 page_index64 = rgn->file_page_offset
+                + ((page_va - rgn->va_start) >> 12);
+            if (page_index64 > 0xFFFF'FFFFULL) return fault_action::killed;
+            file_req.file_node = rgn->file_node;
+            file_req.file_index = static_cast<u32>(page_index64);
+            file_req.storage_key = rgn->storage_key();
+            need_file_io = true;
+        } else if (rgn->backing == vm_backing::ipc_shared) {
+            auto* source = static_cast<vm_region*>(rgn->file_node);
+            if (!source) return fault_action::killed;
+            const u64 source_va = source->va_start + (page_va - rgn->va_start);
+            auto* source_slot = source->find_page(source_va);
+            if (!source_slot || source_slot->phys == 0) {
+                if (!is_write) return fault_action::retry;
+                rgn->backing = vm_backing::anonymous;
+                rgn->file_node = nullptr;
+                return fault_action::retry;
+            }
+            if (!vm_commit_admitted(space, 1U)) {
+                return fault_action::oom;
+            }
+            page_cache::cache_binding cache_binding{};
+            if (source_slot->cache_binding) {
+                auto duplicated = page_cache::duplicate_binding(
+                    source_slot->cache_binding, rgn->storage_key());
+                if (!duplicated) return fault_action::oom;
+                cache_binding = *duplicated;
+            } else {
+                auto ref = pmm::frame_ref(source_slot->phys);
+                if (!ref) return fault_action::oom;
+            }
+            auto release_new_pin = [&]() noexcept -> void {
+                if (cache_binding) {
+                    discard_value page_cache::release_binding(cache_binding);
+                } else {
+                    discard_value pmm::frame_release_pin(source_slot->phys);
+                }
+            };
+            const dat_table<dat_level::region_1> root{root_phys};
+            u64 prot_bits = PTE_PROTECT;
+            if (is_exec) prot_bits |= PTE_NOEXEC;
+            auto map_r = map_page<dat_level::region_1>(
+                root, page_va, source_slot->phys, page_prot{prot_bits});
+            if (!map_r) {
+                release_new_pin();
+                return fault_action::killed;
+            }
+            auto* slot = rgn->reserve_page(page_va);
+            if (!slot) {
+                discard_value unmap_page<dat_level::region_1>(root, page_va);
+                release_new_pin();
+                return fault_action::oom;
+            }
+            slot->phys = source_slot->phys;
+            slot->state = vm_page_state::ipc;
+            slot->cache_binding = cache_binding;
+            const u32 slot_index = static_cast<u32>(slot - rgn->pages.slots);
+            auto rmap_result = rmap::insert(*rgn, slot_index, slot->phys);
+            if (!rmap_result) {
+                slot->cache_binding.clear();
+                slot->clear();
+                discard_value unmap_page<dat_level::region_1>(root, page_va);
+                release_new_pin();
+                return fault_action::oom;
+            }
+            discard_value rgn->resident.fetch_add(1,
+                std::memory_order::relaxed);
+            discard_value rgn->committed.fetch_add(1,
+                std::memory_order::relaxed);
+            ++space.total_resident;
+            ++space.total_committed;
+            return fault_action::resolved;
+        } else if (rgn->backing == vm_backing::physical) {
+            sys::printk::perr(
+                "fault: page fault on physical-backed region at VA {:#018x} — kernel bug",
+                fault_va);
+            return fault_action::killed;
+        } else {
+            return fault_action::killed;
+        }
+        } // space.lock released here.
+
+        if (!need_file_io) {
+            return fault_action::killed;
+        }
+
+        auto page_result = page_cache::acquire_page(
+            file_req.file_node, file_req.file_index, file_req.storage_key);
+        if (!page_result) {
+            const auto error = page_result.error();
+            if (error.category == lib::error_category::driver &&
+                error.code == static_cast<u32>(lib::driver_error::busy)) {
+                return fault_action::retry;
+            }
+            return error.category == lib::error_category::memory
+                ? fault_action::oom : fault_action::killed;
+        }
+        auto lease = std::move(*page_result);
+
+        const sync::irq_lock_guard guard2{space.lock};
+
+        auto* rgn = vm_find(space, fault_va);
+        if (!rgn || rgn->backing != vm_backing::file ||
+            rgn->file_node != file_req.file_node) {
+            discard_value page_cache::release(std::move(lease));
+            return fault_action::retry;
+        }
+        const auto requested_access = is_write
+            ? zxfoundation::dgp::memory_contract::memory_access::write
+            : (is_exec ? zxfoundation::dgp::memory_contract::memory_access::execute
+                       : zxfoundation::dgp::memory_contract::memory_access::read);
+        if (!zxfoundation::dgp::memory_contract::memory_access_has(
+                rgn->dgp_access(), requested_access)) {
+            discard_value page_cache::release(std::move(lease));
+            return fault_action::killed;
+        }
+        if (rgn->find_page(page_va)) {
+            discard_value page_cache::release(std::move(lease));
+            return fault_action::resolved;
+        }
+
+        const u64 phys = lease.phys;
+        const dat_table<dat_level::region_1> root{root_phys};
+        u64 prot_bits = 0;
+        if (!(rgn->prot & vm_prot::write)) prot_bits |= PTE_PROTECT;
+        if (!(rgn->prot & vm_prot::exec)) prot_bits |= PTE_NOEXEC;
+        if ((rgn->flags & (vm_flags::cow | vm_flags::shared_read)) != vm_flags::none)
+            prot_bits |= PTE_PROTECT;
+        auto map_r = map_page<dat_level::region_1>(root, page_va, phys,
+            page_prot{prot_bits});
+        if (!map_r) {
+            discard_value page_cache::release(std::move(lease));
+            return fault_action::killed;
+        }
+        auto* slot = rgn->reserve_page(page_va);
+        if (!slot) {
+            discard_value unmap_page<dat_level::region_1>(root, page_va);
+            discard_value page_cache::release(std::move(lease));
+            return fault_action::oom;
+        }
+        slot->phys = phys;
+        slot->file_node = rgn->file_node;
+        slot->file_index = file_req.file_index;
+        slot->state = vm_page_state::file_cache;
+        slot->cache_binding = std::move(lease).into_binding();
+        const u32 slot_index = static_cast<u32>(slot - rgn->pages.slots);
+        auto rmap_result = rmap::insert(*rgn, slot_index, phys);
+        if (!rmap_result) {
+            discard_value page_cache::release_binding(slot->cache_binding);
+            slot->clear();
+            discard_value unmap_page<dat_level::region_1>(root, page_va);
+            return fault_action::oom;
+        }
+        discard_value rgn->resident.fetch_add(1,
+            std::memory_order::relaxed);
+        ++space.total_resident;
+        return fault_action::resolved;
+}
+
+} // namespace zxfoundation::memory::vm
+

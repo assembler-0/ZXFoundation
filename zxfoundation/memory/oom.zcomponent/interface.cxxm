@@ -1,0 +1,2 @@
+export module zxfoundation.memory.oom;
+export import zxfoundation.memory.oom.core;

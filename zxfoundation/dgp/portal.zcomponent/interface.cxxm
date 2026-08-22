@@ -1,0 +1,3 @@
+export module zxfoundation.dgp.portal;
+export import zxfoundation.dgp.portal.types;
+export import zxfoundation.dgp.portal.core;

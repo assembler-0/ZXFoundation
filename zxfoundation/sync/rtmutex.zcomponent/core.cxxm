@@ -5,7 +5,7 @@
 export module zxfoundation.sync.rtmutex.core;
 import zxfoundation.base.types;
 import zxfoundation.sync.qspinlock.core;
-import zxfoundation.domain.strand_types;
+import zxfoundation.dgp.domain.types;
 import arch.s390x.cpu.irq;
 import lib.list;
 import std;
@@ -18,7 +18,7 @@ namespace zxfoundation::sync::rtmutex {
     class rtmutex {
         std::atomic<u32>             m_lock_word{0}; ///< 0 = free, 1 = held.
         sync::qspinlock::qspinlock   m_pi_lock{}; ///< Protects m_owner, m_waiters, and serializes the chain walk.
-        domain::strand*              m_owner{nullptr};
+        dgp::domain::strand*              m_owner{nullptr};
         lib::list_head               m_waiters{};
 
     public:

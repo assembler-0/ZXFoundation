@@ -1,0 +1,2 @@
+export module zxfoundation.sched.softirq;
+export import zxfoundation.sched.softirq.core;

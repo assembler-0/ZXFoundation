@@ -1,0 +1,184 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/isolation.zcomponent/core.cxxm
+/// @brief DGP isolation lifecycle and authorization interface.
+
+export module zxfoundation.dgp.isolation.core;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sched.policy;
+import arch.s390x.mmu.types;
+import lib.error;
+import std;
+
+export {
+namespace zxfoundation::dgp::isolation {
+
+    using zxfoundation::base::lifecycle_state;
+
+    /// @brief Initialize the DGP isolation clean core.
+    /// @note The initial implementation resets the bootstrap storage-key registry before domain-visible DGP objects exist.
+    /// @warning This function must run before domain, gate, or portal policy is exposed to user-visible objects.
+    auto init() noexcept -> void;
+
+    /// @brief Create initial DGP isolation state for a domain.
+    /// @param[in] domain_id Domain identifier assigned by the caller.
+    /// @param[in] policy Hardware-first isolation policy for the domain.
+    /// @return Isolation domain state, or a kernel error.
+    [[nodiscard]] auto create_domain(
+        u32 domain_id,
+        const isolation_policy& policy
+    ) noexcept -> std::expected<isolation_domain_state, lib::kernel_error>;
+
+    /// @brief Attach committed DAT root state to a DGP isolation domain.
+    /// @param[in] state Isolation state to update.
+    /// @param[in] current_ls Current lifecycle state (from ko.state) — must be sealed.
+    /// @param[in] asce Typed region-first ASCE constructed from the committed DAT root.
+    /// @param[in] root_phys Physical address of the committed region-first root table.
+    /// @return Success when the state can accept the ASCE root metadata.
+    [[nodiscard]] auto bind_asce_root(
+        isolation_domain_state& state,
+        lifecycle_state current_ls,
+        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
+        u64 root_phys
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Activate a sealed DGP isolation domain.
+    /// @param[in] state Isolation state to activate.
+    /// @param[in] asce Typed region-first ASCE constructed from the committed DAT root.
+    /// @param[in] root_phys Physical address of the committed region-first root table.
+    /// @param[in] storage_key The domain's hardware storage key.
+    /// @return Success when the domain transitions to active.
+    [[nodiscard]] auto activate_domain(
+        lifecycle_state& state,
+        arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
+        u64 root_phys,
+        [[maybe_unused]] u8 storage_key
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Begin revocation of the storage-key authority attached to a DGP domain.
+    /// @param[in,out] state Isolation state whose key is entering the draining phase.
+    /// @return Success when no live gate or portal authority can still observe the key.
+    [[nodiscard]] auto begin_storage_key_revocation(
+        lifecycle_state& state,
+        skey_revocation_state& storage_key_state,
+        std::atomic<u16>& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto begin_storage_key_revocation(
+        lifecycle_state& state,
+        skey_revocation_state& storage_key_state,
+        u16& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Complete storage-key revocation after required translation invalidation is done.
+    /// @param[in] state Isolation state whose storage key can be returned to DGP policy.
+    /// @param[in,out] storage_key The domain's hardware storage key.
+    /// @param[in,out] storage_key_generation Storage key generation counter.
+    /// @param[in,out] storage_key_state Storage key revocation state.
+    /// @return Success when DGP-owned key metadata is no longer reusable by stale mappings.
+    [[nodiscard]] auto complete_storage_key_revocation(
+        [[maybe_unused]] lifecycle_state& state,
+        u8& storage_key,
+        u32& storage_key_generation,
+        skey_revocation_state& storage_key_state
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Record that a portal authority is leaving the active DGP set.
+    /// @param[in,out] state Isolation state for the source domain that held the portal.
+    /// @param[in,out] revocation_epoch Revocation epoch counter.
+    /// @return Success when one active portal reference was converted into revocation progress.
+    [[nodiscard]] auto begin_portal_teardown(
+        [[maybe_unused]] lifecycle_state& state,
+        std::atomic<u16>& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto begin_portal_teardown(
+        [[maybe_unused]] lifecycle_state& state,
+        u16& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Validate that a DGP domain may be admitted to a CPU run queue.
+    /// @param[in] state Isolation state associated with the candidate domain.
+    /// @param[in] root_phys Physical address of the region-first root table.
+    /// @param[in] asce_raw Raw ASCE value.
+    /// @return Success when the domain is active and has committed ASCE metadata.
+    [[nodiscard]] auto validate_scheduler_admission(
+        const lifecycle_state state,
+        u64 root_phys,
+        u64 asce_raw
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Validate a scheduler policy against DGP authority and basic safety invariants.
+    /// @param[in] state Domain isolation state requesting scheduler admission.
+    /// @param[in] policy Requested scheduler policy.
+    /// @param[in] has_rt_authority True when the caller holds the domain's RT/admin capability authority.
+    /// @return Scheduler admission result, or kernel_error describing the denied request.
+    [[nodiscard]] auto validate_scheduler_policy(
+        const lifecycle_state state,
+        const zxfoundation::sched::sched_policy& policy,
+        bool has_rt_authority
+    ) noexcept -> std::expected<zxfoundation::sched::sched_admission_result, lib::kernel_error>;
+
+    /// @brief Destroy DGP isolation state for a domain.
+    /// @param[in] state Domain lifecycle state.
+    /// @param[in,out] storage_key The domain's hardware storage key.
+    /// @param[in,out] storage_key_generation Storage key generation counter.
+    /// @param[in,out] storage_key_state Storage key revocation state.
+    /// @param[in,out] revocation_epoch Revocation epoch counter.
+    /// @return Success when storage-key ownership is released; SCOMS records the terminal state.
+    [[nodiscard]] auto destroy_domain(
+        lifecycle_state& state,
+        u8& storage_key,
+        u32& storage_key_generation,
+        skey_revocation_state& storage_key_state,
+        std::atomic<u16>& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto destroy_domain(
+        lifecycle_state& state,
+        u8& storage_key,
+        u32& storage_key_generation,
+        skey_revocation_state& storage_key_state,
+        u16& revocation_epoch
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Validate entry into a DGP gate chokepoint (structural validation only).
+    /// @param[in] caller_domain_id Domain requesting entry.
+    /// @param[in] gate_id Gate identifier being entered.
+    /// @param[in] requested Rights required by the gate operation.
+    /// @return Success when the request is structurally valid.
+    /// @note Full gate validation (existence, state, rights) is performed by dispatch::validate_call.
+    [[nodiscard]] auto validate_gate_entry(
+        u32 caller_domain_id,
+        u32 gate_id,
+        dgp::isolation::isolation_rights requested
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Validate creation or use of a DGP portal.
+    /// @param[in] source_domain_id Domain that will hold the portal authority.
+    /// @param[in] target_domain_id Domain whose address space is exposed through the portal.
+    /// @param[in] va_start First target virtual address exposed through the portal.
+    /// @param[in] va_end Exclusive end of the target virtual range.
+    /// @param[in] requested Rights requested for the portal mapping.
+    /// @return Success when the portal request is structurally valid.
+    [[nodiscard]] auto validate_portal(
+        u32 source_domain_id,
+        u32 target_domain_id,
+        u64 va_start,
+        u64 va_end,
+        dgp::isolation::isolation_rights requested
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Lazy revocation of DGP rights on a domain.
+    /// @param[in] d          Target domain.  Must be non-null and active.
+    /// @param[in] drop_mask  Bits to clear from @c granted_rights.
+    /// @return Success on completion, or kernel_error when @c d is not active.
+    auto revoke_domain_rights(
+        zxfoundation::dgp::domain::domain& d,
+        dgp::isolation::isolation_rights drop_mask
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+} // namespace zxfoundation::dgp
+} // end export

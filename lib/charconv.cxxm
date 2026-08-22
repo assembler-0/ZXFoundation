@@ -3,8 +3,8 @@
 /// @brief raw EBCDIC <-> ASCII conversion table
 
 export module lib.charconv;
-import std;
 import zxfoundation.base.types;
+import std;
 
 export {
 

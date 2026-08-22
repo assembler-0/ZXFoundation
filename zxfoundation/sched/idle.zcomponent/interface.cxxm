@@ -1,0 +1,2 @@
+export module zxfoundation.sched.idle;
+export import zxfoundation.sched.idle.core;

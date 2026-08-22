@@ -4,31 +4,29 @@
 
 export module lib.bit;
 import zxfoundation.base.types;
-import zxfoundation.base.endian;
 import std;
+
+using std::countl_zero;
+using std::countr_zero;
+using std::popcount;
+using std::has_single_bit;
+using std::bit_ceil;
+using std::bit_floor;
+using std::bit_width;
+using std::rotl;
+using std::rotr;
+using std::byteswap;
+using std::bit_cast;
+using std::endian;
 
 export {
 
 namespace lib {
 
-    using std::countl_zero;
-    using std::countr_zero;
-    using std::popcount;
-    using std::has_single_bit;
-    using std::bit_ceil;
-    using std::bit_floor;
-    using std::bit_width;
-    using std::rotl;
-    using std::rotr;
-    using std::byteswap;
-    using std::bit_cast;
-    using std::endian;
-
-    /// @brief Bit-numbering conventions used by z/Architecture hardware
-    ///        facilities (e.g. STFLE, ECAG, STSI).
+    /// @brief Bit-numbering conventions
     enum class bit_numbering {
-        lsb0, ///< Standard C++: bit 0 is the least significant bit (2^0).
-        msb0  ///< IBM/zArch: bit 0 is the most significant bit (2^N-1).
+        lsb0,
+        msb0
     };
 
     /// @brief Mask with a single bit set (LSB0 numbering).

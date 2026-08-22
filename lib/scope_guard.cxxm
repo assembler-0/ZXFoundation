@@ -1,14 +1,14 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file lib/scope_guard.cxxm
 /// @brief RAII scope guard — executes a cleanup callback on scope exit.
+
 export module lib.scope_guard;
 
 export {
 
-namespace std {
+namespace lib {
 
     /// @brief RAII scope guard — calls @p fn on destruction unless dismissed.
-    ///
     /// @tparam Fn  Callable type (typically a lambda).
     template <typename Fn>
     class scope_guard {

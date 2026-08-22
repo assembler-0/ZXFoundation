@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* arch/s390x/init/zxfl/stage1/stage1.ld */
 
+OUTPUT_FORMAT("elf64-s390", "elf64-s390", "elf64-s390")
+OUTPUT_ARCH(s390:64-bit)
 ENTRY(__zx_ipl_entry)
 
 SECTIONS

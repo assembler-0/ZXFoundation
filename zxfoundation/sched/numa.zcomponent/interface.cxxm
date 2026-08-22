@@ -1,0 +1,2 @@
+export module zxfoundation.sched.numa;
+export import zxfoundation.sched.numa.core;

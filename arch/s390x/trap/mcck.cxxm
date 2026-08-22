@@ -13,11 +13,11 @@ import zxfoundation.sys.irq.consts;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk.core;
 import zxfoundation.sys.printk.core;
-import zxfoundation.domain.domain_types;
-import zxfoundation.domain.signal;
-import zxfoundation.domain.signal_types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.signal;
+import zxfoundation.dgp.domain.types;
 import zxfoundation.scoms.kobject.ref;
-import zxfoundation.sched.sched;
+import zxfoundation.sched.core;
 import lib.error;
 
 export {
@@ -74,7 +74,7 @@ namespace arch::s390x::trap::mcck {
     constexpr u64 MAX_IPD_WINDOW_TOD  = 5ULL * 60ULL * 4'096'000'000ULL;
     /// @}
 
-    namespace _internal {
+    namespace detail {
 
         /// @brief Validate register-state validity per Linux's
         ///        @c nmi_registers_valid() and PoP §11-15.
@@ -131,7 +131,7 @@ namespace arch::s390x::trap::mcck {
             return now >= pcp.ipd_window_deadline;
         }
 
-    } // namespace _internal
+    } // namespace detail
 
     /// @brief Centralized machine-check dispatcher
     /// @param[in] frame  Saved interrupt frame from entry.S SAVE_FRAME on the
@@ -171,7 +171,7 @@ namespace arch::s390x::trap::mcck {
             if ((mcic & MCIC_B) != 0ULL) {
                 auto& pcp = cpu::lowcore::this_cpu_percpu();
                 const u64 now = static_cast<u64>(cpu::clock::stcke().tod);
-                if (_internal::ipd_window_expired(pcp, now)) {
+                if (detail::ipd_window_expired(pcp, now)) {
                     pcp.ipd_count = 0U;
                     pcp.ipd_window_deadline = now + MAX_IPD_WINDOW_TOD;
                 }
@@ -287,25 +287,25 @@ namespace arch::s390x::trap::mcck {
                 "mcck: storage error corrected (informational)\n");
         }
 
-        if (!_internal::nmi_registers_valid(mcic)) {
+        if (!detail::nmi_registers_valid(mcic)) {
             const bool in_user =
                 (frame->psw_mask & cpu::psw::PSW_BIT_PSTATE) != 0;
             if (!in_user) {
-                _internal::dump_mcesa(*lc);
+                detail::dump_mcesa(*lc);
                 zxfoundation::sys::syschk::syschk_fatal(
                     ::lib::kernel_error::from_machine(::lib::machine_error::system_damage),
                     "mcck: nmi registers invalid in nucleus — register state unreliable");
             }
             auto* d =
-                reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain);
+                reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain);
             if (d != nullptr) {
-                zxfoundation::domain::signal::signal_enqueue(
+                zxfoundation::dgp::signal::signal_enqueue(
                     *d,
-                    zxfoundation::domain::signal::signal_kind::fault,
+                    zxfoundation::dgp::signal::signal_kind::fault,
                     static_cast<u64>(lc->failing_storage_address));
                 zxfoundation::sched::sched_resched_current();
             }
-            _internal::dump_mcesa(*lc);
+            detail::dump_mcesa(*lc);
         }
 
         zxfoundation::sys::irq::irq_dispatch(

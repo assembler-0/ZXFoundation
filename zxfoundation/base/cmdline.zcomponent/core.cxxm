@@ -1,0 +1,52 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file cmdline.cxxm
+/// @brief Kernel command-line parameter registry and parser.
+
+export module zxfoundation.base.cmdline.core;
+import zxfoundation.base.types;
+import std;
+
+export {
+
+namespace zxfoundation::base::cmdline {
+
+    constexpr usize MAX_PARAMS = 64;
+
+    /// @brief How a parameter's value is interpreted.
+    enum class value_type : u8 {
+        flag,     ///< Presence-only boolean; sets @c *(bool*)storage = true.
+        str,      ///< String value copied into storage buffer.
+        u64,      ///< Unsigned 64-bit integer.
+        boolean,  ///< 0/1, on/off, true/false, yes/no — sets @c *(bool*)storage.
+        callback, ///< Custom handler: @c handler(value) is called.
+    };
+
+    /// @brief Signature for @c value_type::callback handlers.
+    /// @param value  The token after '=', or empty for flags.
+    /// @return true on success, false to abort parsing.
+    using handler_fn = auto (*)(std::string_view value) noexcept -> bool;
+
+    /// @brief Descriptor for a single cmdline parameter.
+    struct param {
+        std::string_view name{};
+        value_type  type;
+        handler_fn  handler{nullptr}; ///< null = use default dispatch for type.
+        void*       storage{nullptr}; ///< Pointer to the target variable.
+        usize       storage_size{0};  ///< For str: capacity in bytes.
+        std::string_view help{};      ///< Human-readable description.
+    };
+
+    /// @brief Look up a registered parameter by name.
+    /// @return Pointer to the param, or nullptr.
+    [[nodiscard]] auto find(std::string_view name) noexcept -> param*;
+
+    /// @brief Register a cmdline parameter.
+    /// @return true on success, false if table is full or duplicate name.
+    auto add(const param& p) noexcept -> bool;
+
+    /// @brief Parse a complete command line against registered parameters.
+    auto parse(std::string_view cmdline) noexcept -> void;
+
+} // namespace zxfoundation::base::cmdline
+
+} // end export

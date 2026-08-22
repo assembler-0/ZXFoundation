@@ -1,0 +1,117 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/page_cache.zcomponent/types.cxxm
+/// @brief Freestanding page-cache provider contracts.
+
+export module zxfoundation.memory.page_cache.types;
+import zxfoundation.base.types;
+import zxfoundation.memory.objects;
+import std;
+
+export {
+
+namespace zxfoundation::memory::page_cache {
+
+    inline constexpr u32 PAGE_CACHE_SLOTS = 4096U;
+    inline constexpr u32 PAGE_CACHE_INDEX_SLOTS = 8192U;
+    inline constexpr u32 PAGE_CACHE_SLOT_INVALID = ~0U;
+
+    /// @brief Read one file page into a physical frame.
+    /// @param[in] node Opaque file-node owned by a filesystem service.
+    /// @param[in] index Zero-based file page index.
+    /// @param[out] destination HHDM virtual address of a zeroed frame.
+    /// @return Zero on success, otherwise a provider-defined non-zero status.
+    using read_page_fn = auto (*)(void* node, u32 index, void* destination) noexcept -> u32;
+
+    /// @brief Write one dirty file page back to its backing provider.
+    /// @return Zero on success, otherwise a provider-defined non-zero status.
+    using write_page_fn = auto (*)(void* node, u32 index, const void* source) noexcept -> u32;
+
+    enum class cache_entry_state : u8 {
+        empty = 0,
+        loading = 1,
+        ready = 2,
+        writeback = 3,
+        evicting = 4,
+    };
+
+    /// @brief Stable identity for a cache mapping pin stored in a VM slot.
+    struct cache_binding {
+        u32 slot{PAGE_CACHE_SLOT_INVALID};
+        u32 generation{0U};
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return slot != PAGE_CACHE_SLOT_INVALID && generation != 0U;
+        }
+
+        auto clear() noexcept -> void {
+            slot = PAGE_CACHE_SLOT_INVALID;
+            generation = 0U;
+        }
+    };
+
+    /// @brief Move-only cache mapping pin held while a PTE is being installed.
+    struct page_lease {
+        u64 phys{0ULL};
+        cache_binding binding{};
+
+        page_lease() noexcept = default;
+        page_lease(u64 page_phys, cache_binding page_binding) noexcept
+            : phys(page_phys), binding(page_binding) {}
+        page_lease(const page_lease&) = delete;
+        auto operator=(const page_lease&) = delete;
+
+        page_lease(page_lease&& other) noexcept
+            : phys(other.phys), binding(other.binding) {
+            other.clear();
+        }
+
+        auto operator=(page_lease&& other) noexcept -> page_lease& {
+            if (this != &other) {
+                // Reassigning a live lease would silently lose a PMM pin.
+                if (*this) __builtin_trap();
+                phys = other.phys;
+                binding = other.binding;
+                other.clear();
+            }
+            return *this;
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return phys != 0ULL && static_cast<bool>(binding);
+        }
+
+        [[nodiscard]] auto into_binding() && noexcept -> cache_binding {
+            const auto result = binding;
+            clear();
+            return result;
+        }
+
+        auto clear() noexcept -> void {
+            phys = 0ULL;
+            binding.clear();
+        }
+
+        ~page_lease() noexcept {
+            if (*this) __builtin_trap();
+        }
+    };
+
+    /// @brief Page-cache key and resident frame record.
+    struct cache_entry {
+        void* file_node{nullptr};
+        u32 index{0};
+        u64 phys{0};
+        u32 mapping_refs{0};
+        u32 generation{0};
+        u32 key_next{PAGE_CACHE_SLOT_INVALID};
+        u32 phys_next{PAGE_CACHE_SLOT_INVALID};
+        u32 free_next{PAGE_CACHE_SLOT_INVALID};
+        objects::memory_object_ref authority{};
+        u8 storage_key{0};
+        cache_entry_state state{cache_entry_state::empty};
+        bool dirty{false};
+    };
+
+}
+
+} // end export

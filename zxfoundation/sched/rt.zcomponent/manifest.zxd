@@ -1,0 +1,7 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    core.cxxm
+    core.cxx
+    bandwidth.cxxm
+    bandwidth.cxx
+}

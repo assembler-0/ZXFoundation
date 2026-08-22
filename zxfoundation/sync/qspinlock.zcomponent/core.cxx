@@ -5,7 +5,7 @@
 module zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.qspinlock.mcs;
 import zxfoundation.base.types;
-import zxfoundation.sched.context;
+import zxfoundation.sched.context.core;
 import arch.s390x.cpu.sync;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.lowcore;

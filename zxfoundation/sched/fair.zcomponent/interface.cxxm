@@ -1,0 +1,2 @@
+export module zxfoundation.sched.fair;
+export import zxfoundation.sched.fair.core;

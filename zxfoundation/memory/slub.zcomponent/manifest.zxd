@@ -1,0 +1,8 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    types.cxxm
+    core.cxxm
+    core.cxx
+    kmalloc.cxxm
+    typed.cxxm
+}

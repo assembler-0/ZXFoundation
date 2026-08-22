@@ -7,14 +7,14 @@ import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
-import zxfoundation.domain.strand_types;
-import zxfoundation.domain.domain_types;
-import zxfoundation.domain.domain;
-import zxfoundation.sched.sched;
-import zxfoundation.sched.sched_rt;
-import zxfoundation.sched.sched_policy_types;
-import zxfoundation.sched.context;
-import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.domain.core;
+import zxfoundation.sched.core;
+import zxfoundation.sched.rt.core;
+import zxfoundation.sched.policy;
+import zxfoundation.sched.context.core;
+import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.isolation;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
@@ -25,19 +25,19 @@ import std;
 
 namespace zxfoundation::sync::detail {
 
-    using zxfoundation::domain::strand;
-    using zxfoundation::domain::domain;
+    using zxfoundation::dgp::domain::strand;
+    using zxfoundation::dgp::domain::domain;
     using zxfoundation::sched::sched_class_id;
 
     /// @brief Recover the enclosing @c strand from its @c pi_waiters node.
     [[nodiscard]] no_export inline auto strand_from_pi_waiters(lib::list_node* n) noexcept -> strand* {
         auto* body = lib::container_of<
-            zxfoundation::domain::strand_body,
+            zxfoundation::dgp::domain::strand_body,
             lib::list_node,
-            &zxfoundation::domain::strand_body::pi_waiters>(n);
+            &zxfoundation::dgp::domain::strand_body::pi_waiters>(n);
         return reinterpret_cast<strand*>(
             reinterpret_cast<u8*>(body) -
-            __builtin_offsetof(zxfoundation::domain::strand, body));
+            __builtin_offsetof(zxfoundation::dgp::domain::strand, body));
     }
 
     /// @brief Defensive upper bound on the PI chain length.  Real lock
@@ -62,10 +62,10 @@ namespace zxfoundation::sync::detail {
         const auto* od = static_cast<const domain*>(owner.owner);
         if (!wd || !od) return true;
         if (wd == od) return true;
-        using zxfoundation::dgp::isolation_rights;
-        using zxfoundation::dgp::has_all_rights;
-        return has_all_rights(od->granted_rights, isolation_rights::delegate)
-            && has_all_rights(wd->granted_rights, isolation_rights::enter);
+        using zxfoundation::dgp::isolation::isolation_rights;
+        using zxfoundation::dgp::isolation::has_all_rights;
+        return has_all_rights(od->granted_rights, dgp::isolation::isolation_rights::delegate)
+            && has_all_rights(wd->granted_rights, dgp::isolation::isolation_rights::enter);
     }
 
     /// @brief Highest effective RT priority among the waiters of @c m.
@@ -102,10 +102,10 @@ namespace zxfoundation::sync::rtmutex {
 
     using std::atomic;
     using std::memory_order;
-    using zxfoundation::domain::strand;
-    using zxfoundation::domain::domain;
-    using zxfoundation::domain::sched_substate;
-    using zxfoundation::domain::domain_flags;
+    using zxfoundation::dgp::domain::strand;
+    using zxfoundation::dgp::domain::domain;
+    using zxfoundation::sched::sched_substate;
+    using zxfoundation::dgp::domain::domain_flags;
     using zxfoundation::sched::sched_class_id;
 
     /// @brief Acquire the mutex, blocking if held.

@@ -6,7 +6,7 @@ module drivers.console.diag.core;
 import zxfoundation.base.types;
 import zxfoundation.sys.printk.types;
 import zxfoundation.sync.qspinlock.core;
-import zxfoundation.sched.context;
+import zxfoundation.sched.context.core;
 import arch.s390x.cpu.diag;
 import arch.s390x.cpu.irq;
 import lib.charconv;

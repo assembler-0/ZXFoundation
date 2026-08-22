@@ -1,0 +1,197 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/memory_objects.zcomponent/core.cxxm
+/// @brief Unified SCOMS-backed memory object hierarchy — core interface.
+
+export module zxfoundation.memory.objects.core;
+import zxfoundation.base.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.dgp.memory_contract;
+import zxfoundation.dgp.isolation.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::objects {
+
+    inline constexpr u32 MAX_MEMORY_OBJECTS = 8192U;
+
+    /// @brief Discriminator for the typed views layered on top of a
+    ///        memory_object.
+    enum class memory_view_kind : u8 {
+        none              = 0,
+        vm_region         = 1,
+        kmem_cache        = 2,
+        policy_server     = 3,
+        service_entry     = 4,
+        device_binding    = 5,
+        dataset_extent    = 6,
+    };
+
+    struct memory_object;
+
+    /// @brief Generation-checked identity used across memory-object APIs.
+    struct memory_object_ref {
+        scoms::kobject::kobject_type type{scoms::kobject::kobject_type::none};
+        u32 id{scoms::kobject::KOBJECT_ID_INVALID};
+        u32 generation{0};
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return type != scoms::kobject::kobject_type::none &&
+                   id != scoms::kobject::KOBJECT_ID_INVALID && generation != 0U;
+        }
+    };
+
+    /// @brief Immutable policy stamped into a memory authority at creation.
+    struct memory_object_policy {
+        u8 storage_key{0};
+        u32 storage_key_generation{0};
+        u8 numa_node{0};
+        dgp::memory_contract::memory_scope dgp_scope{dgp::memory_contract::memory_scope::private_domain};
+        dgp::memory_contract::memory_access dgp_access{dgp::memory_contract::memory_access::none};
+         dgp::isolation::isolation_rights dgp_rights{ dgp::isolation::isolation_rights::none};
+        dgp::memory_contract::invalidation_scope invalidate{dgp::memory_contract::invalidation_scope::none};
+        u64 dgp_generation{0};
+        u64 mapping_generation{0};
+    };
+
+    /// @brief Tagged body for the typed views over a memory_object.
+    union view_body {
+        void* generic{nullptr};       ///< @c none — unused, or opaque pointer.
+        void* vm_region;              ///< @c vm_region — @c vm::vm_region*.
+        void* kmem_cache;             ///< @c kmem_cache — @c slub::kmem_cache*.
+        void* policy_server;          ///< @c policy_server — @c policy::policy_server*.
+        void* service_entry;          ///< @c service_entry — @c sys::service::service_entry*.
+        void* device_binding;         ///< @c device_binding — reserved.
+        void* dataset_extent;         ///< @c dataset_extent — reserved.
+    };
+
+    /// @brief single authority representation for any memory-bearing
+    ///        resource in the kernel.
+    struct memory_object {
+        scoms::kobject::bobject ko{};
+        memory_view_kind view_kind{memory_view_kind::none};
+        u8 _pad0[3]{};
+        u64 range_start{0};
+        u64 range_length{0};
+        u32 owner_domain{scoms::kobject::KOBJECT_ID_INVALID};
+        scoms::kobject::kobject_type related_type{scoms::kobject::kobject_type::none};
+        u8 _pad_related[3]{};
+        u32 related_id{scoms::kobject::KOBJECT_ID_INVALID};
+        u32 related_generation{0};
+         dgp::isolation::isolation_rights authority_rights{ dgp::isolation::isolation_rights::none};
+        u8  storage_key{0};
+        u32 storage_key_generation{0};
+        u8  numa_node{0};
+        dgp::memory_contract::memory_scope     dgp_scope{dgp::memory_contract::memory_scope::private_domain};
+        dgp::memory_contract::memory_access    dgp_access{dgp::memory_contract::memory_access::none};
+         dgp::isolation::isolation_rights dgp_rights{ dgp::isolation::isolation_rights::none};
+        dgp::memory_contract::invalidation_scope invalidate{dgp::memory_contract::invalidation_scope::none};
+        u64 dgp_generation{0};
+        u64 mapping_generation{0};
+        std::atomic<u32> active_mappings{0};
+        std::atomic_bool extent_retiring{false};
+        view_body body{};
+
+        memory_object() noexcept = default;
+        memory_object(const memory_object&) = delete;
+        auto operator=(const memory_object&) = delete;
+    };
+
+    static_assert(__builtin_offsetof(memory_object, ko) == 0);
+
+    auto memory_objects_init() noexcept -> void;
+
+    [[nodiscard]] auto memory_object_ref_of(
+        const memory_object& object
+    ) noexcept -> memory_object_ref;
+
+    [[nodiscard]] auto memory_object_resolve(
+        memory_object_ref ref
+    ) noexcept -> std::expected<memory_object*, lib::kernel_error>;
+
+    /// @brief Resolve by raw SCOMS object id (used by frame back-pointer).
+    [[nodiscard]] auto memory_object_resolve_id(
+        u32 id, memory_view_kind expected_kind = memory_view_kind::none
+    ) noexcept -> memory_object*;
+
+    [[nodiscard]] auto memory_object_create(
+        scoms::kobject::kobject_type type,
+        u32 owner_domain,
+        scoms::kobject::bobject* parent = nullptr,
+        u64 range_start = 0,
+        u64 range_length = 0,
+         dgp::isolation::isolation_rights authority_rights =  dgp::isolation::isolation_rights::none,
+        memory_object_policy policy = {}
+    ) noexcept -> std::expected<memory_object*, lib::kernel_error>;
+
+    /// @brief Attach a typed view descriptor to an existing object.
+    /// @param[in] ref   Authority object to enrich.
+    /// @param[in] kind  Which body discriminant is being attached.
+    /// @param[in] body  Subsystem-owned descriptor pointer to attach.
+    /// @return Success or invalid-argument when @p kind is @c none or
+    ///         @p ref does not resolve to an active object.
+    [[nodiscard]] auto memory_object_attach_view(
+        memory_object_ref ref,
+        memory_view_kind kind, void* body
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Detach the typed view descriptor from an object, leaving
+    ///        it as a pure authority.
+    [[nodiscard]] auto memory_object_detach_view(
+        memory_object_ref ref
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_delegate(
+        memory_object_ref source, u32 caller_domain,
+        u32 owner_domain,  dgp::isolation::isolation_rights authority_rights
+    ) noexcept -> std::expected<memory_object_ref, lib::kernel_error>;
+
+    /// @brief Recover the policy published by one authority object.
+    [[nodiscard]] auto memory_object_policy_for(
+        memory_object_ref ref
+    ) noexcept -> std::expected<memory_object_policy, lib::kernel_error>;
+
+    /// @brief Replace the complete policy record on mutable memory authority.
+    [[nodiscard]] auto memory_object_update_policy(
+        memory_object_ref storage, const memory_object_policy& policy
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_destroy(u32 id) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_destroy(
+        memory_object_ref ref
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_link(
+        memory_object& object, const memory_object& related
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_update_range(
+        memory_object_ref ref, u64 range_start, u64 range_length
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Retain/release one live VMA reference to a physical extent.
+    [[nodiscard]] auto memory_extent_acquire_mapping(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+    [[nodiscard]] auto memory_extent_release_mapping(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+    [[nodiscard]] auto memory_extent_mapping_count(
+        memory_object_ref extent
+    ) noexcept -> std::expected<u32, lib::kernel_error>;
+    /// @brief Prevent new VMA references after confirming the extent is idle.
+    [[nodiscard]] auto memory_extent_retire(
+        memory_object_ref extent
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto memory_object_find(u32 id) noexcept -> memory_object*;
+
+
+} // namespace zxfoundation::memory::objects
+
+} // end export

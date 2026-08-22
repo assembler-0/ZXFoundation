@@ -1,0 +1,89 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/policy_types.cxxm
+/// @brief Scheduler policy records shared by classed scheduling backends.
+
+export module zxfoundation.sched.rq.types;
+import zxfoundation.base.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sched.sd.types;
+import zxfoundation.sched.rt.bandwidth;
+import zxfoundation.sched.entity;
+import lib.rbtree;
+import lib.list;
+import std;
+
+export {
+
+namespace zxfoundation::sched::rq {
+
+    /// @brief Per-CPU run queue — schedules strands (execution contexts).
+    struct run_queue {
+        sync::qspinlock::qspinlock      lock{};          ///< Protects run queue data (enqueue/dequeue/select).
+        sync::qspinlock::qspinlock      context_lock{};  ///< Serializes ASCE / CR1 loads during context switch.
+        u32                             nr_running{0};   ///< Total runnable strands on this CPU.
+
+        dgp::domain::strand*            curr{nullptr};   ///< Currently running strand.
+        dgp::domain::strand*            idle_strand{nullptr}; ///< This CPU's idle strand.
+
+        /// @brief EEVDF fair scheduling tree (cached leftmost = earliest deadline).
+        lib::rb_root_cached             fair_tree{};
+
+        u64                             min_vruntime{0}; ///< Monotonically increasing vruntime floor.
+        i64                             avg_vruntime_acc{0};
+        u64                             avg_weight_acc{0};
+
+        /// @brief RT FIFO queue (domains dequeued in FIFO order).
+        lib::list_head                  rt_queue{};
+
+        /// @brief Conservative EDF deadline queue.
+        lib::list_head                  deadline_queue{};
+
+        u16                             cpu_id{0};       ///< Logical CPU ID this run_queue belongs to.
+
+        /// @brief Set to 1 when this CPU's run queue is fully initialized
+        std::atomic<u32> online{0};
+
+        /// @brief Per-CPU scheduler-domain hierarchy (SMT → MC → DIE → BOOK → NUMA).
+        sd::sched_domain_tree          sd_tree{};
+
+        /// @brief Per-CPU RT bandwidth controller (1 s period, 950 ms quota).
+        rt::bw::rt_bandwidth            rt_bw{};
+
+        /// @brief Per-CPU PELT averaging accumulator (mirrors Linux's @c cfs_rq::avg).
+        sched_avg_rq                    cfs_avg{};
+
+        /// @brief Per-CPU nohz idle state (tickless flags).
+        u32                             nohz_flags{0};
+
+        /// @brief Original CPU capacity (SMT-aware throughput units, 1024=max).
+        u32                             cpu_capacity_orig{1024};
+
+        /// @brief Current CPU capacity — dynamically reduced by RT pressure
+        ///        and restored by tick decay (matches Linux scheduler).
+        u32                             cpu_capacity_curr{1024};
+
+        /// @brief Lockless advisory view consumed by remote balancers.
+        std::atomic<u64>                balance_min_vruntime{0};
+        std::atomic<i64>                balance_avg_vruntime_acc{0};
+        std::atomic<u64>                balance_avg_weight_acc{0};
+        std::atomic<u64>                balance_cfs_load_avg{0};
+        std::atomic<u64>                balance_cfs_util_avg{0};
+        std::atomic<u64>                balance_cfs_runnable_avg{0};
+        std::atomic<u64>                balance_attached_asce{0};
+        std::atomic<u32>                balance_nr_running{0};
+        std::atomic<u32>                balance_attached_domain_id{0};
+        std::atomic<u32>                balance_cpu_capacity_curr{1024};
+        std::atomic<u32>                balance_online{0};
+        std::atomic<u8>                 balance_attached_dgp_state{0};
+
+        run_queue() noexcept = default;
+        run_queue(const run_queue&)            = delete;
+        auto operator=(const run_queue&)       = delete;
+        run_queue(run_queue&&)                 = delete;
+        auto operator=(run_queue&&)            = delete;
+    };
+
+} // namespace zxfoundation::sched
+
+} // end export

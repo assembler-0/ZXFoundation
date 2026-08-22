@@ -1,4 +1,6 @@
 !files : !compile_group -> [auto] {
+    interface.cxxm
+    types.cxxm
     switch_to.S
     ret_to_user.S
     domain_enter.S

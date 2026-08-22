@@ -1,0 +1,103 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/core.cxxm
+/// @brief Scheduler core — schedule(), tick, init, work-stealing, softirq, nohz.
+
+export module zxfoundation.sched.core;
+import zxfoundation.sched.policy;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import zxfoundation.sys.timer.types;
+import zxfoundation.sched.rq.types;
+import arch.s390x.cpu.irq;
+import lib.error;
+import std;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::dgp::domain::strand;
+using zxfoundation::sched::rq::run_queue;
+
+export {
+
+namespace zxfoundation::sched {
+
+    [[nodiscard]] auto cpu_timer(u16 cpu_id) noexcept -> zxfoundation::sys::timer::kernel_timer&;
+    [[nodiscard]] auto cpu_rq(u16 cpu_id) noexcept -> run_queue&;
+    [[nodiscard]] auto this_rq() noexcept -> run_queue&;
+
+    declscope(C) auto __switch_to_asm(
+        strand* prev,
+        strand* next
+    ) noexcept -> domain*;
+
+    auto enqueue_strand(strand* s) noexcept -> void;
+    auto dequeue_strand(strand* s) noexcept -> void;
+    auto enqueue_domain(domain* d) noexcept -> void;
+    auto dequeue_domain(domain* d) noexcept -> void;
+
+    /// @brief Admit a scheduler policy for a strand before run-queue insertion.
+    /// @param[in,out] s Strand receiving the policy metadata.
+    /// @param[in] policy Requested scheduler policy.
+    /// @return Admission record on success, or kernel_error when DGP/class policy denies the request.
+    [[nodiscard]] auto strand_admit_policy(
+        strand& s,
+        const zxfoundation::sched::sched_policy& policy
+    ) noexcept -> std::expected<zxfoundation::sched::sched_admission_result, lib::kernel_error>;
+
+    /// @brief Create and optionally enqueue a secondary strand for a DGP domain.
+    /// @param[in] request Executor-style creation request selecting one of
+    ///            three strand kinds (kernel-thread, user-process, bare).
+    ///            See @c zxfoundation::dgp::domain::strand_create_request
+    ///            for the full duality documentation.
+    /// @return Pointer to the created strand, or kernel_error if validation,
+    ///         allocation, or admission fails.
+    [[nodiscard]] auto strand_spawn(
+        const zxfoundation::dgp::domain::strand_create_request& request
+    ) noexcept -> std::expected<zxfoundation::dgp::domain::strand*, lib::kernel_error>;
+
+    /// @brief Quiesce every strand owned by a domain before identity teardown.
+    /// @param[in] d Domain entering the dying state.
+    /// @return Success when no strand is running and all runnable strands are removed.
+    [[nodiscard]] auto quiesce_domain(domain& d) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    auto schedule() noexcept -> void;
+    [[noreturn]] auto strand_trampoline_exit() noexcept -> void;
+
+    /// @brief CPU timer quantum enforcement — fires when a strand's quantum expires.
+    auto cpu_timer_tick() noexcept -> void;
+
+    /// @brief CPU timer IRQ handler — dispatches vector EXT_IRQ_CPU_TIMER.
+    auto irq_handler_cpu_timer(
+        u16 irq,
+        arch::s390x::cpu::irq::irq_frame* frame,
+        void* data
+    ) noexcept -> void;
+
+    /// @brief Periodic scheduler tick
+    auto scheduler_tick() noexcept -> void;
+
+    [[nodiscard]] auto need_resched() noexcept -> bool;
+
+    /// @brief Mark the currently executing domain as needing rescheduling.
+    auto sched_resched_current() noexcept -> void;
+
+    auto preempt_schedule() noexcept -> void;
+
+    [[nodiscard]] auto sched_active() noexcept -> bool;
+
+    auto sched_init() noexcept -> void;
+    auto sched_init_ap(u16 cpu_id) noexcept -> void;
+
+    [[noreturn]] auto idle_enter() noexcept -> void;
+
+    /// @brief Notify the scheduler that a CPU has come online.
+    [[nodiscard]] auto cpu_up(u16 cpu_id) noexcept -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Notify the scheduler that a CPU is going offline.
+    /// @param[in] cpu_id Logical CPU ID going offline.
+    /// @return Success or kernel_error.
+    [[nodiscard]] auto cpu_down(u16 cpu_id) noexcept -> ::std::expected<void, ::lib::kernel_error>;
+
+} // namespace zxfoundation::sched
+
+} // end export

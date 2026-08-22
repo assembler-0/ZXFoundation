@@ -19,9 +19,7 @@ import lib.format;
 import lib.bit;
 import std;
 
-namespace _internal {
-
-    using namespace arch::s390x::io::css;
+namespace arch::s390x::io::css::detail {
 
     /// @brief Maximum tracked subchannels (expandable later).
     no_export inline constexpr u32 MAX_SCH_ENTRIES = 256;
@@ -40,7 +38,7 @@ namespace _internal {
 
     no_export io_completion_sink_fn g_completion_sink{nullptr};
 
-} // namespace _internal
+} // namespace detail
 
 namespace arch::s390x::io::css {
 
@@ -54,7 +52,7 @@ namespace arch::s390x::io::css {
 
         const auto irq_state = arch::s390x::cpu::irq::irq_save_disable();
 
-        for (u32 sch_no = 0; sch_no <= 0xFFFF && found < _internal::MAX_SCH_ENTRIES; ++sch_no) {
+        for (u32 sch_no = 0; sch_no <= 0xFFFF && found < detail::MAX_SCH_ENTRIES; ++sch_no) {
             const auto id = subchannel_id::from_parts(0, 0, static_cast<u16>(sch_no));
 
             schib info{};
@@ -92,9 +90,9 @@ namespace arch::s390x::io::css {
 
             // Record in the table under the lock.
             {
-                zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+                zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
 
-                auto& entry = _internal::g_subchannel_table[found];
+                auto& entry = detail::g_subchannel_table[found];
                 entry.schid  = id;
                 entry.devno  = info.pmcw_data.devno;
                 entry.available_lpm = info.pmcw_data.pam != 0U
@@ -109,8 +107,8 @@ namespace arch::s390x::io::css {
             ++found;
         }
 
-        _internal::g_sch_count       = found;
-        _internal::g_css_initialized = true;
+        detail::g_sch_count       = found;
+        detail::g_css_initialized = true;
 
         {
             u64 cr6 = 0;
@@ -132,18 +130,18 @@ namespace arch::s390x::io::css {
     [[nodiscard]] auto start_io(u32 sch_index, orb& orb_ref) noexcept
         -> ::std::expected<void, ::lib::kernel_error>
     {
-        if (!_internal::g_css_initialized) {
+        if (!detail::g_css_initialized) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
         }
-        if (sch_index >= _internal::g_sch_count) {
+        if (sch_index >= detail::g_sch_count) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
 
-        auto& entry = _internal::g_subchannel_table[sch_index];
+        auto& entry = detail::g_subchannel_table[sch_index];
         {
-            const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
             if (entry.binding_id == ~0U || orb_ref.intparm != entry.binding_id) {
                 return ::std::unexpected(
                     ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
@@ -165,7 +163,7 @@ namespace arch::s390x::io::css {
         }
 
         {
-            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
             if (entry.state == subchannel_state::active &&
                 entry.active_binding_id == entry.binding_id) {
                 entry.state = subchannel_state::idle;
@@ -194,12 +192,12 @@ namespace arch::s390x::io::css {
     ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         if (!sink) return ::std::unexpected(
             ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
-        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
-        if (_internal::g_completion_sink && _internal::g_completion_sink != sink) {
+        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        if (detail::g_completion_sink && detail::g_completion_sink != sink) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
         }
-        _internal::g_completion_sink = sink;
+        detail::g_completion_sink = sink;
         return {};
     }
 
@@ -207,13 +205,13 @@ namespace arch::s390x::io::css {
     [[nodiscard]] auto claim_binding(
         u32 sch_index, u32 binding_id, u32 binding_generation
     ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
-        if (sch_index >= _internal::g_sch_count || binding_id == ~0U ||
+        if (sch_index >= detail::g_sch_count || binding_id == ~0U ||
             binding_generation == 0U) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
         }
-        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
-        auto& entry = _internal::g_subchannel_table[sch_index];
+        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        auto& entry = detail::g_subchannel_table[sch_index];
         if (entry.binding_id != ~0U) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_driver(::lib::driver_error::busy));
@@ -228,12 +226,12 @@ namespace arch::s390x::io::css {
     [[nodiscard]] auto release_binding(
         u32 sch_index, u32 binding_id, u32 binding_generation
     ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
-        if (sch_index >= _internal::g_sch_count) {
+        if (sch_index >= detail::g_sch_count) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
-        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
-        auto& entry = _internal::g_subchannel_table[sch_index];
+        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        auto& entry = detail::g_subchannel_table[sch_index];
         if (entry.binding_id != binding_id ||
             entry.binding_generation != binding_generation) {
             return ::std::unexpected(
@@ -251,9 +249,9 @@ namespace arch::s390x::io::css {
 
     /// @brief Return the hardware-available logical path mask for a binding.
     [[nodiscard]] auto available_lpm(u32 sch_index) noexcept -> u8 {
-        if (sch_index >= _internal::g_sch_count) return 0U;
-        const zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
-        return _internal::g_subchannel_table[sch_index].available_lpm;
+        if (sch_index >= detail::g_sch_count) return 0U;
+        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        return detail::g_subchannel_table[sch_index].available_lpm;
     }
 
     /// @brief Test I/O on a subchannel (issue TSCH).
@@ -263,16 +261,16 @@ namespace arch::s390x::io::css {
     [[nodiscard]] auto test_io(u32 sch_index, irb& irb_ref) noexcept
         -> ::std::expected<condition_code, ::lib::kernel_error>
     {
-        if (!_internal::g_css_initialized) {
+        if (!detail::g_css_initialized) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
         }
-        if (sch_index >= _internal::g_sch_count) {
+        if (sch_index >= detail::g_sch_count) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
 
-        auto& entry = _internal::g_subchannel_table[sch_index];
+        auto& entry = detail::g_subchannel_table[sch_index];
 
         const condition_code cc = tsch(entry.schid, irb_ref);
         if (cc == 3) {
@@ -282,7 +280,7 @@ namespace arch::s390x::io::css {
 
         // Store a copy for interrupt-path inspection.
         {
-            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
             entry.last_irb = irb_ref;
             if (cc == 0) {
                 const auto stctl = irb_ref.scsw_data.stctl();
@@ -303,20 +301,20 @@ namespace arch::s390x::io::css {
     [[nodiscard]] auto halt_io(u32 sch_index) noexcept
         -> ::std::expected<void, ::lib::kernel_error>
     {
-        if (!_internal::g_css_initialized) {
+        if (!detail::g_css_initialized) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
         }
-        if (sch_index >= _internal::g_sch_count) {
+        if (sch_index >= detail::g_sch_count) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
 
-        auto& entry = _internal::g_subchannel_table[sch_index];
+        auto& entry = detail::g_subchannel_table[sch_index];
 
         const int cc = hsch(entry.schid);
         if (cc == 0) {
-            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
             entry.state = subchannel_state::halting;
             return {};
         }
@@ -338,20 +336,20 @@ namespace arch::s390x::io::css {
     [[nodiscard]] auto clear_io(u32 sch_index) noexcept
         -> ::std::expected<void, ::lib::kernel_error>
     {
-        if (!_internal::g_css_initialized) {
+        if (!detail::g_css_initialized) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
         }
-        if (sch_index >= _internal::g_sch_count) {
+        if (sch_index >= detail::g_sch_count) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
 
-        auto& entry = _internal::g_subchannel_table[sch_index];
+        auto& entry = detail::g_subchannel_table[sch_index];
 
         const int cc = csch(entry.schid);
         if (cc == 0) {
-            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
             entry.state = subchannel_state::halting;
             return {};
         }
@@ -362,13 +360,13 @@ namespace arch::s390x::io::css {
     /// @brief Called from the I/O interrupt handler to drain status.
     /// @param sch_no Raw subchannel number from the I/O old PSW area.
     auto io_interrupt(u32 sch_no) noexcept -> void {
-        if (!_internal::g_css_initialized) {
+        if (!detail::g_css_initialized) {
             return;
         }
 
         u32 idx = 0xFFFFFFFF;
-        for (u32 i = 0; i < _internal::g_sch_count; ++i) {
-            if (_internal::g_subchannel_table[i].schid.sch_no() == static_cast<u16>(sch_no)) {
+        for (u32 i = 0; i < detail::g_sch_count; ++i) {
+            if (detail::g_subchannel_table[i].schid.sch_no() == static_cast<u16>(sch_no)) {
                 idx = i;
                 break;
             }
@@ -383,7 +381,7 @@ namespace arch::s390x::io::css {
             return;
         }
 
-        auto& entry = _internal::g_subchannel_table[idx];
+        auto& entry = detail::g_subchannel_table[idx];
 
         // Drain status from hardware.
         irb status{};
@@ -395,7 +393,7 @@ namespace arch::s390x::io::css {
         u32 binding_generation = 0U;
         irb completed_status{};
         {
-            zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
             entry.last_irb = status;
             if (cc == 0) {
                 const auto stctl = status.scsw_data.stctl();
@@ -427,8 +425,8 @@ namespace arch::s390x::io::css {
             entry.io_done.store(1, std::memory_order::seq_cst);
         }
 
-        if (completed && _internal::g_completion_sink) [[likely]] {
-            _internal::g_completion_sink(
+        if (completed && detail::g_completion_sink) [[likely]] {
+            detail::g_completion_sink(
                 idx, binding_id, binding_generation, completed_status);
         }
 
@@ -444,15 +442,15 @@ namespace arch::s390x::io::css {
     [[nodiscard]] auto find_device(u16 dev_type, u16 dev_model) noexcept
         -> ::std::expected<u32, ::lib::kernel_error>
     {
-        if (!_internal::g_css_initialized) {
+        if (!detail::g_css_initialized) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
         }
 
-        zxfoundation::sync::irq_lock_guard guard(_internal::g_css_lock);
+        zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
 
-        for (u32 i = 0; i < _internal::g_sch_count; ++i) {
-            const auto& s = _internal::g_subchannel_table[i].sense;
+        for (u32 i = 0; i < detail::g_sch_count; ++i) {
+            const auto& s = detail::g_subchannel_table[i].sense;
             if (s.dev_type == dev_type &&
                 s.dev_model == static_cast<u8>(dev_model)) {
                 return i;
@@ -465,17 +463,17 @@ namespace arch::s390x::io::css {
 
     /// @brief Return the number of probed subchannels.
     [[nodiscard]] auto subchannel_count() noexcept -> u32 {
-        return _internal::g_sch_count;
+        return detail::g_sch_count;
     }
 
     /// @brief Return a pointer to a subchannel entry by index.
     /// @param index Index into the subchannel table.
     /// @return Pointer to the entry, or nullptr if index is out of range.
     [[nodiscard]] auto get_entry(u32 index) noexcept -> subchannel_entry* {
-        if (index >= _internal::g_sch_count) {
+        if (index >= detail::g_sch_count) {
             return nullptr;
         }
-        return &_internal::g_subchannel_table[index];
+        return &detail::g_subchannel_table[index];
     }
 
 } // namespace arch::s390x::io::css

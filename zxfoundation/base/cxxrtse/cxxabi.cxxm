@@ -7,10 +7,11 @@ import zxfoundation.base.types;
 import zxfoundation.sys.syschk.core;
 import zxfoundation.sys.printk.core;
 import zxfoundation.sync.qspinlock.core;
-import lib.error;
-import lib.static_vector;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
+import arch.s390x.cpu.sync;
+import lib.static_vector;
+import lib.error;
 import std;
 
 using zxfoundation::sys::printk::pinfo;
@@ -90,7 +91,7 @@ auto __cxa_guard_acquire(u64* g) -> int {
     }
 
     while (!(__atomic_load_n(g, __ATOMIC_ACQUIRE) & GUARD_INITIALIZED))
-        __asm__ volatile("diag 0,0,0x44" ::: "memory");
+        arch::s390x::cpu::sync::cpu_relax();
     return 0;
 }
 

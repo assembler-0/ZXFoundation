@@ -6,12 +6,13 @@ module zxfoundation.sync.mutex.core;
 import zxfoundation.base.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.waitqueue.types;
-import zxfoundation.domain.strand_types;
-import zxfoundation.domain.domain_types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.domain.types;
 import zxfoundation.sync.lockable;
-import zxfoundation.sched.context;
-import zxfoundation.sched.sched;
+import zxfoundation.sched.context.core;
+import zxfoundation.sched.core;
 import zxfoundation.base.typestate;
+import zxfoundation.sched.policy;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.irq;
@@ -21,13 +22,13 @@ import std;
 
 namespace zxfoundation::sync::mutex {
 
-    using zxfoundation::domain::strand;
+    using zxfoundation::dgp::domain::strand;
     using zxfoundation::sync::waitqueue::wait_entry;
-    using zxfoundation::domain::strand;
-    using zxfoundation::domain::sched_substate;
+    using zxfoundation::dgp::domain::strand;
+    using zxfoundation::sched::sched_substate;
     using zxfoundation::base::lifecycle_state;
-    using zxfoundation::domain::domain;
-    using zxfoundation::domain::domain_flags;
+    using zxfoundation::dgp::domain::domain;
+    using zxfoundation::dgp::domain::domain_flags;
     using zxfoundation::sync::waitqueue::wait_head;
     using zxfoundation::sync::waitqueue::wait_entry;
     using zxfoundation::sync::waitqueue::wait_flags;

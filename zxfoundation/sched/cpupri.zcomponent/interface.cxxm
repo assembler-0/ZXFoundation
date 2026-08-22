@@ -1,0 +1,2 @@
+export module zxfoundation.sched.cpupri;
+export import zxfoundation.sched.cpupri.core;

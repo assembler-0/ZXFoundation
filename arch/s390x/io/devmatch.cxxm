@@ -6,7 +6,7 @@ export module arch.s390x.io.devmatch;
 import zxfoundation.base.types;
 import std;
 
-namespace arch::s390x::css::devmatch::_internal {
+namespace arch::s390x::css::devmatch::detail {
 
     /// @brief Device class — broad categorization for policy/driver binding.
     enum class dev_class : u8 {
@@ -122,13 +122,13 @@ namespace arch::s390x::css::devmatch::_internal {
         "unknown",       // unknown
     };
 
-} // namespace arch::s390x::css::devmatch::_internal
+} // namespace arch::s390x::css::devmatch::detail
 
 export {
 
 namespace arch::s390x::css::devmatch {
 
-    using namespace _internal;
+    using namespace detail;
 
     /// @brief Result of a device lookup.
     struct match_result {

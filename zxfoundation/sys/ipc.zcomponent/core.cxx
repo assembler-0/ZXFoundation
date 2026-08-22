@@ -9,19 +9,19 @@ import zxfoundation.scoms.table;
 import zxfoundation.scoms.kobject.ref;
 import zxfoundation.scoms.kobject.types;
 import zxfoundation.scoms.metadata.core;
-import zxfoundation.memory.memory_objects;
+import zxfoundation.memory.objects;
 import zxfoundation.memory.vm;
-import zxfoundation.memory.vm_types;
+import zxfoundation.memory.vm.types;
 import zxfoundation.memory.kmalloc;
-import zxfoundation.domain.domain_types;
-import zxfoundation.sys.cap.types;
-import zxfoundation.sys.cap.core;
-import zxfoundation.domain.domain;
-import zxfoundation.domain.strand_types;
-import zxfoundation.portal.portal;
-import zxfoundation.portal.portal_types;
-import zxfoundation.dgp.dgp_authorize;
-import zxfoundation.dgp.isolation_types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.dgp.cap.core;
+import zxfoundation.dgp.domain.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.portal;
+import zxfoundation.dgp.portal.types;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.isolation.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.sync.lockable;
@@ -48,7 +48,7 @@ namespace zxfoundation::sys::ipc::detail {
 
     auto release_message(message_object& msg) noexcept -> void {
         for (u32 i = 0; i < msg.capability_count; ++i) {
-            discard_value sys::cap::cap_release(msg.body->capabilities[i].token);
+            discard_value dgp::cap::cap_release(msg.body->capabilities[i].token);
         }
         for (u32 i = 0; i < msg.grant_count; ++i) {
             discard_value memory::objects::memory_object_destroy(
@@ -68,19 +68,18 @@ namespace zxfoundation::sys::ipc {
         detail::g_endpoints.init(scoms::kobject::kobject_type::endpoint);
         detail::g_messages.init(scoms::kobject::kobject_type::message);
         detail::g_initialized = true;
-        domain::register_ipc_drain_cb(endpoint_destroy_for_domain);
     }
 
     [[nodiscard]] auto endpoint_create(
-        domain::domain& owner, u32 peer_domain
+        dgp::domain::domain& owner, u32 peer_domain
     ) noexcept -> std::expected<u32, lib::kernel_error> {
-        auto* peer = domain::domain_find(peer_domain);
+        auto* peer = dgp::domain::domain_find(peer_domain);
         if (!peer) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
-        auto auth = dgp::dgp_authorize(
+        auto auth = dgp::authorize(
             owner, *peer, dgp::operation_kind::ipc_endpoint_create,
-            dgp::dgp_authorization_metadata{
-                .requested_rights = dgp::isolation_rights::signal});
+            dgp::authorization_metadata{
+                .requested_rights =  dgp::isolation::isolation_rights::signal});
         if (!auth) return std::unexpected(auth.error());
 
         const sync::irq_lock_guard guard{detail::g_lock};
@@ -115,7 +114,7 @@ namespace zxfoundation::sys::ipc {
     }
 
     [[nodiscard]] auto endpoint_destroy(
-        domain::domain& caller, u32 endpoint_id
+        dgp::domain::domain& caller, u32 endpoint_id
     ) noexcept -> std::expected<void, lib::kernel_error> {
         const sync::irq_lock_guard guard{detail::g_lock};
         auto* endpoint = detail::endpoint(endpoint_id);
@@ -123,13 +122,13 @@ namespace zxfoundation::sys::ipc {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        auto* peer = domain::domain_find(endpoint->peer_domain);
+        auto* peer = dgp::domain::domain_find(endpoint->peer_domain);
         if (!peer) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
-        auto auth = dgp::dgp_authorize(
+        auto auth = dgp::authorize(
             caller, *peer, dgp::operation_kind::ipc_endpoint_destroy,
-            dgp::dgp_authorization_metadata{
-                .requested_rights = dgp::isolation_rights::signal});
+            dgp::authorization_metadata{
+                .requested_rights =  dgp::isolation::isolation_rights::signal});
         if (!auth) return std::unexpected(auth.error());
         while (endpoint->queue_count != 0U) {
             auto* msg = detail::message(endpoint->queue->message_ids[endpoint->queue_head]);
@@ -151,7 +150,7 @@ namespace zxfoundation::sys::ipc {
         return endpoint && endpoint->owner_domain == domain_id;
     }
 
-    auto endpoint_destroy_for_domain(u32 domain_id) noexcept -> void {
+    auto destroy_for_domain(u32 domain_id) noexcept -> void {
         detail::g_endpoints.destroy_if(
             [domain_id](const endpoint_object& endpoint) noexcept -> bool {
                 return endpoint.owner_domain == domain_id ||
@@ -171,9 +170,9 @@ namespace zxfoundation::sys::ipc {
     }
 
     [[nodiscard]] auto message_send(
-        domain::domain& caller, u32 endpoint_id,
+        dgp::domain::domain& caller, u32 endpoint_id,
         const u8* payload, u32 length,
-        const sys::cap::cap_token* capabilities, u32 capability_count,
+        const dgp::cap::cap_token* capabilities, u32 capability_count,
         const memory::objects::memory_object_ref* grants, u32 grant_count
     ) noexcept -> std::expected<void, lib::kernel_error> {
         if (!payload || length > IPC_MESSAGE_BYTES ||
@@ -187,15 +186,15 @@ namespace zxfoundation::sys::ipc {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        auto* peer = domain::domain_find(endpoint->peer_domain);
+        auto* peer = dgp::domain::domain_find(endpoint->peer_domain);
         if (!peer || endpoint->queue_count >= IPC_QUEUE_DEPTH) {
             return std::unexpected(lib::kernel_error::from_driver(
                 lib::driver_error::busy));
         }
-        auto auth = dgp::dgp_authorize(
+        auto auth = dgp::authorize(
             caller, *peer, dgp::operation_kind::ipc_send,
-            dgp::dgp_authorization_metadata{
-                .requested_rights = dgp::isolation_rights::signal});
+            dgp::authorization_metadata{
+                .requested_rights =  dgp::isolation::isolation_rights::signal});
         if (!auth) return std::unexpected(auth.error());
         auto result = detail::g_messages.alloc();
         if (!result) return std::unexpected(result.error());
@@ -214,7 +213,7 @@ namespace zxfoundation::sys::ipc {
         msg.grant_count = grant_count;
         std::copy_n(payload, length, msg.body->payload);
         for (u32 i = 0; i < capability_count; ++i) {
-            auto duplicate = sys::cap::cap_duplicate_for(
+            auto duplicate = dgp::cap::cap_duplicate_for(
                 capabilities[i], capabilities[i].rights(), caller.ko.id,
                 peer->ko.id);
             if (!duplicate) {
@@ -236,7 +235,7 @@ namespace zxfoundation::sys::ipc {
                     lib::memory_error::capability_invalid));
             }
             const auto attenuation = (*grant_result)->authority_rights
-                & (dgp::isolation_rights::map | dgp::isolation_rights::share);
+                & ( dgp::isolation::isolation_rights::map |  dgp::isolation::isolation_rights::share);
             auto delegated = memory::objects::memory_object_delegate(
                 grants[i], caller.ko.id, peer->ko.id, attenuation);
             if (!delegated) {
@@ -257,9 +256,9 @@ namespace zxfoundation::sys::ipc {
     }
 
     [[nodiscard]] auto message_receive(
-        domain::domain& caller, u32 endpoint_id,
+        dgp::domain::domain& caller, u32 endpoint_id,
         u8* payload, u32 payload_capacity, u32& out_length,
-        sys::cap::cap_token* capabilities, u32& capability_count,
+        dgp::cap::cap_token* capabilities, u32& capability_count,
         memory::objects::memory_object_ref* grants, u32& grant_count
     ) noexcept -> std::expected<void, lib::kernel_error> {
         if (!payload || !capabilities || !grants) return std::unexpected(lib::kernel_error::from_generic(
@@ -295,24 +294,24 @@ namespace zxfoundation::sys::ipc {
     }
 
 [[nodiscard]] auto shm_export(
-    domain::domain& caller, u64 va, u64 length, u32 target_domain
-) noexcept -> std::expected<sys::cap::cap_token, lib::kernel_error> {
+    dgp::domain::domain& caller, u64 va, u64 length, u32 target_domain
+) noexcept -> std::expected<dgp::cap::cap_token, lib::kernel_error> {
     if (length == 0 || (va & (PAGE_SIZE - 1ULL)) != 0 ||
         (length & (PAGE_SIZE - 1ULL)) != 0 || va + length < va) {
         sys::printk::perr("shm_export: bad va/length va={:#x} len={}", va, length);
         return std::unexpected(lib::kernel_error::from_memory(
             lib::memory_error::invalid_address));
     }
-    auto* target = domain::domain_find(target_domain);
+    auto* target = dgp::domain::domain_find(target_domain);
     if (!target) {
         sys::printk::perr("shm_export: target domain {} not found", target_domain);
         return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
     }
-    auto auth = dgp::dgp_authorize(
+    auto auth = dgp::authorize(
         caller, *target, dgp::operation_kind::shm_export,
-        dgp::dgp_authorization_metadata{
-            .requested_rights = dgp::isolation_rights::share,
+        dgp::authorization_metadata{
+            .requested_rights =  dgp::isolation::isolation_rights::share,
             .target_va_start = va, .target_va_end = va + length});
     if (!auth) {
         sys::printk::perr("shm_export: DGP authorize denied");
@@ -346,10 +345,10 @@ namespace zxfoundation::sys::ipc {
         return std::unexpected(lib::kernel_error::from_memory(
             lib::memory_error::capability_invalid));
     }
-    auto token = sys::cap::cap_issue(
-        sys::cap::cap_type::memory, static_cast<u16>((*grant)->ko.id),
-        sys::cap::cap_rights::read | sys::cap::cap_rights::map |
-            sys::cap::cap_rights::delegate,
+    auto token = dgp::cap::cap_issue(
+        dgp::cap::cap_type::memory, static_cast<u16>((*grant)->ko.id),
+        dgp::cap::cap_rights::read | dgp::cap::cap_rights::map |
+            dgp::cap::cap_rights::delegate,
         target_domain);
         if (!token) {
             sys::printk::perr("shm_export: cap_issue failed err={} grant.id={} grant.state={}",
@@ -366,23 +365,23 @@ namespace zxfoundation::sys::ipc {
 }
 
     [[nodiscard]] auto shm_import(
-        domain::domain& caller, sys::cap::cap_token grant_token,
+        dgp::domain::domain& caller, dgp::cap::cap_token grant_token,
         u64 va, u64 length
-    ) noexcept -> std::expected<portal::portal_binding, lib::kernel_error> {
+    ) noexcept -> std::expected<dgp::portal::portal_binding, lib::kernel_error> {
         if (length == 0 || (va & (PAGE_SIZE - 1ULL)) != 0 ||
             (length & (PAGE_SIZE - 1ULL)) != 0 || va + length < va)
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::invalid_address));
-        auto grant = sys::cap::cap_validate<memory::objects::memory_object>(
-            grant_token, sys::cap::cap_rights::map);
+        auto grant = dgp::cap::cap_validate<memory::objects::memory_object>(
+            grant_token, dgp::cap::cap_rights::map);
         if (!grant) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
-        auto owner_check = sys::cap::cap_validate_generic_for(
-            grant_token, sys::cap::cap_rights::map, caller.ko.id);
+        auto owner_check = dgp::cap::cap_validate_generic_for(
+            grant_token, dgp::cap::cap_rights::map, caller.ko.id);
         if (!owner_check) return std::unexpected(owner_check.error());
-        auto* source = domain::domain_find((*grant)->owner_domain);
+        auto* source = dgp::domain::domain_find((*grant)->owner_domain);
         if (!source) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
         if ((*grant)->ko.type != scoms::kobject::kobject_type::grant ||
@@ -396,41 +395,41 @@ namespace zxfoundation::sys::ipc {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
-        auto auth = dgp::dgp_authorize(
+        auto auth = dgp::authorize(
             *source, caller, dgp::operation_kind::shm_import,
-            dgp::dgp_authorization_metadata{
-                .requested_rights = dgp::isolation_rights::map,
+            dgp::authorization_metadata{
+                .requested_rights =  dgp::isolation::isolation_rights::map,
                 .target_va_start = va, .target_va_end = va + length});
         if (!auth) return std::unexpected(auth.error());
         if (va < memory::vm::VM_USER_START || va + length < va ||
             va + length > memory::vm::VM_USER_END)
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::invalid_address));
-        auto portal_result = portal::portal_create(
+        auto portal_result = dgp::portal::portal_create(
             caller.ko.id, source->ko.id, va, va + length,
-            portal::portal_prot::read, 0U, source_region);
+            dgp::portal::portal_prot::read, 0U, source_region);
         if (!portal_result) return std::unexpected(portal_result.error());
 
-        auto* desc = portal::portal_find(*portal_result);
+        auto* desc = dgp::portal::portal_find(*portal_result);
         if (!desc) {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::internal_error));
         }
 
-        auto* active = reinterpret_cast<domain::strand*>(
+        auto* active = static_cast<dgp::domain::strand*>(
             arch::s390x::cpu::lowcore::current_strand_ptr());
         if (!active || active->owner != &caller || !active->body) {
             active = &caller.primary_strand;
         }
         if (!active->body) {
-            discard_value portal::portal_destroy(*portal_result);
+            discard_value dgp::portal::portal_destroy(*portal_result);
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
         active->body->uregs.access_regs[desc->ar_num] = desc->alet;
         if (!auth->consume()) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::invalid_arg));
-        return portal::portal_binding {
+        return dgp::portal::portal_binding {
             .ar_num = desc->ar_num,
             .portal_id = *portal_result,
         };

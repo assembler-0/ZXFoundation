@@ -4,11 +4,11 @@
 
 export module zxfoundation.sys.ipc.core;
 import zxfoundation.base.types;
-import zxfoundation.memory.memory_objects;
-import zxfoundation.domain.domain_types;
-import zxfoundation.sys.cap.types;
-import zxfoundation.domain.strand_types;
-import zxfoundation.portal.portal_types;
+import zxfoundation.memory.objects;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.portal.types;
 import lib.error;
 import std;
 
@@ -19,42 +19,42 @@ namespace zxfoundation::sys::ipc {
     auto ipc_init() noexcept -> void;
 
     [[nodiscard]] auto endpoint_create(
-        domain::domain& owner, u32 peer_domain
+        dgp::domain::domain& owner, u32 peer_domain
     ) noexcept -> std::expected<u32, lib::kernel_error>;
 
     [[nodiscard]] auto endpoint_destroy(
-        domain::domain& caller, u32 endpoint_id
+        dgp::domain::domain& caller, u32 endpoint_id
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     [[nodiscard]] auto endpoint_owned_by(
         u32 endpoint_id, u32 domain_id
     ) noexcept -> bool;
 
-    auto endpoint_destroy_for_domain(u32 domain_id) noexcept -> void;
+    auto destroy_for_domain(u32 domain_id) noexcept -> void;
 
     [[nodiscard]] auto message_send(
-        domain::domain& caller, u32 endpoint_id,
+        dgp::domain::domain& caller, u32 endpoint_id,
         const u8* payload, u32 length,
-        const sys::cap::cap_token* capabilities, u32 capability_count,
+        const dgp::cap::cap_token* capabilities, u32 capability_count,
         const memory::objects::memory_object_ref* grants, u32 grant_count
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     [[nodiscard]] auto message_receive(
-        domain::domain& caller, u32 endpoint_id,
+        dgp::domain::domain& caller, u32 endpoint_id,
         u8* payload, u32 payload_capacity, u32& out_length,
-        sys::cap::cap_token* capabilities, u32& capability_count,
+        dgp::cap::cap_token* capabilities, u32& capability_count,
         memory::objects::memory_object_ref* grants, u32& grant_count
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     [[nodiscard]] auto shm_export(
-        domain::domain& caller, u64 va, u64 length,
+        dgp::domain::domain& caller, u64 va, u64 length,
         u32 target_domain
-    ) noexcept -> std::expected<sys::cap::cap_token, lib::kernel_error>;
+    ) noexcept -> std::expected<dgp::cap::cap_token, lib::kernel_error>;
 
     [[nodiscard]] auto shm_import(
-        domain::domain& caller, sys::cap::cap_token grant_token,
+        dgp::domain::domain& caller, dgp::cap::cap_token grant_token,
         u64 va, u64 length
-    ) noexcept -> std::expected<portal::portal_binding, lib::kernel_error>;
+    ) noexcept -> std::expected<dgp::portal::portal_binding, lib::kernel_error>;
 
 } // namespace zxfoundation::sys::ipc
 

@@ -1,0 +1,126 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/numa.zcomponent/core.cxxm
+/// @brief NUMA topology initialization and deterministic placement helpers — core interface.
+
+export module zxfoundation.memory.numa.core;
+import zxfoundation.base.types;
+import zxfoundation.memory.numa.types;
+import arch.s390x.init.zxfl.protocol;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::numa {
+
+    /// @brief Initialize immutable NUMA topology from the ZXFL boot protocol.
+    /// @param[in] protocol Loader-supplied boot protocol containing memory and CPU topology evidence.
+    /// @return Success when at least the deterministic bootstrap fallback node exists.
+    /// @note The current implementation consumes ZXFL records only; later boot-topology hardening may replace the evidence with direct STSI/SCLP records.
+    /// @warning This function must run before AP release and before node-owned allocator state is initialized.
+    auto init(
+        const arch::s390x::init::zxfl::protocol& protocol
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Report whether NUMA topology has been initialized.
+    /// @return true after `init()` has completed successfully.
+    /// @note The topology table is immutable after successful initialization in this migration wave.
+    [[nodiscard]] auto initialized() noexcept -> bool;
+
+    /// @brief Return the current topology generation.
+    /// @return Monotonic generation incremented after successful initialization.
+    /// @note Later hotplug or topology-recovery waves may increment this value again.
+    [[nodiscard]] auto generation() noexcept -> u64;
+
+    /// @brief Count NUMA node records known to the topology table.
+    /// @return Number of non-empty node records.
+    /// @warning A known node may be degraded and may not currently contain allocatable memory.
+    [[nodiscard]] auto node_count() noexcept -> u8;
+
+    /// @brief Report whether topology contains loader-provided memory evidence.
+    /// @return true when at least one node record was derived from ZXFL usable-memory topology.
+    /// @note Later kernel self-discovery should refine this with direct machine topology records.
+    [[nodiscard]] auto has_loader_memory_evidence() noexcept -> bool;
+
+    /// @brief Report whether the current topology had to synthesize the boot node.
+    /// @return true when the deterministic single-node fallback is active.
+    /// @note This is safe for allocation and records that no explicit multi-node placement evidence was available.
+    [[nodiscard]] auto uses_synthetic_fallback() noexcept -> bool;
+
+    /// @brief Read one NUMA node record.
+    /// @param[in] node_id Node identifier to inspect.
+    /// @return Pointer to the immutable node record, or a kernel error.
+    /// @warning The returned pointer remains valid only while the topology generation is unchanged.
+    [[nodiscard]] auto node_at(
+        u8 node_id
+    ) noexcept -> std::expected<const node_topology*, lib::kernel_error>;
+
+    /// @brief Resolve a physical address to a NUMA node.
+    /// @param[in] phys Physical address to classify.
+    /// @return NUMA node identifier containing the address, or a kernel error.
+    /// @note Sparse or discontiguous firmware regions fall back to the first encompassing node range.
+    [[nodiscard]] auto node_for_phys(
+        u64 phys
+    ) noexcept -> std::expected<u8, lib::kernel_error>;
+
+    /// @brief Resolve a page-frame number to a NUMA node.
+    /// @param[in] pfn Page-frame number using the 4 KiB base page granule.
+    /// @return NUMA node identifier containing the frame, or a kernel error.
+    [[nodiscard]] auto node_for_pfn(
+        u64 pfn
+    ) noexcept -> std::expected<u8, lib::kernel_error>;
+
+    /// @brief Resolve a logical CPU to its preferred NUMA node.
+    /// @param[in] cpu_id Kernel logical CPU identifier.
+    /// @return Preferred NUMA node identifier for the CPU.
+    /// @note The mapping is derived from ZXFL CPU topology evidence and is stable until topology generation changes.
+    [[nodiscard]] auto node_for_cpu(
+        u16 cpu_id
+    ) noexcept -> std::expected<u8, lib::kernel_error>;
+
+    /// @brief Resolve an allocation policy into an initial placement decision.
+    /// @param[in] policy Caller-supplied placement policy.
+    /// @param[in] local_node Local CPU or domain preferred node.
+    /// @return Selected node and fallback metadata, or a kernel error.
+    /// @note Deep PMM integration will consume this resolver when node-owned zones are introduced.
+    /// @warning This function does not allocate memory and does not reserve allocator watermarks.
+    [[nodiscard]] auto resolve_policy(
+        const allocation_policy& policy,
+        u8 local_node
+    ) noexcept -> std::expected<placement_result, lib::kernel_error>;
+
+    /// @brief Install a fully-resolved SLIT matrix from an outside evidence
+    ///        probe (typically @c sched_node_distance's STSI 15.1.x walk).
+    /// @param[in] matrix   16×16 distance matrix populated by the caller.
+    /// @param[in] stsi_ok  True when the matrix was built from real machine
+    ///                     topology (STSI), false when it is a synthetic fallback.
+    auto slit_install(const slit_matrix& matrix, bool stsi_ok) noexcept -> void;
+
+    /// @brief Sealed-synthetic fallback installer — mirrors Linux's
+    ///        @c build_synthetic_slit(): 10 local / 20 boot-adjacent /
+    ///        40 fully-remote edges.  Used by @c init() and by callers that
+    ///        detect STSI unavailability before the scheduler boots.
+    auto slit_load_synthetic() noexcept -> void;
+
+    /// @brief Read NUMA distance between two nodes (units: 10 local … 255 max).
+    /// @param[in] node_a Source node id.
+    /// @param[in] node_b Destination node id.
+    /// @return Distance from the SLIT cache, or 255 when either id is out of range.
+    [[nodiscard]] auto node_distance(u8 node_a, u8 node_b) noexcept -> u8;
+
+    /// @brief Return the NUMA node id assigned to a logical CPU.
+    /// @param[in] cpu_id Logical CPU id.
+    /// @return NUMA node id (NUMA_NODE_BOOT when out of range).
+    [[nodiscard]] auto node_of_cpu(u16 cpu_id) noexcept -> u8;
+
+    /// @brief Return the distance between two logical CPUs by way of their
+    ///        assigned NUMA nodes.
+    [[nodiscard]] auto cpu_distance(u16 cpu_a, u16 cpu_b) noexcept -> u8;
+
+    /// @brief Diagnostics: report the SLIT table source.
+    /// @return 0 = uninitialized, 1 = STSI 15.1.x, 2 = synthetic, 3 = degraded.
+    [[nodiscard]] auto slit_source_kind() noexcept -> u32;
+
+} // namespace zxfoundation::memory::numa
+
+} // end export

@@ -5,7 +5,8 @@
     ext.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]
     io.cxxm
     mcck.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]
-    pgm.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]
+    pgm.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
+    pgm.cxx !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]
     svc.cxxm
     fixup.cxxm
 }

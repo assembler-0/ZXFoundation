@@ -1,0 +1,54 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file crypto/sha256.cxxm
+/// @brief SHA-256 streaming hash implementation
+
+export module crypto.sha256.core;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace crypto::sha256 {
+
+    /// @brief Byte length of a SHA-256 message digest.
+    constexpr auto SHA256_DIGEST_SIZE = 32U;
+
+    /// @brief SHA-256 running computation context.
+    struct sha256_ctx {
+        u32  state[8]{};      ///< Current intermediate hash values (H0..H7).
+        u64  bit_count{};     ///< Total message bits processed so far.
+        u8   buf[64]{};       ///< Partial-block accumulation buffer.
+        u32  buf_len{};       ///< Number of valid bytes in buf (0..63).
+        bool finalized{};     ///< Set by sha256_final(); guards against double-finalize.
+    };
+
+    /// @brief Initialize a SHA-256 context to the FIPS 180-4 initial hash value.
+    /// @param[out] ctx  Context to initialize.
+    auto sha256_init(sha256_ctx& ctx) -> void;
+
+    /// @brief Feed a span of bytes into a running SHA-256 computation.
+    /// @param[in,out] ctx   Running SHA-256 context.
+    /// @param[in]     data  Input byte span.
+    /// @return std::expected<void, lib::kernel_error>
+    auto sha256_update(sha256_ctx& ctx, std::span<const u8> data)
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Finalize the hash and write the 32-byte digest.
+    /// @param[in,out] ctx  Running SHA-256 context.
+    /// @param[out]    out  Exactly 32-byte output span.
+    /// @return std::expected<void, lib::kernel_error>
+    auto sha256_final(sha256_ctx& ctx, std::span<u8, SHA256_DIGEST_SIZE> out)
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief One-shot SHA-256: hash @p data and write the 32-byte digest to @p out.
+    [[nodiscard]] auto sha256_hash(std::span<const u8> data, std::span<u8, SHA256_DIGEST_SIZE> out)
+        -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto sha256_verify(std::span<const u8> data,
+                                     std::span<const u8, SHA256_DIGEST_SIZE> expected)
+        -> std::expected<void, lib::kernel_error>;
+
+} // namespace crypto::sha256
+
+} // end export

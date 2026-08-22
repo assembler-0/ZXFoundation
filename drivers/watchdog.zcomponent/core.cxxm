@@ -12,6 +12,8 @@ namespace drivers::watchdog {
 
     auto init() noexcept -> void;
 
+    auto heartbeat_bump() noexcept -> void;
+
 } // namespace zxfoundation::sys::watchdog
 
 } // end export

@@ -1,0 +1,112 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/domain_tree_types.cxxm
+/// @brief Hierarchical scheduling domain hierarchy definitions.
+
+export module zxfoundation.sched.sd.types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import lib.cpumask;
+import lib.list;
+import std;
+
+export {
+
+namespace zxfoundation::sched::sd {
+
+    /// @brief Maximum supported depth of the sched_domain hierarchy.
+    /// @details The depth is bounded by the well-known topology levels:
+    ///          SMT(0), MC(1), DIE(2), NUMA(3), BOOK(4) (reserved).
+    inline constexpr u32 SCHED_DOMAIN_MAX_LEVEL = 5U;
+
+    /// @brief Scheduling domain flags
+    enum class sd_flag : u32 {
+        load_balance        = 1U << 0,   ///< Load balance on this domain.
+        balance_exec        = 1U << 1,   ///< Balance on exec().
+        balance_fork        = 1U << 2,   ///< Balance on fork().
+        balance_wake        = 1U << 3,   ///< Balance on wakeup.
+        balance_newidle     = 1U << 4,   ///< Newidle balance on this domain.
+        update_idle_cpu    = 1U << 5,   ///< Update idle cpu count.
+        wake_affine         = 1U << 6,   ///< Wake affine for cache locality.
+        share_cpu_capacity = 1U << 7,   ///< SMT siblings share capacity.
+        share_pkg_resources = 1U << 8,  ///< LLC shared at this level.
+        share_powerdomain  = 1U << 9,  ///< Power domain shared.
+        asym_cpucapacity   = 1U << 10,  ///< CPUs at this level have unequal capacities.
+        asym_cpucapacity_full = 1U << 11,///< All CPU capacities differ.
+        prefer_sibling      = 1U << 12,  ///< Prefer sibling over own CPU.
+        overlap             = 1U << 13,  ///< Domain overlap exists.
+        serialise           = 1U << 14,  ///< Serialise balancing pass.
+        prefer_level        = 1U << 15,  ///< Selected as the level to balance at.
+        cluster             = 1U << 16,  ///< Cluster-level (between MC and NUMA).
+        numa                = 1U << 17,  ///< NUMA-level domain.
+        clock_domain_gaps   = 1U << 18,  ///< Per-domain clock-skew allowed.
+        no_balance          = 1U << 19,  ///< ISOLATED — never balance here.
+    };
+
+    [[nodiscard]] constexpr auto operator|(sd_flag a, sd_flag b) noexcept -> sd_flag {
+        return static_cast<sd_flag>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+    [[nodiscard]] constexpr auto operator&(sd_flag a, sd_flag b) noexcept -> sd_flag {
+        return static_cast<sd_flag>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+    constexpr auto operator|=(sd_flag& a, sd_flag b) noexcept -> sd_flag& {
+        a = a | b;
+        return a;
+    }
+
+    /// @brief Topology level identifier (canonical ordering).
+    enum class sd_level : u8 {
+        smt  = 0,  ///< SMT (symmetric multithreading) within a core.
+        mc   = 1,  ///< Multi-core / multi-chip module.
+        die  = 2,  ///< Die / package level.
+        book = 3,  ///< Book level (s/Architecture drawer).
+        numa = 4,  ///< NUMA node.
+    };
+
+    /// @brief Compact sched_group descriptor — a node in the @c sched_domain
+    ///        balancing candidates ring.
+    struct sched_group {
+        ::lib::cpumask             cpus{};
+        sched_group*               next{nullptr};
+        u32                        group_capacity{0U};
+        u64                        avg_load{0U};
+        u32                        nr_balance_failed{0U};
+        bool                       has_running{false};
+    };
+
+    static_assert(sizeof(sched_group) <= 256U,
+        "sched_group stays within one s390x L1 cache line (256 B)");
+
+    /// @brief Per-CPU per-level scheduling-domain descriptor.
+    struct sched_domain {
+        sd_level                   level{sd_level::smt};
+        sd_flag                    flags{sd_flag::load_balance};
+        ::lib::cpumask             span_cpus{};
+        sched_group*               groups{nullptr};
+        sched_domain*              parent{nullptr};
+        sched_domain*              child{nullptr};
+        u64                        balance_interval_ns{1'000'000ULL};
+        u64                        last_balance_tick{0ULL};
+        u32                        nr_balance_failed{0U};
+        u64                        cache_hot_time_ns{500'000ULL};
+        u32                        imbalance_pct{125U};
+        u32                        nr_busy_cpus{0U};
+        u64                        domain_load{0ULL};
+        u32                        domain_capacity{0U};
+        bool                       fresh_built{true};
+    };
+
+    static_assert(sizeof(sched_domain) <= 256U,
+        "sched_domain stays within one s390x L1 cache line (256 B)");
+
+    /// @brief Per-CPU sched_domain tree rooted at @c run_queue::sd.
+    struct sched_domain_tree {
+        sched_domain*              levels[SCHED_DOMAIN_MAX_LEVEL]{nullptr,};
+        u32                        max_built_level{0U};
+    };
+
+    static_assert(sizeof(sched_domain_tree) <= SCHED_DOMAIN_MAX_LEVEL * sizeof(void*) + 8U,
+            "sched_domain_tree size matches the levels[5] + u32 layout");
+
+} // namespace zxfoundation::sched::sd
+
+} // end export

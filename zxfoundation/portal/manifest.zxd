@@ -1,4 +1,0 @@
-!files : !compile_group -> [auto] {
-    portal_types.cxxm
-    portal.cxxm
-}

@@ -1,0 +1,60 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/nohz.cxxm
+/// @brief Per-CPU tickless (nohz) idle state machine.
+
+export module zxfoundation.sched.nohz.core;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sched::nohz {
+
+    /// @brief Flags written into @c run_queue::nohz_flags.
+    enum class nohz_flag : u32 {
+        tick_stopped        = 1U << 0,   ///< Periodic tick has been removed.
+        idle_prepared       = 1U << 1,   ///< CPU has entered nohz-prepare phase.
+        nr_balance_pending  = 1U << 2,   ///< nohz kick-balance pin.
+    };
+
+    /// @brief Default nohz management callbacks — installed during the
+    ///        scheduler init.
+    using nohz_fn = auto (*)() noexcept -> void;
+
+    /// @brief Generic per-CPU hook pointers.
+    struct nohz_ops {
+        nohz_fn   prepare_idle{nullptr};   ///< Call before tick stop.
+        nohz_fn   enter_balance{nullptr};  ///< Called on wakeup before tick start.
+        nohz_fn   tick_stop{nullptr};       ///< Actually issue the timer_cancel.
+        nohz_fn tick_start{nullptr};   ///< Actually re-add the periodic timer.
+        void*     context{nullptr};         ///< This CPU's remote context.
+    };
+
+    /// @details The hooks operate on the current CPU's tick timer and raise
+    ///          SCHED_SOFTIRQ so the balancer can re-evaluate on wake.
+    auto do_prepare_idle() noexcept -> void;
+    auto do_tick_stop() noexcept -> void;
+    auto do_tick_start() noexcept -> void;
+    auto do_enter_balance() noexcept -> void;
+
+    /// @brief Enter nohz idle on the current CPU.
+    auto idle_enter(u32& nohz_flags, const nohz_ops& ops) noexcept -> void;
+
+    /// @brief Constant nohz ops table installed on every CPU.
+    from_global(reference) const zxfoundation::sched::nohz::nohz_ops the_ops;
+
+    /// @brief Exit nohz idle on the current CPU (called on any wakeup).
+    /// @param[in,out] nohz_flags Per-CPU flag word.
+    /// @param[in]     ops        Operational hooks.
+    /// @note Re‑opens the periodic tick timer so scheduler_tick() fires again.
+    auto idle_exit(u32& nohz_flags, const nohz_ops& ops) noexcept -> void;
+
+    /// @brief Test whether the nohz-idle kick is pending on the current CPU.
+    [[nodiscard]] auto balance_pending(u32 nohz_flags) noexcept -> bool;
+
+    /// @brief Clear the nohz-balance pending flag (committed by the balancer
+    ///        on the first pass of the softirq).
+    auto clear_balance(u32& nohz_flags) noexcept -> void;
+
+} // namespace zxfoundation::sched::nohz
+
+} // end export

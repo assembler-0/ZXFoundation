@@ -198,7 +198,7 @@
             </Description>
             <Behavior>
                 The domain-create syscall passed a stack-local copied name to
-                domain_create(), leaving domain::name dangling. Later teardown
+                domain_create(), leaving dgp::domain::name dangling. Later teardown
                 logs printed empty or corrupted names. Domain destruction also
                 released secondary strand slots without detaching them from the
                 domain, so the final domain release could fail with live dependents.

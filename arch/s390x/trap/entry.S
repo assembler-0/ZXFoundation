@@ -121,7 +121,7 @@
     stg     %r15, 0(%r1)            // backchain = interrupt frame pointer
     lgr     %r15, %r1               // r15 = kernel stack frame
 
-    brasl   %r14, _ZN12zxfoundation5schedW12zxfoundationW5schedW5sched8scheduleEv
+    brasl   %r14, _ZN12zxfoundation5schedW12zxfoundationW5schedW4core8scheduleEv
 
     lg      %r15, 0(%r15)
 1:

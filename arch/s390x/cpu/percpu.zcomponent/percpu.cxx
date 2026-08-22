@@ -5,8 +5,8 @@
 module arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import zxfoundation.memory.hhdm;
-import zxfoundation.memory.numa_types;
-import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.numa.types;
+import zxfoundation.memory.pmm.types;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
 

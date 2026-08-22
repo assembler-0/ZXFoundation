@@ -1,0 +1,81 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/deadline.cxxm
+/// @brief Conservative earliest-deadline scheduler backend with DGP admission.
+
+export module zxfoundation.sched.deadline.core;
+import zxfoundation.sched.policy;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import zxfoundation.sched.rq.types;
+import lib.error;
+import std;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::sched::rq::run_queue;
+using zxfoundation::dgp::domain::strand;
+
+
+export {
+
+namespace zxfoundation::sched::deadline {
+
+    /// @brief Validate and reserve conservative deadline scheduling authority for a strand.
+    /// @param[in,out] owner Domain that owns the strand and deadline budget.
+    /// @param[in,out] s Strand receiving deadline admission metadata.
+    /// @param[in] policy Requested deadline scheduler policy.
+    /// @return Admission result with reserved runtime and period, or kernel_error when denied.
+    [[nodiscard]] auto admit(
+        domain& owner,
+        strand& s,
+        const sched_policy& policy
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error>;
+
+    /// @brief Release deadline bandwidth previously reserved for a strand.
+    /// @param[in,out] owner Domain owning the reservation.
+    /// @param[in,out] s Strand whose reservation is released.
+    auto release_admission(domain& owner, strand& s) noexcept -> void;
+
+    /// @brief Enqueue an admitted deadline strand on a per-CPU run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Admitted deadline strand.
+    /// @return Success or kernel_error if admission metadata is invalid.
+    [[nodiscard]] auto enqueue(
+        run_queue& rq,
+        strand& s
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Dequeue an admitted deadline strand from a per-CPU run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Deadline strand to remove.
+    auto dequeue(run_queue& rq, strand& s) noexcept -> void;
+
+    /// @brief Pick the earliest-deadline strand from a run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @return Best deadline strand, or nullptr when no deadline work is queued.
+    [[nodiscard]] auto pick_next(run_queue& rq) noexcept -> strand*;
+
+    /// @brief Account one conservative deadline tick with CBS replenishment.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s  Currently running deadline strand.
+    auto tick(run_queue& rq, strand& s) noexcept -> void;
+
+    /// @brief Mark current work preemptible when deadline work wakes.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] waking Deadline strand being enqueued or woken.
+    auto check_preempt(run_queue& rq, strand& waking) noexcept -> void;
+
+    /// @brief Push the earliest-deadline strand to the CPU with the latest
+    ///        deadline (Phase 4.7 EDF push migration).
+    /// @param[in,out] src_rq Source CPU run queue (lock held).
+    /// @return Destination CPU id, or CONFIG_ZX_MAX_CPUS if no destination.
+    [[nodiscard]] auto push(run_queue& src_rq) noexcept -> u16;
+
+    /// @brief Pull the earliest-deadline strand from another CPU (Phase 4.7).
+    /// @param[in]     idle_cpu CPU performing the pull.
+    /// @param[in,out] src_rq   Source CPU run queue (lock held).
+    /// @return Stolen strand, or nullptr.
+    [[nodiscard]] auto pull(u16 idle_cpu, run_queue& src_rq) noexcept -> strand*;
+
+} // namespace zxfoundation::sched::deadline
+
+} // end export

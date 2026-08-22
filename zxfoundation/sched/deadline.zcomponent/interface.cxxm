@@ -1,0 +1,2 @@
+export module zxfoundation.sched.deadline;
+export import zxfoundation.sched.deadline.core;

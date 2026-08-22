@@ -1,0 +1,2 @@
+export module zxfoundation.init.storage;
+export import zxfoundation.init.storage.core;

@@ -1,0 +1,56 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/signal.zcomponent/core.cxxm
+/// @brief Signal delivery interface — enqueue, deliver, and manage
+///        signal handlers for DGP domain::domains.
+
+export module zxfoundation.dgp.signal.core;
+import zxfoundation.dgp.signal.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::dgp::signal {
+
+    /// @brief Register a signal handler for the given domain::domain and kind.
+    /// @param[in,out] d     The target domain::domain.
+    /// @param[in]     kind  The signal kind to handle.
+    /// @param[in]     info  Handler descriptor (function, user data, default).
+    /// @return  Success, or kernel_error if kind is out of range.
+    [[nodiscard]] auto signal_register_handler(
+        domain::domain&       d,
+        signal_kind           kind,
+        const signal_handler_info& info
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Queue a signal for asynchronous delivery to a domain::domain.
+    /// @param[in,out] d     The target domain::domain.
+    /// @param[in]     kind  Signal kind.
+    /// @param[in]     data  Opaque payload.
+    auto signal_enqueue(
+        domain::domain& d,
+        signal_kind kind,
+        u64         data
+    ) noexcept -> void;
+
+    /// @brief Update the per-domain::domain blocked mask.
+    auto signal_block(domain::domain& d, u32 mask) noexcept -> void;
+
+    /// @brief Return the current blocked mask.
+    [[nodiscard]] auto signal_blocked_mask(const domain::domain& d) noexcept -> u32;
+
+    /// @brief Deliver one unblocked pending signal to the domain::domain.
+    /// @return  True if a signal was delivered; false if the queue was empty
+    ///          or every pending kind was blocked.
+    auto signal_deliver_one(domain::domain& d) noexcept -> bool;
+
+    /// @brief Deliver all pending signals to the domain::domain.
+    /// @return  true if the domain::domain should be rescheduled (terminate default
+    ///          was taken).
+    auto signal_deliver_all(domain::domain& d) noexcept -> bool;
+
+} // namespace zxfoundation::dgp::signal
+
+} // end export

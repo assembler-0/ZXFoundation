@@ -3,63 +3,73 @@
 /// @brief Verified z/Architecture transactional execution primitives.
 
 export module arch.s390x.cpu.tx;
-import zxfoundation.base.types;
-import arch.s390x.cpu.features;
 import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.features;
+import arch.s390x.cpu.teid;
+import arch.s390x.trap.pgm;
+import zxfoundation.base.types;
 import lib.bit;
+import std;
 
 export {
 
 namespace arch::s390x::cpu::tx {
 
-    /// @brief PoP format-1 Transaction Diagnostic Block.
-    struct alignas(256) tdb {
-        u8  format{0};
-        u8  flags{0};
-        u8  reserved_02[4]{};
-        u16 nesting_depth{0};
-        u64 transaction_abort_code{0};
-        u64 conflict_token_value{0};
-        u64 aborted_instruction_address{0};
-        u8  exception_access_id{0};
-        u8  data_exception_code{0};
-        u8  reserved_42[2]{};
-        u32 program_interruption_id{0};
-        u64 translation_exception_id{0};
-        u64 breaking_event_address{0};
-        u8  reserved_38[72]{};
-        u64 saved_registers[16]{};
-
-        /// @brief Abort code (format-dependent, see PoP Chapter 5).
-        [[nodiscard]] auto abort_code() const noexcept -> u64 {
-            return transaction_abort_code;
-        }
-
-        /// @brief Conflict token — virtual address of the conflicting operand.
-        [[nodiscard]] auto conflict_token() const noexcept -> u64 {
-            return conflict_token_value;
-        }
-
-        /// @brief Aborted-transaction instruction address.
-        [[nodiscard]] auto abort_instruction_address() const noexcept -> u64 {
-            return aborted_instruction_address;
-        }
-
-        /// @brief Whether this block contains PoP format-1 data.
-        [[nodiscard]] auto valid() const noexcept -> bool { return format == 1U; }
-
-        /// @brief Whether the conflict token is valid for this abort.
-        [[nodiscard]] auto conflict_token_valid() const noexcept -> bool {
-            return valid() && (flags & 0x01U) != 0U;
-        }
+    enum class tdb_format : u8 {
+        unpredictable   = 0,
+        format1         = 1
     };
 
-    static_assert(sizeof(tdb) == 256, "TX TDB must be exactly 256 bytes");
-    static_assert(__builtin_offsetof(tdb, nesting_depth) == 6);
-    static_assert(__builtin_offsetof(tdb, transaction_abort_code) == 8);
-    static_assert(__builtin_offsetof(tdb, conflict_token_value) == 16);
-    static_assert(__builtin_offsetof(tdb, aborted_instruction_address) == 24);
-    static_assert(__builtin_offsetof(tdb, saved_registers) == 128);
+    enum class tdb_abort_code : u64 {
+        external_int           = 2,
+        pgm_int                = 4,
+        mcck_int               = 5,
+        io_int                 = 6,
+        fetch_overflow         = 7,
+        store_overflow         = 8,
+        fetch_conflict         = 9,
+        store_conflict         = 10,
+        restricted_inst        = 11,
+        pgm_int_condition      = 12,
+        nesting_depth_exceeded = 13,
+        cache_fetch_related    = 14,
+        cache_store_related    = 15,
+        cache_other            = 16,
+        guarded_storage_event  = 19,
+        misc_condition         = 255
+    };
+
+    union [[gnu::packed]] tdb_exception_code {
+        trap::pgm::data_exception_code dxc;
+        trap::pgm::vector_exception_code vxc;
+    };
+
+    /// @brief Transaction Diagnostic Block
+    struct [[gnu::packed]] tdb {
+        tdb_format format{};
+        union {
+            u8 flags{};
+            struct {
+                bitfield(conflict_token_validity);
+                bitfield(constrained_transaction_indication);
+                bitrsvd(6);
+            };
+        };
+        bytersvd(tobytes(w, 1)){};
+        u16 transaction_nesting_depth{};
+        tdb_abort_code transaction_abort_code{};
+        u64 conflict_token{};
+        u64 aborted_transaction_inst_addr{};
+        u8 exception_access_id{};
+        tdb_exception_code exception_code;
+        bytersvd(tobytes(hw, 1)){};
+        u32 program_int_id{};
+        teid::teid translation_exception_id;
+        u64 breaking_event_addr{};
+        bytersvd(tobytes(dw, 9)){};
+        std::array<u64, 16> general_registers;
+    };
+    assert_size(tdb, 256);
 
     /// @brief CC values returned by tbegin() / tbeginc().
     constexpr i32 TX_CC_SUCCESS          = 0; ///< Transaction initiated.
@@ -135,11 +145,10 @@ namespace arch::s390x::cpu::tx {
     }
 
     /// @brief Begin a constrained transaction (facility 50).
-    /// Hardware guarantees eventual completion — no fallback path required.
     /// @return CC value: 0 = started (first attempt), 2 = restarted after abort.
-    [[nodiscard]] inline auto tbeginc() noexcept -> i32 {
+    [[nodiscard]] inline auto tbeginc() noexcept -> condition_code {
         if (!constrained_available()) return TX_CC_UNAVAILABLE;
-        i32 cc;
+        condition_code cc;
         __asm__ volatile(
             // TBEGINC 0,I2 — opcode 0xE561, TDB address must be 0
             "   .insn   sil,0xe56100000000,0,0xFE00\n"
@@ -165,7 +174,6 @@ namespace arch::s390x::cpu::tx {
     }
 
     /// @brief Abort the current transaction with the given abort code.
-    /// Control returns to the instruction after the outermost TBEGIN with CC != 0.
     [[nodiscard]] inline auto depth() noexcept -> u32;
 
     [[noreturn]] inline auto tabort(u64 code) noexcept -> void {

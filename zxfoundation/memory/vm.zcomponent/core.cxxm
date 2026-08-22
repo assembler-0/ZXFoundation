@@ -1,0 +1,151 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/vm.zcomponent/core.cxxm
+/// @brief Virtual Memory Engine — core interface.
+
+export module zxfoundation.memory.vm.core;
+import zxfoundation.base.types;
+import zxfoundation.memory.vm.types;
+import zxfoundation.memory.objects;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::vm {
+
+    /// @brief Initialize a per-domain VME address space.
+    auto vm_space_init(vm_space& space) noexcept -> void;
+
+    /// @brief Set a domain VM-space committed-page budget.
+    /// @note A live budget may not be reduced below pages already committed.
+    [[nodiscard]] auto vm_space_set_commit_limit(
+        vm_space& space, u64 limit_pages
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Atomically reserve committed pages for a caller that cannot
+    ///        retain @c space.lock through its fallible page-install work.
+    [[nodiscard]] auto vm_space_try_charge_commit(
+        vm_space& space, u64 pages
+    ) noexcept -> bool;
+
+    /// @brief Return a page charge obtained from @ref vm_space_try_charge_commit.
+    auto vm_space_uncharge_commit(vm_space& space, u64 pages) noexcept -> void;
+
+    /// @brief RCU-protected lookup: find the vm_region containing VA.
+    /// @return Pointer to the region, or nullptr if no region contains va.
+    [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region*;
+
+    /// @brief Find one live mapping view that consumes @p grant.
+    [[nodiscard]] auto vm_find_grant_mapping(
+        vm_space& space, objects::memory_object_ref grant
+
+    ) noexcept -> vm_region*;
+    /// @brief Walk every active vm_region in the system via callback.
+    /// @param[in] callback Function pointer invoked per region
+    using region_visitor = bool (*)(vm_region&) noexcept;
+    auto vm_for_each_region(region_visitor callback) noexcept -> void;
+
+    /// @brief Test if @p phys is mapped-resident in @p rgn.
+    [[nodiscard]] auto vm_region_maps_phys(
+        const vm_region& rgn, u64 phys
+    ) noexcept -> bool;
+
+    /// @brief Drop all resident page mappings in @p space whose backing
+    ///        physical address lies in @c [phys_start, phys_end).
+    /// @param[in,out] space  Address space to sweep (locked internally).
+    /// @param[in] phys_start Inclusive start of physical range.
+    /// @param[in] phys_end   Exclusive end of physical range.
+    /// @return Number of physical frames freed (not slots dropped).
+    [[nodiscard]] auto vm_space_drain_phys_range(
+        vm_space& space, u64 phys_start, u64 phys_end
+    ) noexcept -> u32;
+
+    /// @brief Drain resident mappings whose phys lies in @c [phys_start,phys_end]
+    /// @param[in] phys_start Inclusive start of physical range.
+    /// @param[in] phys_end   Exclusive end of physical range.
+    /// @return Number of physical frames freed.
+    [[nodiscard]] auto vm_drain_phys_range(
+        u64 phys_start, u64 phys_end
+    ) noexcept -> u32;
+
+    /// @param[in,out] space Address space whose tree is locked by the caller.
+    /// @param[in,out] rgn Region whose start key changes.
+    /// @param[in] new_start New page-aligned inclusive start address.
+    /// @return Success when the new interval can be reinserted.
+    [[nodiscard]] auto vm_rekey_region(
+        vm_space& space, vm_region& rgn, u64 new_start
+    ) noexcept -> bool;
+
+    /// @brief Top-down scan from mmap_base for a gap of at least size bytes.
+    /// @param[in] space  The address space to scan.
+    /// @param[in] size   Required gap size (must be page-aligned).
+    /// @param[in] align  Alignment requirement (must be power of 2).
+    /// @return  The base VA of the gap on success.
+    [[nodiscard]] auto vm_find_gap(
+        const vm_space& space, u64 size, u64 align
+    ) noexcept -> std::expected<u64, lib::kernel_error>;
+
+    /// @brief Try to merge rgn with its predecessor and/or successor.
+    auto vm_try_merge(vm_space& space, vm_region* rgn) noexcept -> void;
+
+    /// @brief Split rgn at split_va into [rgn->va_start, split_va) and [split_va, old_end).
+    /// @return Pointer to the new region [split_va, old_end) on success.
+    [[nodiscard]] auto vm_split(
+        vm_space& space, vm_region* rgn, u64 split_va
+    ) noexcept -> std::expected<vm_region*, lib::kernel_error>;
+
+    /// @brief Map a region of size bytes with given protection and flags.
+    /// @return The virtual address of the mapped region on success.
+    [[nodiscard]] auto vm_map(
+        vm_space& space,
+        u64 size, vm_prot prot, vm_flags flags
+    ) noexcept -> std::expected<u64, lib::kernel_error>;
+
+    /// @brief Map at an exact VA with specified backing.
+    [[nodiscard]] auto vm_map_fixed(
+        vm_space& space,
+        u64 va, u64 size,
+        vm_prot prot, vm_flags flags,
+        vm_backing backing, u64 phys_base,
+        objects::memory_object_ref mapped_extent = {}
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Map a checked subrange of a capability-bound physical extent.
+    /// The caller supplies an offset, never an arbitrary physical address.
+    [[nodiscard]] auto vm_map_extent(
+        vm_space& space, u64 root_phys, u64 va, u64 length, vm_prot prot,
+        objects::memory_object_ref extent_ref, u64 extent_offset
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    [[nodiscard]] auto vm_map_shared_region(
+        vm_space& target, u64 target_root_phys, u64 target_va, u64 length,
+        vm_region& source, vm_prot prot
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Unmap pages in [va, va+size), splitting partially-overlapping
+    ///        regions, removing fully-covered regions, and freeing physical pages.
+    [[nodiscard]] auto vm_unmap(
+        vm_space& space,
+        u64 root_phys,
+        u64 va, u64 size
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+    /// @brief Change protection bits for [va, va+size).
+    [[nodiscard]] auto vm_protect(
+        vm_space& space,
+        u64 root_phys,
+        u64 va, u64 size, vm_prot new_prot
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Destroy all regions in a VME space, freeing region descriptors.
+    auto vm_destroy_space(vm_space& space) noexcept -> void;
+
+    /// @brief Look up a vm_region by SCOMS ID.
+    /// @return Raw pointer, or nullptr if not found.
+    [[nodiscard]] auto vm_region_find_by_id(u32 id) noexcept -> vm_region*;
+
+    /// @brief Initialize the VME subsystem (create SCOMS table for vm_region).
+    auto vm_init() noexcept -> void;
+
+} // namespace zxfoundation::memory::vm
+
+} // end export

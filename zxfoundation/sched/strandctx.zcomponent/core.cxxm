@@ -1,0 +1,66 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/strandctx.zcomponent/core.cxxm
+/// @brief Strand context setup and user-mode first-entry trampolines.
+
+export module zxfoundation.sched.strandctx.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import arch.s390x.sched.types;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::dgp::domain::strand;
+
+export {
+
+namespace zxfoundation::sched::strandctx {
+
+    /// @brief Kernel-thread entry function type
+    using strand_entry_fn = auto (*)(void*) noexcept -> void;
+
+    /// @brief Set up the initial kernel stack frame for a strand so that the
+    /// @param s      Target strand with valid @c kstack_top
+    /// @param entry  Non-null kernel entry function
+    /// @param arg    Opaque argument passed to @c entry in r2
+    auto setup_strand_context_kernel_thread(
+        strand* s,
+        strand_entry_fn entry,
+        void* arg
+    ) noexcept -> void;
+
+    /// @brief Set up the initial kernel stack frame for a strand whose first
+    ///        context switch performs an @c LPSWE into user mode.
+    /// @param s      Target strand with valid @c kstack_top and @c body->uregs
+    ///               already populated
+    /// @param uregs  Pointer to the user_regs snapshot
+    /// @param owner  The owning domain, used for ASC normalization and DGP
+    ///               isolation validation.
+    auto setup_strand_context_user(
+        strand* s,
+        const arch::s390x::sched::user_regs* uregs,
+        const domain* owner
+    ) noexcept -> void;
+
+    /// @brief Convenience wrapper — kernel-thread first-switch for the
+    ///        primary strand of a domain.
+    auto setup_primary_strand_context(
+        domain* d,
+        strand_entry_fn entry,
+        void* arg
+    ) noexcept -> void;
+
+    /// @brief Convenience wrapper — user-process first-switch for the
+    ///        primary strand of a domain.
+    auto setup_primary_strand_context_user(
+        domain* d
+    ) noexcept -> void;
+
+    /// @brief Enter user mode for a domain at runtime
+    /// @param s  Strand with valid @c body->uregs; domain accessed via @c s->owner.
+    [[noreturn]] auto domain_enter_user(strand* s) noexcept -> void;
+
+    /// @brief Overload taking @c domain* for backward compatibility.
+    [[noreturn]] auto domain_enter_user(domain* d) noexcept -> void;
+
+} // namespace zxfoundation::sched::strandctx
+
+} // end export

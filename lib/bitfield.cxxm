@@ -1,0 +1,561 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file bitfield.cxxm
+/// @brief C++ wrapper for bitfields
+
+export module lib.bitfield;
+import zxfoundation.base.types;
+import std;
+
+export {
+    
+namespace lib {
+
+    template <class T>
+    concept bit_storage = std::unsigned_integral<T>;
+
+    template <usize N>
+    struct fixed_string {
+        char data[N]{};
+
+        constexpr fixed_string() noexcept = default;
+
+        constexpr fixed_string(const char (&str)[N]) noexcept {
+            for (usize i = 0; i < N; ++i) data[i] = str[i];
+        }
+
+        [[nodiscard]] constexpr usize size() const noexcept { return N - 1; }
+        [[nodiscard]] constexpr const char* c_str() const noexcept { return data; }
+    };
+
+    template <usize N>
+    fixed_string(const char (&)[N]) -> fixed_string<N>;
+
+    template <usize N1, usize N2>
+    [[nodiscard]] constexpr bool operator==(const fixed_string<N1>& a,
+                                             const fixed_string<N2>& b) noexcept {
+        if constexpr (N1 != N2) {
+            return false;
+        } else {
+            for (usize i = 0; i < N1; ++i)
+                if (a.data[i] != b.data[i]) return false;
+            return true;
+        }
+    }
+
+    struct msb0_t {
+        [[nodiscard]] static constexpr usize bit_shift(usize total,
+                                                               usize n) noexcept {
+            trap_assert(n < total);
+            return total - 1 - n;
+        }
+
+        [[nodiscard]] static constexpr std::pair<usize, usize>
+        range_shift_width(usize total, usize a, usize b) noexcept {
+            trap_assert(a <= b && b < total);
+            usize width = b - a + 1;
+            usize shift = total - b - 1;
+            return {shift, width};
+        }
+    };
+
+    struct lsb0_t {
+        [[nodiscard]] static constexpr usize bit_shift(usize, usize n) noexcept {
+            return n;
+        }
+
+        [[nodiscard]] static constexpr std::pair<usize, usize>
+        range_shift_width(usize total, usize a, usize b) noexcept {
+            trap_assert(a >= b && a < total);
+            return {b, a - b + 1};
+        }
+    };
+
+    inline constexpr msb0_t msb0{};
+    inline constexpr lsb0_t lsb0{};
+
+    template <bit_storage T>
+    [[nodiscard]] constexpr T bitmask(usize count) noexcept {
+        constexpr usize digits = std::numeric_limits<T>::digits;
+        if (count >= digits) return static_cast<T>(~T{0});
+        if (count == 0) return T{0};
+        return static_cast<T>((T{1} << count) - T{1});
+    }
+
+    template <bit_storage T>
+    class bit_ref {
+    public:
+        constexpr bit_ref(T& storage, usize shift) noexcept
+            : storage_(&storage), shift_(shift) {}
+
+        constexpr operator bool() const noexcept {
+            return ((*storage_ >> shift_) & T{1}) != T{0};
+        }
+
+        constexpr bit_ref& operator=(bool v) noexcept {
+            if (v) *storage_ = static_cast<T>(*storage_ | (T{1} << shift_));
+            else   *storage_ = static_cast<T>(*storage_ & ~(T{1} << shift_));
+            return *this;
+        }
+
+        constexpr bit_ref& operator=(const bit_ref& other) noexcept {
+            return *this = static_cast<bool>(other);
+        }
+
+        constexpr bit_ref& flip() noexcept {
+            *storage_ = static_cast<T>(*storage_ ^ (T{1} << shift_));
+            return *this;
+        }
+
+    private:
+        T* storage_;
+        usize shift_;
+    };
+
+    template <bit_storage T>
+    class bit_range_ref {
+    public:
+        constexpr bit_range_ref(T& storage, usize shift, usize width) noexcept
+            : storage_(&storage), shift_(shift), width_(width) {}
+
+        [[nodiscard]] constexpr operator T() const noexcept {
+            return static_cast<T>((*storage_ >> shift_) & bitmask<T>(width_));
+        }
+
+        constexpr bit_range_ref& operator=(T value) noexcept {
+            const T m = bitmask<T>(width_);
+            *storage_ = static_cast<T>((*storage_ & static_cast<T>(~(m << shift_))) |
+                                        static_cast<T>((value & m) << shift_));
+            return *this;
+        }
+
+        constexpr bit_range_ref& operator=(const bit_range_ref& other) noexcept {
+            return *this = static_cast<T>(other);
+        }
+
+        [[nodiscard]] constexpr usize width() const noexcept { return width_; }
+
+    private:
+        T* storage_;
+        usize shift_;
+        usize width_;
+    };
+
+    template <bit_storage T, class Numbering>
+    class bit_iterator {
+    public:
+        using difference_type = std::ptrdiff_t;
+        using value_type = bool;
+
+        constexpr bit_iterator() noexcept = default;
+        constexpr bit_iterator(const T* storage, usize pos) noexcept
+            : storage_(storage), pos_(pos) {}
+
+        [[nodiscard]] constexpr bool operator*() const noexcept {
+            constexpr usize digits = std::numeric_limits<T>::digits;
+            return ((*storage_ >> Numbering::bit_shift(digits, pos_)) & T{1}) != T{0};
+        }
+
+        constexpr bit_iterator& operator++() noexcept { ++pos_; return *this; }
+        constexpr bit_iterator operator++(int) noexcept {
+            auto tmp = *this; ++pos_; return tmp;
+        }
+
+        [[nodiscard]] constexpr bool operator==(const bit_iterator&) const noexcept = default;
+
+    private:
+        const T* storage_ = nullptr;
+        usize pos_ = 0;
+    };
+
+    template <bit_storage T, class Numbering = msb0_t>
+    class bit_field {
+    public:
+        using storage_type = T;
+        using numbering = Numbering;
+        static constexpr usize extent = std::numeric_limits<T>::digits;
+
+        constexpr bit_field() noexcept = default;
+        constexpr explicit bit_field(T v) noexcept : value_(v) {}
+
+        [[nodiscard]] constexpr auto operator[](this auto&& self, usize bit) noexcept
+            -> std::conditional_t<std::is_const_v<std::remove_reference_t<decltype(self)>>,
+                                   bool, bit_ref<T>> {
+            trap_assert(bit < extent);
+            const usize shift = Numbering::bit_shift(extent, bit);
+            if constexpr (std::is_const_v<std::remove_reference_t<decltype(self)>>) {
+                return ((self.value_ >> shift) & T{1}) != T{0};
+            } else {
+                return bit_ref<T>(self.value_, shift);
+            }
+        }
+
+        [[nodiscard]] constexpr auto operator[](this auto&& self, usize a,
+                                                 usize b) noexcept
+            -> std::conditional_t<std::is_const_v<std::remove_reference_t<decltype(self)>>,
+                                   T, bit_range_ref<T>> {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            if constexpr (std::is_const_v<std::remove_reference_t<decltype(self)>>) {
+                return static_cast<T>((self.value_ >> shift) & bitmask<T>(width));
+            } else {
+                return bit_range_ref<T>(self.value_, shift, width);
+            }
+        }
+
+        template <usize A, usize B>
+        [[nodiscard]] constexpr T extract() const noexcept {
+            constexpr auto sw = Numbering::range_shift_width(extent, A, B);
+            return static_cast<T>((value_ >> sw.first) & bitmask<T>(sw.second));
+        }
+
+        template <usize A, usize B>
+        constexpr bit_field& insert(T v) noexcept {
+            constexpr auto sw = Numbering::range_shift_width(extent, A, B);
+            const T m = bitmask<T>(sw.second);
+            value_ = static_cast<T>((value_ & static_cast<T>(~(m << sw.first))) |
+                                     static_cast<T>((v & m) << sw.first));
+            return *this;
+        }
+
+        [[nodiscard]] constexpr T extract(usize a, usize b) const noexcept {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            return static_cast<T>((value_ >> shift) & bitmask<T>(width));
+        }
+
+        constexpr bit_field& insert(usize a, usize b, T v) noexcept {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            const T m = bitmask<T>(width);
+            value_ = static_cast<T>((value_ & static_cast<T>(~(m << shift))) |
+                                     static_cast<T>((v & m) << shift));
+            return *this;
+        }
+
+        constexpr bit_field& set_range(usize a, usize b, T v) noexcept {
+            return insert(a, b, v);
+        }
+
+        [[nodiscard]] constexpr bool test(usize bit) const noexcept {
+            return (*this)[bit];
+        }
+
+        constexpr bit_field& set(usize bit) noexcept {
+            (*this)[bit] = true;
+            return *this;
+        }
+
+        constexpr bit_field& set(usize bit, bool v) noexcept {
+            (*this)[bit] = v;
+            return *this;
+        }
+
+        constexpr bit_field& clear(usize bit) noexcept {
+            (*this)[bit] = false;
+            return *this;
+        }
+
+        constexpr bit_field& clear() noexcept { value_ = T{0}; return *this; }
+
+        constexpr bit_field& flip(usize bit) noexcept {
+            (*this)[bit].flip();
+            return *this;
+        }
+
+        constexpr bit_field& flip() noexcept { value_ = static_cast<T>(~value_); return *this; }
+
+        [[nodiscard]] constexpr bool all() const noexcept {
+            return value_ == static_cast<T>(~T{0});
+        }
+        [[nodiscard]] constexpr bool any() const noexcept { return value_ != T{0}; }
+        [[nodiscard]] constexpr bool none() const noexcept { return value_ == T{0}; }
+
+        [[nodiscard]] constexpr usize count() const noexcept {
+            return static_cast<usize>(
+                __builtin_popcountll(static_cast<unsigned long long>(value_)));
+        }
+
+        [[nodiscard]] constexpr usize count(usize a, usize b) const noexcept {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            const T v = static_cast<T>((value_ >> shift) & bitmask<T>(width));
+            return static_cast<usize>(
+                __builtin_popcountll(static_cast<unsigned long long>(v)));
+        }
+
+        template <class Fn>
+        constexpr void for_each(Fn&& fn) const
+            noexcept(std::is_nothrow_invocable_v<Fn&, usize, bool>) {
+            for (usize i = 0; i < extent; ++i) fn(i, (*this)[i]);
+        }
+
+        template <class Fn>
+        constexpr void for_each(usize a, usize b, Fn&& fn) const
+            noexcept(std::is_nothrow_invocable_v<Fn&, usize, bool>) {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            for (usize i = 0; i < width; ++i)
+                fn(i, ((value_ >> (shift + i)) & T{1}) != T{0});
+        }
+
+        [[nodiscard]] constexpr bit_iterator<T, Numbering> begin() const noexcept {
+            return {&value_, 0};
+        }
+        [[nodiscard]] constexpr bit_iterator<T, Numbering> end() const noexcept {
+            return {&value_, extent};
+        }
+
+        [[nodiscard]] constexpr bit_field rotl(unsigned n) const noexcept {
+            n %= static_cast<unsigned>(extent);
+            if (n == 0) return *this;
+            return bit_field(static_cast<T>((value_ << n) | (value_ >> (extent - n))));
+        }
+
+        [[nodiscard]] constexpr bit_field rotr(unsigned n) const noexcept {
+            n %= static_cast<unsigned>(extent);
+            if (n == 0) return *this;
+            return bit_field(static_cast<T>((value_ >> n) | (value_ << (extent - n))));
+        }
+
+        [[nodiscard]] static constexpr T mask(usize a, usize b) noexcept {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            return static_cast<T>(bitmask<T>(width) << shift);
+        }
+
+        [[nodiscard]] constexpr T value() const noexcept { return value_; }
+        [[nodiscard]] constexpr T& raw() noexcept { return value_; }
+        [[nodiscard]] constexpr explicit operator T() const noexcept { return value_; }
+
+        constexpr void swap(bit_field& other) noexcept { std::swap(value_, other.value_); }
+
+        [[nodiscard]] friend constexpr bool operator==(const bit_field&,
+                                                         const bit_field&) noexcept = default;
+        [[nodiscard]] friend constexpr auto operator<=>(const bit_field&,
+                                                          const bit_field&) noexcept = default;
+
+    private:
+        T value_;
+    };
+
+
+    template <bit_storage T, class Numbering = msb0_t>
+    class bitfield_ref {
+    public:
+        using storage_type = T;
+        using numbering = Numbering;
+        static constexpr usize extent = std::numeric_limits<T>::digits;
+
+        constexpr explicit bitfield_ref(T& storage) noexcept : ptr_(&storage) {}
+
+        [[nodiscard]] constexpr auto operator[](this auto&& self, usize bit) noexcept
+            -> std::conditional_t<std::is_const_v<std::remove_reference_t<decltype(self)>>,
+                                   bool, bit_ref<T>> {
+            trap_assert(bit < extent);
+            const usize shift = Numbering::bit_shift(extent, bit);
+            if constexpr (std::is_const_v<std::remove_reference_t<decltype(self)>>) {
+                return ((*self.ptr_ >> shift) & T{1}) != T{0};
+            } else {
+                return bit_ref<T>(*self.ptr_, shift);
+            }
+        }
+
+        [[nodiscard]] constexpr auto operator[](this auto&& self, usize a,
+                                                 usize b) noexcept
+            -> std::conditional_t<std::is_const_v<std::remove_reference_t<decltype(self)>>,
+                                   T, bit_range_ref<T>> {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            if constexpr (std::is_const_v<std::remove_reference_t<decltype(self)>>) {
+                return static_cast<T>((*self.ptr_ >> shift) & bitmask<T>(width));
+            } else {
+                return bit_range_ref<T>(*self.ptr_, shift, width);
+            }
+        }
+
+        template <usize A, usize B>
+        [[nodiscard]] constexpr T extract() const noexcept {
+            constexpr auto sw = Numbering::range_shift_width(extent, A, B);
+            return static_cast<T>((*ptr_ >> sw.first) & bitmask<T>(sw.second));
+        }
+
+        template <usize A, usize B>
+        constexpr bitfield_ref& insert(T v) noexcept {
+            constexpr auto sw = Numbering::range_shift_width(extent, A, B);
+            const T m = bitmask<T>(sw.second);
+            *ptr_ = static_cast<T>((*ptr_ & static_cast<T>(~(m << sw.first))) |
+                                    static_cast<T>((v & m) << sw.first));
+            return *this;
+        }
+
+        [[nodiscard]] constexpr T extract(usize a, usize b) const noexcept {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            return static_cast<T>((*ptr_ >> shift) & bitmask<T>(width));
+        }
+
+        constexpr bitfield_ref& insert(usize a, usize b, T v) noexcept {
+            auto [shift, width] = Numbering::range_shift_width(extent, a, b);
+            const T m = bitmask<T>(width);
+            *ptr_ = static_cast<T>((*ptr_ & static_cast<T>(~(m << shift))) |
+                                    static_cast<T>((v & m) << shift));
+            return *this;
+        }
+
+        constexpr bitfield_ref& set_range(usize a, usize b, T v) noexcept {
+            return insert(a, b, v);
+        }
+
+        [[nodiscard]] constexpr bool test(usize bit) const noexcept { return (*this)[bit]; }
+        constexpr bitfield_ref& set(usize bit) noexcept { (*this)[bit] = true; return *this; }
+        constexpr bitfield_ref& set(usize bit, bool v) noexcept {
+            (*this)[bit] = v;
+            return *this;
+        }
+        constexpr bitfield_ref& clear(usize bit) noexcept {
+            (*this)[bit] = false;
+            return *this;
+        }
+        constexpr bitfield_ref& flip(usize bit) noexcept { (*this)[bit].flip(); return *this; }
+
+        [[nodiscard]] constexpr T value() const noexcept { return *ptr_; }
+        [[nodiscard]] constexpr T& raw() noexcept { return *ptr_; }
+        [[nodiscard]] constexpr explicit operator T() const noexcept { return *ptr_; }
+
+    private:
+        T* ptr_;
+    };
+
+    using bf8_ref  = bitfield_ref<u8>;
+    using bf64_ref = bitfield_ref<u64>;
+
+    using bf8  = bit_field<u8>;
+    using bf16 = bit_field<u16>;
+    using bf32 = bit_field<u32>;
+    using bf64 = bit_field<u64>;
+
+    static_assert(std::is_trivially_default_constructible_v<bf64>);
+    static_assert(std::is_trivially_copyable_v<bf64>);
+    static_assert(std::is_standard_layout_v<bf64>);
+
+    template <fixed_string Name, usize Start, usize End>
+    struct field_spec {
+        static constexpr auto name = Name;
+        static constexpr usize start = Start;
+        static constexpr usize end = End;
+    };
+
+    namespace detail {
+
+    template <class T>
+    inline constexpr bool always_false = false;
+
+    template <fixed_string Name, class... Fs>
+    [[nodiscard]] consteval usize index_of_field() noexcept {
+        usize idx = 0, result = static_cast<usize>(-1);
+        (void)((Fs::name == Name ? (result = idx, ++idx, true) : (++idx, false)) || ...);
+        return result;
+    }
+
+    } // namespace detail
+
+    template <bit_storage T, class Numbering, class... Fields>
+    class record_ref;
+
+    template <bit_storage T, class Numbering, class... Fields>
+    class record {
+    public:
+        using storage_type = T;
+        using numbering = Numbering;
+        static constexpr usize field_count = sizeof...(Fields);
+
+        constexpr record() noexcept = default;
+        constexpr explicit record(T v) noexcept : bits_(v) {}
+
+        template <fixed_string Name>
+        [[nodiscard]] constexpr T get() const noexcept {
+            constexpr usize idx = detail::index_of_field<Name, Fields...>();
+            static_assert(idx != static_cast<usize>(-1), "record: unknown field name");
+            using F = std::tuple_element_t<idx, std::tuple<Fields...>>;
+            return bits_[F::start, F::end];
+        }
+
+        template <fixed_string Name>
+        constexpr record& set(T v) noexcept {
+            constexpr usize idx = detail::index_of_field<Name, Fields...>();
+            static_assert(idx != static_cast<usize>(-1), "record: unknown field name");
+            using F = std::tuple_element_t<idx, std::tuple<Fields...>>;
+            bits_[F::start, F::end] = v;
+            return *this;
+        }
+
+        // tuple-protocol overload (index-based), backs structured bindings
+        template <usize I>
+        [[nodiscard]] constexpr T get() const noexcept {
+            static_assert(I < field_count, "record: field index out of range");
+            using F = std::tuple_element_t<I, std::tuple<Fields...>>;
+            return bits_[F::start, F::end];
+        }
+
+        [[nodiscard]] constexpr T underlying() const noexcept { return bits_.value(); }
+        [[nodiscard]] constexpr bit_field<T, Numbering>& bits() noexcept { return bits_; }
+        [[nodiscard]] constexpr const bit_field<T, Numbering>& bits() const noexcept {
+            return bits_;
+        }
+
+        using ref_type = record_ref<T, Numbering, Fields...>;
+        [[nodiscard]] constexpr ref_type ref() noexcept { return ref_type(bits_.raw()); }
+
+    private:
+        bit_field<T, Numbering> bits_;
+    };
+
+    template <usize I, bit_storage T, class Numbering, class... Fields>
+    [[nodiscard]] constexpr T get(const record<T, Numbering, Fields...>& r) noexcept {
+        return r.template get<I>();
+    }
+
+    template <bit_storage T, class Numbering, class... Fields>
+    class record_ref {
+    public:
+        using storage_type = T;
+        static constexpr usize field_count = sizeof...(Fields);
+
+        constexpr explicit record_ref(T& storage) noexcept : bits_(storage) {}
+
+        template <fixed_string Name>
+        [[nodiscard]] constexpr T get() const noexcept {
+            constexpr usize idx = detail::index_of_field<Name, Fields...>();
+            static_assert(idx != static_cast<usize>(-1), "record_ref: unknown field name");
+            using F = std::tuple_element_t<idx, std::tuple<Fields...>>;
+            return bits_[F::start, F::end];
+        }
+
+        template <fixed_string Name>
+        constexpr record_ref& set(T v) noexcept {
+            constexpr usize idx = detail::index_of_field<Name, Fields...>();
+            static_assert(idx != static_cast<usize>(-1), "record_ref: unknown field name");
+            using F = std::tuple_element_t<idx, std::tuple<Fields...>>;
+            bits_[F::start, F::end] = v;
+            return *this;
+        }
+
+        template <usize I>
+        [[nodiscard]] constexpr T get() const noexcept {
+            static_assert(I < field_count, "record_ref: field index out of range");
+            using F = std::tuple_element_t<I, std::tuple<Fields...>>;
+            return bits_[F::start, F::end];
+        }
+
+        [[nodiscard]] constexpr T underlying() const noexcept { return bits_.value(); }
+        [[nodiscard]] constexpr bitfield_ref<T, Numbering>& bits() noexcept { return bits_; }
+
+    private:
+        bitfield_ref<T, Numbering> bits_;
+    };
+
+
+} // namespace lib
+
+template <class T, class Numbering, class... Fields>
+struct std::tuple_size<lib::record<T, Numbering, Fields...>>
+    : std::integral_constant<usize, sizeof...(Fields)> {};
+
+template <usize I, class T, class Numbering, class... Fields>
+struct std::tuple_element<I, lib::record<T, Numbering, Fields...>> {
+    using type = T;
+};
+
+}

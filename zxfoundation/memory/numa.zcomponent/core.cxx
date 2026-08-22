@@ -1,0 +1,571 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/numa.zcomponent/core.cxx
+/// @brief NUMA topology initialization and deterministic placement helpers — implementation.
+
+module zxfoundation.memory.numa.core;
+import zxfoundation.memory.numa.types;
+import arch.s390x.init.zxfl.protocol;
+import zxfoundation.base.config;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+namespace zxfoundation::memory::numa::detail {
+
+    inline constexpr u64 U64_MAX_VALUE = ~0ULL;
+
+    std::array<node_topology, MAX_NUMA_NODES> g_nodes{};
+    std::array<u8, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cpu_to_node{};
+
+    /// @brief Single source of truth for NUMA distances — the SLIT matrix.
+    alignas(64) zxfoundation::memory::numa::slit_matrix g_slit{};
+
+    /// @brief Quality of the SLIT table populated by @c slit_load.
+    enum class slit_source : u8 {
+        uninitialized = 0,
+        stsi_15_1_x  = 1,
+        synthetic    = 2,
+        degraded     = 3,
+    };
+
+    slit_source g_slit_source{slit_source::uninitialized};
+
+    bool g_initialized{false};
+    u64 g_generation{0ULL};
+
+    [[nodiscard]] constexpr auto invalid_argument() noexcept -> lib::kernel_error {
+        return lib::kernel_error::from_generic(lib::generic_error::invalid_arg);
+    }
+
+    [[nodiscard]] constexpr auto out_of_range() noexcept -> lib::kernel_error {
+        return lib::kernel_error::from_generic(lib::generic_error::out_of_range);
+    }
+
+    [[nodiscard]] constexpr auto uninitialized() noexcept -> lib::kernel_error {
+        return lib::kernel_error::from_generic(lib::generic_error::uninitialized);
+    }
+
+    [[nodiscard]] constexpr auto align_up_page(u64 value) noexcept -> u64 {
+        return (value + (PAGE_SIZE - 1ULL))
+            & ~(PAGE_SIZE - 1ULL);
+    }
+
+    [[nodiscard]] constexpr auto align_down_page(u64 value) noexcept -> u64 {
+        return value & ~(PAGE_SIZE - 1ULL);
+    }
+
+    [[nodiscard]] constexpr auto sanitize_node_id(u8 node_id) noexcept -> u8 {
+        if (zxfoundation::memory::numa::node_id_is_valid(node_id)) {
+            return node_id;
+        }
+
+        return zxfoundation::memory::numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] constexpr auto usable_pages_in_range(u64 base, u64 length) noexcept -> u64 {
+        if (length == 0ULL || base > (U64_MAX_VALUE - length)) {
+            return 0ULL;
+        }
+
+        const u64 start = align_up_page(base);
+        const u64 end = align_down_page(base + length);
+        if (start >= end) {
+            return 0ULL;
+        }
+
+        return (end - start) >> PAGE_SHIFT;
+    }
+
+    [[nodiscard]] auto node_record(
+        u8 node_id,
+        u8 drawer_id,
+        zxfoundation::memory::numa::topology_source source
+    ) noexcept -> zxfoundation::memory::numa::node_topology* {
+        if (!zxfoundation::memory::numa::node_id_is_valid(node_id)) {
+            return nullptr;
+        }
+
+        auto& node = g_nodes[node_id];
+        if (node.source == zxfoundation::memory::numa::topology_source::none
+            && node.state == zxfoundation::memory::numa::node_state::offline) {
+            node.node_id = node_id;
+            node.drawer_id = drawer_id;
+            node.source = source;
+            node.phys_start = U64_MAX_VALUE;
+            node.phys_end = 0ULL;
+            node.free_pages = 0ULL;
+            node.low_watermark_pages = 0ULL;
+            node.high_watermark_pages = 0ULL;
+            node.cpu_count = 0U;
+        }
+
+        if (drawer_id != zxfoundation::memory::numa::NUMA_DRAWER_UNKNOWN
+            && node.drawer_id == zxfoundation::memory::numa::NUMA_DRAWER_UNKNOWN) {
+            node.drawer_id = drawer_id;
+        }
+
+        if (source == zxfoundation::memory::numa::topology_source::zxfl_memory_map
+            || node.source == zxfoundation::memory::numa::topology_source::none) {
+            node.source = source;
+        }
+
+        return &node;
+    }
+
+    auto reset_state() noexcept -> void {
+        for (auto & g_node : g_nodes) {
+            g_node = zxfoundation::memory::numa::node_topology{};
+        }
+
+        for (u8& i : g_cpu_to_node) {
+            i = zxfoundation::memory::numa::NUMA_NODE_ANY;
+        }
+
+        g_slit = zxfoundation::memory::numa::slit_matrix{};
+        g_slit_source = slit_source::uninitialized;
+        g_initialized = false;
+    }
+
+    /// @brief Fill @c g_slit with the synthetic 10/20/40 fallback layout.
+    auto build_synthetic_slit() noexcept -> void {
+        using namespace zxfoundation::memory::numa;
+        for (u32 a = 0; a < MAX_NUMA_NODES; ++a) {
+            for (u32 b = 0; b < MAX_NUMA_NODES; ++b) {
+                if (a == b)               g_slit.distances[a][b] = 10U;
+                else if (a == NUMA_NODE_BOOT || b == NUMA_NODE_BOOT)
+                    g_slit.distances[a][b] = 20U;
+                else                       g_slit.distances[a][b] = 40U;
+            }
+        }
+        g_slit_source = slit_source::synthetic;
+    }
+
+    auto apply_memory_region(
+        const arch::s390x::init::zxfl::mem_region& region
+    ) noexcept -> void {
+        if (region.type != arch::s390x::init::zxfl::ZXFL_MEM_USABLE) {
+            return;
+        }
+
+        const u64 pages = usable_pages_in_range(region.base, region.length);
+        if (pages == 0ULL) {
+            return;
+        }
+
+        const u64 start = align_up_page(region.base);
+        const u64 end = align_down_page(region.base + region.length);
+        auto* node = node_record(
+            sanitize_node_id(region.numa_node),
+            zxfoundation::memory::numa::NUMA_DRAWER_UNKNOWN,
+            zxfoundation::memory::numa::topology_source::zxfl_memory_map);
+        if (!node) {
+            return;
+        }
+
+        node->state = zxfoundation::memory::numa::node_state::online;
+        if (start < node->phys_start) {
+            node->phys_start = start;
+        }
+        if (end > node->phys_end) {
+            node->phys_end = end;
+        }
+        node->free_pages += pages;
+    }
+
+    auto apply_cpu_record(
+        u32 logical_cpu,
+        const arch::s390x::init::zxfl::cpu_info& cpu
+    ) noexcept -> void {
+        if (logical_cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
+            return;
+        }
+
+        if (cpu.state == arch::s390x::init::zxfl::ZXFL_CPU_UNKNOWN) {
+            return;
+        }
+
+        const u8 node_id = sanitize_node_id(cpu.numa_node);
+        g_cpu_to_node[logical_cpu] = node_id;
+
+        auto* node = node_record(
+            node_id,
+            cpu.drawer_id,
+            zxfoundation::memory::numa::topology_source::zxfl_cpu_map);
+        if (!node) {
+            return;
+        }
+
+        if (node->state == zxfoundation::memory::numa::node_state::offline) {
+            node->state = zxfoundation::memory::numa::node_state::degraded;
+        }
+
+        ++node->cpu_count;
+    }
+
+    auto synthesize_boot_node() noexcept -> void {
+        auto* node = node_record(
+            zxfoundation::memory::numa::NUMA_NODE_BOOT,
+            zxfoundation::memory::numa::NUMA_DRAWER_UNKNOWN,
+            zxfoundation::memory::numa::topology_source::synthetic_single_node);
+        if (!node) {
+            return;
+        }
+
+        node->state = zxfoundation::memory::numa::node_state::degraded;
+        node->phys_start = 0ULL;
+        node->phys_end = 0ULL;
+        node->free_pages = 0ULL;
+        g_cpu_to_node[0] = zxfoundation::memory::numa::NUMA_NODE_BOOT;
+    }
+
+    [[nodiscard]] auto known_node_count() noexcept -> u8 {
+        u8 count = 0U;
+        for (const auto& g_node : g_nodes) {
+            if (g_node.state != zxfoundation::memory::numa::node_state::offline
+                || g_node.source != zxfoundation::memory::numa::topology_source::none) {
+                ++count;
+            }
+        }
+
+        return count;
+    }
+
+    auto finalize_node(zxfoundation::memory::numa::node_topology& node) noexcept -> void {
+        if (node.source == zxfoundation::memory::numa::topology_source::none) {
+            return;
+        }
+
+        if (node.phys_start == U64_MAX_VALUE) {
+            node.phys_start = 0ULL;
+        }
+
+        if (node.free_pages == 0ULL
+            && node.state == zxfoundation::memory::numa::node_state::online) {
+            node.state = zxfoundation::memory::numa::node_state::degraded;
+        }
+
+        node.low_watermark_pages = node.free_pages / 64ULL;
+        if (node.free_pages != 0ULL && node.low_watermark_pages == 0ULL) {
+            node.low_watermark_pages = 1ULL;
+        }
+
+        node.high_watermark_pages = node.free_pages / 16ULL;
+        if (node.high_watermark_pages < node.low_watermark_pages) {
+            node.high_watermark_pages = node.low_watermark_pages;
+        }
+        if (node.high_watermark_pages > node.free_pages) {
+            node.high_watermark_pages = node.free_pages;
+        }
+    }
+
+    auto finalize_topology() noexcept -> void {
+        for (u32 i = 0U; i < zxfoundation::memory::numa::MAX_NUMA_NODES; ++i) {
+            finalize_node(g_nodes[i]);
+        }
+
+        if (known_node_count() == 0U) {
+            synthesize_boot_node();
+        }
+    }
+
+    [[nodiscard]] auto is_initialized_or_error() noexcept -> std::expected<void, lib::kernel_error> {
+        if (!g_initialized) {
+            return std::unexpected(uninitialized());
+        }
+
+        return {};
+    }
+
+} // namespace zxfoundation::memory::numa::detail
+
+namespace zxfoundation::memory::numa {
+
+    /// @brief Initialize immutable NUMA topology from the ZXFL boot protocol.
+    /// @param[in] protocol Loader-supplied boot protocol containing memory and CPU topology evidence.
+    /// @return Success when at least the deterministic bootstrap fallback node exists.
+    /// @note The current implementation consumes ZXFL records only; later boot-topology hardening may replace the evidence with direct STSI/SCLP records.
+    /// @warning This function must run before AP release and before node-owned allocator state is initialized.
+    auto init(
+        const arch::s390x::init::zxfl::protocol& protocol
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        detail::reset_state();
+
+        if (protocol.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
+            || protocol.cpu_count > zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
+            return std::unexpected(detail::out_of_range());
+        }
+
+        const auto* regions = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
+            protocol.mem_map_addr);
+        if (protocol.mem_map_count != 0U && !regions) {
+            return std::unexpected(detail::invalid_argument());
+        }
+
+        for (u32 i = 0U; i < protocol.mem_map_count; ++i) {
+            detail::apply_memory_region(regions[i]);
+        }
+
+        for (u32 i = 0U; i < protocol.cpu_count; ++i) {
+            detail::apply_cpu_record(i, protocol.cpu_map[i]);
+        }
+
+        detail::finalize_topology();
+
+        if (detail::g_slit_source == detail::slit_source::uninitialized) {
+            detail::build_synthetic_slit();
+        }
+        detail::g_initialized = true;
+        ++detail::g_generation;
+        return {};
+    }
+
+    /// @brief Report whether NUMA topology has been initialized.
+    /// @return true after `init()` has completed successfully.
+    /// @note The topology table is immutable after successful initialization in this migration wave.
+    [[nodiscard]] auto initialized() noexcept -> bool {
+        return detail::g_initialized;
+    }
+
+    /// @brief Return the current topology generation.
+    /// @return Monotonic generation incremented after successful initialization.
+    /// @note Later hotplug or topology-recovery waves may increment this value again.
+    [[nodiscard]] auto generation() noexcept -> u64 {
+        return detail::g_generation;
+    }
+
+    /// @brief Count NUMA node records known to the topology table.
+    /// @return Number of non-empty node records.
+    /// @warning A known node may be degraded and may not currently contain allocatable memory.
+    [[nodiscard]] auto node_count() noexcept -> u8 {
+        return detail::known_node_count();
+    }
+
+    /// @brief Report whether topology contains loader-provided memory evidence.
+    /// @return true when at least one node record was derived from ZXFL usable-memory topology.
+    /// @note Later kernel self-discovery should refine this with direct machine topology records.
+    [[nodiscard]] auto has_loader_memory_evidence() noexcept -> bool {
+        for (u32 i = 0U; i < MAX_NUMA_NODES; ++i) {
+            if (detail::g_nodes[i].source == topology_source::zxfl_memory_map) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// @brief Report whether the current topology had to synthesize the boot node.
+    /// @return true when the deterministic single-node fallback is active.
+    /// @note This is safe for allocation and records that no explicit multi-node placement evidence was available.
+    [[nodiscard]] auto uses_synthetic_fallback() noexcept -> bool {
+        for (u32 i = 0U; i < MAX_NUMA_NODES; ++i) {
+            if (detail::g_nodes[i].source == topology_source::synthetic_single_node) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// @brief Read one NUMA node record.
+    /// @param[in] node_id Node identifier to inspect.
+    /// @return Pointer to the immutable node record, or a kernel error.
+    /// @warning The returned pointer remains valid only while the topology generation is unchanged.
+    [[nodiscard]] auto node_at(
+        u8 node_id
+    ) noexcept -> std::expected<const node_topology*, lib::kernel_error> {
+        auto init_result = detail::is_initialized_or_error();
+        if (!init_result) {
+            return std::unexpected(init_result.error());
+        }
+
+        if (!node_id_is_valid(node_id)) {
+            return std::unexpected(detail::out_of_range());
+        }
+
+        const auto& node = detail::g_nodes[node_id];
+        if (node.state == node_state::offline && node.source == topology_source::none) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+
+        return &node;
+    }
+
+    /// @brief Resolve a physical address to a NUMA node.
+    /// @param[in] phys Physical address to classify.
+    /// @return NUMA node identifier containing the address, or a kernel error.
+    /// @note Sparse or discontiguous firmware regions fall back to the first encompassing node range.
+    [[nodiscard]] auto node_for_phys(
+        u64 phys
+    ) noexcept -> std::expected<u8, lib::kernel_error> {
+        auto init_result = detail::is_initialized_or_error();
+        if (!init_result) {
+            return std::unexpected(init_result.error());
+        }
+
+        for (u32 i = 0U; i < MAX_NUMA_NODES; ++i) {
+            const auto& node = detail::g_nodes[i];
+            if (!node_state_is_allocatable(node.state)) {
+                continue;
+            }
+            if (node.phys_start <= phys && phys < node.phys_end) {
+                return static_cast<u8>(i);
+            }
+        }
+
+        return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::not_found));
+    }
+
+    /// @brief Resolve a page-frame number to a NUMA node.
+    /// @param[in] pfn Page-frame number using the 4 KiB base page granule.
+    /// @return NUMA node identifier containing the frame, or a kernel error.
+    [[nodiscard]] auto node_for_pfn(
+        u64 pfn
+    ) noexcept -> std::expected<u8, lib::kernel_error> {
+        if (pfn > (detail::U64_MAX_VALUE >> PAGE_SHIFT)) {
+            return std::unexpected(detail::out_of_range());
+        }
+
+        return node_for_phys(pfn << PAGE_SHIFT);
+    }
+
+    /// @brief Resolve a logical CPU to its preferred NUMA node.
+    /// @param[in] cpu_id Kernel logical CPU identifier.
+    /// @return Preferred NUMA node identifier for the CPU.
+    /// @note The mapping is derived from ZXFL CPU topology evidence and is stable until topology generation changes.
+    [[nodiscard]] auto node_for_cpu(
+        u16 cpu_id
+    ) noexcept -> std::expected<u8, lib::kernel_error> {
+        auto init_result = detail::is_initialized_or_error();
+        if (!init_result) {
+            return std::unexpected(init_result.error());
+        }
+
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
+            return std::unexpected(detail::out_of_range());
+        }
+
+        const u8 node_id = detail::g_cpu_to_node[cpu_id];
+        if (node_id == NUMA_NODE_ANY) {
+            return NUMA_NODE_BOOT;
+        }
+
+        return node_id;
+    }
+
+    /// @brief Resolve an allocation policy into an initial placement decision.
+    /// @param[in] policy Caller-supplied placement policy.
+    /// @param[in] local_node Local CPU or domain preferred node.
+    /// @return Selected node and fallback metadata, or a kernel error.
+    /// @note Deep PMM integration will consume this resolver when node-owned zones are introduced.
+    /// @warning This function does not allocate memory and does not reserve allocator watermarks.
+    [[nodiscard]] auto resolve_policy(
+        const allocation_policy& policy,
+        u8 local_node
+    ) noexcept -> std::expected<placement_result, lib::kernel_error> {
+        auto init_result = detail::is_initialized_or_error();
+        if (!init_result) {
+            return std::unexpected(init_result.error());
+        }
+
+        u8 preferred = policy.preferred_node;
+        if (preferred == NUMA_NODE_ANY) {
+            preferred = node_id_is_valid(local_node) ? local_node : NUMA_NODE_BOOT;
+        }
+        if (!node_id_is_valid(preferred)) {
+            return std::unexpected(detail::out_of_range());
+        }
+
+        const auto& first = detail::g_nodes[preferred];
+        if (node_state_is_allocatable(first.state) && first.free_pages > first.low_watermark_pages) {
+            return placement_result{
+                .selected_node = preferred,
+                .fallback_distance = 0U,
+                .remote = false,
+                .strict_violation = false,
+            };
+        }
+
+        if (policy.fallback == fallback_mode::strict_local || !policy.allow_remote) {
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+        }
+
+        for (u8 distance = 1U; distance <= MAX_NUMA_NODES; ++distance) {
+            const u8 candidate = static_cast<u8>((static_cast<u32>(preferred) + distance) % MAX_NUMA_NODES);
+            const auto& node = detail::g_nodes[candidate];
+            if (!node_state_is_allocatable(node.state) || node.free_pages <= node.low_watermark_pages) {
+                continue;
+            }
+
+            return placement_result{
+                .selected_node = candidate,
+                .fallback_distance = distance,
+                .remote = candidate != preferred,
+                .strict_violation = false,
+            };
+        }
+
+        if (policy.fallback == fallback_mode::emergency_any) {
+            for (u8 candidate = 0U; candidate < MAX_NUMA_NODES; ++candidate) {
+                const auto& node = detail::g_nodes[candidate];
+                if (node_state_is_allocatable(node.state) && node.free_pages != 0ULL) {
+                    return placement_result{
+                        .selected_node = candidate,
+                        .fallback_distance = static_cast<u8>((candidate + MAX_NUMA_NODES - preferred) % MAX_NUMA_NODES),
+                        .remote = candidate != preferred,
+                        .strict_violation = false,
+                    };
+                }
+            }
+        }
+
+        return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+    }
+
+    /// @brief Install a fully-resolved SLIT matrix from an outside evidence
+    /// @param[in] matrix   16×16 distance matrix populated by the caller.
+    /// @param[in] stsi_ok  True when the matrix was built from real machine
+    ///                     topology (STSI), false when it is a synthetic fallback.
+    auto slit_install(const slit_matrix& matrix, bool stsi_ok) noexcept -> void {
+        detail::g_slit = matrix;
+        detail::g_slit_source = stsi_ok
+            ? detail::slit_source::stsi_15_1_x
+            : detail::slit_source::degraded;
+    }
+
+    /// @brief Sealed-synthetic fallback installer
+    auto slit_load_synthetic() noexcept -> void {
+        detail::build_synthetic_slit();
+    }
+
+    /// @brief Read NUMA distance between two nodes (units: 10 local … 255 max).
+    /// @param[in] node_a Source node id.
+    /// @param[in] node_b Destination node id.
+    /// @return Distance from the SLIT cache, or 255 when either id is out of range.
+    [[nodiscard]] auto node_distance(u8 node_a, u8 node_b) noexcept -> u8 {
+        if (node_a >= MAX_NUMA_NODES || node_b >= MAX_NUMA_NODES) return 255U;
+        return detail::g_slit.distances[node_a][node_b];
+    }
+
+    /// @brief Return the NUMA node id assigned to a logical CPU.
+    /// @param[in] cpu_id Logical CPU id.
+    /// @return NUMA node id (NUMA_NODE_BOOT when out of range).
+    [[nodiscard]] auto node_of_cpu(u16 cpu_id) noexcept -> u8 {
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) return NUMA_NODE_BOOT;
+        const u8 n = detail::g_cpu_to_node[cpu_id];
+        return (n == NUMA_NODE_ANY) ? NUMA_NODE_BOOT : n;
+    }
+
+    /// @brief Return the distance between two logical CPUs by way of their
+    ///        assigned NUMA nodes.
+    [[nodiscard]] auto cpu_distance(u16 cpu_a, u16 cpu_b) noexcept -> u8 {
+        return node_distance(node_of_cpu(cpu_a), node_of_cpu(cpu_b));
+    }
+
+    /// @brief Diagnostics: report the SLIT table source.
+    /// @return 0 = uninitialized, 1 = STSI 15.1.x, 2 = synthetic, 3 = degraded.
+    [[nodiscard]] auto slit_source_kind() noexcept -> u32 {
+        return static_cast<u32>(detail::g_slit_source);
+    }
+
+} // namespace zxfoundation::memory::numa
+

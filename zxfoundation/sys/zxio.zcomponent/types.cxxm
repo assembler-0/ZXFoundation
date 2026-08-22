@@ -6,7 +6,7 @@
 export module zxfoundation.sys.zxio.types;
 import zxfoundation.base.types;
 import zxfoundation.scoms.kobject.base;
-import zxfoundation.memory.memory_objects;
+import zxfoundation.memory.objects;
 import std;
 
 export {

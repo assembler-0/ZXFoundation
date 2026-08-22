@@ -21,8 +21,6 @@ namespace lib {
         rb_node*  right{};           ///< Right child (nullptr = leaf).
     };
 
-    // ── Accessor helpers ──────────────────────────────────────────────────
-
     [[nodiscard]] inline auto rb_parent(const rb_node* n) noexcept -> rb_node* {
         return reinterpret_cast<rb_node*>(n->__parent_color & ~uptr(3));
     }
@@ -50,8 +48,6 @@ namespace lib {
     inline auto rb_set_parent_color(rb_node* n, rb_node* p, uptr color) noexcept -> void {
         n->__parent_color = reinterpret_cast<uptr>(p) | color;
     }
-
-    // ── Root ──────────────────────────────────────────────────────────────
 
     /// @brief RB-tree root.  nullptr = empty tree.
     struct rb_root {
@@ -119,8 +115,6 @@ namespace lib {
         }
     };
 
-    // ── Augmentation policy ───────────────────────────────────────────────
-
     /// @brief Default augmentation — no-op.  Zero overhead when not needed.
     struct rb_augment_none {
         static auto propagate(rb_node*) noexcept -> void {}
@@ -128,16 +122,7 @@ namespace lib {
         static auto rotate(rb_node*, rb_node*) noexcept -> void {}
     };
 
-    // ── Core operations ───────────────────────────────────────────────────
-
     /// @brief Link a new node into the tree at the caller-determined position.
-    ///
-    /// The caller must have performed a BST walk to find:
-    ///   - @p parent: the future parent of @p node.
-    ///   - @p link:   pointer to parent->left or parent->right (the nullptr slot).
-    ///
-    /// After linking, call @c rb_insert_color to rebalance.
-    ///
     /// @param[in] node    The new node to insert.
     /// @param[in] parent  Parent of the new node (nullptr if tree is empty).
     /// @param[in] link    Address of the parent's child pointer to set.
@@ -148,8 +133,6 @@ namespace lib {
         node->right = nullptr;
         *link = node;
     }
-
-    // ── Rotation helpers ──────────────────────────────────────────────────
 
     namespace _detail {
 
@@ -170,8 +153,6 @@ namespace lib {
         }
 
     } // namespace _detail
-
-    // ── Insert rebalancing ────────────────────────────────────────────────
 
     /// @brief Rebalance the tree after inserting a new (red) node.
     ///
@@ -484,8 +465,6 @@ namespace lib {
             _detail::__rb_erase_fixup<Augment>(child, parent, root);
     }
 
-    // ── Traversal ─────────────────────────────────────────────────────────
-
     /// @brief Return the leftmost (minimum) node, or nullptr if empty.
     [[nodiscard]] inline auto rb_first(const rb_root& root) noexcept -> rb_node* {
         rb_node* n = root.node;
@@ -556,8 +535,6 @@ namespace lib {
         return *this;
     }
 
-    // ── Cached root operations ────────────────────────────────────────────
-
     /// @brief Insert + rebalance for a cached root.
     ///
     /// @param[in,out] node       The newly linked node (via rb_link_node).
@@ -578,8 +555,6 @@ namespace lib {
             tree.leftmost = rb_next(node);
         rb_erase<Augment>(node, tree.root);
     }
-
-    // ── Replace ───────────────────────────────────────────────────────────
 
     /// @brief Replace a node in the tree with another node.
     ///
@@ -613,8 +588,6 @@ namespace lib {
         rb_replace_node(old_node, new_node, tree.root);
     }
 
-    // ── Node count (O(n) — diagnostic only) ───────────────────────────────
-
     namespace _detail {
         inline auto __rb_count(const rb_node* n) noexcept -> u32 {
             if (!n) return 0;
@@ -640,8 +613,6 @@ namespace lib {
     /// @brief Lower-bound search: first node for which cmp(node, key) >= 0.
     /// @tparam Cmp  Functor: `auto(const rb_node*, const Key&) -> i32`
     ///               returning <0 when node < key, 0 on equal, >0 > key.
-    /// @return Pointer to the lower-bound node, or nullptr if all nodes
-    ///         are strictly less than @p key.
     template <typename Key, typename Cmp>
     [[nodiscard]] auto rb_lower_bound(const rb_root& root, const Key& key, Cmp&& cmp) noexcept -> rb_node* {
         rb_node* n = root.node;
@@ -681,9 +652,6 @@ namespace lib {
     }
 
     /// @brief Insert + cached leftmost update in one call.
-    /// @details Mirrors @c rb_insert_color_cached with the walk folded in.
-    ///          The @p leftmost cookie is refreshed when the new node is
-    ///          inserted to the leftmost path.
     template <typename Key, typename Cmp>
     auto rb_insert_cached(rb_root_cached& tree, rb_node* node,
                            const Key& key, Cmp&& cmp) noexcept -> void {
@@ -704,9 +672,7 @@ namespace lib {
     }
 
     /// @brief In-order walk invoking @p fn for each node.
-    /// @tparam Fn Invocable as `auto(rb_node&) -> void` (mutable ref so
-    ///         callees can mutate node contents, but the tree structure
-    ///         is presumed stable for the duration of the walk).
+    /// @tparam Fn Invocable as `auto(rb_node&) -> void`
     template <typename Fn>
     auto rb_for_each(const rb_root& root, Fn&& fn) noexcept -> void {
         for (rb_node* n = rb_first(root); n; n = rb_next(n))
@@ -714,11 +680,7 @@ namespace lib {
     }
 
     /// @brief Erase-safe iteration: snapshot successor before invoking @p fn
-    ///        so @p fn may safely call @c rb_erase on the yielded node.
-    /// @details Used by components that drain the tree inside the loop body
-    ///         (e.g. @c sched_cpu_down walking the fair_tree).  The iterator
-    ///         recomputes the next node after the body so it remains valid
-    ///         even when @p fn erases the current node.
+    ///        so @p fn may safely call @c rb_erase on the yielded node
     template <typename Fn>
     auto rb_for_each_safe(rb_root& root, Fn&& fn) noexcept -> void {
         rb_node* n = rb_first(root);

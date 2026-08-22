@@ -1,7 +1,3 @@
 !files : !compile_group -> [auto] {
-    isolation_types.cxxm
-    memory_contract.cxxm
-    sync_contract.cxxm
-    isolation.cxxm
-    dgp_authorize.cxxm
+    interface.cxxm
 }

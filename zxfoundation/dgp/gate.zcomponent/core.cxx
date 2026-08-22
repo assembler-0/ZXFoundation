@@ -1,0 +1,191 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/core.cxx
+/// @brief Gate subsystem core — gate lifecycle and the SCOMS-managed gate
+///        table.
+
+module zxfoundation.dgp.gate.core;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.dgp.cap.core;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.domain.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.ref;
+import zxfoundation.scoms.kobject.types;
+import zxfoundation.scoms.metadata.core;
+import zxfoundation.scoms.table;
+import zxfoundation.sys.printk.core;
+import arch.s390x.cpu.lowcore;
+import lib.error;
+import std;
+
+using zxfoundation::dgp::gate::gate_desc;
+using zxfoundation::dgp::gate::gate_type;
+using zxfoundation::dgp::gate::gate_auth;
+using zxfoundation::dgp::gate::MAX_GATES;
+using zxfoundation::sys::printk::pinfo;
+using zxfoundation::sys::printk::perr;
+
+namespace zxfoundation::dgp::gate::detail {
+
+    using namespace zxfoundation::scoms;
+    using zxfoundation::base::lifecycle_state;
+
+    /// @brief SCOMS-managed gate table.
+    no_export scoms_table<gate_desc, MAX_GATES> g_gate_table{};
+
+} // namespace detail
+
+namespace zxfoundation::dgp::gate {
+
+    /// @brief Create a new gate descriptor.
+    /// @param type             Gate type (nucleus or domain).
+    /// @param auth             Authorization policy.
+    /// @param target_domain_id Target domain ID.
+    /// @param entry_va         Entry-point virtual address in the target domain.
+    /// @param target_key       Storage key of the target domain.
+    /// @return                 The allocated slot ID, or an error if the table is full.
+    auto gate_create(
+        gate_type type,
+        gate_auth auth,
+        u32       target_domain_id,
+        u64       entry_va,
+        u8        target_key
+    ) noexcept -> std::expected<u32, lib::kernel_error> {
+
+        auto* caller = []() -> zxfoundation::dgp::domain::domain* {
+            auto* lc = arch::s390x::cpu::lowcore::get_current();
+            if (lc && lc->current_domain != 0)
+                return reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain);
+            return nullptr;
+        }();
+        auto* target = zxfoundation::dgp::domain::domain_find(target_domain_id);
+        if (!caller || !target) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        auto auth_result = zxfoundation::dgp::authorize(
+            *caller, *target,
+            zxfoundation::dgp::operation_kind::gate_create,
+            zxfoundation::dgp::authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::lifecycle,
+            }
+        );
+        if (!auth_result) {
+            return std::unexpected(auth_result.error());
+        }
+
+        if (target->storage_key != target_key) {
+            perr("gate_create: target_key={} does not match target domain {} storage_key={}",
+                 target_key, target_domain_id, target->storage_key);
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::capability_invalid));
+        }
+
+        auto alloc_result = detail::g_gate_table.alloc();
+        if (!alloc_result) {
+            perr("gate: gate table full ({} / {})",
+                 detail::g_gate_table.count(), MAX_GATES);
+            return std::unexpected(alloc_result.error());
+        }
+
+        auto embryo_ref = static_cast<
+            scoms::kobject::robject<gate_desc, base::lifecycle_state::embryo>&&
+        >(alloc_result.value());
+
+        gate_desc& desc   = *embryo_ref;
+        auto owner_result = scoms::object_core::set_owner(desc.ko, target->ko.id);
+        auto attach_result = scoms::object_core::attach(desc.ko, target->ko);
+        if (!owner_result || !attach_result) {
+            discard_value detail::g_gate_table.release(desc.ko.id);
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        desc.type          = type;
+        desc.auth          = auth;
+        desc.target_domain = target_domain_id;
+        desc.entry_va      = entry_va;
+        desc.target_key    = target_key;
+
+        const u32 id = desc.ko.id;
+
+        auto active_ref = static_cast<
+            scoms::kobject::robject<gate_desc, base::lifecycle_state::embryo>&&
+        >(embryo_ref).activate();
+
+        sys::printk::pverbose("gate: created gate {} (type={}, target_domain={}, entry_va={:#x})",
+              id,
+              static_cast<u8>(type),
+              target_domain_id,
+              entry_va);
+
+        return id;
+    }
+
+    /// @brief Destroy a gate, freeing its slot.
+    /// @param id  The gate slot ID to destroy.
+    /// @return    Success, or an error if the id is invalid or already free.
+    auto gate_destroy(u32 id) noexcept
+        -> std::expected<void, lib::kernel_error> {
+
+        auto* gate = detail::g_gate_table.find_raw(id);
+        if (!gate) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        auto revoke_result = zxfoundation::dgp::cap::cap_revoke_target(gate->ko);
+        if (!revoke_result) return std::unexpected(revoke_result.error());
+
+        auto result = detail::g_gate_table.release(id);
+        if (!result) {
+            perr("gate: gate_destroy — id {} failed", id);
+            return std::unexpected(result.error());
+        }
+
+        sys::printk::pverbose("gate: destroyed gate {}", id);
+        return {};
+    }
+
+    /// @brief Destroy all gates owned by a specific domain.
+    /// @param domain_id  The domain whose gates should be destroyed.
+    auto destroy_for_domain(u32 domain_id) noexcept -> void {
+        detail::g_gate_table.destroy_if(
+            [domain_id](const gate_desc& g) noexcept -> bool {
+                return g.target_domain == domain_id;
+            });
+    }
+
+    /// @brief Look up a gate descriptor by id.
+    /// @param id  The gate slot ID to look up.
+    /// @return    Pointer to the gate_desc, or nullptr if the id is invalid
+    ///            or the slot is unused.
+    auto gate_find(u32 id) noexcept -> gate_desc* {
+        return detail::g_gate_table.find_raw(id);
+    }
+
+    auto register_gate_cap_lookup() noexcept -> void {
+        discard_value zxfoundation::dgp::cap::register_lookup(
+            zxfoundation::dgp::cap::cap_type::gate,
+            [](u16 obj_id) noexcept -> scoms::kobject::bobject* {
+                auto* g = gate_find(static_cast<u32>(obj_id));
+                return g ? &g->ko : nullptr;
+            });
+    }
+
+    /// @brief Initialize the gate subsystem.
+    auto gate_init() noexcept -> void {
+        detail::g_gate_table.init(scoms::kobject::kobject_type::gate);
+
+        register_gate_cap_lookup();
+
+        pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
+    }
+
+    /// @brief Return the current number of active gates.
+    auto gate_count() noexcept -> u32 {
+        return detail::g_gate_table.count();
+    }
+
+} // namespace zxfoundation::dgp::gate

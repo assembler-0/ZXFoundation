@@ -8,7 +8,7 @@ import std;
 
 export {
 
-namespace std {
+namespace lib {
 
     /// @brief A fixed-capacity FIFO queue (circular buffer).
     /// @tparam T Type of the elements.

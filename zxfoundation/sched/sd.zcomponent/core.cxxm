@@ -1,0 +1,65 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/domain_tree.cxxm
+/// @brief Hierarchical balancing-domain builder and traversal helpers.
+
+export module zxfoundation.sched.sd.core;
+import zxfoundation.sched.sd.types;
+import zxfoundation.sched.topology.types;
+import zxfoundation.sched.topology.core;
+import zxfoundation.base.types;
+import lib.cpumask;
+import std;
+
+export {
+
+namespace zxfoundation::sched::sd {
+
+    /// @brief Build one CPU's @c sched_domain tree.
+    /// @param[in] cpu          Target CPU.
+    /// @param[in] topo_record  Pointer to that CPU's @c cpu_topology_record.
+    /// @param[in] node_mask    NUMA node mask for the CPU's local node.
+    /// @param[out] out_tree    Output per-CPU tree (zeroed and populated).
+    auto tree_build(
+        u16 cpu,
+        const zxfoundation::sched::topology::cpu_topology_record* topo_record,
+        const ::lib::cpumask& node_mask,
+        sched_domain_tree& out_tree
+    ) noexcept -> void;
+
+    /// @brief Walk up the hierarchy from @c base returning the first domain
+    ///        that has all of the requested flag bits set.
+    /// @param[in] base  Bottom-most domain in the search.
+    /// @param[in] flag  Flag bitmask required in the result.
+    /// @return Pointer to the highest ancestor that satisfies the flag test
+    [[nodiscard]] auto highest_flag_domain(const sched_domain* base, sd_flag flag) noexcept -> const sched_domain*;
+
+    /// @brief Walk down the hierarchy from @c base returning the lowest domain
+    ///        which has all of @c flag set.
+    /// @param[in] base  Top-most domain in the search.
+    /// @param[in] flag  Flag bitmask required in the result.
+    [[nodiscard]] auto lowest_flag_domain(const sched_domain* base, sd_flag flag) noexcept -> const sched_domain*;
+
+    /// @brief Iterate each @c sched_group in a domain's ring, invoking @c fn.
+    /// @details Stops when the ring loops back to @c groups (head) or when
+    ///          @c fn returns false.
+    template <typename Fn>
+    auto for_each_group(const sched_domain& sd, Fn&& fn) noexcept -> void {
+        const sched_group* head = sd.groups;
+        const sched_group* cur = head;
+        while (cur != nullptr) {
+            fn(*cur);
+            cur = cur->next;
+            if (cur == head) break;
+        }
+    }
+
+    /// @brief Test whether @c cpu is in @c sd.span_cpus.
+    [[nodiscard]] auto domain_contains_cpu(const sched_domain& sd, u16 cpu) noexcept -> bool;
+
+    /// @brief Cache-hot predicate: keeping a strand on its current CPU for
+    ///        @c cache_hot_time_ns since last run.
+    [[nodiscard]] auto is_cache_hot(const sched_domain& sd, u64 elapsed_ns) noexcept -> bool;
+
+} // namespace zxfoundation::sched::sd
+
+} // end export

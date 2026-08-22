@@ -28,7 +28,7 @@ namespace zxfoundation::sys::timer::detail {
         }
     };
 
-    static std::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
+    static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
         g_heaps[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
 
     /// @brief Subsystem initialization flag.

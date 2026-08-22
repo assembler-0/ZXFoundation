@@ -1,3 +1,0 @@
-export module zxfoundation.sys.cap;
-export import zxfoundation.sys.cap.core;
-export import zxfoundation.sys.cap.types;

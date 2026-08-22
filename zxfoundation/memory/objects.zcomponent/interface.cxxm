@@ -1,0 +1,2 @@
+export module zxfoundation.memory.objects;
+export import zxfoundation.memory.objects.core;

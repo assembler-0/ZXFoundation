@@ -9,7 +9,7 @@ import zxfoundation.sys.printk.types;
 import zxfoundation.sys.time.core;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
-import zxfoundation.domain.domain_types;
+import zxfoundation.dgp.domain.types;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;

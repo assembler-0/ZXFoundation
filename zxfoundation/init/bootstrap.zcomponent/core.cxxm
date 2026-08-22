@@ -1,0 +1,18 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/init/bootstrap.cxxm
+/// @brief sys/bootstrapd — first schedulable kernel domain.
+
+export module zxfoundation.init.bootstrap.core;
+import arch.s390x.init.zxfl.protocol;
+
+export {
+
+namespace zxfoundation::init::bootstrap {
+
+    /// @brief Entry function for the sys/bootstrap domain.
+    /// @param arg   Pointer to the boot @c protocol descriptor
+    auto bootstrap_entry(void* arg) noexcept -> void;
+
+} // namespace zxfoundation::init::bootstrap
+
+} // end export

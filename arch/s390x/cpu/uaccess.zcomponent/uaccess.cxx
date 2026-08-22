@@ -11,7 +11,7 @@ import zxfoundation.base.types;
 import zxfoundation.memory.hhdm;
 import std;
 
-namespace arch::s390x::cpu::uaccess::_internal {
+namespace arch::s390x::cpu::uaccess::detail {
 
     /// OAC: use PSW ASC (= HOME for kernel).  K=0,A=0 ⇒ 0x0000.
     no_export constexpr u32 OAC_HOME    = 0x0000U;
@@ -85,11 +85,11 @@ namespace arch::s390x::cpu::uaccess::_internal {
         return 0;
     }
 
-} // namespace arch::s390x::cpu::uaccess::_internal
+} // namespace arch::s390x::cpu::uaccess::detail
 
 namespace arch::s390x::cpu::uaccess {
 
-    using namespace _internal;
+    using namespace detail;
 
     /// @brief Copy from user space (PRIMARY) to kernel space (HOME).
     [[nodiscard]] auto copy_from_user(void* dst, u64 src, u64 len,

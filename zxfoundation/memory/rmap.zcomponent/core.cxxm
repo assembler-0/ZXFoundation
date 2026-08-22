@@ -1,0 +1,62 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/rmap.zcomponent/core.cxxm
+/// @brief Reverse-map (rmap) implementation — core interface.
+
+export module zxfoundation.memory.rmap.core;
+import zxfoundation.base.types;
+import zxfoundation.memory.rmap.types;
+import zxfoundation.memory.vm.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::rmap {
+
+    /// @brief Number of striped locks.
+    constexpr u32 RMAP_LOCK_STRIPE = 256U;
+
+    [[nodiscard]] auto release_slot_pin(
+        vm::vm_page_slot& slot
+    ) noexcept -> std::expected<bool, lib::kernel_error>;
+
+    /// @brief Allocate the reverse-map heads for @p max_pfn frames.
+    [[nodiscard]] auto init(u64 max_pfn) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Insert a reverse-map link: "slot @p slot_index in @p rgn
+    ///        maps @p phys".
+    [[nodiscard]] auto insert(vm::vm_region& rgn, u32 slot_index, u64 phys) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Remove the link matching (@p rgn, @p slot_index, @p phys).
+    auto remove(vm::vm_region& rgn, u32 slot_index, u64 phys) noexcept -> void;
+
+    /// @brief Rebind an existing rmap entry after a VMA split without allocating.
+    /// @return false when the old entry was absent or did not match.
+    [[nodiscard]] auto rebind(
+        vm::vm_region& from, u32 from_slot,
+        vm::vm_region& to, u32 to_slot,
+        u64 phys
+    ) noexcept -> bool;
+
+    /// @brief Walk every VMA slot that references @p phys.
+    auto for_each_phys(u64 phys, visitor visit) noexcept -> u32;
+
+    /// @brief Collect rmap identities without dereferencing VM page slots.
+    auto collect_peers(u64 phys,
+                        vm::vm_region& self, u32 self_slot,
+                        peer_ref* out, u32 cap) noexcept -> u32;
+
+    /// @brief Invalidate every peer mapping of @p phys except @p self.
+    /// @pre Caller holds self.owning_space->lock when self has an owning space.
+    auto invalidate_peers(u64 phys,
+                          vm::vm_region& self, u32 self_slot) noexcept
+        -> std::expected<peer_invalidation_result, lib::kernel_error>;
+
+    /// @brief Count how many VMA slots currently reference @p phys.
+    [[nodiscard]] auto count_refs(u64 phys) noexcept -> u32;
+
+} // namespace zxfoundation::memory::rmap
+
+} // end export

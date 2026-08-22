@@ -11,7 +11,7 @@ import zxfoundation.base.types;
 import lib.error;
 import std;
 
-from_global(nomangle) auto __raw_alloc(u64 size) noexcept -> void*;
+auto allocate(u64) noexcept -> void* symalias_reference(kmalloc);
 
 namespace zxfoundation::scoms::object_core::detail {
 
@@ -24,7 +24,7 @@ namespace zxfoundation::scoms::object_core::detail {
         if (!g_metadata[block]) {
             if (!create) return nullptr;
             g_metadata[block] = static_cast<object_metadata*>(
-                __raw_alloc(sizeof(object_metadata) * METADATA_BLOCK_SIZE));
+                allocate(sizeof(object_metadata) * METADATA_BLOCK_SIZE));
             if (!g_metadata[block]) return nullptr;
             for (u32 i = 0; i < METADATA_BLOCK_SIZE; ++i)
                 g_metadata[block][i] = {};

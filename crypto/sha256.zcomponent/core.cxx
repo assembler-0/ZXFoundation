@@ -1,0 +1,273 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file crypto/sha256.cxxm
+/// @brief SHA-256 streaming hash implementation
+
+module crypto.sha256.core;
+import zxfoundation.base.types;
+import arch.s390x.cpu.cpacf;
+import arch.s390x.cpu.features;
+import lib.error;
+import std;
+
+namespace crypto::sha256::detail {
+
+    no_export constexpr u32 K[64] {
+        0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
+        0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+        0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+        0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+        0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
+        0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+        0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U,
+        0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+        0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+        0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+        0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
+        0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+        0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
+        0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+        0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+        0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U,
+    };
+
+    /// @brief Rotate-right a 32-bit word.
+    /// @param[in] x  Value to rotate.
+    /// @param[in] n  Number of bit positions to rotate (0..31).
+    /// @return Rotated value.
+    [[nodiscard]] no_export constexpr auto rotr32(u32 x, u32 n) -> u32 {
+        return (x >> n) | (x << (32U - n));
+    }
+
+    /// @brief Process a single 512-bit (64-byte) message block.
+    /// @param[in,out] ctx    SHA-256 context whose state[] is updated in place.
+    /// @param[in]     block  Exactly 64 bytes of message data (one full block).
+    /// @note The 64-word message schedule @c w[] is stack-allocated (~256 bytes).
+    no_export auto sha256_block(sha256_ctx& ctx, std::span<const u8, 64> block) -> void {
+        u32 w[64];
+
+        // Build the first 16 words from big-endian block bytes.
+        for (u32 i = 0U; i < 16U; ++i) {
+            w[i] = (static_cast<u32>(block[i * 4U + 0U]) << 24U) |
+                   (static_cast<u32>(block[i * 4U + 1U]) << 16U) |
+                   (static_cast<u32>(block[i * 4U + 2U]) <<  8U) |
+                   (static_cast<u32>(block[i * 4U + 3U]));
+        }
+
+        // Extend to a 64-word message schedule.
+        for (u32 i = 16U; i < 64U; ++i) {
+            const u32 s0 = rotr32(w[i - 15U],  7U) ^ rotr32(w[i - 15U], 18U) ^ (w[i - 15U] >>  3U);
+            const u32 s1 = rotr32(w[i -  2U], 17U) ^ rotr32(w[i -  2U], 19U) ^ (w[i -  2U] >> 10U);
+            w[i] = w[i - 16U] + s0 + w[i - 7U] + s1;
+        }
+
+        u32 a = ctx.state[0]; u32 b = ctx.state[1];
+        u32 c = ctx.state[2]; u32 d = ctx.state[3];
+        u32 e = ctx.state[4]; u32 f = ctx.state[5];
+        u32 g = ctx.state[6]; u32 h = ctx.state[7];
+
+        for (u32 i = 0U; i < 64U; ++i) {
+            const u32 s1  = rotr32(e,  6U) ^ rotr32(e, 11U) ^ rotr32(e, 25U);
+            const u32 ch  = (e & f) ^ (~e & g);
+            const u32 t1  = h + s1 + ch + K[i] + w[i];
+            const u32 s0  = rotr32(a,  2U) ^ rotr32(a, 13U) ^ rotr32(a, 22U);
+            const u32 maj = (a & b) ^ (a & c) ^ (b & c);
+            const u32 t2  = s0 + maj;
+            h = g; g = f; f = e; e = d + t1;
+            d = c; c = b; b = a; a = t1 + t2;
+        }
+
+        ctx.state[0] += a; ctx.state[1] += b;
+        ctx.state[2] += c; ctx.state[3] += d;
+        ctx.state[4] += e; ctx.state[5] += f;
+        ctx.state[6] += g; ctx.state[7] += h;
+    }
+
+}
+
+namespace crypto::sha256 {
+
+    /// @brief Initialize a SHA-256 context to the FIPS 180-4 initial hash value.
+    /// @param[out] ctx  Context to initialize.
+    auto sha256_init(sha256_ctx& ctx) -> void {
+        ctx.state[0] = 0x6a09e667U;
+        ctx.state[1] = 0xbb67ae85U;
+        ctx.state[2] = 0x3c6ef372U;
+        ctx.state[3] = 0xa54ff53aU;
+        ctx.state[4] = 0x510e527fU;
+        ctx.state[5] = 0x9b05688cU;
+        ctx.state[6] = 0x1f83d9abU;
+        ctx.state[7] = 0x5be0cd19U;
+        ctx.bit_count = 0U;
+        ctx.buf_len   = 0U;
+        ctx.finalized = false;
+    }
+
+    /// @brief Feed a span of bytes into a running SHA-256 computation.
+    /// @param[in,out] ctx   Running SHA-256 context.
+    /// @param[in]     data  Input byte span.
+    /// @return std::expected<void, lib::kernel_error>
+    auto sha256_update(sha256_ctx& ctx, std::span<const u8> data)
+        -> std::expected<void, lib::kernel_error> {
+        if (ctx.finalized) {
+            return std::unexpected(
+                lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
+        }
+
+        // Null pointer with non-zero size is malformed input.
+        if (data.data() == nullptr && !data.empty()) {
+            return std::unexpected(
+                lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
+        }
+
+        // Empty span: legal no-op.
+        if (data.empty()) {
+            return {};
+        }
+
+        const u64 max_bytes = (static_cast<u64>(-1) - ctx.bit_count) / 8U;
+        if (data.size() > max_bytes) {
+            return std::unexpected(
+                lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
+        }
+
+        ctx.bit_count += static_cast<u64>(data.size()) * 8U;
+
+        usize remaining = data.size();
+        usize offset    = 0U;
+
+        while (remaining > 0U) {
+            const u32 space = 64U - ctx.buf_len;
+            const u32 take  = (static_cast<u32>(remaining) < space)
+                              ? static_cast<u32>(remaining)
+                              : space;
+
+            for (u32 i = 0U; i < take; ++i) {
+                ctx.buf[ctx.buf_len + i] = data[offset + i];
+            }
+            ctx.buf_len += take;
+            offset      += take;
+            remaining   -= take;
+
+            if (ctx.buf_len == 64U) {
+                // buf is exactly 64 bytes; construct a fixed-extent span over it.
+                detail::sha256_block(ctx, std::span<const u8, 64>(ctx.buf, 64U));
+                ctx.buf_len = 0U;
+            }
+        }
+
+        return {};
+    }
+
+    /// @brief Finalize the hash and write the 32-byte digest.
+    /// @param[in,out] ctx  Running SHA-256 context.
+    /// @param[out]    out  Exactly 32-byte output span.
+    /// @return std::expected<void, lib::kernel_error>
+    auto sha256_final(sha256_ctx& ctx, std::span<u8, SHA256_DIGEST_SIZE> out)
+        -> std::expected<void, lib::kernel_error> {
+        if (ctx.finalized) {
+            return std::unexpected(
+                lib::kernel_error::from_crypto(lib::crypto_error::invalid_input));
+        }
+
+        // Append the 0x80 padding byte.
+        ctx.buf[ctx.buf_len++] = 0x80U;
+
+        if (ctx.buf_len > 56U) {
+            while (ctx.buf_len < 64U) {
+                ctx.buf[ctx.buf_len++] = 0x00U;
+            }
+            detail::sha256_block(ctx, std::span<const u8, 64>(ctx.buf, 64U));
+            ctx.buf_len = 0U;
+        }
+
+        // Zero-pad to the 56-byte boundary, leaving 8 bytes for the length.
+        while (ctx.buf_len < 56U) {
+            ctx.buf[ctx.buf_len++] = 0x00U;
+        }
+
+        // Encode message bit length as 64-bit big-endian (FIPS 180-4 §5.1.1).
+        const u64 bits = ctx.bit_count;
+        ctx.buf[56] = static_cast<u8>(bits >> 56U);
+        ctx.buf[57] = static_cast<u8>(bits >> 48U);
+        ctx.buf[58] = static_cast<u8>(bits >> 40U);
+        ctx.buf[59] = static_cast<u8>(bits >> 32U);
+        ctx.buf[60] = static_cast<u8>(bits >> 24U);
+        ctx.buf[61] = static_cast<u8>(bits >> 16U);
+        ctx.buf[62] = static_cast<u8>(bits >>  8U);
+        ctx.buf[63] = static_cast<u8>(bits);
+
+        detail::sha256_block(ctx, std::span<const u8, 64>(ctx.buf, 64U));
+
+        // Serialize the eight 32-bit state words as big-endian bytes.
+        for (u32 i = 0U; i < 8U; ++i) {
+            out[i * 4U + 0U] = static_cast<u8>(ctx.state[i] >> 24U);
+            out[i * 4U + 1U] = static_cast<u8>(ctx.state[i] >> 16U);
+            out[i * 4U + 2U] = static_cast<u8>(ctx.state[i] >>  8U);
+            out[i * 4U + 3U] = static_cast<u8>(ctx.state[i]);
+        }
+
+        ctx.finalized = true;
+        return {};
+    }
+
+    /// @brief One-shot SHA-256: hash @p data and write the 32-byte digest to @p out.
+    [[nodiscard]] auto sha256_hash(std::span<const u8> data, std::span<u8, SHA256_DIGEST_SIZE> out)
+        -> std::expected<void, lib::kernel_error> {
+        namespace cpacf = arch::s390x::cpu::cpacf;
+        namespace feat  = arch::s390x::cpu::features;
+
+        if (feat::has(feat::facility::msa)) {
+            struct sha256_pb {
+                u32 state[8]{};
+                u32 _pad[2]{};
+            } pb{};
+            pb.state[0] = 0x6a09e667U;
+            pb.state[1] = 0xbb67ae85U;
+            pb.state[2] = 0x3c6ef372U;
+            pb.state[3] = 0xa54ff53aU;
+            pb.state[4] = 0x510e527fU;
+            pb.state[5] = 0x9b05688cU;
+            pb.state[6] = 0x1f83d9abU;
+            pb.state[7] = 0x5be0cd19U;
+
+            const u64 msg_bits = static_cast<u64>(data.size()) * 8U;
+            pb._pad[0] = static_cast<u32>(msg_bits >> 32U);
+            pb._pad[1] = static_cast<u32>(msg_bits);
+
+            cpacf::klmd<cpacf::klmd_fc::sha256, cpacf::klmd_flags::none, cpacf::klmd_fv_flag::flags_field_valid, sha256_pb>(pb, data);
+
+            for (u32 i = 0U; i < 8U; ++i) {
+                out[i * 4U + 0U] = static_cast<u8>(pb.state[i] >> 24U);
+                out[i * 4U + 1U] = static_cast<u8>(pb.state[i] >> 16U);
+                out[i * 4U + 2U] = static_cast<u8>(pb.state[i] >>  8U);
+                out[i * 4U + 3U] = static_cast<u8>(pb.state[i]);
+            }
+            return {};
+        }
+
+        sha256_ctx ctx;
+        sha256_init(ctx);
+        return sha256_update(ctx, data)
+            .and_then([&]() -> std::expected<void, lib::kernel_error> {
+                return sha256_final(ctx, out);
+            });
+    }
+
+    [[nodiscard]] auto sha256_verify(std::span<const u8> data,
+                                     std::span<const u8, SHA256_DIGEST_SIZE> expected)
+        -> std::expected<void, lib::kernel_error> {
+        u8 computed[SHA256_DIGEST_SIZE]{};
+        auto hash_result = sha256_hash(data, std::span<u8, SHA256_DIGEST_SIZE>(computed));
+        if (!hash_result) {
+            return hash_result;
+        }
+        for (u32 i = 0U; i < SHA256_DIGEST_SIZE; ++i) {
+            if (computed[i] != expected[i]) {
+                return std::unexpected(
+                    lib::kernel_error::from_crypto(lib::crypto_error::hash_mismatch));
+            }
+        }
+        return {};
+    }
+
+} // namespace crypto::sha256

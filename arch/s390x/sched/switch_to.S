@@ -1,19 +1,21 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file arch/s390x/sched/switch_to.S
-/// @brief Context switch — save/restore callee-saved GPRs, all 32 VRs, ARs, FPC,
-///        and swap kernel stacks.
+/// @brief Context switch and first-entry trampolines for strands
 
 #include <arch/s390x/cpu/lowcore.h>
+#include <arch/s390x/cpu/irq_frame.h>
 
 #define STRAND_OWNER        24   ///< strand::owner (void* — back-pointer to domain)
 #define STRAND_KSTACK_TOP   112  ///< strand::kstack_top (verified by static_assert)
 #define STRAND_KSP          120  ///< strand::ksp        (verified by static_assert)
 #define SF_GPRS             48
 
-#define FRAME_ARS          0
-#define FRAME_FPC          64
-#define FRAME_VRS          72
-#define FRAME_SIZE         640
+#define FRAME_ARS           0
+#define FRAME_FPC           64
+#define FRAME_VRS           72
+#define FRAME_SIZE          640
+
+#define USER_ENTRY_SENTINEL  (-1)
 
     .section .text, "ax", @progbits
     .globl  __switch_to_asm
@@ -61,10 +63,14 @@ __switch_to_asm:
 
     .size   __switch_to_asm, . - __switch_to_asm
 
-/// @brief First-entry trampoline for new domains.
+/// @brief First-entry trampoline for kernel-thread strands.
+///
 ///   r6  = arg    (void* passed to the entry function)
 ///   r7  = entry  (function pointer: void (*)(void*) noexcept)
 ///   r14 = &domain_trampoline (this function)
+///
+/// @details This trampoline runs the kernel entry function in supervisor (home)
+///          space
     .globl  domain_trampoline
     .type   domain_trampoline, @function
     .align  8
@@ -74,13 +80,32 @@ domain_trampoline:
     aghi    %r15, -160                   // grow stack
     stg     %r1, 0(%r15)                 // store back-chain
 
-    stosm   160(%r15), 0x03
+    stosm   160(%r15), 0x03              // enable IO+EXT interrupts
 
-    lgr     %r2, %r6
-    basr    %r14, %r7
+    lgr     %r2, %r6                     // r2 = arg  (s390x ABI first arg)
+    basr    %r14, %r7                    // call entry(arg)
 
     brasl   %r14, sched_strand_trampoline_exit
     j       .
 
     .size   domain_trampoline, . - domain_trampoline
+
+/// @brief First-entry dispatcher for either a kernel-thread or a user-process
+///        strand.
+    .globl  ret_from_fork
+    .type   ret_from_fork, @function
+    .align  8
+ret_from_fork:
+    ltgr    %r7, %r7
+    cghi    %r7, -1
+    je      .Luser_first_switch
+    j       .Lkthread_first_switch
+.Luser_first_switch:
+    mvc     LC_RETURN_PSW(16, 0), 0x110(%r15)    // copy user PSW mask + addr
+    lmg     %r0, %r15, 0x90(%r15)               // load 16 user GPRs
+    lpswe   LC_RETURN_PSW(0)
+.Lkthread_first_switch:
+    jg      domain_trampoline
+
+    .size   ret_from_fork, . - ret_from_fork
     .section .note.GNU-stack, "", @progbits

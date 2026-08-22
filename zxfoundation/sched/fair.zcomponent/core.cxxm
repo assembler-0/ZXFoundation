@@ -1,0 +1,184 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/fair.cxxm
+/// @brief EEVDF (Earliest Eligible Virtual Deadline First) scheduling class.
+
+export module zxfoundation.sched.fair.core;
+import zxfoundation.sched.entity;
+import zxfoundation.base.types;
+import zxfoundation.sched.classed.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sched.rq.types;
+import lib.rbtree;
+import lib.error;
+import lib.container_of;
+import std;
+
+using zxfoundation::sched::rq::run_queue;
+using zxfoundation::dgp::domain::strand;
+
+export {
+
+namespace zxfoundation::sched::fair {
+
+    /// @brief Default nice-0 weight (1024).
+    inline constexpr u32 NICE_0_WEIGHT = 1024U;
+
+    /// @brief Default EEVDF slice in TOD ticks
+    inline constexpr u64 EEVDF_DEFAULT_SLICE_NS = 40'960'000ULL;
+
+    /// @brief Maximum weight used in inverse-weight scaling (1024 == 1.0).
+    inline constexpr u32 WEIGHT_MAX = 1024U;
+
+    /// @brief Scaled delta for calc_delta_fair: weighted virtual time advance.
+    /// @param[in] delta  Wall-time delta (ns-equivalent or TOD ticks).
+    /// @param[in] se     Schedulable entity.
+    /// @return The weighted vruntime delta = delta * WEIGHT_MAX / se->weight.
+    /// @note A heavier entity advances its vruntime slower (so it gets a
+    ///       proportionally larger slice).
+    [[nodiscard]] auto calc_delta_fair(u64 delta, const sched_entity& se) noexcept -> u64;
+
+    /// @brief Compute the average vruntime across the queued entities.
+    /// @param[in] cfs_min_vruntime  Current min_vruntime of the cfs_rq.
+    /// @param[in] avg_vruntime_acc   Accumulator keeping weighted average.
+    /// @param[in] avg_weight_acc     Accumulator keeping total weight.
+    /// @return The current avg vruntime (in vruntime units).
+    [[nodiscard]] auto avg_vruntime(u64 cfs_min_vruntime,
+                                    i64 avg_vruntime_acc,
+                                    u64 avg_weight_acc) noexcept -> u64;
+
+    /// @brief Update the running avg_vruntime accumulator when an entity is
+    ///        added to the cfs_rq.
+    /// @param[in]     se         Entity being inserted.
+    /// @param[in,out] avg_acc    Mutable accumulator (i64, signed).
+    /// @param[in,out] avg_w_acc  Mutable total weight accumulator (u64).
+    auto avg_vruntime_add(const sched_entity& se, u64 cfs_min_vruntime,
+                          i64& avg_acc, u64& avg_w_acc) noexcept -> void;
+
+    /// @brief Update the running avg_vruntime accumulator when an entity is
+    ///        removed from the cfs_rq.
+    auto avg_vruntime_sub(const sched_entity& se, u64 cfs_min_vruntime,
+                          i64& avg_acc, u64& avg_w_acc) noexcept -> void;
+
+    /// @brief Promote @c min_vruntime on every tick / dequeue to prevent the
+    ///        floor from dropping as entities age out.
+    /// @param[in]     cfs_min_vruntime  Current min_vruntime (mutable by caller).
+    /// @param[in,out] new_floor         Candidate new floor (in-out).
+    /// @return The next @c min_vruntime value to assign.
+    [[nodiscard]] auto update_min_vruntime(u64 cfs_min_vruntime, u64 new_floor) noexcept -> u64;
+
+    /// @brief Predicate returning whether @c se is eligible to run on this
+    ///        cfs_rq (i.e. its lag <= 0).
+    /// @param[in] se            Entity being tested.
+    /// @param[in] avg_vruntime  Current avg vruntime of the cfs_rq (see
+    ///                          @c avg_vruntime() above).
+    /// @return True when se is eligible (vruntime <= avg_vruntime).
+    [[nodiscard]] auto entity_eligible(const sched_entity& se, u64 avg_vruntime) noexcept -> bool;
+
+    /// @brief Compute the per-entity slice in vruntime units, calibrated
+    ///        to the number of queued entities (Linux's @c sched_slice).
+    /// @param[in] se         Entity being scheduled.
+    /// @param[in] nr_running Current cfs_rq::nr_running.
+    /// @return The slice duration in vruntime units.
+    [[nodiscard]] auto sched_slice(const sched_entity& se, u32 nr_running) noexcept -> u64;
+
+    /// @brief Place an entity into the cfs_rq, computing its initial vruntime.
+    /// @param[in,out] se              Entity to place.
+    /// @param[in]     avg_vruntime    Current avg vruntime over the cfs_rq.
+    /// @param[in]     min_vruntime    Current cfs_rq::min_vruntime.
+    /// @param[in]     nr_running      Number of entities that will be queued
+    ///                                on this cfs_rq *after* this placement
+    /// @param[in]     initial         1 on initial enqueue (zero start); 0 on wakeup.
+    auto place_entity(sched_entity& se, u64 avg_vruntime, u64 min_vruntime,
+                      u32 nr_running, bool initial) noexcept -> void;
+
+    /// @brief Debit the running entity by the elapsed wall-time delta.
+    /// @param[in,out] se        Entity receiving the debit.
+    /// @param[in,out] min_vr    Mutable cfs_rq::min_vruntime reference (advanced here).
+    /// @param[in]     delta     Elapsed wall-time delta (vtime units).
+    auto update_curr(sched_entity& se, u64& min_vr, u64 delta) noexcept -> void;
+
+    /// @brief Recompute an entity's lag after a balancer migration.
+    /// @param[in,out] se          Entity being migrated.
+    /// @param[in]     src_min_vr  Source cfs_rq::min_vruntime.
+    /// @param[in]     dst_min_vr  Destination cfs_rq::min_vruntime.
+    auto migrate_entity(sched_entity& se, u64 src_min_vr, u64 dst_min_vr) noexcept -> void;
+
+    /// @brief Yield: collapse @c se->vruntime to @c min_vruntime so the runner
+    ///        ages backward into the queue.
+    auto yield_entity(sched_entity& se, u64 min_vr) noexcept -> void;
+
+    /// @brief Directed yield: move @c yielding_se ahead of @c target_se.
+    auto yield_to_entity(sched_entity& yielding_se,
+                         const sched_entity& target_se,
+                         u64 min_vr) noexcept -> void;
+
+    /// @brief Extract strand from @c rb_node
+    [[nodiscard]] inline auto rb_node_to_strand(lib::rb_node* node) noexcept -> strand* {
+        return lib::container_of_anchor<strand, sched_entity, lib::rb_node,
+                                         &strand::se, &sched_entity::fair_node>(node);
+    }
+
+    /// @brief Iterrator class for fair nodes
+    class fair_iterator {
+    public:
+        explicit fair_iterator(lib::rb_node* n) noexcept
+            : current_{n}, next_{n ? lib::rb_next(n) : nullptr} {}
+
+        [[nodiscard]] auto operator*()  const noexcept -> strand& { return *rb_node_to_strand(current_); }
+        [[nodiscard]] auto operator->() const noexcept -> strand* { return  rb_node_to_strand(current_); }
+
+        auto operator++() noexcept -> fair_iterator& {
+            current_ = next_;
+            next_    = current_ ? lib::rb_next(current_) : nullptr;
+            return *this;
+        }
+        auto operator++(int) noexcept -> fair_iterator {
+            auto tmp = *this; ++(*this); return tmp;
+        }
+
+        [[nodiscard]] friend auto operator==(const fair_iterator& a, const fair_iterator& b) noexcept -> bool {
+            return a.current_ == b.current_;
+        }
+
+    private:
+        lib::rb_node* current_{nullptr};
+        lib::rb_node* next_{nullptr};
+    };
+
+    class fair_range {
+    public:
+        explicit fair_range(const run_queue& rq) noexcept
+            : first_{const_cast<lib::rb_node*>(rq.fair_tree.leftmost)} {}
+
+        [[nodiscard]] auto begin() const noexcept -> fair_iterator { return fair_iterator{first_}; }
+        [[nodiscard]] auto end()   const noexcept -> fair_iterator { return fair_iterator{nullptr}; }
+    private:
+        lib::rb_node* first_;
+    };
+
+    /// @brief Range-for adapter for CFS fair tree traversal.
+    [[nodiscard]] inline auto iter(const run_queue& rq) noexcept -> fair_range { return fair_range{rq}; }
+
+    /// @brief Enqueue a strand into the CFS fair scheduling tree.
+    /// @param[in,out] rq Run queue (caller holds @c rq.lock).
+    /// @param[in,out] s  Strand being enqueued.
+    /// @return Success, or @c kernel_error when SMT isolation-sensitive
+    ///         placement is violated on the target CPU.
+    [[nodiscard]] auto enqueue(run_queue& rq, strand& s) noexcept -> std::expected<void, lib::kernel_error>;
+
+    auto dequeue(run_queue& rq, strand& s) noexcept -> void;
+
+    [[nodiscard]] auto pick_next(run_queue& rq) noexcept -> strand*;
+
+    auto tick(run_queue& rq, strand& s) noexcept -> void;
+
+    auto preempt(run_queue& rq, strand& waking) noexcept -> void;
+
+    /// @brief Legacy vtable shim
+    auto vtable_enqueue(run_queue& rq, strand& s) noexcept -> void;
+
+    from_global(reference) const classed::sched_class the_class;
+
+} // namespace zxfoundation::sched::fair
+
+} // end export

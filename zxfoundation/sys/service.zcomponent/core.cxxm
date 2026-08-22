@@ -6,8 +6,8 @@
 export module zxfoundation.sys.service.core;
 import zxfoundation.base.types;
 import zxfoundation.scoms.kobject.base;
-import zxfoundation.memory.memory_objects;
-import zxfoundation.sys.cap.types;
+import zxfoundation.memory.objects;
+import zxfoundation.dgp.cap.types;
 import lib.error;
 import std;
 
@@ -25,7 +25,7 @@ namespace zxfoundation::sys::service {
     struct service_entry {
         scoms::kobject::bobject  ko{};
         char            name[SERVICE_NAME_MAX_LEN]{};
-        cap::cap_token  token{};
+        dgp::cap::cap_token  token{};
         memory::objects::memory_object_ref authority{};
 
         service_entry() noexcept = default;
@@ -47,7 +47,7 @@ namespace zxfoundation::sys::service {
     /// @return  service_id on success, kernel_error on failure.
     [[nodiscard]] auto register_service(
         std::string_view name,
-        cap::cap_token   token,
+        dgp::cap::cap_token   token,
         u32              owner_id
     ) noexcept -> std::expected<u32, lib::kernel_error>;
 
@@ -59,7 +59,7 @@ namespace zxfoundation::sys::service {
     [[nodiscard]] auto lookup_service(
         std::string_view name,
         u32              caller_id
-    ) noexcept -> std::expected<cap::cap_token, lib::kernel_error>;
+    ) noexcept -> std::expected<dgp::cap::cap_token, lib::kernel_error>;
 
     /// @brief Unregister a service.
     /// @param[in]  service_id  The service ID returned by register_service.

@@ -1,0 +1,47 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/cpupri.cxxm
+/// @brief Per-system CPU priority index used by the RT scheduler.
+
+export module zxfoundation.sched.cpupri.core;
+import zxfoundation.base.types;
+import lib.cpumask;
+
+export {
+
+namespace zxfoundation::sched::cpupri {
+
+    /// @brief Highest RT priority supported by the index.
+    constexpr u32 CPUPRI_NR_PRIORITIES = 128U;
+
+    /// @brief Sentinel priority used for "no RT work" buckets
+    inline constexpr u8 CPUPRI_INVALID = 0xFFU;
+
+    /// @brief Initialize the cpupri index.
+    auto init() noexcept -> void;
+
+    /// @brief Update the index for an RT enqueue/dequeue on a CPU.
+    /// @param[in] cpu      CPU whose top RT priority changed.
+    /// @param[in] old_pri  Previous top priority (0..127 or CPUPRI_INVALID).
+    /// @param[in] new_pri  New top priority (0..127 or CPUPRI_INVALID).
+    auto pri_set(u16 cpu, u8 old_pri, u8 new_pri) noexcept -> void;
+
+    /// @brief Find the CPU with the lowest RT priority at or below a threshold,
+    ///        restricted by an affinity mask.
+    /// @param[in] pri_threshold RT priority ceiling — CPUs running strictly
+    ///            higher priority than @c pri_threshold are not returned.
+    /// @param[in] affinity       Allowed CPU mask.
+    /// @return CPU id (an arbitrary lowest-priority candidate), or
+    ///         @c CONFIG_ZX_MAX_CPUS when no CPU qualifies.
+    [[nodiscard]] auto find_fitness(u8 pri_threshold, const ::lib::cpumask& affinity) noexcept -> u16;
+
+    /// @brief Read the cached top RT priority of a CPU.
+    [[nodiscard]] auto pri_top(u16 cpu) noexcept -> u8;
+
+    /// @brief Count of supported priority buckets.
+    [[nodiscard]] consteval auto nr_priorities() noexcept -> u32 {
+        return CPUPRI_NR_PRIORITIES;
+    }
+
+} // namespace zxfoundation::sched::cpupri
+
+} // end export

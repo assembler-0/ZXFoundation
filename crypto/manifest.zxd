@@ -1,4 +1,3 @@
 !files : !compile_group -> [auto] {
-    sha256_types.cxxm
-    sha256.cxxm
+
 }

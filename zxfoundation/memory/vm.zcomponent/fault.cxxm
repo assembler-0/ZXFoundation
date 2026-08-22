@@ -1,0 +1,42 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/vm.zcomponent/fault.cxxm
+/// @brief page fault handler — core interface.
+
+export module zxfoundation.memory.vm.fault;
+import zxfoundation.memory.vm.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::memory::vm {
+
+    /// @brief Outcome of a page fault resolution.
+    enum class fault_action : u8 {
+        resolved    = 0,   ///< Fault resolved — page mapped, resume execution.
+        killed      = 1,   ///< Unrecoverable fault — domain must be killed.
+        guard_hit   = 2,   ///< Fault on a guard page.
+        stack_grew  = 3,   ///< Stack region was extended downward.
+        retry       = 4,   ///< Mapping changed concurrently; retry the fault.
+        oom         = 5,   ///< Allocation or backing store exhausted.
+    };
+
+    /// @brief Coordinates of a file-backed miss captured while the VM-space
+    ///        lock is held.
+    struct _fault_file_request {
+        void* file_node{nullptr};
+        u32   file_index{0};
+        u8    storage_key{0};
+    };
+
+    [[nodiscard]] auto handle_page_fault(
+        vm_space& space,
+        u64 root_phys,
+        u8 storage_key,
+        u64 fault_va,
+        bool is_write,
+        bool is_exec
+    ) noexcept -> fault_action;
+
+} // namespace zxfoundation::memory::vm
+
+} // end export

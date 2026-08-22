@@ -6,7 +6,7 @@
 export module zxfoundation.base.cxxrtse.builtins;
 import zxfoundation.base.types;
 
-namespace _internal {
+namespace detail {
 
     struct u128_pair {
         u64 hi{};
@@ -28,60 +28,60 @@ namespace _internal {
         return u.full;
     }
 
-} // namespace _internal
+} // namespace detail
 
-no_mangle {
+declscope(C) {
 
 /// @brief 128-bit logical shift left.
 auto __ashlti3(u128 a, int b) noexcept -> u128 {
     if (b == 0) return a;
 
-    auto [hi, lo] = _internal::split(a);
+    auto [hi, lo] = detail::split(a);
 
-    if (b >= 128) return _internal::combine(0, 0);
+    if (b >= 128) return detail::combine(0, 0);
 
     if (b >= 64) {
-        return _internal::combine(lo << (b - 64), 0);
+        return detail::combine(lo << (b - 64), 0);
     }
 
     // 0 < b < 64
     const u64 new_hi = (hi << b) | (lo >> (64 - b));
     const u64 new_lo = lo << b;
-    return _internal::combine(new_hi, new_lo);
+    return detail::combine(new_hi, new_lo);
 }
 
 /// @brief 128-bit logical shift right.
 auto __lshrti3(u128 a, int b) noexcept -> u128 {
     if (b == 0) return a;
 
-    auto [hi, lo] = _internal::split(a);
+    auto [hi, lo] = detail::split(a);
 
-    if (b >= 128) return _internal::combine(0, 0);
+    if (b >= 128) return detail::combine(0, 0);
 
     if (b >= 64) {
-        return _internal::combine(0, hi >> (b - 64));
+        return detail::combine(0, hi >> (b - 64));
     }
 
     // 0 < b < 64
     const u64 new_hi = hi >> b;
     const u64 new_lo = (lo >> b) | (hi << (64 - b));
-    return _internal::combine(new_hi, new_lo);
+    return detail::combine(new_hi, new_lo);
 }
 
 /// @brief 128-bit arithmetic shift right.
 auto __ashrti3(u128 a, int b) noexcept -> u128 {
     if (b == 0) return a;
 
-    auto [hi, lo] = _internal::split(a);
+    auto [hi, lo] = detail::split(a);
     const auto shi = static_cast<long long>(hi);
 
     if (b >= 128) {
         const auto fill = static_cast<u64>(shi >> 63);
-        return _internal::combine(fill, fill);
+        return detail::combine(fill, fill);
     }
 
     if (b >= 64) {
-        return _internal::combine(
+        return detail::combine(
             static_cast<u64>(shi >> 63),
             static_cast<u64>(shi >> (b - 64)));
     }
@@ -89,7 +89,7 @@ auto __ashrti3(u128 a, int b) noexcept -> u128 {
     // 0 < b < 64
     const u64 new_hi = static_cast<u64>(shi >> b);
     const u64 new_lo = (lo >> b) | (hi << (64 - b));
-    return _internal::combine(new_hi, new_lo);
+    return detail::combine(new_hi, new_lo);
 }
 
 auto __udivti3(u128 a, u128 b) noexcept -> u128 {
@@ -98,10 +98,10 @@ auto __udivti3(u128 a, u128 b) noexcept -> u128 {
     if (a == b) return 1;
 
     // Fast path: both fit in 64 bits.
-    auto [ah, al] = _internal::split(a);
-    auto [bh, bl] = _internal::split(b);
+    auto [ah, al] = detail::split(a);
+    auto [bh, bl] = detail::split(b);
     if (ah == 0 && bh == 0) {
-        return _internal::combine(0, al / bl);
+        return detail::combine(0, al / bl);
     }
 
     // General case: binary long-division using the shift stubs above.
@@ -124,10 +124,10 @@ auto __umodti3(u128 a, u128 b) noexcept -> u128 {
     if (a == b) return 0;
 
     // Fast path.
-    auto [ah, al] = _internal::split(a);
-    auto [bh, bl] = _internal::split(b);
+    auto [ah, al] = detail::split(a);
+    auto [bh, bl] = detail::split(b);
     if (ah == 0 && bh == 0) {
-        return _internal::combine(0, al % bl);
+        return detail::combine(0, al % bl);
     }
 
     // General case.
@@ -142,10 +142,49 @@ auto __umodti3(u128 a, u128 b) noexcept -> u128 {
     return rem;
 }
 
+/// @brief Signed 128-bit division — @c __divti3.
+/// @details clang emits this for @c i128 division.  We compute the magnitude
+///          quotient via @c __udivti3 and apply the XOR-of-signs rule to the
+///          result.  The @c INT128_MIN / -1 overflow is guarded (returns
+///          INT128_MIN) so the operation is total, matching the freestanding
+///          "no trap" expectation for this kernel runtime.
+auto __divti3(i128 a, i128 b) noexcept -> i128 {
+    if (b == 0) return 0;
+
+    // INT128_MIN / -1 would overflow; clamp to INT128_MIN.
+    if (a == static_cast<i128>((__uint128_t)1 << 127)
+        && b == static_cast<i128>(-1)) {
+        return static_cast<i128>((__uint128_t)1 << 127);
+    }
+
+    const bool neg_a = a < 0;
+    const bool neg_b = b < 0;
+    const auto ua = static_cast<u128>(neg_a ? -a : a);
+    const auto ub = static_cast<u128>(neg_b ? -b : b);
+    const auto uq = __udivti3(ua, ub);
+    const auto sq = static_cast<i128>(uq);
+    return (neg_a != neg_b) ? -sq : sq;
+}
+
+/// @brief Signed 128-bit modulo — @c __modti3.
+/// @details clang emits this for @c i128 remainder.  The magnitude is computed
+///          via @c __umodti3 and the sign of the result follows the dividend
+///          (C truncated-toward-zero convention).
+auto __modti3(i128 a, i128 b) noexcept -> i128 {
+    if (b == 0) return 0;
+
+    const bool neg_a = a < 0;
+    const auto ua = static_cast<u128>(neg_a ? -a : a);
+    const auto ub = static_cast<u128>((b < 0) ? -b : b);
+    const auto ur = __umodti3(ua, ub);
+    const auto sr = static_cast<i128>(ur);
+    return neg_a ? -sr : sr;
+}
+
 /// @brief 128-bit multiply (needed by some codegen paths).
 auto __multi3(u128 a, u128 b) noexcept -> u128 {
-    auto [ah, al] = _internal::split(a);
-    auto [bh, bl] = _internal::split(b);
+    auto [ah, al] = detail::split(a);
+    auto [bh, bl] = detail::split(b);
 
     // (ah*2^64 + al) * (bh*2^64 + bl)
     // = ah*bh*2^128 (overflows, discard)
@@ -155,14 +194,14 @@ auto __multi3(u128 a, u128 b) noexcept -> u128 {
     const u128 cross = static_cast<u128>(ah) * static_cast<u128>(bl)
                      + static_cast<u128>(al) * static_cast<u128>(bh);
 
-    auto [ll_hi, ll_lo] = _internal::split(lo_lo);
-    auto [cr_hi, cr_lo] = _internal::split(cross);
+    auto [ll_hi, ll_lo] = detail::split(lo_lo);
+    auto [cr_hi, cr_lo] = detail::split(cross);
 
     const u64 res_lo = ll_lo;
     const u64 res_hi = ll_hi + cr_lo;
     discard_value cr_hi; // overflow discarded
 
-    return _internal::combine(res_hi, res_lo);
+    return detail::combine(res_hi, res_lo);
 }
 
 } // no_mangle

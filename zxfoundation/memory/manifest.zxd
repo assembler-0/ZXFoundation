@@ -1,24 +1,3 @@
 !files : !compile_group -> [auto] {
-    hhdm_types.cxxm
-    hhdm.cxxm
-    pmm_types.cxxm
-    numa_types.cxxm
-    numa.cxxm
-    pmm.cxxm
-    page_cache_types.cxxm
-    page_cache.cxxm
-    reclaim.cxxm
-    oom.cxxm
-    slub_types.cxxm
-    slub.cxxm
-    slub_typed.cxxm
-    kmalloc.cxxm
-    vm_types.cxxm
-    vm_types.cxx
-    rmap_types.cxxm
-    rmap.cxxm
-    memory_objects.cxxm
-    vm.cxxm
-    vm_txn.cxxm
-    fault.cxxm
+    interface.cxxm
 }

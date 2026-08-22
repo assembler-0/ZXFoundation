@@ -6,8 +6,8 @@ export module zxfoundation.sys.ipc.types;
 import zxfoundation.base.types;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.scoms.kobject.types;
-import zxfoundation.memory.memory_objects;
-import zxfoundation.sys.cap.types;
+import zxfoundation.memory.objects;
+import zxfoundation.dgp.cap.types;
 
 export {
 
@@ -21,7 +21,7 @@ namespace zxfoundation::sys::ipc {
     inline constexpr u32 IPC_MESSAGE_GRANTS = 8U;
 
     struct capability_attachment {
-        cap::cap_token token{};
+        dgp::cap::cap_token token{};
         u32 rights{0};
     };
 

@@ -11,10 +11,10 @@ import zxfoundation.scoms.table;
 import zxfoundation.scoms.kobject.ref;
 import zxfoundation.scoms.kobject.types;
 import zxfoundation.scoms.metadata.core;
-import zxfoundation.memory.memory_objects;
-import zxfoundation.sys.cap.types;
-import zxfoundation.sys.cap.core;
-import zxfoundation.domain.domain;
+import zxfoundation.memory.objects;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.dgp.cap.core;
+import zxfoundation.dgp.domain.core;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import lib.error;
@@ -30,7 +30,7 @@ namespace zxfoundation::sys::service::detail {
 
 namespace zxfoundation::sys::service {
 
-    using namespace cap;
+    using namespace dgp::cap;
 
     auto init() noexcept -> void {
         using namespace detail;
@@ -38,7 +38,6 @@ namespace zxfoundation::sys::service {
 
         g_service_table.init(scoms::kobject::kobject_type::service_entry);
         register_service_cap_lookup();
-        zxfoundation::domain::register_service_drain_cb(destroy_for_domain);
 
         {
             auto d0_token = cap_issue(
@@ -227,7 +226,7 @@ namespace zxfoundation::sys::service {
 
 } // namespace zxfoundation::sys::service
 
-namespace zxfoundation::sys::cap {
+namespace zxfoundation::dgp::cap {
 
     using zxfoundation::base::lifecycle_state;
 
@@ -250,7 +249,7 @@ namespace zxfoundation::sys::cap {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        auto result = zxfoundation::sys::cap::cap_resolve(token, needed);
+        auto result = zxfoundation::dgp::cap::cap_resolve(token, needed);
         if (!result) return std::unexpected(result.error());
         if (token.type() != cap_type::service) {
             return std::unexpected(
@@ -259,4 +258,4 @@ namespace zxfoundation::sys::cap {
         return reinterpret_cast<zxfoundation::sys::service::service_entry*>(*result);
     }
 
-} // namespace zxfoundation::sys::cap
+} // namespace zxfoundation::dgp::cap

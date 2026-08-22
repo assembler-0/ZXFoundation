@@ -19,7 +19,7 @@ import arch.s390x.trap.fixup;
 import lib.error;
 import std;
 
-namespace drivers::watchdog::_internal {
+namespace drivers::watchdog::detail {
 
     using namespace zxfoundation::base::config;
     using namespace zxfoundation::sys::timer;
@@ -93,18 +93,18 @@ namespace drivers::watchdog::_internal {
         }
     }
 
-} // namespace _internal
+} // namespace detail
 
 namespace drivers::watchdog {
 
     auto disarm() noexcept -> void {
         using namespace arch::s390x::cpu;
         discard_value diag::diag288(diag::diag288_fn::cancel, diag::WDT_RESTART, 0, 0);
-        _internal::g_harddog_armed = false;
+        detail::g_harddog_armed = false;
     }
 
     auto init() noexcept -> void {
-        using namespace _internal;
+        using namespace detail;
         using namespace zxfoundation::sys::timer;
         using namespace zxfoundation::sys::printk;
 
@@ -131,6 +131,10 @@ namespace drivers::watchdog {
 
         pinfo("watchdog: softdog armed (interval={}s, miss_threshold={})",
             WATCHDOG_INTERVAL_SECONDS, WATCHDOG_FATAL_THRESHOLD);
+    }
+
+    auto heartbeat_bump() noexcept -> void {
+        arch::s390x::cpu::lowcore::this_cpu_percpu().watchdog_heartbeat++;
     }
 
 } // namespace zxfoundation::sys::watchdog

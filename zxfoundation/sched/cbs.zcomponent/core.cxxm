@@ -1,0 +1,64 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/cbs.cxxm
+/// @brief Per-strand CBS (Constant Bandwidth Server) replenishment timers
+///        for the EDF deadline scheduling class
+
+export module zxfoundation.sched.cbs.core;
+import zxfoundation.sched.entity;
+import zxfoundation.sys.timer.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sched::cbs {
+
+    /// @brief Default CBS server period in nanoseconds (100 ms).
+    inline constexpr u64 CBS_PERIOD_DEFAULT_NS = 100'000'000ULL;
+
+    /// @brief Default CBS runtime per period (10 ms = 10% of 100 ms).
+    inline constexpr u64 CBS_RUNTIME_DEFAULT_NS = 10'000'000ULL;
+
+    /// @brief Per-strand CBS state record (one per admitted deadline strand).
+    struct cbs_replen {
+        u64                     period_ns{CBS_PERIOD_DEFAULT_NS};
+        u64                     runtime_ns{CBS_RUNTIME_DEFAULT_NS};
+        u64                     used_runtime_ns{0ULL};
+        u64                     period_deadline{0ULL};          ///< absolute time of next period end
+        u8                      _pad[4]{};
+        zxfoundation::sys::timer::kernel_timer  timer{};
+    };
+
+    static_assert(sizeof(cbs_replen) <= 96U,
+        "cbs_replen fits in one cache sector");
+
+    /// @brief Build a CBS block for a strand that is about to be admitted.
+    /// @param[out] cbs  Output record (stack-resident).
+    auto init(cbs_replen& cbs) noexcept -> void;
+
+    /// @brief Charge one tick against the CBS runtime.
+    /// @param[in,out] cbs       Local CBS block.
+    /// @param[in]     delta_ns  Charge amount (1 ms = 1 tick accounting).
+    /// @return true when the runtime is exhausted and throttling should
+    ///         occur (the strand should be dequeued).
+    auto charge(cbs_replen& cbs, u64 delta_ns) noexcept -> bool;
+
+    /// @brief Replenish a CBS record with the remainder of the current period.
+    /// @note Called when the period timer fires; the strand is re‑enqueued
+    ///       when it was throttleing.
+    auto replenish(cbs_replen& cbs) noexcept -> void;
+
+    /// @brief Install the CBS timer expiry handler on a strand's CBS block.
+    /// @param[in,out] cbs     CBS block (overwrites timer members).
+    /// @param[in]     cpu     CPU id the timer is pinned to.
+    /// @param[in]     cb      Callback function pointer (must not be null).
+    /// @param[in]     data    Opaque callback data (typically the strand*).
+    auto install_timer(cbs_replen& cbs, u16 cpu,
+                            zxfoundation::sys::timer::timer_fn cb,
+                            void* data) noexcept -> void;
+
+    /// @brief Remove CBS timer from the timer heap (called on dequeue/destroy).
+    auto cancel_timer(cbs_replen& cbs) noexcept -> void;
+
+} // namespace zxfoundation::sched::cbs
+
+} // end export

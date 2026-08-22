@@ -1,0 +1,2 @@
+export module zxfoundation.dgp.memory_contract;
+export import zxfoundation.dgp.memory_contract.core;

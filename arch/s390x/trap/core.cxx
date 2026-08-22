@@ -14,13 +14,10 @@ import zxfoundation.sys.syschk.core;
 import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
 import lib.error;
-import lib.softirq;
+import lib.softirq.core;
 
 /// @brief Program check handler.
-/// @note Drains deferred softirq work after the primary handler so any
-///       softirq raised from the pgm path (or carried over from an
-///       IRQ-disabled owner) is dispatched before IRQ-return.
-no_mangle auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+declscope(C) auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::pgm::handle(frame);
     namespace irq = zxfoundation::sys::irq;
     if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
@@ -29,14 +26,12 @@ no_mangle auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcep
 }
 
 /// @brief External interrupt handler.
-no_mangle auto do_ext_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+declscope(C) auto do_ext_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::ext::handle(frame);
 }
 
 /// @brief I/O interrupt handler.
-/// @note Drains deferred softirq work after the primary handler — see
-///       @c do_pgm_interrupt above.
-no_mangle auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+declscope(C) auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::io::handle(frame);
     namespace irq = zxfoundation::sys::irq;
     if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
@@ -46,7 +41,7 @@ no_mangle auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept
 
 /// @brief SVC handler — nucleus-call dispatch.
 /// @note Drains deferred softirq work after the nucleus call completes.
-no_mangle auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 svc_code) noexcept -> void {
+declscope(C) auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 svc_code) noexcept -> void {
     frame->gprs[2] = arch::s390x::trap::svc::handle(frame, svc_code);
     namespace irq = zxfoundation::sys::irq;
     if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
@@ -55,12 +50,12 @@ no_mangle auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 svc
 }
 
 /// @brief Machine-check handler — decode MCIC and attempt recovery.
-no_mangle auto do_mcck_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+declscope(C) auto do_mcck_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::mcck::handle(frame);
 }
 
 /// @brief Restart interruption handler.
-no_mangle [[noreturn]] auto do_restart_interrupt(
+declscope(C) [[noreturn]] auto do_restart_interrupt(
     void* data,
     i32   source,
     u16   cpu_id,

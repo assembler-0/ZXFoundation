@@ -16,10 +16,10 @@ import arch.s390x.cpu.hotplug;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.ipi;
 import zxfoundation.memory.pmm;
-import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
-import zxfoundation.sched.sched;
-import zxfoundation.sched.sched_topology;
+import zxfoundation.sched.core;
+import zxfoundation.sched.topology.core;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.sys.printk.core;
@@ -27,51 +27,53 @@ import zxfoundation.sys.irq.core;
 import lib.error;
 import std;
 
-namespace arch::s390x::cpu::smp::_internal {
+namespace arch::s390x::cpu::smp::detail {
     no_export std::atomic<u32> g_ap_online{0};
     no_export std::atomic<u32> g_sched_ready{0};
     no_export std::atomic<u32> g_aps_initialized{0};
     no_export u32 g_total_aps{0};
 }
 
-no_mangle {
-
-auto ap_entry() -> void;
-
-[[noreturn]] auto ap_startup() -> void {
-    arch::s390x::cpu::ctlreg::ctl_set_bit<0>(37);
-    arch::s390x::cpu::ctlreg::ctl_set_bit<0>(52);
-
-    {
-        const u64 cr3 = 0xFFFF0000ULL;
-        const u64 cr4 = 0xFFFF0000ULL;
-        arch::s390x::cpu::ctlreg::ctl_load<3, 3>(cr3);
-        arch::s390x::cpu::ctlreg::ctl_load<4, 4>(cr4);
-
-        u64 cr6 = 0;
-        arch::s390x::cpu::ctlreg::ctl_store<6, 6>(cr6);
-        cr6 |= 0x00000000FF000000ULL;
-        arch::s390x::cpu::ctlreg::ctl_load<6, 6>(cr6);
-    }
-
-    discard_value arch::s390x::cpu::smp::_internal::g_ap_online.fetch_add(1, std::memory_order::seq_cst);
-
-    while (arch::s390x::cpu::smp::_internal::g_sched_ready.load(std::memory_order::acquire) == 0)
-        arch::s390x::cpu::sync::cpu_relax();
-
-    const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-    zxfoundation::sched::sched_init_ap(pcp.cpu_id);
-
-    discard_value arch::s390x::cpu::smp::_internal::g_aps_initialized.fetch_add(1, std::memory_order::seq_cst);
-
-    zxfoundation::sched::sched_idle_enter();
+from_global(nomangle) {
+    auto ap_entry() -> void;
 }
+
+declscope(C) {
+
+    [[noreturn]] auto ap_startup() -> void {
+        arch::s390x::cpu::ctlreg::ctl_set_bit<0>(37);
+        arch::s390x::cpu::ctlreg::ctl_set_bit<0>(52);
+
+        {
+            const u64 cr3 = 0xFFFF0000ULL;
+            const u64 cr4 = 0xFFFF0000ULL;
+            arch::s390x::cpu::ctlreg::ctl_load<3, 3>(cr3);
+            arch::s390x::cpu::ctlreg::ctl_load<4, 4>(cr4);
+
+            u64 cr6 = 0;
+            arch::s390x::cpu::ctlreg::ctl_store<6, 6>(cr6);
+            cr6 |= 0x00000000FF000000ULL;
+            arch::s390x::cpu::ctlreg::ctl_load<6, 6>(cr6);
+        }
+
+        discard_value arch::s390x::cpu::smp::detail::g_ap_online.fetch_add(1, std::memory_order::seq_cst);
+
+        while (arch::s390x::cpu::smp::detail::g_sched_ready.load(std::memory_order::acquire) == 0)
+            arch::s390x::cpu::sync::cpu_relax();
+
+        const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        zxfoundation::sched::sched_init_ap(pcp.cpu_id);
+
+        discard_value arch::s390x::cpu::smp::detail::g_aps_initialized.fetch_add(1, std::memory_order::seq_cst);
+
+        zxfoundation::sched::idle_enter();
+    }
 
 } // no_mangle
 
 namespace arch::s390x::cpu::smp {
 
-    using namespace _internal;
+    using namespace detail;
 
     enum class ap_boot_state : u8 {
         allocated,

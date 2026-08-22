@@ -4,7 +4,7 @@
 
 module zxfoundation.sync.rcu.core;
 import zxfoundation.sync.rcu.types;
-import zxfoundation.sched.context;
+import zxfoundation.sched.context.core;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.cpu.lowcore;

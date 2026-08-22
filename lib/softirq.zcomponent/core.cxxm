@@ -1,0 +1,134 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/softirq.cxxm
+/// @brief Generic softirq framework
+
+export module lib.softirq.core;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace lib {
+
+    /// @brief Softirq vector identifier.
+    enum class softirq_vec : u8 {
+        hi          = 0,  ///< High-priority tasklets (legacy slot, reserved).
+        timer       = 1,  ///< Timer expiry release work.
+        net_tx      = 2,  ///< Network transmit (reserved for future net domain).
+        net_rx      = 3,  ///< Network receive (reserved for future net domain).
+        block       = 4,  ///< Block I/O completion (reserved).
+        irq_poll    = 5,  ///< IRQ poll softirq (reserved).
+        tasklet     = 6,  ///< Generic tasklet vector (reserved).
+        sched       = 7,  ///< Scheduler load-balancing softirq.
+        hrtimer     = 8,  ///< High-resolution timer softirq.
+        rcu         = 9,  ///< Read-Copy-Update grace-period advancement.
+        mutex_release = 10, ///< Slow-path mutex release.
+        nohz_idle   = 11, ///< nohz idle balance kick.
+        numa        = 12, ///< NUMA balancing hint.
+        _count            ///< Sentinel: number of softirq vectors supported.
+    };
+
+    static_assert(static_cast<u32>(softirq_vec::_count) <= 32U,
+        "softirq vector count must fit the u32 pending bitmap");
+
+    /// @brief Convert a softirq vector to its bit position in the pending bitmap.
+    /// @param[in] v Softirq vector identifier.
+    /// @return Bit position (0..31).
+    [[nodiscard]] constexpr auto softirq_bit(softirq_vec v) noexcept -> u32 {
+        return 1U << static_cast<u32>(v);
+    }
+
+    /// @brief Convert a softirq vector to its dense index in the vector table.
+    /// @param[in] v Softirq vector identifier.
+    /// @return Dense index 0 .. N-1 where N is the number of supported vectors.
+    [[nodiscard]] constexpr auto softirq_index(softirq_vec v) noexcept -> u32 {
+        return static_cast<u32>(v);
+    }
+
+    /// @brief Maximum number of softirq vectors supported by the framework.
+    inline constexpr u32 NR_SOFTIRQS = static_cast<u32>(softirq_vec::_count);
+
+    /// @brief Function pointer type invoked by the softirq dispatcher.
+    /// @param[in] data Opaque context registered with @c open_softirq.
+    using softirq_fn = auto (*)(void* data) noexcept -> void;
+
+    /// @brief One entry in the global softirq vector table.
+    struct softirq_entry {
+        softirq_fn   action{nullptr};
+        void*        data{nullptr};
+        /// @brief Generation counter bumped on @c open_softirq, allowing callers
+        ///        to detect re-registration of a vector slot (e.g. for diagnostics).
+        std::atomic<u32> generation{0U};
+    };
+
+    static_assert(sizeof(softirq_entry) <= 24U,
+        "softirq_entry must fit one cache line stride (no false sharing)");
+
+    /// @brief Per-CPU softirq execution state.
+    struct softirq_state {
+        /// @brief Bitmap of pending softirq vectors (one bit per @c softirq_vec).
+        std::atomic<u32> pending{0U};
+        /// @brief Snapshot of pending bits being processed right now in @c do_softirq.
+        u32                                     processing{0U};
+        /// @brief Recursive re-entry guard (a softirq may raise another softirq).
+        u32                                     nest{0U};
+        /// @brief Monotonic counter bumped every time @c do_softirq is entered.
+        u64                                     dispatch_count{0U};
+        /// @brief Monotonic counter bumped every time @c raise_softirq actually sets a bit.
+        u64                                     raise_count{0U};
+    };
+
+    /// @brief Reserved value for "no softirq vector" returns.
+    inline constexpr softirq_vec SOFTIRQ_VEC_NONE = static_cast<softirq_vec>(0xFFU);
+
+    /// @brief Register a handler for a softirq vector.
+    /// @param[in] v      Softirq vector to register.
+    /// @param[in] action Callback invoked by @c do_softirq when @c v is pending.
+    /// @param[in] data   Opaque caller context passed back to @c action.
+    /// @return Success when the slot was free, or @c kernel_error::already_locked
+    ///         when the slot was already registered.
+    [[nodiscard]] auto open_softirq(
+        softirq_vec v,
+        softirq_fn action,
+        void* data
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Mark a softirq vector as pending on the current CPU.
+    /// @param[in] v Vector to raise.
+    auto raise_softirq(softirq_vec v) noexcept -> void;
+
+    /// @brief Mark a softirq vector as pending on a *remote* CPU.
+    /// @param[in] cpu Target CPU id (logical, not absolute).
+    /// @param[in] v   Softirq vector to raise.
+    auto raise_softirq_on(u16 cpu, softirq_vec v) noexcept -> void;
+
+    /// @brief Test whether any softirq is pending on the current CPU.
+    /// @return True when at least one vector is pending and dispatchable.
+    [[nodiscard]] auto softirq_pending() noexcept -> bool;
+
+    /// @brief Drain all pending softirq vectors on the current CPU.
+    auto do_softirq() noexcept -> void;
+
+    /// @brief Clear a pending softirq vector without dispatching it.
+    /// @param[in] v Vector to clear.
+    /// @return True when a pending bit was cleared; false when no work was pending.
+    [[nodiscard]] auto softirq_clear(softirq_vec v) noexcept -> bool;
+
+    /// @brief Test whether a particular softirq vector is pending on this CPU.
+    /// @param[in] v Vector to test.
+    [[nodiscard]] auto softirq_test(softirq_vec v) noexcept -> bool;
+
+    /// @brief Read this CPU's softirq dispatch statistics (for diagnostics).
+    /// @return A pair (raise_count, dispatch_count).
+    [[nodiscard]] auto softirq_stats() noexcept -> std::pair<u64, u64>;
+
+    /// @brief Return the global vector-table entry for a softirq vector.
+    /// @param[in] v Vector to inspect.
+    /// @return Const reference to the registered entry (action may be nullptr
+    ///         when the slot was never opened).
+    [[nodiscard]] auto softirq_entry_for(softirq_vec v) noexcept -> const softirq_entry&;
+
+} // namespace lib
+
+} // end export

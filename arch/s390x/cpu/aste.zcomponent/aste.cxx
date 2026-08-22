@@ -8,7 +8,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.ctlreg;
 import zxfoundation.base.types;
 import zxfoundation.memory.pmm;
-import zxfoundation.memory.pmm_types;
+import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;

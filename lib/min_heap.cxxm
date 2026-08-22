@@ -7,14 +7,9 @@ import zxfoundation.base.types;
 
 export {
 
-namespace std {
+namespace lib {
 
     /// @brief Fixed-capacity binary min-heap.
-    ///
-    /// Stores elements of type T in a contiguous array, ordered by a
-    /// caller-supplied comparator.  All mutating operations accept the
-    /// comparator so the heap remains stateless w.r.t. ordering policy.
-    ///
     /// @tparam T         Element type (typically a pointer).
     /// @tparam Capacity  Maximum number of elements.
     template<typename T, u32 Capacity>

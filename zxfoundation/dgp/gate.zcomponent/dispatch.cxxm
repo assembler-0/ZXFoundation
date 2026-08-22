@@ -1,0 +1,57 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/dispatch.cxxm
+/// @brief Gate subsystem dispatch table
+
+export module zxfoundation.dgp.gate.dispatch;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::dgp::gate::dispatch {
+
+    /// @brief Register a handler at a given packed call slot.
+    /// @param packed_nr  Table index: (namespace << 5) | operation.
+    /// @param handler    The handler function.
+    /// @param meta       Authorization metadata.
+    /// @return Success, or kernel_error if slot occupied or out of range.
+    [[nodiscard]] auto register_handler(
+        u32 packed_nr,
+        dispatch_handler handler,
+        const entry_meta &meta
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Bulk-register all handlers for a namespace.
+    /// @param ns      The namespace whose handlers to register.
+    /// @param ops     Array of (operation_id, handler, meta) tuples.
+    /// @param count   Number of entries in @p ops.
+    /// @return Success, or the first registration error encountered.
+    struct registration_op {
+        u8 operation_id{};
+        dispatch_handler handler{};
+        entry_meta meta;
+    };
+
+    [[nodiscard]] auto register_namespace_handlers(
+        call_namespace ns,
+        const registration_op ops[],
+        u32 count
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Dispatch a nucleus call through the table.
+    /// @param packed_nr  Table index.
+    /// @param a0-a4      Arguments.
+    /// @return Handler return value, or ~0ULL on error.
+    [[nodiscard]] auto dispatch(
+        u32 packed_nr,
+        u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
+    ) noexcept -> u64;
+
+    /// @brief Return true if the given slot has a registered handler.
+    [[nodiscard]] auto is_registered(u32 packed_nr) noexcept -> bool;
+
+} // namespace zxfoundation::dgp::gate::dispatch_table
+
+} // end export

@@ -1,0 +1,70 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/page_cache.zcomponent/core.cxxm
+/// @brief Bounded file-backed page cache with explicit residency and mapping pins — core interface.
+
+export module zxfoundation.memory.page_cache.core;
+import zxfoundation.base.types;
+import zxfoundation.memory.page_cache.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::page_cache {
+
+    /// @brief Install the filesystem page reader used to populate cache misses.
+    [[nodiscard]] auto install_reader(read_page_fn reader) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Install the filesystem page writer used before dirty eviction.
+    [[nodiscard]] auto install_writer(write_page_fn writer) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Find or populate a page and acquire one VM mapping lease.
+    [[nodiscard]] auto acquire_page(
+        void* node, u32 index, u8 storage_key
+    ) noexcept -> std::expected<page_lease, lib::kernel_error>;
+
+    /// @brief Consume a failed-to-install lease and release its mapping pin.
+    [[nodiscard]] auto release(page_lease&& lease) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Release the VM mapping pin represented by a durable slot binding.
+    [[nodiscard]] auto release_binding(cache_binding& binding) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Acquire a second mapping pin for the same cache page.
+    [[nodiscard]] auto duplicate_binding(
+        const cache_binding& source, u8 storage_key
+    ) noexcept -> std::expected<cache_binding, lib::kernel_error>;
+
+    /// @brief Mark the page held by a live VM slot dirty.
+    [[nodiscard]] auto mark_dirty_binding(
+        const cache_binding& binding
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Return the number of cache-resident pages.
+    [[nodiscard]] auto resident_count() noexcept -> u32;
+
+    /// @brief Reclaim up to @p target_pages unmapped cache pages.
+    [[nodiscard]] auto reclaim_unmapped(u32 target_pages) noexcept -> u32;
+
+    /// @brief Probe dirty state by physical page through the PFN hash index.
+    [[nodiscard]] auto is_dirty_phys(u64 phys) noexcept -> bool;
+
+    /// @brief Mark a cache page dirty by physical address.
+    auto mark_dirty_phys(u64 phys) noexcept -> void;
+
+    /// @brief Clear software and hardware dirty state after a successful writeback.
+    auto clear_dirty_phys(u64 phys) noexcept -> void;
+
+    /// @brief Write back and evict a clean, unmapped cache page.
+    /// @return True only when the cache's resident PMM pin was released.
+    [[nodiscard]] auto evict_phys(u64 phys) noexcept -> bool;
+
+    /// @brief Evict cache pages contained in a physical drain range.
+    [[nodiscard]] auto evict_range(u64 phys_start, u64 phys_end) noexcept -> u32;
+
+} // namespace zxfoundation::memory::page_cache
+
+} // end export

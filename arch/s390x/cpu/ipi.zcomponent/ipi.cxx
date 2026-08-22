@@ -12,8 +12,8 @@ import arch.s390x.cpu.psw;
 import zxfoundation.base.types;
 import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
-import zxfoundation.sched.sched;
-import zxfoundation.sched.sched_topology;
+import zxfoundation.sched.core;
+import zxfoundation.sched.topology.core;
 import std;
 
 namespace arch::s390x::cpu::ipi {

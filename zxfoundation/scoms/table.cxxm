@@ -16,8 +16,8 @@ import arch.s390x.cpu.irq;
 import lib.error;
 import std;
 
-from_global(nomangle) auto __raw_alloc(u64) noexcept -> void*;
-from_global(nomangle) auto __raw_free(void*) noexcept -> void;
+auto allocate(u64) noexcept -> void* symalias_reference(kmalloc);
+auto free(void*) noexcept -> void symalias_reference(kfree);
 
 export {
 
@@ -64,7 +64,7 @@ namespace zxfoundation::scoms {
             object_core::complete_reclaim(object.ko);
             object.ko.id = kobject::KOBJECT_ID_INVALID;
             object.~T();
-            __raw_free(&object);
+            free(&object);
             next_ptr(id) = m_free_head;
             m_free_head = id;
         }
@@ -88,9 +88,9 @@ namespace zxfoundation::scoms {
 
         [[nodiscard]] auto ensure_slot_block(u32 block) noexcept -> bool {
             if (m_next_blocks[block]) return true;
-            auto* next = static_cast<u32*>(__raw_alloc(
+            auto* next = static_cast<u32*>(allocate(
                 sizeof(u32) * BLOCK_SIZE));
-            auto* generation = static_cast<u32*>(__raw_alloc(
+            auto* generation = static_cast<u32*>(allocate(
                 sizeof(u32) * BLOCK_SIZE));
             if (!next || !generation) return false;
             for (u32 i = 0; i < BLOCK_SIZE; ++i) {
@@ -104,7 +104,7 @@ namespace zxfoundation::scoms {
 
         [[nodiscard]] auto ensure_object_block(u32 block) noexcept -> bool {
             if (m_slot_blocks[block]) return true;
-            auto* slots = static_cast<T**>(__raw_alloc(
+            auto* slots = static_cast<T**>(allocate(
                 sizeof(T*) * BLOCK_SIZE));
             if (!slots) return false;
             for (u32 i = 0; i < BLOCK_SIZE; ++i) slots[i] = nullptr;
@@ -157,7 +157,7 @@ namespace zxfoundation::scoms {
                 return std::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::out_of_memory));
             }
-            auto* obj_ptr = static_cast<T*>(__raw_alloc(sizeof(T)));
+            auto* obj_ptr = static_cast<T*>(allocate(sizeof(T)));
             if (!obj_ptr) {
                 next_ptr(slot) = m_free_head;
                 m_free_head = slot;
@@ -176,7 +176,7 @@ namespace zxfoundation::scoms {
                 next_ptr(slot) = m_free_head;
                 m_free_head = slot;
                 obj.~T();
-                __raw_free(obj_ptr);
+                free(obj_ptr);
                 m_slot_blocks[slot / BLOCK_SIZE][slot % BLOCK_SIZE] = nullptr;
                 return std::unexpected(metadata_result.error());
             }
@@ -186,7 +186,7 @@ namespace zxfoundation::scoms {
                 next_ptr(slot) = m_free_head;
                 m_free_head = slot;
                 obj.~T();
-                __raw_free(obj_ptr);
+                free(obj_ptr);
                 m_slot_blocks[slot / BLOCK_SIZE][slot % BLOCK_SIZE] = nullptr;
                 return std::unexpected(reclaimer_result.error());
             }
@@ -241,7 +241,7 @@ namespace zxfoundation::scoms {
                 return std::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::out_of_memory));
             }
-            auto* obj_ptr = static_cast<T*>(__raw_alloc(sizeof(T)));
+            auto* obj_ptr = static_cast<T*>(allocate(sizeof(T)));
             if (!obj_ptr) {
                 next_ptr(id) = m_free_head;
                 m_free_head = id;
@@ -258,7 +258,7 @@ namespace zxfoundation::scoms {
                 next_ptr(id) = m_free_head;
                 m_free_head = id;
                 obj.~T();
-                __raw_free(obj_ptr);
+                free(obj_ptr);
                 m_slot_blocks[id / BLOCK_SIZE][id % BLOCK_SIZE] = nullptr;
                 return std::unexpected(metadata_result.error());
             }
@@ -268,7 +268,7 @@ namespace zxfoundation::scoms {
                 next_ptr(id) = m_free_head;
                 m_free_head = id;
                 obj.~T();
-                __raw_free(obj_ptr);
+                free(obj_ptr);
                 m_slot_blocks[id / BLOCK_SIZE][id % BLOCK_SIZE] = nullptr;
                 return std::unexpected(reclaimer_result.error());
             }

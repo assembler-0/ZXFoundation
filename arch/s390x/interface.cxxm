@@ -3,3 +3,4 @@ export import arch.s390x.cpu;
 export import arch.s390x.io;
 export import arch.s390x.lib;
 export import arch.s390x.trap;
+export import arch.s390x.sched;

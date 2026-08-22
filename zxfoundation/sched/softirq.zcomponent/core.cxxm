@@ -1,0 +1,72 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/softirq.cxxm
+/// @brief SCHED_SOFTIRQ dispatcher and balancing orchestration.
+
+export module zxfoundation.sched.softirq.core;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::sched::softirq {
+
+    /// @brief Balancing modes accepted by the SCHED softirq driver.
+    enum class balance_kind : u8 {
+        /// @brief Periodic tick-driven balance — fired from scheduler_tick().
+        periodic   = 0,
+        /// @brief Idle CPU entering wait state — fires newidle balance.
+        newidle    = 1,
+        /// @brief Active load balance — initiated by busy CPU softirq.
+        active     = 2,
+        /// @brief nohz idle exit balance — re-balance on wake.
+        nohz_idle  = 3,
+        /// @brief NUMA hint balance — fired by future phase 12 NUMA balancing.
+        numa       = 4,
+    };
+
+    /// @brief Per-CPU softirq balancer state carried by @c run_queue.
+    struct balance_req {
+        /// @brief Kind of balancing requested by the most recent raise.
+        std::atomic<u8> kind{0U};
+        /// @brief Counter bumped each time a balance request is queued.
+        std::atomic<u32> request_count{0U};
+        /// @brief Counter bumped each time the balancer actually runs.
+        std::atomic<u32> completion_count{0U};
+        /// @brief Set to 1 when an active-balance migration succeeded
+        std::atomic<u32> last_migration_ok{0U};
+    };
+
+    static_assert(sizeof(balance_req) <= 24U,
+        "balance_req must remain compact so it fits inside the rq lock-cache stride");
+
+    /// @brief Reason flags for a balance pass failure (mirrors Linux's).
+    enum class balance_result : u8 {
+        ok          = 0,
+        no_runnable = 1,
+        cache_hot   = 2,
+        not_busy    = 3,
+        skip_smt     = 4,
+        throttled   = 5,
+        group_skip  = 6,
+    };
+
+    /// @brief Open the SCHED_SOFTIRQ vector with the framework.
+    /// @return Success when the vector was registered.
+    auto open_sched_softirq() noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Raises SCHED_SOFTIRQ on a target CPU and records the balance kind.
+    /// @param[in] cpu  Target CPU id.
+    /// @param[in] kind Balance kind to request.
+    auto raise_balance(u16 cpu, balance_kind kind) noexcept -> void;
+
+    /// @brief Convenience: raises SCHED_SOFTIRQ on the running CPU.
+    auto raise_balance_local(balance_kind kind) noexcept -> void;
+
+    /// @brief Snapshot-read the per-CPU balance request for diagnostics.
+    /// @return Const reference to the per-CPU balance_req.
+    [[nodiscard]] auto balance_req_of(u16 cpu) noexcept -> const balance_req&;
+
+} // namespace zxfoundation::sched::softirq
+
+} // end export

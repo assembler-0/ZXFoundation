@@ -38,7 +38,7 @@ namespace arch::s390x::cpu::teid {
 
     /// @brief Union view of a 64-bit TEID.
     union teid {
-        u64 val{};
+        u64 val;
         struct {
             u64 addr : 52;  ///<  bits 0-51  — translation-exception address.
             u64 fsi  : 2;   ///<  bits 52-53 — Access-Exc Fetch/Store Indication.

@@ -9,7 +9,7 @@ import arch.s390x.cpu.types;
 
 using arch::s390x::cpu::features::facility;
 
-no_mangle {
+declscope(C) {
 
     auto __zx_clcle(const char *s1, usize l1,
                     const char *s2, usize l2) -> condition_code {

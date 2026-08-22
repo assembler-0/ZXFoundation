@@ -1,0 +1,43 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/reclaim.zcomponent/core.cxxm
+/// @brief Unified reclaim: walks page_cache + all VMAs via the SCOMS
+
+export module zxfoundation.memory.reclaim.core;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::reclaim {
+
+    using reclaim_fn = auto (*)(u8 node, u32 target_pages) noexcept -> u32;
+
+    /// @brief Install the reclaim callback used by kswapd and allocation retry.
+    /// @param[in] callback Callback that isolates and reclaims pages.
+    /// @return Success or invalid argument.
+    [[nodiscard]] auto install(reclaim_fn callback) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Reclaim pages on one NUMA node.
+    /// @param[in] node Preferred NUMA node.
+    /// @param[in] target_pages Minimum requested progress.
+    /// @return Pages reclaimed or a provider-not-ready error.
+    [[nodiscard]] auto reclaim_node(u8 node, u32 target_pages) noexcept
+        -> std::expected<u32, lib::kernel_error>;
+
+    /// @brief Reclaim enough pages to satisfy an allocation retry.
+    /// @param[in] node Preferred NUMA node.
+    /// @param[in] target_pages Minimum progress.
+    /// @return Success when progress meets the target.
+    [[nodiscard]] auto reclaim_for_allocation(u8 node, u32 target_pages) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Evict every resident page whose physical address lies in
+    ///        [phys_start, phys_end).
+    /// @return Number of frames actually freed back to PMM.
+    [[nodiscard]] auto reclaim_range(u64 phys_start, u64 phys_end) noexcept -> u32;
+
+} // namespace zxfoundation::memory::reclaim
+
+} // end export

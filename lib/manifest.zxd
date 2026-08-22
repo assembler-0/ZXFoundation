@@ -1,4 +1,5 @@
 !files : !compile_group -> [auto] {
+    interface.cxxm
     bit.cxxm
     bitmap.cxxm
     charconv.cxxm
@@ -7,11 +8,10 @@
     idalloc.cxxm
     format.cxxm
     list.cxxm
+    bitfield.cxxm
     rbtree.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-comments) ]
     queue.cxxm
     ring_buffer.cxxm
-    softirq_types.cxxm
-    softirq.cxxm
     static_vector.cxxm
     cstring.cxxm
     scope_guard.cxxm

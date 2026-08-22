@@ -1,22 +1,24 @@
-arch/s390x, zxfoundation, drivers, build: NNPA facility API, STSI configuration wrapper, and kernel-wide source refactorization
+arch/s390x, zxfoundation, drivers, build: NNPA facility API, STSI wrapper, kernel-wide zcomponent refactor
 
-    This change set adds new architecture API surface and reorganizes
-    the kernel sources under the directory-scoped zx-discovery
-    component model, consolidating module layout across the tree.
+* Architecture API: NNPA (Neural Network Processing Assist) facility interface for z16; typed STSI 15 configuration topology wrapper
+* Source refactorization: ~350 files reorganized into zcomponent layout (manifest, interface, core implementation) across arch/s390x, zxfoundation/, lib/, drivers/, crypto/, fs/
+* Build: linker scripts OUTPUT_FORMAT/OUTPUT_ARCH fixes; sysroot for s390x-glibc; zxlibstdc++ submodule update
 
-    * Architecture API.  Adds the NNPA (Neural Network Processing
-      Assist) facility interface for the z16 machine generation — facility
-      query, tensor operation functions and parameter block definitions —
-      and a typed C++ wrapper for the STSI 15 (current configuration
-      level) query, including the configuration topology view.
-
-    * Source refactorization.  Nearly all of arch/s390x and about forty
-      percent of zxfoundation are restructured into component-scoped
-      layout: each subsystem now carries a manifest, an interface module
-      and a separate implementation unit.  The lock/RCU infrastructure
-      is consolidated under sync/, the channel subsystem moves under
-      io/, and device drivers move under drivers/.  The vendored
-      libstdc++ dependency is renamed to zxlibstdc++ and the build glue
-      is adjusted accordingly.
-
-    The kernel behaviour is unchanged; this change is structural.
+Bug fixes:
+    - PAGE_MASK corrected (was offset mask, now alignment mask: ~(PAGE_SIZE-1))
+    - New trap_assert/trap_on macros using __builtin_trap()
+    - Watchdog heartbeat_bump() added for per-CPU heartbeat
+    - lib/bitfield.cxxm (561 lines) and lib/rwonce.cxxm added for type-safe bitfields and volatile access
+    - Control registers & transactional execution now use lib::bitfield records
+    - Signed i128 division/modulo (__divti3/__modti3) with overflow clamping added
+    - CPU relax/yield abstraction via DIAG 0x44 (replaces inline asm in cxxabi)
+    - namespace std violations fixed in lib/queue, string_parser, scope_guard, min_heap
+    - C++23 module extern syntax: no_mangle → from_global(nomangle)/declscope(C)
+    - Namespace _internal → detail system-wide (~50 files)
+    - SCOMS allocator: __raw_alloc/free → kmalloc/kfree via symalias_reference
+    - Scheduler: sched_cpu_up/down → cpu_up/down, sched_idle_enter → idle_enter
+    - Sync contract functions renamed (snapshot/validate_irq_state/validate_teardown_phase/advance_teardown_phase)
+    - Capability namespace: sys::cap → dgp::cap system-wide
+    - New DGP authorization component with 60+ operation→rights mappings
+    - MMU pre-init DAT validation removed; impl moved to .cxx; mmu_init → init
+    - Assembly: ret_from_fork added with user/kernel first-entry paths (lpswe for user)

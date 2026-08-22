@@ -1,0 +1,2 @@
+export module zxfoundation.memory.pmm;
+export import zxfoundation.memory.pmm.core;

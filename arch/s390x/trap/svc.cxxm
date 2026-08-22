@@ -5,10 +5,10 @@
 export module arch.s390x.trap.svc;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
-import zxfoundation.gate.gate_types;
-import zxfoundation.gate.dispatch_table;
-import zxfoundation.domain.domain_types;
-import zxfoundation.domain.strand_types;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.gate.dispatch;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.domain.types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 
@@ -16,9 +16,9 @@ export {
 
 namespace arch::s390x::trap::svc {
 
-    using zxfoundation::gate::call_namespace;
-    using zxfoundation::gate::sys_op;
-    using zxfoundation::gate::dispatch_table::dispatch;
+    using zxfoundation::dgp::gate::call_namespace;
+    using zxfoundation::dgp::gate::sys_op;
+    using zxfoundation::dgp::gate::dispatch::dispatch;
     using zxfoundation::base::lifecycle_state;
     
     /// @brief Centralized SVC nucleus-call dispatcher.
@@ -31,18 +31,18 @@ namespace arch::s390x::trap::svc {
         const u64 a4 = frame->gprs[6];
 
         const auto* lc = cpu::lowcore::get_current();
-        if (const auto* d  = lc ? reinterpret_cast<zxfoundation::domain::domain*>(lc->current_domain) : nullptr;
+        if (const auto* d  = lc ? reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain) : nullptr;
             !d || d->ko.state != lifecycle_state::active) {
             return ~0ULL;
         }
 
         const u64 result = dispatch(packed_nr, a0, a1, a2, a3, a4);
-        const u32 shm_import = zxfoundation::gate::pack_call(
+        const u32 shm_import = zxfoundation::dgp::gate::pack_call(
             call_namespace::sys, static_cast<u32>(sys_op::shm_import));
-        const u32 shm_map = zxfoundation::gate::pack_call(
+        const u32 shm_map = zxfoundation::dgp::gate::pack_call(
             call_namespace::sys, static_cast<u32>(sys_op::shm_map));
         if ((packed_nr == shm_import || packed_nr == shm_map) && result < 16U) {
-            auto* strand = reinterpret_cast<zxfoundation::domain::strand*>(
+            auto* strand = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
                 lc->percpu.current_strand);
             if (strand && strand->body) {
                 frame->access_regs[result] = strand->body->uregs.access_regs[result];

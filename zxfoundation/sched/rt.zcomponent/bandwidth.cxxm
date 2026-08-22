@@ -1,0 +1,55 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/rt_bandwidth.cxxm
+/// @brief Global RT bandwidth controller — sched_rt_period_us + per-CPU runtime
+///        enforcement.
+
+export module zxfoundation.sched.rt.bandwidth;
+import zxfoundation.sys.timer.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sched::rt::bw {
+
+    /// @brief System-wide RT bandwidth period (1 000 ms).
+    inline constexpr u64 RT_PERIOD_DEFAULT_NS = 1'000'000'000ULL;
+
+    /// @brief Per-CPU RT runtime ceiling per period (950 ms).
+    inline constexpr u64 RT_RUNTIME_DEFAULT_NS = 950'000'000ULL;
+
+    /// @brief global sched_rt_period_us
+    inline constexpr u64 sched_rt_period_us = RT_PERIOD_DEFAULT_NS / 1000ULL;
+
+    /// @brief global sched_rt_runtime_us
+    inline constexpr u64 sched_rt_runtime_us = RT_RUNTIME_DEFAULT_NS / 1000ULL;
+
+    /// @brief Per-CPU RT bandwidth accounting block.
+    /// @details Carried inside @c rt_rq.  Owned by the per-CPU @c run_queue.
+    struct rt_bandwidth {
+        u64                     rt_period_ns{RT_PERIOD_DEFAULT_NS};
+        u64                     rt_runtime_ns{RT_RUNTIME_DEFAULT_NS};
+        u64                     rt_time_ns{0ULL};
+        u64                     rt_period_start_ns{0ULL};
+        zxfoundation::sys::timer::kernel_timer  rt_period_timer{};
+        bool                    rt_throttled{false};
+        u8                      _pad[3]{};
+    };
+
+    /// @brief Period replenishment: reset the per-CPU RT runtime counter.
+    /// @param[in,out] bw Control block (int).
+    auto bw_replenish(rt_bandwidth& bw) noexcept -> void;
+
+    /// @brief Initialize one per-CPU RT bandwidth control block.
+    /// @param[in,out] bw   Control block to initialise (on BSP stack).
+    /// @param[in] cpu      CPU id.
+    auto bw_init(rt_bandwidth& bw, u16 cpu) noexcept -> void;
+
+    /// @brief Assess the RT bandwidth for the current CPU
+    /// @param[in,out] bw   Control block (mutated to set throttled).
+    /// @param[in]     consumed_ns RT consumption accounting delta (1 tick).
+    /// @return True when the CPU is now throttled.
+    auto bw_charge(rt_bandwidth& bw, u64 consumed_ns) noexcept -> bool;
+
+} // namespace zxfoundation::sched::rt_bw
+
+} // end export

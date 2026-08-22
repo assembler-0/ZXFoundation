@@ -1,0 +1,71 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/slub.zcomponent/core.cxxm
+/// @brief SLUB slab allocator — full SMP-aware implementation — core interface.
+
+export module zxfoundation.memory.slub.core;
+import zxfoundation.memory.slub.types;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::slub {
+
+    /// @brief Initialise the SLUB allocator.
+    auto slub_init() noexcept -> void;
+
+    /// @brief Attach memory_object authorities to all live kmem_caches.
+    auto slub_attach_authorities() noexcept -> void;
+
+    /// @brief Create a new slab cache.
+    /// @param[in]  name         ASCII name for diagnostics.
+    /// @param[in]  object_size  sizeof(T) for the object type.
+    /// @param[in]  align        Required alignment.  0 → use object_size alignment.
+    /// @param[in]  flags        slub_flags bitmask.
+    [[nodiscard]] auto kmem_cache_create(
+        const char*  name,
+        u32          object_size,
+        u32          align,
+        slub_flags   flags = slub_flags::none
+    ) noexcept -> std::expected<kmem_cache_ref_active, lib::kernel_error>;
+
+    /// @brief Destroy a slab cache.
+    auto kmem_cache_destroy(kmem_cache* cache) noexcept -> void;
+
+    /// @brief Return empty node-partial slabs to PMM.
+    auto kmem_cache_shrink(kmem_cache* cache) noexcept -> u32;
+
+    /// @brief Allocate one object from the given cache.
+    /// @return  Pointer to the allocated object (HHDM virtual address),
+    ///          or nullptr on OOM.
+    [[nodiscard]] auto kmem_alloc(kmem_cache& cache) noexcept -> void*;
+
+    /// @brief Typed allocation helper — returns a pointer to T.
+    /// @tparam T  Object type.  sizeof(T) must equal cache.object_size.
+    template<typename T>
+    [[nodiscard]] auto kmem_alloc_t(kmem_cache& cache) noexcept -> T* {
+        return static_cast<T*>(kmem_alloc(cache));
+    }
+    /// @brief Free one object back to its cache.
+    /// @param[in]  cache  The cache the object was allocated from.
+    /// @param[in]  obj    Pointer to the object to free.
+    auto kmem_free(kmem_cache& cache, void* obj) noexcept -> void;
+
+    /// @brief Return the number of live (allocated) objects in a cache.
+    [[nodiscard]] auto kmem_cache_live_objects(
+        const kmem_cache& cache
+    ) noexcept -> i64;
+
+    /// @brief Return a pointer to the Nth registered cache, or nullptr.
+    [[nodiscard]] auto kmem_get_cache(u32 idx) noexcept -> kmem_cache*;
+
+    /// @brief Return the total number of registered caches.
+    [[nodiscard]] auto kmem_cache_count() noexcept -> u32;
+
+    /// @brief Free a slab-allocated object without knowing its cache.
+    auto kmem_free_raw(void* ptr) noexcept -> void;
+
+} // namespace zxfoundation::memory::slub
+
+} // end export

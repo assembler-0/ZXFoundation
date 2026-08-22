@@ -18,7 +18,7 @@ import lib.cpumask;
 import lib.error;
 import std;
 
-namespace zxfoundation::smp::csd::_internal {
+namespace zxfoundation::smp::csd::detail {
 
     /// @brief Per-CPU LIFO head pointer — module-static, indexed by cpu_id.
     alignas(64) std::array<std::atomic<call_single_data*>, base::config::CONFIG_ZX_MAX_CPUS> g_csd_head{};
@@ -74,7 +74,7 @@ namespace zxfoundation::smp::csd::_internal {
         return head.exchange(nullptr, std::memory_order::acq_rel);
     }
 
-} // namespace zxfoundation::smp::_internal
+} // namespace zxfoundation::smp::detail
 
 namespace zxfoundation::smp::csd {
 
@@ -121,7 +121,7 @@ namespace zxfoundation::smp::csd {
 
     /// @brief Drain all pending CSD nodes for the running CPU.
     auto drain_cpu() noexcept -> void {
-        call_single_data* node = _internal::queue_drain_all();
+        call_single_data* node = detail::queue_drain_all();
         while (node) {
             call_single_data* const next = node->next.load(std::memory_order::acquire);
             const u32 flags = node->flags.load(std::memory_order::relaxed);
@@ -149,9 +149,9 @@ namespace zxfoundation::smp::csd {
                     std::memory_order::release);
             }
             if (flags & CSD_F_DISPATCH_LEASE)
-                _internal::dispatch_lease_release(
+                detail::dispatch_lease_release(
                     arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id);
-            ++_internal::g_csd_stats[arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id]
+            ++detail::g_csd_stats[arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id]
                  .dispatch_count;
             node = next;
         }
@@ -182,11 +182,11 @@ namespace zxfoundation::smp::csd {
         }
 
         const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
-        ++_internal::g_csd_stats[self].csd_call_count;
+        ++detail::g_csd_stats[self].csd_call_count;
 
         if (cpu != self) {
             if (!arch::s390x::cpu::cpumask::cpu_online(cpu) ||
-                !_internal::dispatch_lease_try_acquire(cpu)) {
+                !detail::dispatch_lease_try_acquire(cpu)) {
                 return std::unexpected(
                     lib::kernel_error::from_arch(lib::arch_error::cpu_not_available));
             }
@@ -194,7 +194,7 @@ namespace zxfoundation::smp::csd {
                 CSD_F_DISPATCH_LEASE, std::memory_order::release);
         }
 
-        const bool need_ipi = _internal::queue_push(cpu, csd);
+        const bool need_ipi = detail::queue_push(cpu, csd);
         discard_value csd->flags.fetch_or(CSD_F_QUEUED, std::memory_order::release);
 
         if (cpu == self) {
@@ -212,10 +212,10 @@ namespace zxfoundation::smp::csd {
     /// @note CPU teardown keeps the target runnable until this wait completes.
     auto disable_cpu(u16 cpu) noexcept -> void {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
-        auto& state = _internal::g_csd_dispatch_state[cpu];
+        auto& state = detail::g_csd_dispatch_state[cpu];
         const u32 old = state.fetch_or(
-            _internal::CSD_DISPATCH_DISABLED, std::memory_order::acq_rel);
-        while ((state.load(std::memory_order::acquire) & _internal::CSD_DISPATCH_COUNT_MASK) != 0U)
+            detail::CSD_DISPATCH_DISABLED, std::memory_order::acq_rel);
+        while ((state.load(std::memory_order::acquire) & detail::CSD_DISPATCH_COUNT_MASK) != 0U)
             arch::s390x::cpu::sync::cpu_relax();
         discard_value old;
     }
@@ -223,7 +223,7 @@ namespace zxfoundation::smp::csd {
     /// @brief Allow remote CSD enqueues to @p cpu after it has been initialized.
     auto enable_cpu(u16 cpu) noexcept -> void {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
-        _internal::g_csd_dispatch_state[cpu].store(0U, std::memory_order::release);
+        detail::g_csd_dispatch_state[cpu].store(0U, std::memory_order::release);
     }
 
     /// @brief Synchronous single-CPU function-call IPI.
@@ -275,7 +275,7 @@ namespace zxfoundation::smp::csd {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
-        ++_internal::g_csd_stats[self].csd_call_many_count;
+        ++detail::g_csd_stats[self].csd_call_many_count;
 
         u32 remote_targets = 0U;
         mask.for_each([&](u16 cpu) noexcept -> void {
@@ -322,13 +322,13 @@ namespace zxfoundation::smp::csd {
     /// @return True when the running CPU's CSD queue is non-empty.
     [[nodiscard]] auto pending() noexcept -> bool {
         const u16 cpu = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
-        return _internal::g_csd_head[cpu].load(std::memory_order::acquire) != nullptr;
+        return detail::g_csd_head[cpu].load(std::memory_order::acquire) != nullptr;
     }
 
     /// @brief Read the per-CPU CSD statistics block for diagnostics.
     [[nodiscard]] auto stats_of(u16 cpu) noexcept -> csd_stats {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return {};
-        return _internal::g_csd_stats[cpu];
+        return detail::g_csd_stats[cpu];
     }
 
 } // namespace zxfoundation::smp

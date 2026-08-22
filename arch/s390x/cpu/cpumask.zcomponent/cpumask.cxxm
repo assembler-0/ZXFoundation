@@ -48,7 +48,7 @@ namespace arch::s390x::cpu::cpumask {
     template <typename Fn>
         requires std::is_invocable_r_v<void, Fn&, u16>
     auto for_each_online_cpu(Fn&& fn) noexcept -> void {
-        _internal::g_online_mask.for_each(static_cast<Fn&&>(fn), std::memory_order::acquire);
+        detail::g_online_mask.for_each(static_cast<Fn&&>(fn), std::memory_order::acquire);
     }
 
     /// @brief Invoke @p fn for every possible CPU, in ascending id order.
@@ -56,7 +56,7 @@ namespace arch::s390x::cpu::cpumask {
     /// @param[in] fn Callback receiving each possible CPU id.
     template <typename Fn>
     auto for_each_possible_cpu(Fn&& fn) noexcept -> void {
-        _internal::g_possible_mask.for_each(static_cast<Fn&&>(fn), std::memory_order::relaxed);
+        detail::g_possible_mask.for_each(static_cast<Fn&&>(fn), std::memory_order::relaxed);
     }
 
 } // namespace arch::s390x::cpu::cpumask

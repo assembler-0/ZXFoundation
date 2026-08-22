@@ -1,0 +1,172 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/nc_cap.cxxm
+/// @brief Capability namespace dispatch handler.
+
+export module zxfoundation.dgp.gate.nc_cap;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.base.types;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sys.printk.core;
+import lib.error;
+import std;
+import arch.s390x.cpu.lowcore;
+import zxfoundation.dgp.cap.core;
+import zxfoundation.dgp.cap.types;
+
+static constexpr u64 NC_CAP_ERROR = ~0ULL;
+
+namespace zxfoundation::dgp::gate::nc_cap::detail {
+
+    using namespace zxfoundation::dgp::cap;
+
+    [[nodiscard]] auto current_domain() noexcept -> zxfoundation::dgp::domain::domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain);
+    }
+
+    auto nc_cap_acquire(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_CAP_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::cap_acquire,
+            zxfoundation::dgp::authorization_metadata{});
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("cap_acquire: DGP authorization denied");
+            return NC_CAP_ERROR;
+        }
+
+        const cap_token source{a0};
+        const auto rights = static_cast<cap_rights>(a1 & 0xFFFFU);
+
+        auto result = cap_acquire(source, rights, d->ko.id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("cap_acquire: source capability denied");
+            return NC_CAP_ERROR;
+        }
+
+        return result->raw;
+    }
+
+    auto nc_cap_release(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_CAP_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::cap_release,
+            zxfoundation::dgp::authorization_metadata{});
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("cap_release: DGP authorization denied");
+            return NC_CAP_ERROR;
+        }
+
+        const cap_token token{a0};
+        auto owner = zxfoundation::dgp::cap::cap_validate_generic_for(
+            token, cap_rights::none, d->ko.id);
+        if (!owner) {
+            zxfoundation::sys::printk::perr("cap_release: ownership denied");
+            return NC_CAP_ERROR;
+        }
+        auto result = cap_release(token);
+        if (!result) {
+            zxfoundation::sys::printk::perr("cap_release: failed");
+            return NC_CAP_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_cap_validate(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_CAP_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::cap_validate,
+            zxfoundation::dgp::authorization_metadata{});
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("cap_validate: DGP authorization denied");
+            return NC_CAP_ERROR;
+        }
+
+        const cap_token token{a0};
+        const auto needed = static_cast<cap_rights>(a1 & 0xFFFFU);
+
+        auto result = zxfoundation::dgp::cap::cap_validate_generic_for(
+            token, needed, d->ko.id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("cap_validate: failed");
+            return NC_CAP_ERROR;
+        }
+
+        return 0;
+    }
+
+    auto nc_cap_revoke(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_CAP_ERROR;
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::cap_revoke,
+            zxfoundation::dgp::authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::delegate,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("cap_revoke: DGP authorization denied");
+            return NC_CAP_ERROR;
+        }
+
+        const cap_token token{a0};
+        auto owner = zxfoundation::dgp::cap::cap_validate_generic_for(
+            token, cap_rights::none, d->ko.id);
+        if (!owner) {
+            zxfoundation::sys::printk::perr("cap_revoke: ownership denied");
+            return NC_CAP_ERROR;
+        }
+        auto result = zxfoundation::dgp::cap::cap_revoke(token);
+        if (!result) {
+            zxfoundation::sys::printk::perr("cap_revoke: failed");
+            return NC_CAP_ERROR;
+        }
+        return 0;
+    }
+
+} // namespace __cap_detail
+
+export {
+
+namespace zxfoundation::dgp::gate::nc_cap {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::dgp::gate::cap_op;
+
+        switch (static_cast<cap_op>(op)) {
+        case cap_op::acquire:
+            return detail::nc_cap_acquire(a0, a1, a2, a3, a4);
+        case cap_op::release:
+            return detail::nc_cap_release(a0, a1, a2, a3, a4);
+        case cap_op::validate:
+            return detail::nc_cap_validate(a0, a1, a2, a3, a4);
+        case cap_op::revoke:
+            return detail::nc_cap_revoke(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("cap_dispatch: unknown op {}", op);
+            return NC_CAP_ERROR;
+        }
+    }
+
+
+    template <cap_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
+    }
+
+} // namespace zxfoundation::dgp::gate::nc_cap
+
+} // end export

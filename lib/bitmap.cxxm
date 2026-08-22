@@ -19,10 +19,6 @@ namespace lib {
         static constexpr usize bits_per_word = 64;
         static constexpr usize word_count    = (N + bits_per_word - 1) / bits_per_word;
 
-        /// @brief Atomic storage per word. std::atomic lowers on s390x to
-        ///        the same @c __atomic_* builtins as the previous homegrown
-        ///        wrapper — i.e. @c LAA/LAAG + @c STOC/STOCG for the
-        ///        read-modify-write ops and @c LPGR/LGFR for plain loads.
         using atomic_u64 = std::atomic<u64>;
 
         std::array<atomic_u64, word_count> m_storage{};
@@ -93,8 +89,6 @@ namespace lib {
         }
 
         /// @brief Find first set bit strictly after @p after.
-        /// @details Skips fully-clear 64-bit words, so a forward sweep over
-        ///          the whole bitmap costs O(N/64 + popcount) per call.
         [[nodiscard]] auto find_next_set(usize after) const noexcept -> std::optional<usize> {
             const usize start = after + 1;
             if (start >= N) return std::nullopt;

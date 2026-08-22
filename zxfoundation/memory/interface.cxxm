@@ -1,0 +1,10 @@
+export module zxfoundation.memory;
+export import zxfoundation.memory.hhdm;
+export import zxfoundation.memory.objects;
+export import zxfoundation.memory.oom;
+export import zxfoundation.memory.page_cache;
+export import zxfoundation.memory.pmm;
+export import zxfoundation.memory.reclaim;
+export import zxfoundation.memory.rmap;
+export import zxfoundation.memory.slub;
+export import zxfoundation.memory.vm;

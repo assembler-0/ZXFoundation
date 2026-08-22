@@ -1,0 +1,2 @@
+export module zxfoundation.dgp.authorize;
+export import zxfoundation.dgp.authorize.core;

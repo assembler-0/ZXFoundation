@@ -1,0 +1,107 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/domain.zcomponent/core.cxxm
+/// @brief Domain subsystem interface — domain, strand, and lifecycle
+///        management entry points.
+
+export module zxfoundation.dgp.domain.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.scoms.table;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+/// @brief The global domain table — SCOMS scoms_table.
+from_global(nomangle) namespace zxfoundation::dgp::domain {
+    scoms::scoms_table<domain, MAX_DOMAINS> g_domain_table;
+}
+
+export {
+
+namespace zxfoundation::dgp::domain {
+
+    /// @brief Initialize the strand SCOMS table.
+    auto strand_init() noexcept -> void;
+
+    /// @brief Allocate a per-CPU idle strand from the SCOMS strand table.
+    /// @param cpu  CPU this idle strand is pinned to.
+    /// @return Pointer to the idle strand, or kernel_error.
+    /// @note Idle strands have owner == nullptr and strand_flags::idle set.
+    [[nodiscard]] auto idle_strand_create(u16 cpu) noexcept
+        -> std::expected<strand*, lib::kernel_error>;
+
+    /// @brief Destroy a per-CPU idle strand and release its SCOMS slot.
+    /// @param s Idle strand to destroy.
+    /// @return Success or kernel_error.
+    [[nodiscard]] auto idle_strand_destroy(strand& s) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Create a secondary strand within a domain.
+    /// @param owner Domain that will own the strand.
+    /// @param cpu   CPU affinity (0 for any, or specific CPU).
+    /// @return Pointer to the created strand, or kernel_error.
+    [[nodiscard]] auto strand_create(
+        domain* owner, u16 cpu = 0
+    ) noexcept -> std::expected<strand*, lib::kernel_error>;
+
+    /// @brief Destroy a secondary strand that has already left all run queues.
+    /// @param[in,out] s Strand whose stack and SCOMS identity should be released.
+    /// @return Success or kernel_error when the strand is still runnable or invalid.
+    [[nodiscard]] auto strand_destroy(strand& s) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Create a new domain.
+    /// @param[in] name  Human-readable name (pointer must remain valid for
+    ///                   the domain's lifetime).
+    /// @return Pointer to the newly created and activated domain, or kernel_error.
+    [[nodiscard]] auto domain_create(const char* name) noexcept
+        -> std::expected<domain*, lib::kernel_error>;
+
+    /// @brief Destroy a domain and release all its resources.
+    /// @param[in] id  Domain ID to destroy.
+    /// @return Success or kernel_error on invalid ID or an already-claimed domain.
+    [[nodiscard]] auto domain_destroy(domain_id id) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Look up a domain by ID.
+    /// @param[in] id  Domain ID.
+    /// @return Pointer to the domain, or nullptr if the slot is unused or
+    ///         the ID is out of range.
+    [[nodiscard]] auto domain_find(domain_id id) noexcept -> domain*;
+
+    /// @brief Activate a domain: transition from embryo → active.
+    /// @param[in] id  Domain ID to activate.
+    /// @return Success, or kernel_error if the domain is not in embryo state.
+    [[nodiscard]] auto domain_activate(domain_id id) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Return the current number of live domains.
+    [[nodiscard]] auto domain_count() noexcept -> u32;
+
+    /// @brief Invoke @p fn for every live domain in the system.
+    /// @tparam Fn  Callable of signature @c bool(domain&) noexcept.
+    /// @param[in] fn  Visitor.  Return @c true to continue, @c false to stop.
+    /// @return Number of domains visited.
+    template <typename Fn>
+    auto domain_for_each(Fn&& fn) noexcept -> u32 {
+        return g_domain_table.for_each(static_cast<Fn&&>(fn));
+    }
+
+    auto register_domain_cap_lookup() noexcept -> void;
+
+    /// @brief Initialize the domain subsystem.
+    auto domain_init() noexcept -> void;
+
+    /// @brief Get the nucleus domain — the kernel's own domain identity.
+    /// @return Pointer to the nucleus domain (slot 0).  Always non-null
+    ///         after @ref domain_init_nucleus has been called.
+    [[nodiscard]] auto domain_nucleus() noexcept -> domain*;
+
+    /// @brief Return the currently-running domain
+    [[nodiscard]] auto current_domain_or_nucleus() noexcept -> domain*;
+
+    /// @brief Initialize the nucleus domain at slot 0.
+    [[nodiscard]] auto domain_init_nucleus() noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+} // namespace zxfoundation::dgp::domain
+
+} // end export

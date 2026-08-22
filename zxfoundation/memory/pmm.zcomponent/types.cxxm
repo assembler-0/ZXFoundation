@@ -1,0 +1,244 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/pmm.zcomponent/types.cxxm
+/// @brief Physical memory manager type definitions.
+
+export module zxfoundation.memory.pmm.types;
+import zxfoundation.base.types;
+import zxfoundation.base.typestate;
+import zxfoundation.memory.hhdm;
+import zxfoundation.memory.numa.types;
+import zxfoundation.scoms.kobject.types;
+import std;
+
+export {
+
+namespace zxfoundation::memory::pmm {
+
+    using base::lifecycle_state;
+    using base::typestate;
+
+    constexpr u32 MAX_ORDER     = 10;                  ///< Largest block: 2^10 pages = 4 MiB
+
+    /// @brief Maximum order served by the per-CPU page cache (2^3 pages = 32 KiB).
+    constexpr u32 PCP_MAX_ORDER = 3;
+
+    /// @brief Pages bulk-moved between PCP and buddy per refill/drain call.
+    constexpr u32 PCP_BATCH     = 16;
+
+    /// @brief Per-list high-watermark.  A drain is triggered when count > PCP_HIGH.
+    constexpr u32 PCP_HIGH      = 128;
+
+    constexpr u64 MAX_PHYS_GB   = 512ULL;
+    constexpr u64 MAX_FRAMES    = (MAX_PHYS_GB << 30) >> PAGE_SHIFT;
+
+    /// @brief z/Architecture CCW/CDA 31-bit addressing constraint.
+    constexpr u64 ZONE_DMA_LIMIT = 2ULL << 30;
+
+    /// @brief Physical address zone.
+    enum class zone : u8 {
+        dma31  = 0, ///< [0, 2 GiB): lowcores, AP stacks, CCW channel programs.
+        normal = 1, ///< [2 GiB, ∞): page tables, heap, kernel objects.
+        count  = 2,
+    };
+
+    /// @brief Replaces GFP_ZERO.
+    enum class page_init : u8 {
+        uninitialized = 0,
+        zeroed        = 1,
+    };
+
+    /// @brief Semantic purpose; stored in frame_desc for reverse-lookup.
+    enum class purpose : u8 {
+        generic    = 0,
+        lowcore    = 1, ///< 8 KiB prefix area; 8 KiB aligned; zone::dma31.
+        stack      = 2,
+        page_table = 3,
+        device_dma = 4,
+        heap       = 5,
+        slab       = 6, ///< Slab cache backing pages.
+        frame_desc = 7, ///< The frame_desc table itself.
+        file_cache = 8, ///< Page-cache resident frame.
+        reserved_swap = 9,
+    };
+
+    template <purpose P> constexpr zone purpose_zone = zone::normal;
+    template <> constexpr zone purpose_zone<purpose::lowcore>    = zone::dma31;
+    template <> constexpr zone purpose_zone<purpose::stack>      = zone::dma31;
+    template <> constexpr zone purpose_zone<purpose::device_dma> = zone::dma31;
+
+    template <purpose P> constexpr u64 purpose_align = PAGE_SIZE;
+    template <> constexpr u64 purpose_align<purpose::lowcore> = 8192ULL;
+
+    /// @brief Which subsystem currently owns a physical frame.
+    enum class frame_owner : u8 {
+        none       = 0, ///< Frame not present / never initialized.
+        reserved   = 1, ///< Firmware / kernel image / lowcore — permanently off-limits.
+        buddy      = 2, ///< In the buddy free list or PCP (pmm-owned).
+        slab       = 3, ///< Backing a slab_cache.
+        domain     = 4, ///< Backing a domain memory mapping.
+        page_table = 5, ///< A page table frame.
+        stack      = 6, ///< Kernel stack.
+        device     = 7, ///< DMA / device buffer.
+        reserved_typed_view = 8,
+    };
+
+    /// @brief Per-frame status flags.
+    enum frame_flags : u8 {
+        ff_none    = 0,
+        ff_suspect = 1U << 0, ///< MCCK corrected error; still usable.
+        ff_offline = 1U << 1, ///< MCCK uncorrected; frame excluded from merging and allocation.
+        ff_zeroed  = 1U << 2, ///< Contents are known-zero (set by page_init::zeroed path).
+        ff_shared  = 1U << 3, ///< refcount > 1 (CoW / file cache / shared grant).
+        ff_head    = 1U << 4,
+    };
+
+    /// @brief Compact per-physical-frame metadata record.
+    struct frame_desc {
+        std::atomic<u8> order_owner{0};
+        std::atomic<u8> flags{0};
+        u8  numa_node{0};   ///< NUMA node that owns this frame for free, rollback, and PCP placement.
+        u8  _r0{0};
+        std::atomic<u16> refcount{0};    ///< Accessed exclusively via __atomic* builtins in pmm.cxxm.
+        u16 _r1{0};
+        std::atomic<u32> object_id{scoms::kobject::KOBJECT_ID_INVALID};
+        /// @brief SCOMS generation paired with @ref object_id.
+        std::atomic<u32> object_generation{0};
+
+        [[nodiscard]] auto order() const noexcept -> u8 {
+            const u8 val = order_owner.load(std::memory_order::acquire);
+            return static_cast<u8>(val >> 4);
+        }
+        [[nodiscard]] auto owner() const noexcept -> frame_owner {
+            const u8 val = order_owner.load(std::memory_order::acquire);
+            return static_cast<frame_owner>(val & 0x0FU);
+        }
+        auto set_order(u8 o) noexcept -> void {
+            const u8 cur = order_owner.load(std::memory_order::relaxed);
+            order_owner.store(static_cast<u8>((o << 4) | (cur & 0x0FU)),
+                              std::memory_order::release);
+        }
+        auto set_owner(frame_owner ow) noexcept -> void {
+            const u8 cur = order_owner.load(std::memory_order::relaxed);
+            order_owner.store(static_cast<u8>((cur & 0xF0U) | static_cast<u8>(ow)),
+                              std::memory_order::release);
+        }
+
+        /// Atomically OR bits into flags (used for MCCK ff_offline / ff_suspect).
+        auto or_flags(u8 bits) noexcept -> void {
+            flags.fetch_or(bits, std::memory_order::acq_rel);
+        }
+        /// Atomically read flags.
+        [[nodiscard]] auto load_flags(std::memory_order mo = std::memory_order::acquire) const noexcept -> u8 {
+            return flags.load(mo);
+        }
+        /// Atomically write flags (used by set() and paths that already hold the zone lock).
+        auto store_flags(u8 val, std::memory_order mo = std::memory_order::release) noexcept -> void {
+            flags.store(val, mo);
+        }
+
+        /// @brief Initialize all fields in one call.
+        /// @param[in] o     Buddy order (0–MAX_ORDER).
+        /// @param[in] ow    Owning subsystem.
+        /// @param[in] numa  Owning NUMA node for allocator free, rollback, and local-cache policy.
+        /// @param[in] fl    Initial frame_flags bitmask.
+        auto set(u8 o, frame_owner ow, u8 numa = 0, u8 fl = ff_none) noexcept -> void {
+            order_owner.store(static_cast<u8>((o << 4) | static_cast<u8>(ow)),
+                              std::memory_order::release);
+            flags.store(fl, std::memory_order::release);
+            numa_node   = numa;
+            _r0         = 0;
+            refcount.store(0, std::memory_order::release);
+            _r1         = 0;
+            object_id.store(scoms::kobject::KOBJECT_ID_INVALID, std::memory_order::release);
+            object_generation.store(0U, std::memory_order::release);
+        }
+    };
+
+    static_assert(sizeof(frame_desc) == 16, "frame_desc must remain thin and stable");
+    static_assert(__builtin_offsetof(frame_desc, refcount)  ==  4,
+        "refcount must remain at offset 4 — PMM atomics depend on it");
+    static_assert(__builtin_offsetof(frame_desc, object_id) ==  8,
+        "object_id must remain at offset 8 — fault/allocators depend on it");
+    static_assert(__builtin_offsetof(frame_desc, object_generation) == 12,
+        "object_generation must remain adjacent to object_id");
+
+    /// @brief One order-specific free list within the PCP.
+    struct pcp_list {
+        u64 head_phys{0}; ///< Physical base of the chain head; 0 = empty.
+        u32 count{0};     ///< Number of pages currently in this list.
+        u32 _pad{0};
+    };
+    static_assert(sizeof(pcp_list) == 16);
+
+    /// @brief Per-CPU page cache block.
+    /// @note Lists are indexed by NUMA node, zone, and order so remote frees do not poison local refill policy.
+    struct pcp_pool {
+        pcp_list lists[numa::MAX_NUMA_NODES][static_cast<u32>(zone::count)][PCP_MAX_ORDER + 1]{};
+    };
+
+    static_assert(sizeof(pcp_pool) ==
+        numa::MAX_NUMA_NODES * static_cast<u32>(zone::count) * (PCP_MAX_ORDER + 1U) * 16U,
+        "pcp_pool layout mismatch");
+
+    /// @brief Move-only, typestate-tracked physical memory allocation.
+    template <lifecycle_state State = lifecycle_state::embryo>
+    class folio : public typestate<State> {
+    public:
+        u64     phys_base{0};
+        u32     order{0};
+        purpose use{purpose::generic};
+        zone    mem_zone{zone::normal};
+
+        folio() noexcept = default;
+        folio(u64 base, u32 ord, purpose p, zone z) noexcept
+            : phys_base(base), order(ord), use(p), mem_zone(z) {}
+
+        [[nodiscard]] auto page_count() const noexcept -> u64 { return 1ULL << order; }
+        [[nodiscard]] auto size_bytes() const noexcept -> u64 { return page_count() << PAGE_SHIFT; }
+        [[nodiscard]] auto pfn()        const noexcept -> u64 { return phys_base >> PAGE_SHIFT; }
+        [[nodiscard]] auto virt()       const noexcept -> void* {
+            return reinterpret_cast<void*>(hhdm::phys_to_virt(phys_base));
+        }
+        [[nodiscard]] explicit operator bool() const noexcept { return phys_base != 0; }
+
+        /// @brief Advance embryo → active, consuming this folio.
+        /// @note  Only available on embryo folios (requires clause).
+        [[nodiscard]] auto make_active() && noexcept -> folio<lifecycle_state::active>
+            requires (State == lifecycle_state::embryo) {
+            folio<lifecycle_state::active> r{ phys_base, order, use, mem_zone };
+            phys_base = 0;
+            return r;
+        }
+    };
+
+    using folio_embryo = folio<lifecycle_state::embryo>;
+    using folio_active = folio<lifecycle_state::active>;
+
+    /// @brief Node-aware allocation request used by the PMM compatibility wrappers.
+    struct allocation_request {
+        u32 order{0U};
+        zone mem_zone{zone::normal};
+        purpose use{purpose::generic};
+        page_init init{page_init::uninitialized};
+        numa::allocation_policy placement{};
+    };
+
+    /// @brief Node-aware allocation result.
+    struct allocation_result {
+        u64 phys_base{0ULL};
+        u32 order{0U};
+        purpose use{purpose::generic};
+        zone mem_zone{zone::normal};
+        numa::placement_result placement{};
+
+        /// @brief Convert the result into an embryo folio typestate value.
+        /// @return Embryo folio carrying the physical allocation represented by this result.
+        /// @note The result object remains a scalar record so it can be transported by `std::expected` without copying a typestate object.
+        [[nodiscard]] auto into_folio() const noexcept -> folio_embryo {
+            return folio_embryo{phys_base, order, use, mem_zone};
+        }
+    };
+
+} // namespace zxfoundation::memory::pmm
+
+} // end export

@@ -1,0 +1,28 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/idle.cxxm
+/// @brief Idle scheduling class and idle strand initialization.
+
+export module zxfoundation.sched.idle.core;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.base.types;
+import zxfoundation.sched.classed.core;
+
+export {
+
+namespace zxfoundation::sched::idle {
+
+    from_global(reference) const classed::sched_class the_class;
+
+    /// @brief Initialize the per-CPU idle strand.
+    /// @param cpu_id  Logical CPU this idle strand serves.
+    /// @return Pointer to the idle strand, or nullptr on allocation failure.
+    [[nodiscard]] auto init_idle_strand(u16 cpu_id) noexcept -> dgp::domain::strand*;
+
+    /// @brief Destroy a per-CPU idle strand, releasing its SCOMS slot and stack.
+    /// @param s Idle strand to destroy (must not be on_rq or running).
+    /// @return True on success, false on error.
+    [[nodiscard]] auto deinit_idle_strand(dgp::domain::strand& s) noexcept -> bool;
+
+} // namespace zxfoundation::sched::idle
+
+} // end export

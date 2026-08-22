@@ -1,0 +1,195 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/memory/pmm.zcomponent/core.cxxm
+/// @brief Physical Memory Manager — core interface
+
+export module zxfoundation.memory.pmm.core;
+import zxfoundation.base.types;
+import zxfoundation.memory.pmm.types;
+import zxfoundation.memory.numa.types;
+import zxfoundation.base.transaction;
+import arch.s390x.init.zxfl.protocol;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::memory::pmm {
+
+    /// @brief Callback invoked once after a sleepable allocation exhausts all
+    ///        eligible node zones.
+    using allocation_retry_fn = auto (*)(u8 node, u32 target_pages) noexcept -> u32;
+
+    /// @brief Install the allocation-pressure reclaim callback.
+    [[nodiscard]] auto install_allocation_retry(
+        allocation_retry_fn callback
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Initialize the PMM from the ZXFL boot protocol.
+    /// @param[in] proto  Validated ZXFL boot protocol.
+    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void;
+
+    /// @brief Mark a physical range as permanently reserved (runtime call).
+    /// @param[in] phys   Start of the range (page-aligned).
+    /// @param[in] order  log2 of the number of pages to reserve.
+    auto reserve(u64 phys, u32 order) noexcept -> void;
+
+    constexpr u32 TXN_MAX = 16;
+    /// @brief Atomic multi-folio allocation transaction.
+    class transaction : public zxfoundation::base::transaction<transaction> {
+        friend class zxfoundation::base::transaction<transaction>;
+
+        struct slot {
+            u64     phys{0};
+            u32     order{0};
+            zone    z{zone::normal};
+            purpose p{purpose::generic};
+            u8      node_id{numa::NUMA_NODE_BOOT};
+        };
+
+        std::array<slot, TXN_MAX> m_slots{};
+        u32 m_count{0};
+
+        auto on_rollback() noexcept -> void;
+
+    public:
+        transaction()                      noexcept = default;
+        transaction(const transaction&)             = delete;
+        auto operator=(const transaction&)          = delete;
+
+        /// @brief Allocate one folio within this transaction.
+        /// @param[in] order  Buddy order (0 = 4 KiB, MAX_ORDER = 4 MiB).
+        /// @param[in] z      Zone constraint.
+        /// @param[in] p      Semantic purpose annotation.
+        /// @param[in] init   Initialization policy.
+        /// @return folio_embryo on success, kernel_error on failure.
+        [[nodiscard]] auto alloc(
+            u32       order,
+            zone      z,
+            purpose   p    = purpose::generic,
+            page_init init = page_init::uninitialized
+        ) noexcept -> std::expected<folio_embryo, lib::kernel_error>;
+
+        [[nodiscard]] auto count() const noexcept -> u32 ;
+
+        /// @brief Retrieve the physical address of slot i (valid after commit).
+        [[nodiscard]] auto phys(u32 i) const noexcept -> u64;
+    };
+
+    /// @brief Allocate a single folio.
+    /// @param[in] request Node-aware allocation request.
+    /// @return Allocation result containing the folio and resolved placement metadata.
+    /// @note Order-zero through PCP_MAX_ORDER allocations attempt the current CPU's node-local PCP first.
+    /// @warning Allocation is forbidden in MCCK context and multi-page allocation is forbidden in hard IRQ context.
+    [[nodiscard]] auto alloc(
+        const allocation_request& request
+    ) noexcept -> std::expected<allocation_result, lib::kernel_error>;
+
+    /// @brief Allocate a single folio.
+    /// @param[in] order  Buddy order (0–MAX_ORDER).
+    /// @param[in] z      Zone constraint.
+    /// @param[in] p      Semantic purpose annotation.
+    /// @param[in] init   Initialization policy.
+    /// @return folio_embryo on success, kernel_error on failure.
+    [[nodiscard]] auto alloc(
+        u32       order,
+        zone      z,
+        purpose   p    = purpose::generic,
+        page_init init = page_init::uninitialized
+    ) noexcept -> std::expected<folio_embryo, lib::kernel_error>;
+
+    /// @brief Return a folio to the allocator.
+    /// @param[in] f  The folio to free.  Must not be empty.
+    auto free(folio_active f) noexcept -> void;
+
+    /// @brief Atomically increment a frame's refcount.
+    /// @param[in] phys  Physical base address of the frame.
+    /// @return New refcount on success, kernel_error on invalid address.
+    [[nodiscard]] auto frame_ref(u64 phys) noexcept
+        -> std::expected<u16, lib::kernel_error>;
+
+    /// @brief Fail-closed frame-descriptor accessor.
+    /// @param[in] phys  Physical address (lower PAGE_SHIFT bits are ignored).
+    /// @return Pointer into the frame descriptor table, or a kernel_error when
+    ///         the PMM is uninitialized or @p phys is outside the managed
+    ///         physical range.
+    [[nodiscard]] auto desc_of_checked(u64 phys) noexcept
+        -> std::expected<frame_desc*, lib::kernel_error>;
+
+    /// @brief Atomically decrement a frame's refcount.
+    /// @param[in] phys  Physical base address of the frame.
+    /// @return New refcount on success, kernel_error on invalid address.
+    [[nodiscard]] auto frame_unref(u64 phys) noexcept
+        -> std::expected<u16, lib::kernel_error>;
+
+    /// @brief Release one order-zero mapping pin and return the frame
+    /// @return True when this call returned the frame to buddy/PCP, false when
+    ///         another pin still owns it.
+    [[nodiscard]] auto frame_release_pin(u64 phys) noexcept
+        -> std::expected<bool, lib::kernel_error>;
+
+    /// @brief Stamp the SCOMS memory_object id that authorizes this frame.
+    /// @param[in] phys Physical frame address.
+    /// @param[in] object_id SCOMS id of the authoritative memory_object
+    ///                      (typically a vm_region's storage_object grant,
+    ///                      or KOBJECT_ID_INVALID to clear).
+    /// @param[in] object_generation SCOMS generation paired with @p object_id.
+    /// @param[in] writable True when the frame backs a writable mapping.
+    /// @return Success or a checked physical-address error.
+    [[nodiscard]] auto frame_set_mapping_metadata(
+        u64 phys, u32 object_id, u32 object_generation, bool writable = true
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Clear the authority identity stamped on one physical frame.
+    [[nodiscard]] auto frame_clear_mapping_metadata(u64 phys) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Return the current atomic reference count of a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return Reference count or a checked physical-address error.
+    [[nodiscard]] auto frame_refcount(u64 phys) noexcept
+        -> std::expected<u16, lib::kernel_error>;
+
+    /// @brief Validate that a physical range is owned by one SCOMS object.
+    /// @param[in] phys_start Page-aligned physical range start.
+    /// @param[in] length Range length in bytes.
+    /// @param[in] object_id Required SCOMS id (must match @ref frame_desc::object_id).
+    /// @param[in] object_generation Required paired SCOMS generation.
+    /// @return Success only when every page carries the exact live object
+    ///         identity and generation, and is not MCCK-offline.
+    [[nodiscard]] auto frame_validate_mapping(
+        u64 phys_start, u64 length, u32 object_id, u32 object_generation
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Resolve the SCOMS memory_object_id that authorizes a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return SCOMS id, or @ref KOBJECT_ID_INVALID when the frame is not
+    ///         bound to a memory authority (buddy-owned, reserved, page-table).
+    [[nodiscard]] auto frame_object_id_of(u64 phys) noexcept
+        -> std::expected<u32, lib::kernel_error>;
+
+    /// @brief Resolve the SCOMS generation paired with a frame authority id.
+    [[nodiscard]] auto frame_object_generation_of(u64 phys) noexcept
+        -> std::expected<u32, lib::kernel_error>;
+
+    /// @brief Return the NUMA node id recorded for a frame.
+    /// @param[in] phys Physical frame address.
+    /// @return NUMA node id, or a checked physical-address error.
+    [[nodiscard]] auto frame_node_of(u64 phys) noexcept
+        -> std::expected<u8, lib::kernel_error>;
+
+    /// @brief Advisory free page count (sum across all zones).
+    [[nodiscard]] auto free_page_count() noexcept -> u64;
+
+    /// @brief Total managed page count (sum across all zones).
+    [[nodiscard]] auto total_page_count() noexcept -> u64;
+    [[nodiscard]] auto max_pfn() noexcept -> u64;
+
+    /// @brief Return a pointer to the frame_desc for a physical address.
+    /// @param[in] phys  Physical address (lower PAGE_SHIFT bits are ignored).
+    /// @return Pointer into the frame descriptor table, or nullptr if the
+    ///         address is out of range or init() has not been called.
+    [[nodiscard]] auto frame_desc_of(u64 phys) noexcept -> frame_desc*;
+
+} // namespace zxfoundation::memory::pmm
+
+} // end export

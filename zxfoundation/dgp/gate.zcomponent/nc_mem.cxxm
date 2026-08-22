@@ -1,0 +1,332 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/nc_mem.cxxm
+/// @brief Memory namespace dispatch handler.
+
+export module zxfoundation.dgp.gate.nc_mem;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.base.types;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sys.printk.core;
+import zxfoundation.memory.objects;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm.types;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.vm.types;
+import zxfoundation.dgp.cap.core;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.skey;
+import arch.s390x.mmu;
+import lib.error;
+import std;
+
+static constexpr u64 NC_ERROR = ~0ULL;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::dgp::cap::cap_token;
+using zxfoundation::dgp::cap::cap_rights;
+using zxfoundation::dgp::cap::cap_type;
+
+namespace zxfoundation::dgp::gate::nc_mem::detail {
+
+    namespace vm = zxfoundation::memory::vm;
+    namespace mmu = arch::s390x::mmu;
+    namespace pmm = zxfoundation::memory::pmm;
+    namespace skey = arch::s390x::cpu::skey;
+
+    static constexpr u64 PAGE_SIZE = 4096ULL;
+
+    [[nodiscard]] auto page_align_size(u64 size, u64& aligned_size) noexcept -> bool {
+        if (size == 0U || size > ~0ULL - (PAGE_SIZE - 1U)) return false;
+        aligned_size = (size + PAGE_SIZE - 1U) & ~(PAGE_SIZE - 1U);
+        return true;
+    }
+
+    [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain::domain*>(lc->current_domain);
+    }
+
+    auto nc_mem_alloc(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 size = a0;
+        u64 aligned_size{};
+        if (!page_align_size(size, aligned_size)) {
+            zxfoundation::sys::printk::perr("mem_alloc: zero size");
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_alloc,
+            zxfoundation::dgp::authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::map,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_alloc: DGP authorization denied");
+            return NC_ERROR;
+        }
+
+        auto result = vm::vm_map(
+            d->vm_space, aligned_size,
+            vm::vm_prot::rw,
+            vm::vm_flags::anonymous);
+
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_alloc: vm_map failed for size={:#x}", aligned_size);
+            return NC_ERROR;
+        }
+        if (!dgp_r->consume()) return NC_ERROR;
+
+        return *result;
+    }
+
+    auto nc_mem_free(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        u64 aligned_size{};
+        if (va == 0 || !page_align_size(size, aligned_size) || va + aligned_size < va) {
+            zxfoundation::sys::printk::perr("mem_free: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_free,
+            zxfoundation::dgp::authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + aligned_size,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_free: DGP authorization denied");
+            return NC_ERROR;
+        }
+
+        auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_free: vm_unmap failed va={:#x}", va);
+            return NC_ERROR;
+        }
+        if (!dgp_r->consume()) return NC_ERROR;
+
+        return 0;
+    }
+
+    /// @brief Map an exact subrange of a capability-bound memory extent.
+    /// a0 = extent cap, a1 = VA, a2 = page-aligned extent offset,
+    /// a3 = size, a4 = protection bits.
+    auto nc_mem_map(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const cap_token token{a0};
+        const u64 va = a1;
+        const u64 extent_offset = a2;
+        u64 length{};
+        if (token.type() != cap_type::memory_extent || va == 0U ||
+            (extent_offset & (PAGE_SIZE - 1U)) != 0U ||
+            !page_align_size(a3, length) || va + length < va) {
+            zxfoundation::sys::printk::perr("mem_map: invalid extent mapping arguments");
+            return NC_ERROR;
+        }
+
+        auto owner = zxfoundation::dgp::cap::cap_validate_generic_for(
+            token, cap_rights::map, d->ko.id);
+        if (!owner) {
+            zxfoundation::sys::printk::perr("mem_map: extent capability denied");
+            return NC_ERROR;
+        }
+
+        auto extent_object = zxfoundation::dgp::cap::cap_resolve(
+            token, cap_rights::map);
+        if (!extent_object) {
+            zxfoundation::sys::printk::perr("mem_map: extent resolution failed");
+            return NC_ERROR;
+        }
+        auto* extent = reinterpret_cast<zxfoundation::memory::objects::memory_object*>(
+            *extent_object);
+        if (extent->ko.type != zxfoundation::scoms::kobject::kobject_type::memory_extent ||
+            extent->owner_domain != d->ko.id ||
+            extent_offset + length < extent_offset ||
+            extent_offset + length > extent->range_length) {
+            zxfoundation::sys::printk::perr("mem_map: stale or out-of-range extent");
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d, zxfoundation::dgp::operation_kind::mem_map,
+            zxfoundation::dgp::authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + length,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_map: DGP authorization denied");
+            return NC_ERROR;
+        }
+
+        const vm::vm_prot prot =
+            ((a4 & 0x1U) ? vm::vm_prot::read : vm::vm_prot::none) |
+            ((a4 & 0x2U) ? vm::vm_prot::write : vm::vm_prot::none) |
+            ((a4 & 0x4U) ? vm::vm_prot::exec : vm::vm_prot::none);
+        if (prot == vm::vm_prot::none ||
+            ((prot & vm::vm_prot::write) != vm::vm_prot::none &&
+             (prot & vm::vm_prot::exec) != vm::vm_prot::none)) {
+            zxfoundation::sys::printk::perr("mem_map: invalid protection bits");
+            return NC_ERROR;
+        }
+
+        auto result = vm::vm_map_extent(
+            d->vm_space, d->root_phys, va, length, prot,
+            zxfoundation::memory::objects::memory_object_ref{
+                extent->ko.type, extent->ko.id, extent->ko.generation},
+            extent_offset);
+        if (!result || !dgp_r->consume()) {
+            zxfoundation::sys::printk::perr("mem_map: extent mapping failed");
+            return NC_ERROR;
+        }
+        return va;
+    }
+
+    auto nc_mem_unmap(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        u64 aligned_size{};
+        if (va == 0 || !page_align_size(size, aligned_size) || va + aligned_size < va) {
+            zxfoundation::sys::printk::perr("mem_unmap: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_unmap,
+            zxfoundation::dgp::authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + aligned_size,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_unmap: DGP authorization denied");
+            return NC_ERROR;
+        }
+
+        auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_unmap: vm_unmap failed va={:#x}", va);
+            return NC_ERROR;
+        }
+        if (!dgp_r->consume()) return NC_ERROR;
+
+        return 0;
+    }
+
+    auto nc_mem_protect(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return NC_ERROR;
+
+        const u64 va        = a0;
+        const u64 size      = a1;
+        const u64 prot_bits = a2;
+
+        u64 aligned_size{};
+        if (va == 0 || !page_align_size(size, aligned_size) || va + aligned_size < va) {
+            zxfoundation::sys::printk::perr("mem_protect: invalid args va={:#x} size={}", va, size);
+            return NC_ERROR;
+        }
+
+        auto dgp_r = zxfoundation::dgp::authorize(
+            *d, *d,
+            zxfoundation::dgp::operation_kind::mem_protect,
+            zxfoundation::dgp::authorization_metadata{
+                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::map,
+                .target_va_start = va,
+                .target_va_end = va + aligned_size,
+            });
+        if (!dgp_r) {
+            zxfoundation::sys::printk::perr("mem_protect: DGP authorization denied");
+            return NC_ERROR;
+        }
+
+        vm::vm_prot new_prot = vm::vm_prot::none;
+        if (prot_bits & 0x1) new_prot = new_prot | vm::vm_prot::read;
+        if (prot_bits & 0x2) new_prot = new_prot | vm::vm_prot::write;
+        if (prot_bits & 0x4) new_prot = new_prot | vm::vm_prot::exec;
+
+        auto result = vm::vm_protect(d->vm_space, d->root_phys, va, aligned_size, new_prot);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_protect: vm_protect failed at va={:#x}", va);
+            return NC_ERROR;
+        }
+        if (!dgp_r->consume()) return NC_ERROR;
+
+        // Flush the local TLB so that the new protection bits take effect
+        // immediately on this CPU.
+        arch::s390x::mmu::tlb_flush_local();
+
+        return 0;
+    }
+
+    /// @brief Retired range-less sharing gate.
+    ///
+    /// The legacy ABI names only a target domain and cannot carry an exact
+    /// source authority or range.  Cross-domain sharing must use an explicit
+    /// storage-object grant once the shared-key/portal model is implemented.
+    auto nc_mem_share(u64, u64, u64, u64, u64) noexcept -> u64 {
+        zxfoundation::sys::printk::perr(
+            "mem_share: range-less sharing requires an explicit memory grant");
+        return NC_ERROR;
+    }
+
+} // namespace zxfoundation::dgp::gate::nc_mem::detail
+
+export {
+
+namespace zxfoundation::dgp::gate::nc_mem {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::dgp::gate::mem_op;
+
+        switch (static_cast<mem_op>(op)) {
+        case mem_op::alloc:
+            return zxfoundation::dgp::gate::nc_mem::detail::nc_mem_alloc(a0, a1, a2, a3, a4);
+        case mem_op::free:
+            return zxfoundation::dgp::gate::nc_mem::detail::nc_mem_free(a0, a1, a2, a3, a4);
+        case mem_op::map:
+            return zxfoundation::dgp::gate::nc_mem::detail::nc_mem_map(a0, a1, a2, a3, a4);
+        case mem_op::unmap:
+            return zxfoundation::dgp::gate::nc_mem::detail::nc_mem_unmap(a0, a1, a2, a3, a4);
+        case mem_op::protect:
+            return zxfoundation::dgp::gate::nc_mem::detail::nc_mem_protect(a0, a1, a2, a3, a4);
+        case mem_op::share:
+            return zxfoundation::dgp::gate::nc_mem::detail::nc_mem_share(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("mem_dispatch: unknown op {}", op);
+            return NC_ERROR;
+        }
+    }
+
+
+    template <mem_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
+    }
+
+} // namespace zxfoundation::dgp::gate::nc_mem
+
+} // end export

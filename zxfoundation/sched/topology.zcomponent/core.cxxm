@@ -1,0 +1,110 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/topology.cxxm
+/// @brief Scheduler topology records derived from per-CPU and loader evidence.
+
+export module zxfoundation.sched.topology.core;
+import zxfoundation.sched.topology.types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import zxfoundation.memory.numa.types;
+import lib.cpumask;
+import std;
+
+namespace zxfoundation::sched::topology::detail {
+
+    /// @brief Online CPUs grouped by NUMA node (drawer).
+    from_global(reference) std::array<lib::cpumask, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_node_masks;
+
+    /// @brief Per-CPU set of online core siblings
+    from_global(reference) std::array<lib::cpumask, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_core_siblings;
+
+    /// @brief Single mask covering all online CPUs across all NUMA nodes.
+    from_global(reference) ::lib::cpumask g_remote_mask;
+
+} // namespace zxfoundation::sched::topology::_internal
+
+export {
+
+namespace zxfoundation::sched::topology {
+
+    /// @brief Initialize scheduler topology records with deterministic fallback values.
+    /// @note Records are refined from per-CPU lowcore evidence as CPUs become visible to the scheduler.
+    /// @warning Missing SMT/core evidence is represented conservatively as one core per logical CPU.
+    auto topology_init() noexcept -> void;
+
+    /// @brief Refresh one CPU topology record from lowcore and scheduler load evidence.
+    /// @param[in] cpu_id Logical CPU whose record is refreshed.
+    /// @param[in] run_queue_load Current runnable-strand count for the CPU.
+    /// @param[in] online True when the CPU run queue is available for balancing.
+    auto refresh_cpu_record(u16 cpu_id, u32 run_queue_load, bool online) noexcept -> void;
+
+    /// @brief Refresh class-specific load counters for one CPU topology record.
+    /// @param[in] cpu_id Logical CPU whose class counters are refreshed.
+    /// @param[in] fair_load Runnable fair-class strand count.
+    /// @param[in] rt_load Runnable RT-class strand count.
+    /// @param[in] deadline_load Runnable deadline-class strand count.
+    /// @note The counters are advisory balancing inputs and do not replace run-queue locking.
+    auto refresh_class_load(
+        u16 cpu_id,
+        u32 fair_load,
+        u32 rt_load,
+        u32 deadline_load
+    ) noexcept -> void;
+
+    /// @brief Read the scheduler topology record for a CPU.
+    /// @param[in] cpu_id Logical CPU identifier.
+    /// @return Pointer to the topology record, or nullptr if the CPU ID is outside the configured maximum.
+    [[nodiscard]] auto record_for(u16 cpu_id) noexcept -> const cpu_topology_record*;
+
+    /// @brief Read the per-NUMA-node CPU mask maintained by the topology module.
+    /// @param[in] node NUMA node id (must be < @c MAX_NUMA_NODES).
+    /// @return Const reference to the mask, or to a static empty mask when
+    ///         @c node is out of range
+    [[nodiscard]] auto node_mask_of(u8 node) noexcept -> const ::lib::cpumask&;
+
+    /// @brief Classify the topology distance between two logical CPUs.
+    /// @param[in] from_cpu Source CPU.
+    /// @param[in] to_cpu Candidate CPU.
+    /// @return Relation tier used by the scheduler balancer.
+    [[nodiscard]] auto relation_between(u16 from_cpu, u16 to_cpu) noexcept -> cpu_relation;
+
+    /// @brief Record a CPU as online in the per-group balancing masks.
+    /// @param[in] cpu_id Logical CPU that has just become online.
+    auto topology_online_cpu(u16 cpu_id) noexcept -> void;
+
+    /// @brief Remove a CPU from the per-group balancing masks (halt / teardown).
+    /// @param[in] cpu_id Logical CPU that is going offline.
+    /// @note The authoritative online state is the central online registry
+    auto topology_offline_cpu(u16 cpu_id) noexcept -> void;
+
+    /// @brief Iterate the steal candidates relevant to a balancing tier.
+    /// @tparam Fn Callable invocable as fn(u16 cpu).
+    /// @param[in] local_cpu CPU requesting work.
+    /// @param[in] tier      Topology tier being scanned.
+    /// @param[in] fn        Callback receiving each candidate CPU id.
+    template <typename Fn>
+    auto for_each_steal_candidate(u16 local_cpu, cpu_relation tier, Fn&& fn) noexcept -> void {
+        switch (tier) {
+            case cpu_relation::same_smt_core:
+            case cpu_relation::same_core_group:
+                if (local_cpu < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
+                    detail::g_core_siblings[local_cpu].for_each(std::forward<Fn>(fn));
+                }
+                break;
+            case cpu_relation::same_numa_node: {
+                const auto* rec = record_for(local_cpu);
+                const u8 node = rec ? rec->numa_node : 0xFFU;
+                if (node < zxfoundation::memory::numa::MAX_NUMA_NODES) {
+                    detail::g_node_masks[node].for_each(std::forward<Fn>(fn));
+                }
+                break;
+            }
+            default:
+                detail::g_remote_mask.for_each(std::forward<Fn>(fn));
+                break;
+        }
+    }
+
+} // namespace zxfoundation::sched::topology
+
+} // end export

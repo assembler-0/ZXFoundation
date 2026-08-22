@@ -1,0 +1,96 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sched/rt.cxxm
+/// @brief Fixed-priority real-time scheduler backend with DGP admission gates.
+
+export module zxfoundation.sched.rt.core;
+import zxfoundation.sched.policy;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sched.rq.types;
+import zxfoundation.base.types;
+import zxfoundation.base.config;
+import lib.error;
+import lib.cpumask;
+import std;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::sched::rq::run_queue;
+using zxfoundation::dgp::domain::strand;
+
+export {
+
+namespace zxfoundation::sched::rt {
+
+    /// @brief Validate and reserve RT scheduling authority for a strand.
+    /// @param[in,out] owner Domain that owns the strand and RT budget.
+    /// @param[in,out] s Strand receiving RT admission metadata.
+    /// @param[in] policy Requested RT scheduler policy.
+    /// @return Admission result with reserved runtime and period, or kernel_error when denied.
+    [[nodiscard]] auto admit(
+        domain& owner,
+        strand& s,
+        const sched_policy& policy
+    ) noexcept -> std::expected<sched_admission_result, lib::kernel_error>;
+
+    /// @brief Release RT bandwidth previously reserved for a strand.
+    /// @param[in,out] owner Domain owning the reservation.
+    /// @param[in,out] s Strand whose reservation is released.
+    /// @note The function is idempotent for non-RT strands.
+    auto release_admission(domain& owner, strand& s) noexcept -> void;
+
+    /// @brief Enqueue an admitted RT strand on a per-CPU run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Admitted real-time strand.
+    /// @return Success or kernel_error if admission metadata is invalid or
+    ///         SMT isolation-sensitive placement is violated on the target CPU.
+    [[nodiscard]] auto enqueue(
+        run_queue& rq,
+        strand& s
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Dequeue an admitted RT strand from a per-CPU run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s Real-time strand to remove.
+    auto dequeue(run_queue& rq, strand& s) noexcept -> void;
+
+    /// @brief Pick the highest-priority RT strand from a run queue.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @return Best RT strand, or nullptr when no RT work is queued.
+    [[nodiscard]] auto pick_next(run_queue& rq) noexcept -> strand*;
+
+    /// @brief Account an RT scheduler tick, charge per-CPU RT bandwidth, and
+    ///        dequeue the strand on budget exhaustion or per-CPU throttle.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] s  Currently running real-time strand.
+    auto tick(run_queue& rq, strand& s) noexcept -> void;
+
+    /// @brief Mark the current domain for preemption when RT work wakes.
+    /// @param[in,out] rq Run queue protected by the caller.
+    /// @param[in,out] waking Real-time strand being enqueued or woken.
+    auto check_preempt(run_queue& rq, strand& waking) noexcept -> void;
+
+    /// @brief Push the highest-priority RT strand from @c src_rq to a less
+    ///        busy CPU (Phase 4.6 push/pull migration).
+    /// @param[in,out] src_rq Source CPU run queue (lock held).
+    /// @return Destination CPU id, or CONFIG_ZX_MAX_CPUS if no destination found.
+    [[nodiscard]] auto push(run_queue& src_rq) noexcept -> u16;
+
+    /// @brief Pull the highest idle-RT candidate from another CPU (Phase 4.6).
+    /// @param[in]     idle_cpu CPU performing the pull (lock held on its own RQ).
+    /// @param[in,out] src_rq   Source CPU run queue (lock held; caller may derive
+    ///                         source cpu_id from @c src_rq.cpu_id).
+    /// @return Stolen strand, or nullptr.
+    [[nodiscard]] auto pull(u16 idle_cpu, run_queue& src_rq) noexcept -> strand*;
+
+    /// @brief Apply a priority inheritance boost to @c s.
+    auto boost_prio(strand& s, u8 new_prio) noexcept -> void;
+
+    /// @brief Remove the priority boost on @c s and restore saved policy.
+    /// @note  Called from @c rt_mutex::unlock after ownership handoff.
+    auto unboost_prio(strand& s) noexcept -> void;
+
+    /// @brief Wake a strand that was sleeping on an rt_mutex.
+    auto task_wake_pi(strand& s) noexcept -> void;
+
+} // namespace zxfoundation::sched::rt
+
+} // end export

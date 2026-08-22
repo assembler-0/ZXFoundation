@@ -4,9 +4,9 @@
 
 export module lib.cpumask;
 import lib.bitmap;
-import std;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import std;
 
 export {
 

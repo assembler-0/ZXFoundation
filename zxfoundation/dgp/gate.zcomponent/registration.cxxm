@@ -1,0 +1,40 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/registration.cxxm
+/// @brief Register all handlers into the dispatch table.
+
+export module zxfoundation.dgp.gate.registration;
+import zxfoundation.dgp.authorize.core;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.gate.dispatch;
+import zxfoundation.base.types;
+import lib.error;
+import std;
+
+export {
+
+namespace zxfoundation::dgp::gate::registration {
+
+    [[nodiscard]] constexpr auto make_op(
+        u8                                      op_id,
+        dispatch::dispatch_handler        handler,
+        dispatch::gate_auth_level         auth   = dispatch::gate_auth_level::none,
+        dgp::operation_kind                     op_kind = dgp::operation_kind::none
+    ) noexcept -> dispatch::registration_op {
+        return dispatch::registration_op{
+            .operation_id = op_id,
+            .handler      = handler,
+            .meta         = dispatch::entry_meta{
+                .operation_id    = op_id,
+                .auth            = auth,
+                .op_kind         = op_kind,
+            },
+        };
+    }
+
+    /// @brief Register accessible handlers into the dispatch table.
+    auto register_all_handlers() noexcept -> void;
+
+} // namespace zxfoundation::dgp::gate::registration
+
+} // end export

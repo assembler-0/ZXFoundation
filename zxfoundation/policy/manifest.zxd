@@ -1,4 +1,0 @@
-!files : !compile_group -> [auto] {
-    policy_types.cxxm
-    policy.cxxm
-}

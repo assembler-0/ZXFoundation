@@ -5,7 +5,7 @@
 export module arch.s390x.lib.cstring;
 import zxfoundation.base.types;
 
-export no_mangle {
+export declscope(C) {
 
     auto __zx_clcle(const char *s1, usize l1,
                     const char *s2, usize l2) -> condition_code;
