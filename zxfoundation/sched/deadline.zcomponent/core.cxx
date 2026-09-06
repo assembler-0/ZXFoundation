@@ -19,7 +19,7 @@ import arch.s390x.cpu.cpumask;
 import lib.error;
 import lib.list;
 import lib.cpumask;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::deadline::detail {
 

@@ -4,34 +4,34 @@
 
 module arch.s390x.cpu.psw;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 namespace arch::s390x::cpu::psw {
 
     /// @brief Extract the current PSW mask via EPSW. addr is unavailable; set to 0.
-    [[nodiscard]] auto extract_psw() noexcept -> zx_psw {
+    [[nodiscard]] auto extract_psw() noexcept -> zpsw {
         epsw_words w{};
         __asm__ volatile ("epsw %[hi], %[lo]"
             : [hi] "=d"(w.hi), [lo] "=d"(w.lo) :: "cc");
-        return zx_psw{.mask = std::bit_cast<u64>(w), .addr = 0ULL};
+        return zpsw{ "mask"_f = std::bit_cast<u64>(w), "address"_f = 0 };
     }
 
-    [[noreturn]] auto load_psw(const zx_psw& psw) noexcept -> void {
+    [[noreturn]] auto load_psw(const zpsw& psw) noexcept -> void {
         __asm__ volatile ("lpswe %0" :: "Q"(psw) : "memory", "cc");
         std::unreachable();
     }
 
     [[noreturn]] auto disabled_wait() noexcept -> void {
-        alignas(8) static constexpr zx_psw halt {
-            .mask = PSW_MASK_DISABLED_WAIT, .addr = PSW_STD_HALT_ADDR
+        alignas(8) static constexpr zpsw halt_psw {
+            "mask"_f = PSW_MASK_DISABLED_WAIT, "address"_f = 0
         };
-        load_psw(halt);
+        load_psw(halt_psw);
     }
 
     /// @brief Enter enabled-wait state — the z/Architecture idle primitive.
     auto enabled_wait() noexcept -> void {
-        alignas(8) static constexpr  zx_psw wait_psw {
-            .mask = PSW_MASK_ENABLED_WAIT, .addr = 0
+        alignas(8) static constexpr zpsw wait_psw {
+            "mask"_f = PSW_MASK_ENABLED_WAIT, "address"_f = 0
         };
         __asm__ volatile(
             "   larl  1,0f\n"          // r1 = address of label '0:'
@@ -44,20 +44,26 @@ namespace arch::s390x::cpu::psw {
         );
     }
 
-    auto write_psw_to_lowcore(u64 lc_offset, zx_psw psw) noexcept -> void {
+    auto write_psw_to_lowcore(u64 lc_offset, zpsw psw) noexcept -> void {
         __asm__ volatile (
             "stg %[mask], 0(%[off])\n\t"
             "stg %[addr], 8(%[off])\n\t"
-            :: [mask] "r"(psw.mask), [addr] "r"(psw.addr), [off] "a"(lc_offset) : "memory"
+            :: [mask] "r"(psw.get<"mask">().underlying()),
+               [addr] "r"(psw.get<"address">()),
+               [off] "a"(lc_offset) : "memory"
         );
     }
 
-    [[nodiscard]] auto make_handler_psw(u64 entry_virt) noexcept -> zx_psw {
-        return zx_psw{.mask = PSW_MASK_KERNEL_DAT, .addr = entry_virt};
+    [[nodiscard]] auto make_handler_psw(u64 entry_virt) noexcept -> zpsw {
+        return zpsw {
+            "mask"_f = PSW_MASK_KERNEL_DAT, "address"_f = entry_virt
+        };
     }
 
-    [[nodiscard]] auto make_ap_restart_psw(u64 entry_phys) noexcept -> zx_psw {
-        return zx_psw{.mask = PSW_MASK_KERNEL, .addr = entry_phys};
+    [[nodiscard]] auto make_ap_restart_psw(u64 entry_phys) noexcept -> zpsw {
+        return zpsw {
+            "mask"_f = PSW_MASK_KERNEL, "address"_f = entry_phys
+        };
     }
 
 } // namespace arch::s390x::cpu::psw

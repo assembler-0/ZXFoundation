@@ -7,10 +7,10 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.sys.syschk.core;
 import zxfoundation.sched.balance.core;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import lib.softirq.core;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::softirq::detail {
 
@@ -21,7 +21,7 @@ namespace zxfoundation::sched::softirq::detail {
     no_export auto softirq_entry(void* data) noexcept -> void {
         const u16 cpu = (data != nullptr)
             ? static_cast<u16>(reinterpret_cast<u64>(data) & 0xFFFFULL)
-            : arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+            : arch::s390x::cpu::percpu::this_cpu().cpu_id;
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
         auto& req = g_balance_reqs[cpu];
         const u8 kind_u = req.kind.load(std::memory_order::acquire);
@@ -52,7 +52,7 @@ namespace zxfoundation::sched::softirq {
         auto& req = detail::g_balance_reqs[cpu];
         req.kind.store(static_cast<u8>(kind), std::memory_order::release);
         discard_value req.request_count.fetch_add(1U, std::memory_order::relaxed);
-        const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 self = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         if (cpu == self) {
             lib::raise_softirq(lib::softirq_vec::sched);
         } else {
@@ -62,7 +62,7 @@ namespace zxfoundation::sched::softirq {
 
     /// @brief Convenience: raises SCHED_SOFTIRQ on the running CPU.
     auto raise_balance_local(balance_kind kind) noexcept -> void {
-        const u16 cpu = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 cpu = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         raise_balance(cpu, kind);
     }
 

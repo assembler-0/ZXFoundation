@@ -4,6 +4,9 @@
 
 export module arch.s390x.io.types;
 import zxfoundation.base.types;
+import lib.bitfield;
+import lib.structure;
+import lib.stl;
 
 export {
 
@@ -23,14 +26,6 @@ namespace arch::s390x::io {
     inline constexpr u8 CCW_FLAG_IDA     = 0x04; ///< Indirect data addressing (PoP bit 13).
     inline constexpr u8 CCW_FLAG_SUSPEND = 0x02; ///< Suspend channel program (PoP bit 14).
     inline constexpr u8 CCW_FLAG_MIDA    = 0x01; ///< Modified IDA (PoP bit 15).
-
-    inline constexpr u8 CCW_CMD_NOP         = 0x03; ///< No operation.
-    inline constexpr u8 CCW_CMD_BASIC_SENSE = 0x04; ///< Basic sense.
-    inline constexpr u8 CCW_CMD_TIC         = 0x08; ///< Transfer in channel.
-    inline constexpr u8 CCW_CMD_READ        = 0x02; ///< Read.
-    inline constexpr u8 CCW_CMD_WRITE       = 0x01; ///< Write.
-    inline constexpr u8 CCW_CMD_CONTROL     = 0x03; ///< Control.
-    inline constexpr u8 CCW_CMD_SENSE_ID    = 0xE4; ///< Sense ID.
 
     inline constexpr u8 DEV_STAT_ATTN = 0x80; ///< Attention.
     inline constexpr u8 DEV_STAT_MOD  = 0x40; ///< Status modifier.
@@ -68,220 +63,350 @@ namespace arch::s390x::io {
     inline constexpr u8 ACTL_DEV_ACTIVE  = 0x02; ///< Device active (PoP bit 25).
     inline constexpr u8 ACTL_SUSPENDED   = 0x01; ///< Suspended (PoP bit 26).
 
-    /// @brief Format-1 CCW: 8 bytes, big-endian, used with Format-1 ORB.
-    struct [[gnu::packed]] ccw1 {
-        u8  cmd{};          ///< Byte 0: Command code.
-        u8  flags{};        ///< Byte 1: Flag byte (CD, CC, SLI, SKIP, PCI, IDA, S, MIDA).
-        u16 count{};        ///< Bytes 2-3: Byte count.
-        u32 data_addr{};    ///< Bytes 4-7: Data address (31-bit, bit 0 must be zero).
+    enum class ccw_commands : u8 {
+        write           = 0b00000001,
+        read            = 0b00000010,
+        read_backward   = 0b00001100,
+        control         = 0b00000011,
+        sense           = 0b00000100,
+        sense_id        = 0b11100100,
+        tic             = 0b00001000,
+        transport       = 0b01000000,
     };
 
-    static_assert(sizeof(ccw1) == 8, "ccw1 must be exactly 8 bytes (PoP Format-1 CCW)");
+    /// @brief Check if a CCW command is valid
+    /// @param cmd unsigned 8 bit command code
+    /// @param dcw specify Transport mode, for DCW
+    [[nodiscard]] auto ccw_cmd_valid(const u8 cmd, bool dcw = false) noexcept -> bool {
+        return lib::bf8{cmd}.extract<4, 7>() != 0 && (dcw ? lib::bf8{cmd}[1] : true);
+    }
+
+    using ccw_flags = lib::record<u8, lib::msb0_t,
+        lib::rw<"chain_data",       lib::bits<0, 0>>,
+        lib::rw<"chain_command",    lib::bits<1, 1>>,
+        lib::rw<"suppress_length",  lib::bits<2, 2>>,
+        lib::rw<"skip",             lib::bits<3, 3>>,
+        lib::rw<"pgm_contolled_interruption", lib::bits<4, 4>>,
+        lib::rw<"indirect_data_access",       lib::bits<5, 5>>,
+        lib::rw<"suspend",                   lib::bits<6, 6>>,
+        lib::rw<"modified_ida",              lib::bits<7, 7>>
+    >;
+
+    /// @brief Format-1 CCW: 8 bytes, big-endian, used with Format-1 ORB.
+    using ccw1 = lib::structure<8, 8, lib::endian::big,
+        lib::rw<"cmd_code",  lib::bytes<0, 0>, ccw_commands>,
+        lib::rw<"flags",     lib::bytes<1, 1>, ccw_flags>,
+        lib::rw<"count",     lib::bytes<2, 3>, u16>,
+        lib::rw<"data_addr", lib::bytes<4, 7>, u32>
+    >;
+
+    /// @brief Format-0 Channel Command Word (CCW0)
+    using ccw0 = lib::structure<8, 8, lib::endian::big,
+        lib::rw<"cmd_code",     lib::bytes<0, 0>, ccw_commands>,
+        lib::rw<"data_address", lib::at_byte<1>::at_bits<0, 23>, u32>,
+        lib::rw<"flags",        lib::bytes<4, 4>, ccw_flags>,
+        lib::rw<"count",        lib::bytes<6, 7>, u16>
+    >;
+
+    /// @brief Format-1/0 Channel Command Word
+    using ccw_common = lib::structure<8, 8, lib::endian::big,
+        lib::overlay_rw<"f0",     lib::bytes<0, 7>, ccw0>,
+        lib::overlay_rw<"f1",     lib::bytes<0, 7>, ccw1>
+    >;
+
+    template <typename T>
+    struct scsw_extensions {
+        [[nodiscard]] auto has_device_error(this const T& self) noexcept -> bool {
+            return
+                self.template get<R"(dev_status\unit_check)">() ||
+                self.template get<R"(dev_status\unit_exception)">();
+        }
+
+        [[nodiscard]] auto has_sch_error(this const T& self) noexcept -> bool {
+            return
+                self.template get<R"(sch_status\pgm_check)">() ||
+                self.template get<R"(sch_status\protection_check)">() ||
+                self.template get<R"(sch_status\channel_data_check)">() ||
+                self.template get<R"(sch_status\channel_control_check)">() ||
+                self.template get<R"(sch_status\interface_control_check)">() ||
+                self.template get<R"(sch_status\chaining_check)">();
+        }
+    };
 
     /// @brief Subchannel Status Word — packed status from TSCH.
-    struct [[gnu::packed]] scsw {
-        u32 flags{0};       ///< Word 0: key(4), control bits, FC(3), AC(7), SC(5).
-        u32 ccw_addr{0};    ///< Word 1: CCW address.
-        u8  dev_status{0};  ///< Word 2 bits 0-7: Device status byte.
-        u8  sch_status{0};  ///< Word 2 bits 8-15: Subchannel status byte.
-        u16 count{0};       ///< Word 2 bits 16-31: Residual byte count.
+    using scsw = lib::structure<12, 4, lib::endian::big,
+        lib::extensions<scsw_extensions>,
+        lib::overlay_rw<"io_subclass_code",               lib::at_byte<0>::at_bits<0, 3>, u8>,
+        lib::overlay_rw<"flags",                          lib::bytes<0, 1>, lib::record<u16, lib::msb0_t,
+            lib::rw<"suspend_control",                    lib::bits<4, 4>>,
+            lib::rw<"esw_format",                         lib::bits<5, 5>>,
+            lib::rw<"deferred_condition_code",            lib::bits<6, 7>>,
+            lib::rw<"ccw_format",                         lib::bits<8, 8>>,
+            lib::rw<"prefetch",                           lib::bits<9, 9>>,
+            lib::rw<"status_interruption_control",        lib::bits<10, 10>>,
+            lib::rw<"irb_format_control",                 lib::bits<11, 11>>,
+            lib::rw<"suppressed_suspended_int",           lib::bits<12, 12>>,
+            lib::rw<"zero_condition",                     lib::bits<13, 13>>,
+            lib::rw<"extended_control",                   lib::bits<14, 14>>,
+            lib::rw<"path_not_operational",               lib::bits<15, 15>>
+        >>,
+        lib::rw<"control",                                lib::bytes<2, 3>, lib::record<u16, lib::msb0_t,
+            lib::overlay_rw<"function",                   lib::bits<1, 3>>,
+                lib::rw<R"(function\start)",              lib::bits<1, 1>>,
+                lib::rw<R"(function\halt)",               lib::bits<2, 2>>,
+                lib::rw<R"(function\clear)",              lib::bits<3, 3>>,
+            lib::overlay_rw<"activity",                   lib::bits<4, 10>>,
+                lib::rw<R"(activity\resume_p)",           lib::bits<4, 4>>,
+                lib::rw<R"(activity\start_p)",            lib::bits<5, 5>>,
+                lib::rw<R"(activity\halt_p)",             lib::bits<6, 6>>,
+                lib::rw<R"(activity\clear_p)",            lib::bits<7, 7>>,
+                lib::rw<R"(activity\sch_active)",         lib::bits<8, 8>>,
+                lib::rw<R"(activity\device_active)",      lib::bits<9, 9>>,
+                lib::rw<R"(activity\suspended)",          lib::bits<10, 10>>,
+            lib::overlay_rw<"status",                     lib::bits<11, 15>>,
+                lib::rw<R"(status\alert)",                lib::bits<11, 11>>,
+                lib::rw<R"(status\intermediate)",         lib::bits<12, 12>>,
+                lib::rw<R"(status\primary)",              lib::bits<13, 13>>,
+                lib::rw<R"(status\secondary)",            lib::bits<14, 14>>,
+                lib::rw<R"(status\pending)",              lib::bits<15, 15>>
+        >>,
+        lib::rw<"ccw_address",                            lib::bytes<4, 7>, u32>,
+        lib::rw<"dev_status",                             lib::bytes<8, 8>, lib::record<u8, lib::msb0_t,
+            lib::rw<"attention",                          lib::bits<0, 0>>,
+            lib::rw<"modifier",                           lib::bits<1, 1>>,
+            lib::rw<"control_unit_end",                   lib::bits<2, 2>>,
+            lib::rw<"busy",                               lib::bits<3, 3>>,
+            lib::rw<"channel_end",                        lib::bits<4, 4>>,
+            lib::rw<"device_end",                         lib::bits<5, 5>>,
+            lib::rw<"unit_check",                         lib::bits<6, 6>>,
+            lib::rw<"unit_exception",                     lib::bits<7, 7>>
+        >>,
+        lib::rw<"sch_status",                             lib::bytes<9, 9>, lib::record<u8, lib::msb0_t,
+            lib::rw<"pgm_controlled_int",                 lib::bits<0, 0>>,
+            lib::rw<"incorrect_length",                   lib::bits<1, 1>>,
+            lib::rw<"pgm_check",                          lib::bits<2, 2>>,
+            lib::rw<"protection_check",                   lib::bits<3, 3>>,
+            lib::rw<"channel_data_check",                 lib::bits<4, 4>>,
+            lib::rw<"channel_control_check",              lib::bits<5, 5>>,
+            lib::rw<"interface_control_check",            lib::bits<6, 6>>,
+            lib::rw<"chaining_check",                     lib::bits<7, 7>>
+        >>,
+        lib::rw<"count",                                  lib::bytes<10, 11>, u16>
+    >;
 
-        /// @brief Extract function control field (PoP bits 17-19 of word 0).
-        /// FC bits: 17=Start, 18=Halt, 19=Clear.
-        [[nodiscard]] constexpr auto fctl() const noexcept -> u8 {
-            return static_cast<u8>((flags >> 12) & 0x07);
-        }
-
-        /// @brief Extract activity control field (PoP bits 20-26 of word 0).
-        /// AC bits: 20=Resume, 21=Start, 22=Halt, 23=Clear,
-        ///          24=SchActive, 25=DevActive, 26=Suspended.
-        [[nodiscard]] constexpr auto actl() const noexcept -> u8 {
-            return static_cast<u8>((flags >> 5) & 0x7F);
-        }
-
-        /// @brief Extract status control field (PoP bits 27-31 of word 0).
-        /// SC bits: 27=Alert, 28=Intermediate, 29=Primary,
-        ///          30=Secondary, 31=StatusPending.
-        [[nodiscard]] constexpr auto stctl() const noexcept -> u8 {
-            return static_cast<u8>(flags & 0x1F);
-        }
-
-        /// @brief True if status is solicited (primary status pending).
-        [[nodiscard]] constexpr auto is_solicited() const noexcept -> bool {
-            return (stctl() & STCTL_STATUS_PEND) != 0;
-        }
-
-        /// @brief True if primary status is indicated.
-        [[nodiscard]] constexpr auto is_primary() const noexcept -> bool {
-            return (stctl() & STCTL_PRIMARY) != 0;
-        }
-
-        /// @brief True if secondary status is indicated.
-        [[nodiscard]] constexpr auto is_secondary() const noexcept -> bool {
-            return (stctl() & STCTL_SECONDARY) != 0;
-        }
-
-        /// @brief True if alert status (unsolicited primary without secondary).
-        [[nodiscard]] constexpr auto is_alert() const noexcept -> bool {
-            return is_primary() && !is_secondary();
-        }
-
-        /// @brief True if device-end (DE) bit is set in device status.
-        [[nodiscard]] constexpr auto has_device_end() const noexcept -> bool {
-            return (dev_status & DEV_STAT_DE) != 0;
-        }
-
-        /// @brief True if channel-end (CE) bit is set in device status.
-        [[nodiscard]] constexpr auto has_channel_end() const noexcept -> bool {
-            return (dev_status & DEV_STAT_CE) != 0;
-        }
-
-        /// @brief True if any error condition is indicated.
-        ///
-        /// Checks unit-check, unit-exception in device status and
-        /// all subchannel status error bits (program, protection,
-        /// channel-data, channel-control, interface-control, chaining).
-        [[nodiscard]] constexpr auto has_error() const noexcept -> bool {
-            constexpr u8 dev_err_mask = DEV_STAT_UC | DEV_STAT_UX;
-            constexpr u8 sch_err_mask = SCH_STAT_PROG | SCH_STAT_PROT |
-                                        SCH_STAT_CHD  | SCH_STAT_CHC  |
-                                        SCH_STAT_ICC  | SCH_STAT_CC;
-            return ((dev_status & dev_err_mask) != 0) ||
-                   ((sch_status & sch_err_mask) != 0);
-        }
+    enum class pmcw_limit_mode : u8 {
+        no_limit_checking           = 0b00,
+        address_eq_greater_current  = 0b01,
+        address_less_current        = 0b10,
     };
-
-    static_assert(sizeof(scsw) == 12, "scsw must be exactly 12 bytes");
 
     /// @brief Path Management Control Word — subchannel configuration.
-    struct [[gnu::packed]] pmcw {
-        u32 intparm{0};   ///< Interruption parameter.
-        u16 flags{0};     ///< Control flags (E, LM, MM, D, T, V, ISC, etc.).
-        u16 devno{0};     ///< Device number.
-        u8  lpm{0};       ///< Logical path mask.
-        u8  pnom{0};      ///< Path not operational mask.
-        u8  lpum{0};      ///< Last path used mask.
-        u8  pim{0};       ///< Path installed mask.
-        u16 mbi{0};       ///< Measurement block index.
-        u8  pom{0};       ///< Path operational mask.
-        u8  pam{0};       ///< Path available mask.
-        u8  chpid[8]{};   ///< Channel path identifiers (one per path).
-        u32 _reserved{0}; ///< Reserved.
+    using pmcw = lib::structure<28, 4, lib::endian::big,
+        lib::rw<"interruption_parameter",         lib::bytes<0, 3>, u32>,
+        lib::rw<"io_subclass_code",               lib::at_byte<4>::at_bits<2, 4>, u8>,
+        lib::rw<"flags",                          lib::bytes<5, 5>, lib::record<u8, lib::msb0_t,
+            lib::rw<"enabled",                    lib::bits<0, 0>>,
+            lib::rw<"limit_mode",                 lib::bits<1, 2>, pmcw_limit_mode>,
+            lib::overlay_rw<"measurement_enable", lib::bits<0, 7>, lib::record<u8, lib::msb0_t,
+                lib::rw<"block_update",         lib::bits<3, 3>>,
+                lib::rw<"device_connect_time",  lib::bits<4, 4>>
+            >>,
+            lib::rw<"multipath_mode",             lib::bits<5, 5>>,
+            lib::rw<"timing_facility",            lib::bits<6, 6>>,
+            lib::rw<"device_number_valid",        lib::bits<7, 7>>
+        >>,
+        lib::rw<"device_number",                  lib::bytes<6, 7>, u16>,
+        lib::rw<"logical_path_mask",              lib::bytes<8, 8>, lib::bf8>,
+        lib::rw<"path_not_operational_mask",      lib::bytes<9, 9>, lib::bf8>,
+        lib::rw<"last_path_used_mask",            lib::bytes<10, 10>, lib::bf8>,
+        lib::rw<"path_installed_mask",            lib::bytes<11, 11>, lib::bf8>,
+        lib::rw<"measurement_block_index",        lib::bytes<12, 13>, u16>,
+        lib::rw<"path_operational_mask",          lib::bytes<14, 14>, lib::bf8>,
+        lib::rw<"path_available_mask",            lib::bytes<15, 15>, lib::bf8>,
+        lib::rw<"channel_path_identifiers",       lib::bytes<16, 23>, u8[8]>,
+        lib::rw<"measurement_block_format",       lib::at_byte<27>::at_bits<5, 5>, u8>,
+        lib::rw<"ext_measurement_blk_word_format",lib::at_byte<27>::at_bits<6, 6>, u8>,
+        lib::rw<"measurement_block_word_enable",  lib::at_byte<27>::at_bits<7, 7>, u8>
+    >;
 
-        /// @brief True if subchannel is enabled (E bit — bit 7 of flags).
-        [[nodiscard]] constexpr auto is_enabled() const noexcept -> bool {
-            return (flags & 0x0080) != 0;
-        }
+    /// @brief Subchannel Information Block
+    using schib = lib::structure<52, 4, lib::endian::big,
+        lib::rw<"pmcw",           lib::bytes<0, 27>, pmcw>,
+        lib::rw<"scsw",           lib::bytes<28, 39>, scsw>,
+        lib::overlay_rw<"mba",    lib::bytes<40, 47>, u64>,
+        lib::overlay_rw<"mda",    lib::bytes<40, 51>, u8[12]>
+    >;
 
-        /// @brief True if multipath mode is active (M bit — bit 5 of flags).
-        [[nodiscard]] constexpr auto is_multipath() const noexcept -> bool {
-            return (flags & 0x0020) != 0;
-        }
-
-        /// @brief Extract ISC (I/O interruption subclass code, bits 2-4 of word 1).
-        /// In the u16 flags field on big-endian: positions 13-11.
-        [[nodiscard]] constexpr auto isc() const noexcept -> u8 {
-            return static_cast<u8>((flags >> 11) & 0x07);
-        }
-    };
-
-    static_assert(sizeof(pmcw) == 28, "pmcw must be exactly 28 bytes");
-
-    /// @brief Subchannel Information Block — returned by STSCH, input to MSCH.
-    struct [[gnu::packed]] alignas(4) schib {
-        pmcw pmcw_data{};   ///< Path Management Control Word.
-        scsw scsw_data{};   ///< Subchannel Status Word.
-        u64  mba{0};        ///< Measurement block address.
-        u32  _pad{0};       ///< Padding to 52 bytes.
-    };
-
-    static_assert(sizeof(schib) == 52, "schib must be exactly 52 bytes");
-
-    /// @brief Operation Request Block — input to SSCH instruction.
-    ///
-    /// PoP §14.3.3 / Linux arch/s390/include/asm/cio.h.
-    /// Word 1 layout (big-endian, bit 0 = MSB):
-    ///   key(0-3) | S(4) | C(5) | M(6) | Y(7) | F(8) | P(9) | I(10) |
-    ///   A(11) | U(12) | _(13) | H(14) | T(15) | LPM(16-23) |
-    ///   L(24) | _(25-30) | X(31)
-    struct [[gnu::packed]] alignas(4) orb {
-        u32 intparm{0};    ///< Word 0: Interruption parameter.
-        u32 ctrl{0};       ///< Word 1: Key + control flags + LPM + ILS.
-        u32 cpa{0};        ///< Word 2: Channel Program Address (31-bit).
-        u32 _reserved3{0}; ///< Word 3: CSS priority (reserved for us).
-        u32 _reserved4{0}; ///< Word 4.
-        u32 _reserved5{0}; ///< Word 5.
-        u32 _reserved6{0}; ///< Word 6.
-        u32 _reserved7{0}; ///< Word 7.
-
-        /// @brief Set the storage key in bits 0-3 of word 1.
-        constexpr auto set_key(u8 key) noexcept -> void {
-            ctrl = (ctrl & 0x0FFFFFFFU) | (static_cast<u32>(key & 0x0FU) << 28);
-        }
-
-        /// @brief Set Format-1 CCW bit (bit 8 of word 1).
-        constexpr auto set_format1() noexcept -> void {
-            ctrl |= 0x00800000U;
-        }
-
-        /// @brief Set the Logical Path Mask (bits 16-23 of word 1).
-        constexpr auto set_lpm(u8 lpm) noexcept -> void {
-            ctrl = (ctrl & 0xFFFF00FFU) | (static_cast<u32>(lpm) << 8);
-        }
-
-        /// @brief Set the Channel Program Address (word 2, 31-bit physical).
-        constexpr auto set_cpa(u32 addr) noexcept -> void {
-            cpa = addr & 0x7FFFFFFFU;
-        }
-    };
-
+    /// @brief Operation Request Block. (Command/Transport)
+    using orb = lib::structure<32, 8, lib::endian::big,
+        lib::rw<"interruption_parameter",          lib::bytes<0, 3>, u32>,
+        lib::rw<"subchannel_key",                  lib::at_byte<4>::at_bits<0, 3>, u8>,
+        lib::rw<"control",                         lib::bytes<4, 7>, lib::record<u32, lib::msb0_t,
+            lib::rw<"suspend",                     lib::bits<4, 4>>,
+            lib::rw<"streaming_mode",              lib::bits<5, 5>>,
+            lib::rw<"modification",                lib::bits<6, 6>>,
+            lib::rw<"synchronization",             lib::bits<7, 7>>,
+            lib::rw<"ccw_format",                  lib::bits<8, 8>>,
+            lib::rw<"prefetch",                    lib::bits<9, 9>>,
+            lib::rw<"initial_status_interruption", lib::bits<10, 10>>,
+            lib::rw<"addr_limit_checking",         lib::bits<11, 11>>,
+            lib::rw<"suppress_suspended",          lib::bits<12, 12>>,
+            lib::rw<"channel_program_type",        lib::bits<13, 13>>,
+            lib::rw<"format2_idaw",                lib::bits<14, 14>>,
+            lib::rw<"2k_idaw_control",             lib::bits<15, 15>>,
+            lib::rw<"incorrect_length_suppression",lib::bits<24, 24>>,
+            lib::rw<"modified_ccw_ida",            lib::bits<25, 25>>,
+            lib::rw<"orb_extension",               lib::bits<31, 31>>
+        >>,
+        lib::rw<"logical_path_mask",       lib::at_byte<6>::at_bits<0, 7>, lib::bf8>,
+        lib::rw<"channel_program_address", lib::at_byte<8>::at_bits<1, 31>, u32>,
+        lib::rw<"css_priority",            lib::bytes<12, 12>, u8>,
+        lib::rw<"cu_priority",             lib::bytes<14, 14>, u8>
+    >;
     static_assert(sizeof(orb) == 32, "orb must be exactly 32 bytes");
 
-    /// @brief Interruption Response Block — output of TSCH instruction.
-    /// Layout: SCSW(12) + ESW(20) + ECW(32) + EMW(32) = 96 bytes.
-    struct [[gnu::packed]] alignas(4) irb {
-        scsw scsw_data{};  ///< Subchannel Status Word (12 bytes).
-        u32  esw[5]{};     ///< Extended Status Word (20 bytes) — PoP §14.3.5.
-        u32  ecw[8]{};     ///< Extended Control Word — device sense data (32 bytes).
-        u32  emw[8]{};     ///< Extended Measurement Word (32 bytes).
+    /// @brief Extended Measurement Word
+    using emw = lib::structure<32, 8, lib::endian::big,
+        lib::rw<"device_connect_time",           lib::bytes<0, 3>, u32>,
+        lib::rw<"function_pending_time",         lib::bytes<4, 7>, u32>,
+        lib::rw<"device_disconnect_time",        lib::bytes<8, 11>, u32>,
+        lib::rw<"control_unit_queuing_time",     lib::bytes<12, 15>, u32>,
+        lib::rw<"device_active_only_time",       lib::bytes<16, 19>, u32>,
+        lib::rw<"device_busy_time",              lib::bytes<20, 23>, u32>,
+        lib::rw<"initial_command_response_time", lib::bytes<24, 27>, u32>
+    >;
+
+    /// @brief Extended Report Word
+    using erw = lib::record<u32, lib::msb0_t,
+        lib::rw<"rq_logging_only",            lib::bits<1, 1>>,
+        lib::rw<"ext_sch_logout_pending",     lib::bits<2, 2>>,
+        lib::rw<"authorization_check",        lib::bits<3, 3>>,
+        lib::rw<"path_verification_required", lib::bits<4, 4>>,
+        lib::rw<"channel_path_timeout",       lib::bits<5, 5>>,
+        lib::rw<"failing_storage_access_v",   lib::bits<6, 6>>,
+        lib::rw<"concurrent_sense",           lib::bits<7, 7>>,
+        lib::rw<"secondary_ccw_addr_v",       lib::bits<8, 8>>,
+        lib::rw<"failing_storage_format",     lib::bits<9, 9>>,
+        lib::rw<"concurrent_sense_count",     lib::bits<10, 15>>
+    >;
+
+    enum class esw0_storage_access_code : u8 {
+        unknown       = 0b00,
+        read          = 0b01,
+        write         = 0b10,
+        read_backward = 0b11,
     };
 
-    static_assert(sizeof(irb) == 96, "irb must be exactly 96 bytes (PoP §14.3.4)");
+    enum class esw0_termination_code : u8 {
+        halt_sgn           = 0b00,
+        normal_termination = 0b01,
+        clear_sgn          = 0b10,
+    };
 
-    /// @brief Subsystem-Identification Word (SID) for I/O instructions.
-    struct [[gnu::packed]] subchannel_id {
-        u32 val{0};
+    enum class esw0_sequence_code : u8 {
+        nz_command_byte        = 0b001,
+        accepted_no_transfer   = 0b010,
+        polling_state          = 0b011,
+        ccw_transmit_error     = 0b100,
+        unpredictable_transfer = 0b101,
+    };
 
-        /// @brief Construct from SSID and subchannel number.
-        [[nodiscard]] static constexpr auto from_parts(
-            [[maybe_unused]] u8 cssid, u8 ssid, u16 sch_no) noexcept
-            -> subchannel_id
-        {
-            subchannel_id id{};
-            // cssid is not part of the SID word per PoP — ignored.
-            id.val = (static_cast<u32>(ssid & 0x03) << 17) |  // SSID at bits 45-46
-                     (1u << 16) |                               // "one" bit at bit 47
-                     static_cast<u32>(sch_no);                  // sch_no at bits 48-63
-            return id;
-        }
+    /// @brief Extended Status Word Format 0
+    using esw0 = lib::structure<20, 4, lib::endian::big,
+        lib::rw<"subchannel_logout",             lib::bytes<0, 3>, lib::record<u32, lib::msb0_t,
+            lib::rw<"esf",                       lib::bits<0, 7>, lib::record<u8, lib::msb0_t,
+                lib::rw<"key_check",             lib::bits<1, 1>>,
+                lib::rw<"mm_blk_pgm_check",      lib::bits<2, 2>>,
+                lib::rw<"mm_blk_data_check",     lib::bits<3, 3>>,
+                lib::rw<"mm_blk_prot_check",     lib::bits<4, 4>>,
+                lib::rw<"ccw_check",             lib::bits<5, 5>>,
+                lib::rw<"idaw_midaw_check",      lib::bits<6, 6>>
+            >>,
+            lib::rw<"last_path_used_mask",       lib::bits<8, 15>, lib::bf8>,
+            lib::rw<"ancillary_report",          lib::bits<16, 16>>,
+            lib::overlay_rw<"fvf",               lib::bits<16, 23>, lib::record<u8, lib::msb0_t,
+                lib::rw<"lath_path_used_mask",   lib::bits<1, 1>>,
+                lib::rw<"termination_code",      lib::bits<2, 2>>,
+                lib::rw<"sequence_code",         lib::bits<3, 3>>,
+                lib::rw<"device_status",         lib::bits<4, 4>>,
+                lib::rw<"ccw_tcw_address",       lib::bits<5, 5>>
+            >>,
+            lib::rw<"storage_access_code",       lib::bits<22, 23>, esw0_storage_access_code>,
+            lib::rw<"termination_code",          lib::bits<24, 25>, esw0_termination_code>,
+            lib::rw<"device_status_check",       lib::bits<26, 26>>,
+            lib::rw<"secondary_error",           lib::bits<27, 27>>,
+            lib::rw<"io_error_alert",            lib::bits<28, 28>>,
+            lib::rw<"sequence_code",             lib::bits<29, 31>, esw0_sequence_code>
+        >>,
+        lib::rw<"extended_report_word",          lib::bytes<4, 7>, erw>,
+        lib::overlay_rw<"failing_storage_address",lib::bytes<8, 15>, u64, lib::attr::unaligned>,
+        lib::rw<"ext_sch_logout_descriptor",     lib::bytes<8, 15>, u64, lib::attr::unaligned>,
+        lib::overlay_rw<"secondary_ccw_address", lib::at_byte<16>::at_bits<1, 31>, u32>
+    >;
 
-        /// @brief Extract subchannel set ID (bits 45-46 → u32 positions 18-17).
-        [[nodiscard]] constexpr auto ssid() const noexcept -> u8 {
-            return static_cast<u8>((val >> 17) & 0x03);
-        }
+    /// @brief Extended Status Word Format 1
+    using esw1 = lib::structure<20, 4, lib::endian::big,
+        lib::rw<"last_path_used_mask",           lib::bytes<1, 1>, lib::bf8>,
+        lib::rw<"extended_report_word",          lib::bytes<4, 7>, erw>
+    >;
 
-        /// @brief Extract subchannel number (bits 48-63 → u32 positions 15-0).
-        [[nodiscard]] constexpr auto sch_no() const noexcept -> u16 {
-            return static_cast<u16>(val & 0xFFFF);
-        }
+    /// @brief Extended Status Word Format 2
+    using esw2 = lib::structure<20, 4, lib::endian::big,
+        lib::rw<"last_path_used_mask",           lib::bytes<1, 1>, lib::bf8>,
+        lib::rw<"device_connect_time_intv",      lib::bytes<2, 3>, u16>,
+        lib::rw<"extended_report_word",          lib::bytes<4, 7>, erw>
+    >;
 
-        /// @brief Return raw 32-bit value for use in I/O instructions.
-        [[nodiscard]] constexpr auto to_raw() const noexcept -> u32 {
-            return val;
+    /// @brief Extended Status Word Format 3
+    using esw3 = esw1;
+
+    /// @brief Format-0/1/2/3 Extended Status Word
+    using esw_common = lib::structure<20, 4, lib::endian::big,
+        lib::overlay_rw<"f0",     lib::bytes<0, 19>, esw0>,
+        lib::overlay_rw<"f1",     lib::bytes<0, 19>, esw1>,
+        lib::overlay_rw<"f2",     lib::bytes<0, 19>, esw2>,
+        lib::overlay_rw<"f3",     lib::bytes<0, 19>, esw3>
+    >;
+
+    enum class irb_ecw_information : u8 {
+        unpredictable    = 0,
+        concurrent_sense = 1,
+        model_dependent  = 2,
+    };
+
+    template <typename T>
+    struct irb_extensions {
+        [[nodiscard]] auto ecw_information_type(this const T& self) noexcept -> irb_ecw_information {
+            if (self.template get<R"(scsw\flags\esw_format)">()) {
+                if (self.template get<R"(scsw\flags\extended_control)">())
+                    return self.template get<R"(erw\concurrent_sense)">() ?
+                        irb_ecw_information::concurrent_sense :
+                        irb_ecw_information::model_dependent;
+                return irb_ecw_information::unpredictable;
+            }
+            if (self.template get<R"(scsw\flags\extended_control)">())
+                return self.template get<R"(erw\concurrent_sense)">() ?
+                    irb_ecw_information::concurrent_sense :
+                    irb_ecw_information::unpredictable;
+            return irb_ecw_information::unpredictable;
         }
     };
 
-    static_assert(sizeof(subchannel_id) == 4, "subchannel_id must be exactly 4 bytes");
+    /// @brief Interruption Response Block
+    using irb = lib::structure<96, 8, lib::endian::big,
+        lib::extensions<irb_extensions>,
+        lib::rw<"scsw",           lib::bytes<0, 11>, scsw>,
+        lib::rw<"esw",            lib::bytes<12, 31>, esw_common>,
+        lib::rw<"ecw",            lib::bytes<32, 63>, u32[8]>,
+        lib::rw<"emw",            lib::bytes<64, 95>, emw>
+    >;
+
+    /// @brief Subchannel Identifier Record
+    using subchannel_id =    lib::record<u32, lib::msb0_t,
+        lib::rw<"ssid",   lib::bits<13, 14>, u8>,
+        lib::rw<"one",    lib::bits<15, 15>, u8, lib::attr::fixed<1>>,
+        lib::rw<"sch_no", lib::bits<16, 31>, u16>
+    >;
 
     /// @brief Sense ID response data returned by CCW_CMD_SENSE_ID.
     struct [[gnu::packed]] senseid_data {
@@ -291,8 +416,91 @@ namespace arch::s390x::io {
         u16 dev_type{0};   ///< Device type.
         u8  dev_model{0};  ///< Device model.
     };
-
     static_assert(sizeof(senseid_data) == 7, "senseid_data must be exactly 7 bytes");
+
+    using iiw = lib::record<u32, lib::msb0_t,
+        lib::rw<"pending_type",             lib::bits<0, 0>>,
+        lib::rw<"io_interruption_subclass", lib::bits<2, 4>>
+    >;
+
+    using io_interruption_code = lib::structure<12, 4, lib::endian::native,
+        lib::rw<"sid",                    lib::auto_layout, subchannel_id>,
+        lib::rw<"interruption_parameter", lib::auto_layout, u32>,
+        lib::rw<"interruption_id_word",   lib::auto_layout, iiw>
+    >;
+
+    enum class crw_rsc : u8 {
+        monitoring_facility    = 0b0010,
+        subchannel             = 0b0011,
+        channel_path           = 0b0100,
+        config_alert_facility  = 0b1001,
+        channel_subsystem      = 0b1011,
+    };
+
+    enum class crw_erc : u8 {
+        event_info_pending   = 0b000000,
+        available            = 0b000001,
+        initialized          = 0b000010,
+        temporary_error      = 0b000011,
+        installed_param_init = 0b000100,
+        terminal             = 0b000101,
+        perma_err_fac_not_init   = 0b000110,
+        perma_err_fac_init       = 0b000111,
+        installed_param_modified = 0b001000,
+        installed_param_restored = 0b001010,
+    };
+
+    template <typename T>
+    struct crw_extensions {
+        /// @return optionally a pair of subchannel id and subchannel-set ID
+        [[nodiscard]] auto sch_no(this const T& self) noexcept -> std::optional<std::pair<u16, u8>> {
+            return self.template get<"reporting_source_code">() == crw_rsc::subchannel ?
+                std::pair<u16, u8> {
+                    self.template get<"reporting_source_id">(),
+                    lib::bf32{self.template get<"reporting_source_id">()}.extract<10, 11>()
+                } : std::nullopt;
+        }
+
+        /// @return optionally a channel-path ID
+        [[nodiscard]] auto chpid(this const T& self) noexcept -> std::optional<u8> {
+            return self.template get<"reporting_source_code">() == crw_rsc::channel_path ||
+                   self.template get<"reporting_source_code">() == crw_rsc::config_alert_facility ?
+                lib::bf32{self.template get<"reporting_source_id">()}.extract<8, 15>() : std::nullopt;
+        }
+    };
+
+    using crw = lib::record<u32, lib::msb0_t,
+        lib::extensions<crw_extensions>,
+        lib::rw<"solicited",               lib::bits<1, 1>>,
+        lib::rw<"overflow",                lib::bits<2, 2>>,
+        lib::rw<"chaining",                lib::bits<3, 3>>,
+        lib::rw<"reporting_source_code",   lib::bits<4, 7>, crw_rsc>,
+        lib::rw<"ancillary_report",        lib::bits<8, 8>>,
+        lib::rw<"error_recovery_code",     lib::bits<10, 15>, crw_erc>,
+        lib::rw<"reporting_source_id",     lib::bits<16, 31>>
+    >;
+
+    using tcw = lib::structure<64, 8,      lib::endian::big,
+        lib::rw<"flags",                lib::bytes<0, 0>, lib::record<u32, lib::msb0_t,
+            lib::rw<"format",           lib::bits<0, 1>>,
+            lib::rw<"tida",             lib::bits<13, 13>>,
+            lib::rw<"tccb_tida",        lib::bits<14, 14>>,
+            lib::rw<"output_tida",      lib::bits<15, 15>>,
+            lib::rw<"tidaw_format",     lib::bits<16, 17>>
+        >>,
+        lib::rw<"tccb_length",          lib::at_word<1>::at_bits<8, 13>>,
+        lib::overlay_rw<"operations",   lib::bytes<5, 5>, lib::record<u8, lib::msb0_t,
+            lib::rw<"read",             lib::bits<6, 6>>,
+            lib::rw<"write",            lib::bits<7, 7>>
+        >>,
+        lib::rw<"output_data_address",  lib::bytes<7, 15>, u64>,
+        lib::rw<"input_data_address",   lib::bytes<16, 23>, u64>,
+        lib::rw<"tsb_address",          lib::bytes<24, 31>, u64>,
+        lib::rw<"tccb_address",         lib::bytes<32, 39>, u64>,
+        lib::rw<"input_count",          lib::bytes<40, 43>, u32>,
+        lib::rw<"output_count",         lib::bytes<44, 47>, u32>,
+        lib::rw<"interrogate_tcw_addr", lib::bytes<60, 63>, u32>
+    >;
 
 } // namespace arch::s390x::css
 

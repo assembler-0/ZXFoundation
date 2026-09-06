@@ -3,7 +3,7 @@
 # @brief CCache integration.  Detection is handled by toolchain-validate;
 #        this module only applies the launcher configuration.
 
-option(CCACHE_ENABLE "use ccache for faster compilation" ON)
+option(CCACHE_ENABLE "use ccache for faster compilation" OFF)
 
 if (CCACHE_ENABLE AND ZX_FOUND_CCACHE)
     set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_PROGRAM})

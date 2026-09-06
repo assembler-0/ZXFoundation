@@ -1,0 +1,76 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file fixed_string.cxxm
+/// @brief C++ fixed string
+
+export module lib.fixed_string;
+import zxfoundation.base.types;
+import lib.stl;
+
+export {
+
+namespace lib {
+
+    template <usize N>
+    struct fixed_string {
+        char data[N]{};
+
+        constexpr fixed_string() noexcept = default;
+
+        constexpr fixed_string(const char (&str)[N]) noexcept {
+            for (usize i = 0; i < N; ++i) {
+                data[i] = str[i];
+            }
+        }
+
+        [[nodiscard]] constexpr usize size() const noexcept { return N - 1; }
+        [[nodiscard]] constexpr const char* c_str() const noexcept { return data; }
+
+        [[nodiscard]] constexpr operator std::string_view() const noexcept {
+            return std::string_view{data, N - 1};
+        }
+    };
+
+    template <usize N>
+    fixed_string(const char (&)[N]) -> fixed_string<N>;
+
+    template <usize N1, usize N2>
+    [[nodiscard]] constexpr bool operator==(const fixed_string<N1>& a,
+                                             const fixed_string<N2>& b) noexcept {
+        if constexpr (N1 != N2) {
+            return false;
+        } else {
+            for (usize i = 0; i < N1; ++i) {
+                if (a.data[i] != b.data[i]) return false;
+            }
+            return true;
+        }
+    }
+
+    template <fixed_string Name, class T>
+    struct field_binding {
+        static constexpr auto name = Name;
+        T value;
+    };
+
+    template <fixed_string Str>
+    struct field_tag {
+        static constexpr auto name = Str;
+
+        template <class T>
+        constexpr auto operator=(T&& val) const noexcept {
+            return field_binding<Str, std::decay_t<T>>{std::forward<T>(val)};
+        }
+    };
+
+    namespace literals {
+        template <fixed_string Str>
+        constexpr auto operator""_f() noexcept {
+            return field_tag<Str>{};
+        }
+    }
+
+}
+
+using lib::literals::operator""_f;
+
+}

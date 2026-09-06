@@ -22,7 +22,7 @@ import zxfoundation.smp.csd.core;
 import zxfoundation.sys.printk.core;
 import lib.error;
 import lib.static_vector;
-import std;
+import lib.stl;
 
 namespace arch::s390x::cpu::hotplug::detail {
 
@@ -166,7 +166,7 @@ namespace arch::s390x::cpu::hotplug {
             return ::std::unexpected(::lib::kernel_error::from_generic(
                 ::lib::generic_error::invalid_arg));
 
-        if (cpu_id == lowcore::this_cpu_percpu().cpu_id)
+        if (cpu_id == percpu::this_cpu().cpu_id)
             return ::std::unexpected(::lib::kernel_error::from_generic(
                 ::lib::generic_error::invalid_arg));
 
@@ -190,7 +190,7 @@ namespace arch::s390x::cpu::hotplug {
             return ::std::unexpected(::lib::kernel_error::from_arch(
                 ::lib::arch_error::cpu_not_available));
         }
-        const u16 cpu_addr = lc->percpu.cpu_addr;
+        const u16 cpu_addr = percpu::at(cpu_id).cpu_addr;
         if (!detail::sigp_stop_cpu(cpu_addr)) {
             zxfoundation::smp::csd::enable_cpu(cpu_id);
             cpumask::cpu_set_online(cpu_id);

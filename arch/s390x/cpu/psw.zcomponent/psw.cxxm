@@ -4,6 +4,8 @@
 
 export module arch.s390x.cpu.psw;
 import zxfoundation.base.types;
+import lib.bitfield;
+import lib.structure;
 
 export {
 
@@ -94,35 +96,170 @@ namespace arch::s390x::cpu::psw {
     constexpr u64 PSW_LC_MCCK        = 0x01E0ULL; ///< Machine-check new PSW.
     constexpr u64 PSW_LC_IO          = 0x01F0ULL; ///< I/O new PSW.
 
-    /// @brief 64-bit z/Architecture PSW (16 bytes, 8-byte aligned per PoP §4.2).
-    struct [[gnu::packed]] alignas(8) zx_psw {
-        u64 mask{};  ///< PSW mask word (bits 0–63 per PoP Figure 4-1).
-        u64 addr{};  ///< Instruction address (bits 64–127).
+    enum class psw_basic_addressing_modes : u64 {
+        amode24    = 0b00,
+        amode31    = 0b01,
+        amode64    = 0b11,
     };
 
-    // Two u32 registers from EPSW packed into irqflags (u64).
+    using psw_mask = lib::record<u64, lib::msb0_t,
+        lib::rw<"per_mask", lib::bits<1, 1>>,
+        lib::rw<"dat_mode", lib::bits<5, 5>>,
+        lib::rw<"io_mask", lib::bits<6, 6>>,
+        lib::rw<"external_mask", lib::bits<7, 7>>,
+        lib::rw<"psw_key", lib::bits<8, 11>>,
+        lib::rw<"machine_check_mask", lib::bits<13, 13>>,
+        lib::rw<"wait_state", lib::bits<14, 14>>,
+        lib::rw<"problem_state", lib::bits<15, 15>>,
+        lib::rw<"address_space_control", lib::bits<16, 17>>,
+        lib::rw<"condition_code", lib::bits<18, 19>>,
+        lib::overlay_rw<"pgm_mask", lib::bits<20, 23>>,
+        lib::rw<R"(pgm_mask\fixed_point_overflow)", lib::bits<20, 20>>,
+        lib::rw<R"(pgm_mask\decimal_overflow)", lib::bits<21, 21>>,
+        lib::rw<R"(pgm_mask\hfp_exponent_underflow)", lib::bits<22, 22>>,
+        lib::rw<R"(pgm_mask\hfp_significance)", lib::bits<23, 23>>,
+        lib::overlay_rw<"addressing_mode", lib::bits<31, 32>, psw_basic_addressing_modes>,
+        lib::rw<"extended_addressing_mode", lib::bits<31, 31>>,
+        lib::rw<"basic_addressing_mode", lib::bits<32, 32>>
+    >;
+
+    using psw_mask_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"per_mask", lib::bits<1, 1>>,
+        lib::rw<"dat_mode", lib::bits<5, 5>>,
+        lib::rw<"io_mask", lib::bits<6, 6>>,
+        lib::rw<"external_mask", lib::bits<7, 7>>,
+        lib::rw<"psw_key", lib::bits<8, 11>>,
+        lib::rw<"machine_check_mask", lib::bits<13, 13>>,
+        lib::rw<"wait_state", lib::bits<14, 14>>,
+        lib::rw<"problem_state", lib::bits<15, 15>>,
+        lib::rw<"address_space_control", lib::bits<16, 17>>,
+        lib::rw<"condition_code", lib::bits<18, 19>>,
+        lib::overlay_rw<"pgm_mask", lib::bits<20, 23>>,
+        lib::rw<R"(pgm_mask\fixed_point_overflow)", lib::bits<20, 20>>,
+        lib::rw<R"(pgm_mask\decimal_overflow)", lib::bits<21, 21>>,
+        lib::rw<R"(pgm_mask\hfp_exponent_underflow)", lib::bits<22, 22>>,
+        lib::rw<R"(pgm_mask\hfp_significance)", lib::bits<23, 23>>,
+        lib::overlay_rw<"addressing_mode", lib::bits<31, 32>, psw_basic_addressing_modes>,
+        lib::rw<"extended_addressing_mode", lib::bits<31, 31>>,
+        lib::rw<"basic_addressing_mode", lib::bits<32, 32>>
+    >;
+
+    using zpsw = lib::structure<16, 8, lib::endian::big,
+        lib::rw<"mask", lib::auto_layout, psw_mask>,
+        lib::rw<"address", lib::auto_layout, u64>
+    >;
+
+    using zpsw_view = lib::structure_ref<16, 8, lib::endian::big,
+        lib::rw<"mask", lib::auto_layout, psw_mask>,
+        lib::rw<"address", lib::auto_layout, u64>
+    >;
+
+    using short_psw = lib::record<u64, lib::msb0_t,
+        lib::rw<"per_mask", lib::bits<1, 1>>,
+        lib::rw<"dat_mode", lib::bits<5, 5>>,
+        lib::rw<"io_mask", lib::bits<6, 6>>,
+        lib::rw<"external_mask", lib::bits<7, 7>>,
+        lib::rw<"psw_key", lib::bits<8, 11>>,
+        lib::rw<"machine_check_mask", lib::bits<13, 13>>,
+        lib::rw<"wait_state", lib::bits<14, 14>>,
+        lib::rw<"problem_state", lib::bits<15, 15>>,
+        lib::rw<"address_space_control", lib::bits<16, 17>>,
+        lib::rw<"condition_code", lib::bits<18, 19>>,
+        lib::overlay_rw<"pgm_mask", lib::bits<20, 23>>,
+        lib::rw<R"(pgm_mask\fixed_point_overflow)", lib::bits<20, 20>>,
+        lib::rw<R"(pgm_mask\decimal_overflow)", lib::bits<21, 21>>,
+        lib::rw<R"(pgm_mask\hfp_exponent_underflow)", lib::bits<22, 22>>,
+        lib::rw<R"(pgm_mask\hfp_significance)", lib::bits<23, 23>>,
+        lib::overlay_rw<"addressing_mode", lib::bits<31, 32>, psw_basic_addressing_modes>,
+        lib::rw<"extended_addressing_mode", lib::bits<31, 31>>,
+        lib::rw<"basic_addressing_mode", lib::bits<32, 32>>,
+        lib::rw<"instruction_address", lib::bits<33, 63>>
+    >;
+
+    using short_psw_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"per_mask", lib::bits<1, 1>>,
+        lib::rw<"dat_mode", lib::bits<5, 5>>,
+        lib::rw<"io_mask", lib::bits<6, 6>>,
+        lib::rw<"external_mask", lib::bits<7, 7>>,
+        lib::rw<"psw_key", lib::bits<8, 11>>,
+        lib::rw<"machine_check_mask", lib::bits<13, 13>>,
+        lib::rw<"wait_state", lib::bits<14, 14>>,
+        lib::rw<"problem_state", lib::bits<15, 15>>,
+        lib::rw<"address_space_control", lib::bits<16, 17>>,
+        lib::rw<"condition_code", lib::bits<18, 19>>,
+        lib::overlay_rw<"pgm_mask", lib::bits<20, 23>>,
+        lib::rw<R"(pgm_mask\fixed_point_overflow)", lib::bits<20, 20>>,
+        lib::rw<R"(pgm_mask\decimal_overflow)", lib::bits<21, 21>>,
+        lib::rw<R"(pgm_mask\hfp_exponent_underflow)", lib::bits<22, 22>>,
+        lib::rw<R"(pgm_mask\hfp_significance)", lib::bits<23, 23>>,
+        lib::overlay_rw<"addressing_mode", lib::bits<31, 32>, psw_basic_addressing_modes>,
+        lib::rw<"extended_addressing_mode", lib::bits<31, 31>>,
+        lib::rw<"basic_addressing_mode", lib::bits<32, 32>>,
+        lib::rw<"instruction_address", lib::bits<33, 63>>
+    >;
+
+    using esa390_psw = lib::record<u64, lib::msb0_t,
+        lib::rw<"per_mask", lib::bits<1, 1>>,
+        lib::rw<"dat_mode", lib::bits<5, 5>>,
+        lib::rw<"io_mask", lib::bits<6, 6>>,
+        lib::rw<"external_mask", lib::bits<7, 7>>,
+        lib::rw<"psw_key", lib::bits<8, 11>>,
+        lib::rw<"machine_check_mask", lib::bits<13, 13>>,
+        lib::rw<"wait_state", lib::bits<14, 14>>,
+        lib::rw<"problem_state", lib::bits<15, 15>>,
+        lib::rw<"address_space_control", lib::bits<16, 17>>,
+        lib::rw<"condition_code", lib::bits<18, 19>>,
+        lib::overlay_rw<"pgm_mask", lib::bits<20, 23>>,
+        lib::rw<R"(pgm_mask\fixed_point_overflow)", lib::bits<20, 20>>,
+        lib::rw<R"(pgm_mask\decimal_overflow)", lib::bits<21, 21>>,
+        lib::rw<R"(pgm_mask\hfp_exponent_underflow)", lib::bits<22, 22>>,
+        lib::rw<R"(pgm_mask\hfp_significance)", lib::bits<23, 23>>,
+        lib::rw<"addressing_mode", lib::bits<32, 32>>,
+        lib::rw<"instruction_address", lib::bits<33, 63>>
+    >;
+
+    using esa390_psw_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"per_mask", lib::bits<1, 1>>,
+        lib::rw<"dat_mode", lib::bits<5, 5>>,
+        lib::rw<"io_mask", lib::bits<6, 6>>,
+        lib::rw<"external_mask", lib::bits<7, 7>>,
+        lib::rw<"psw_key", lib::bits<8, 11>>,
+        lib::rw<"machine_check_mask", lib::bits<13, 13>>,
+        lib::rw<"wait_state", lib::bits<14, 14>>,
+        lib::rw<"problem_state", lib::bits<15, 15>>,
+        lib::rw<"address_space_control", lib::bits<16, 17>>,
+        lib::rw<"condition_code", lib::bits<18, 19>>,
+        lib::overlay_rw<"pgm_mask", lib::bits<20, 23>>,
+        lib::rw<R"(pgm_mask\fixed_point_overflow)", lib::bits<20, 20>>,
+        lib::rw<R"(pgm_mask\decimal_overflow)", lib::bits<21, 21>>,
+        lib::rw<R"(pgm_mask\hfp_exponent_underflow)", lib::bits<22, 22>>,
+        lib::rw<R"(pgm_mask\hfp_significance)", lib::bits<23, 23>>,
+        lib::rw<"addressing_mode", lib::bits<32, 32>>,
+        lib::rw<"instruction_address", lib::bits<33, 63>>
+    >;
+
     struct [[gnu::packed]] alignas(u64) epsw_words {
         u32 hi;
         u32 lo;
     };
 
-    static_assert(sizeof(zx_psw) == 16,       "zx_psw must be exactly 16 bytes");
-    static_assert(alignof(zx_psw) == 8,       "zx_psw must be 8-byte aligned");
+    static_assert(sizeof(zpsw) == 16,       "zx_psw must be exactly 16 bytes");
+    static_assert(alignof(zpsw) == 8,       "zx_psw must be 8-byte aligned");
 
     /// @brief Extract the current PSW mask via EPSW. addr is unavailable; set to 0.
-    [[nodiscard]] auto extract_psw() noexcept -> zx_psw;
+    [[nodiscard]] auto extract_psw() noexcept -> zpsw;
 
-    [[noreturn]] auto load_psw(const zx_psw& psw) noexcept -> void;
+    [[noreturn]] auto load_psw(const zpsw& psw) noexcept -> void;
 
     [[noreturn]] auto disabled_wait() noexcept -> void;
 
     /// @brief Enter enabled-wait state — the z/Architecture idle primitive.
     auto enabled_wait() noexcept -> void;
 
-    auto write_psw_to_lowcore(u64 lc_offset, zx_psw psw) noexcept -> void;
+    auto write_psw_to_lowcore(u64 lc_offset, zpsw psw) noexcept -> void;
 
-    [[nodiscard]] auto make_handler_psw(u64 entry_virt) noexcept -> zx_psw;
-    [[nodiscard]] auto make_ap_restart_psw(u64 entry_phys) noexcept -> zx_psw;
+    [[nodiscard]] auto make_handler_psw(u64 entry_virt) noexcept -> zpsw;
+    [[nodiscard]] auto make_ap_restart_psw(u64 entry_phys) noexcept -> zpsw;
 
 } // namespace arch::s390x::cpu::psw
 

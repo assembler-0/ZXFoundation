@@ -53,6 +53,7 @@ import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sched.rt.core;
 import zxfoundation.smp.csd.core;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.aste;
 import arch.s390x.cpu.ar;
@@ -71,7 +72,7 @@ import lib.softirq.core;
 import lib.cpumask;
 import lib.container_of;
 import drivers.watchdog.core;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::detail {
 
@@ -106,7 +107,7 @@ namespace zxfoundation::sched::detail {
     }
 
     auto record_asce_attachment(domain& d) noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         pcp.attached_asce = d.asce.val;
         pcp.attached_domain_id = d.ko.id;
         pcp.attached_dgp_state = static_cast<u8>(d.ko.state);
@@ -260,7 +261,7 @@ namespace zxfoundation::sched {
     }
 
     [[nodiscard]] auto this_rq() noexcept -> run_queue& {
-        const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        const auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         return detail::g_rqs[pcp.cpu_id];
     }
 
@@ -282,7 +283,7 @@ namespace zxfoundation::sched {
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
 
-        const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        const auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         if (s->cpu != pcp.cpu_id) {
             arch::s390x::cpu::ipi::send_reschedule(s->cpu);
         } else {
@@ -564,9 +565,9 @@ namespace zxfoundation::sched {
             && (!prev_owner || next_owner->asce.val != prev_owner->asce.val)) {
             detail::validate_scheduler_irq_context(next_owner->ko.id);
             const u64 next_asce_val = next_owner->asce.val;
-            arch::s390x::cpu::ctlreg::ctl_load<1, 1>(next_asce_val);
+            arch::s390x::cpu::ctlreg::crwrite<1, 1>(next_asce_val);
             auto* lc = arch::s390x::cpu::lowcore::get_current();
-            lc->user_asce = next_asce_val;
+            lc->set<"user_asce">(next_asce_val);
             detail::record_asce_attachment(*next_owner);
         }
         if (next_owner) {
@@ -575,7 +576,7 @@ namespace zxfoundation::sched {
 
         rq.context_lock.unlock();
 
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         pcp.current_strand = reinterpret_cast<u64>(next);
 
         auto* switched_from_owner = __switch_to_asm(prev, next);
@@ -598,7 +599,7 @@ namespace zxfoundation::sched {
     }
 
     [[noreturn]] auto strand_trampoline_exit() noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto* current = reinterpret_cast<strand*>(pcp.current_strand);
         if (current) {
             current->on_rq = false;
@@ -772,10 +773,10 @@ namespace zxfoundation::sched {
 
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
         auto* nucleus = zxfoundation::dgp::domain::domain_nucleus();
-        lc.current_domain = nucleus ? reinterpret_cast<u64>(nucleus) : 0U;
-        lc.kernel_stack = idle_s->kstack_top;
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        pcp.current_domain = lc.current_domain;
+        lc.set<"current_domain"> (nucleus ? reinterpret_cast<u64>(nucleus) : 0U);
+        lc.set<"kernel_stack">   (idle_s->kstack_top);
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        pcp.current_domain = lc.get<"current_domain">();
         pcp.current_strand = reinterpret_cast<u64>(rq.curr);
         pcp.kernel_stack = idle_s->kstack_top;
 
@@ -847,10 +848,10 @@ namespace zxfoundation::sched {
 
         auto& lc = *arch::s390x::cpu::lowcore::get_current();
         auto* nucleus = zxfoundation::dgp::domain::domain_nucleus();
-        lc.current_domain = nucleus ? reinterpret_cast<u64>(nucleus) : 0U;
-        lc.kernel_stack = idle_s->kstack_top;
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
-        pcp.current_domain = lc.current_domain;
+        lc.set<"current_domain"> (nucleus ? reinterpret_cast<u64>(nucleus) : 0U);
+        lc.set<"kernel_stack">   (idle_s->kstack_top);
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        pcp.current_domain = lc.get<"current_domain">();
         pcp.current_strand = 0;
         pcp.kernel_stack = idle_s->kstack_top;
 

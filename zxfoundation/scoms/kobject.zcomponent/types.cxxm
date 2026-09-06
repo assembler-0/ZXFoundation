@@ -5,7 +5,7 @@
 export module zxfoundation.scoms.kobject.types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
-import std;
+import lib.stl;
 
 export {
 

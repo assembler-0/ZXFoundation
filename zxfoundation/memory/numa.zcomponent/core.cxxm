@@ -7,7 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.memory.numa.types;
 import arch.s390x.init.zxfl.protocol;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

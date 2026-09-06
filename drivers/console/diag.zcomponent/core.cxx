@@ -10,7 +10,7 @@ import zxfoundation.sched.context.core;
 import arch.s390x.cpu.diag;
 import arch.s390x.cpu.irq;
 import lib.charconv;
-import std;
+import lib.stl;
 
 namespace drivers::console::diag::detail {
 

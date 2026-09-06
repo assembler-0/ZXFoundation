@@ -2,7 +2,7 @@
 /// @file zxfoundation/dgp/gate.zcomponent/nc_portal.cxxm
 /// @brief Portal namespace dispatch handler.
 
-export module zxfoundation.dgp.gate.nc_portal;
+export module zxfoundation.dgp.gate.registration:nc_portal;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.base.types;
 import zxfoundation.dgp.authorize;
@@ -14,7 +14,7 @@ import zxfoundation.dgp.portal.core;
 import zxfoundation.dgp.portal.types;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import std;
+import lib.stl;
 
 static constexpr u64 NC_ERROR = ~0ULL;
 
@@ -25,7 +25,7 @@ namespace zxfoundation::dgp::gate::nc_portal::detail {
     [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
         if (!lc) [[unlikely]] return nullptr;
-        return reinterpret_cast<domain::domain*>(lc->current_domain);
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
     }
 
     auto nc_portal_create(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {

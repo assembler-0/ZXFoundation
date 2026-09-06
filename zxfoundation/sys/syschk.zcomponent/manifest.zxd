@@ -3,4 +3,6 @@
     types.cxxm
     core.cxxm
     core.cxx
+    barebones.cxxm
+    barebones.cxx
 }

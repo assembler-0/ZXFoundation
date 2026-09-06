@@ -2,7 +2,7 @@
 /// @file zxfoundation/dgp/gate.zcomponent/nc_gate.cxxm
 /// @brief Gate namespace dispatch handler.
 
-export module zxfoundation.dgp.gate.nc_gate;
+export module zxfoundation.dgp.gate.registration:nc_gate;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.base.types;
 import zxfoundation.dgp.authorize;
@@ -11,7 +11,7 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.domain.core;
 import zxfoundation.sys.printk.core;
 import lib.error;
-import std;
+import lib.stl;
 import arch.s390x.cpu.lowcore;
 import zxfoundation.dgp.gate.core;
 
@@ -24,7 +24,7 @@ namespace zxfoundation::dgp::gate::nc_gate::detail {
     [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
         if (!lc) [[unlikely]] return nullptr;
-        return reinterpret_cast<domain::domain*>(lc->current_domain);
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
     }
 
     auto nc_gate_create(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {

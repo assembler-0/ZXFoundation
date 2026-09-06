@@ -1,0 +1,5 @@
+!files : !compile_group -> [auto] {
+    interface.cxxm
+    core.cxxm
+    core.cxx !compile_options -> [ !compiler_id:gcc(-Wno-array-bounds) ]
+}

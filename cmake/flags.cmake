@@ -76,6 +76,8 @@ function(zx_check_c_flags)
     set(ZX_C_FLAGS ${ZX_C_FLAGS} PARENT_SCOPE)
 endfunction()
 
+# todo: libgcc and compiler-rt
+
 set(_ZX_NEEDED_CXX_FLAGS
     "-ffreestanding|REQUIRED"
     "-fno-builtin|REQUIRED"
@@ -97,6 +99,7 @@ set(_ZX_NEEDED_CXX_FLAGS
     "-fno-exceptions|REQUIRED"
     "-fno-rtti|REQUIRED"
     "-nostdlib|REQUIRED"
+    "-Wno-reserved-module-identifier|OPTIONAL"
     "-Wno-c2y-extensions|REQUIRED"
     "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=|OPTIONAL"
     "-march=${MARCH_MODE}|OPTIONAL"
@@ -121,6 +124,7 @@ if(COMPILER_ID STREQUAL "clang")
         "-nostdlib++|REQUIRED"
         "-fcolor-diagnostics|OPTIONAL"
         "-Wno-keyword-compat|REQUIRED"
+        "-Wno-unused-template|REQUIRED"
         "-Wno-nested-anon-types|REQUIRED"
         "-Wno-unknown-warning-option|REQUIRED"
         "-Wno-unused-parameter|REQUIRED"

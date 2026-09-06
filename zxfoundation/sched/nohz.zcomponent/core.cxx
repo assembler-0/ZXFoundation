@@ -7,7 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.sched.core;
 import zxfoundation.sched.softirq.core;
 import zxfoundation.sys.timer;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.clock;
 
 namespace zxfoundation::sched::nohz {
@@ -17,13 +17,13 @@ namespace zxfoundation::sched::nohz {
     auto do_prepare_idle() noexcept -> void {}
     
     auto do_tick_stop() noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto& t = cpu_timer(pcp.cpu_id);
         if (t.armed) discard_value zxfoundation::sys::timer::timer_cancel(t);
     }
     
     auto do_tick_start() noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto& t = cpu_timer(pcp.cpu_id);
         if (!t.armed) {
             t.deadline_tod = arch::s390x::cpu::clock::stck() + zxfoundation::sys::timer::TICK_INTERVAL_TOD;

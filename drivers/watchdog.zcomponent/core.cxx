@@ -9,15 +9,15 @@ import zxfoundation.sys.timer.types;
 import zxfoundation.sys.timer.core;
 import zxfoundation.sys.printk.core;
 import zxfoundation.sys.syschk.core;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.diag;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.psw;
-import arch.s390x.trap.fixup;
+import arch.s390x.trap.fixup.core;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace drivers::watchdog::detail {
 
@@ -60,7 +60,7 @@ namespace drivers::watchdog::detail {
                 if (cpu16 == 0U) return;
                 const u32 cpu = cpu16;
 
-                auto* pcp = lowcore::cpu_percpu(cpu16);
+                auto* pcp = percpu::cpu_percpu(cpu16);
                 if (!pcp) return;
 
                 const u64 hb = pcp->watchdog_heartbeat;
@@ -134,7 +134,7 @@ namespace drivers::watchdog {
     }
 
     auto heartbeat_bump() noexcept -> void {
-        arch::s390x::cpu::lowcore::this_cpu_percpu().watchdog_heartbeat++;
+        arch::s390x::cpu::percpu::this_cpu().watchdog_heartbeat++;
     }
 
 } // namespace zxfoundation::sys::watchdog

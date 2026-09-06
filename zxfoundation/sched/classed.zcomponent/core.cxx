@@ -11,7 +11,7 @@ import zxfoundation.sched.deadline.core;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.base.typestate;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::classed::detail {
 

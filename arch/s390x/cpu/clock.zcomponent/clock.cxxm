@@ -4,29 +4,23 @@
 
 export module arch.s390x.cpu.clock;
 import zxfoundation.base.types;
+import lib.bitfield;
+
+#define __zxmacro_want_bits
+#include macro_extensions
 
 export {
 
 namespace arch::s390x::cpu::clock {
 
-    union tod_clock {
-        u128 val{};
-        struct {
-            u8  epoch_idx;
-            u64 tod;
-            bitrsvd(60);
-            u16 programmable_field;
-        };
-        struct {
-            bitsfield(72, epoch_index_tod);
-            bitrsvd(56);
-        };
-        struct {
-            bitsfield(60, microsecond);
-            bitsfield(12, sub_microsecond);
-            bitrsvd(56);
-        };
-    };
+    using tod_clock = lib::record<u128, lib::msb0_t,
+        lib::overlay_rw<"epoch_index&tod", lib::bits<0, 71>>,
+        lib::overlay_rw<"epoch_index", lib::bits<0, 7>>,
+        lib::overlay_rw<"tod", lib::bits<8, 71>>,
+        lib::overlay_rw<"programmable_field", lib::bits<112, 127>>,
+        lib::overlay_rw<"microsecond", lib::bits<0, 59>>,
+        lib::overlay_rw<"sub_microsecond", lib::bits<60, 71>>
+    >;
 
     /// @name PERFORM TIMING FACILITY FUNCTION
     /// @{

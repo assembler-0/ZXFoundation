@@ -9,7 +9,10 @@ import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_symalias
+#include macro_extensions
 
 auto allocate(u64) noexcept -> void* symalias_reference(kmalloc);
 

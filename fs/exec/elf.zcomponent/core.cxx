@@ -18,7 +18,7 @@ import arch.s390x.mmu.types;
 import arch.s390x.mmu.consts;
 import arch.s390x.cpu.skey;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace fs::exec::elf::detail {
 

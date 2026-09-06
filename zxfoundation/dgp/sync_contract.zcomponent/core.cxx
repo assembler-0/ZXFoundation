@@ -4,10 +4,10 @@
 
 module zxfoundation.dgp.sync_contract.core;
 import zxfoundation.base.types;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::sync_contract {
 
@@ -18,10 +18,10 @@ namespace zxfoundation::dgp::sync_contract {
     /// @return Snapshot containing CPU ID, qspinlock depth, interrupt mask state, and RCU read-side state.
     [[nodiscard]] auto contract_snapshot(
         lock_context context,
-    teardown_phase phase,
-    u32 domain_id
+        teardown_phase phase,
+        u32 domain_id
     ) noexcept -> contract_state {
-        const auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        const auto& pcp = arch::s390x::cpu::percpu::this_cpu();
 
         contract_state state{};
         state.domain_id = domain_id;

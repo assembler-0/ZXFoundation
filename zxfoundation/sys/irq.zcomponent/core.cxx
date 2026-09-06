@@ -14,10 +14,10 @@ import zxfoundation.scoms.kobject.types;
 import zxfoundation.scoms.metadata.core;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sys::irq::detail {
 
@@ -41,7 +41,7 @@ namespace zxfoundation::sys::irq {
         using namespace detail;
         if (irq >= IRQ_NR_MAX) [[unlikely]] return;
 
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         const u32 raise =
             (cls == arch::s390x::cpu::irq::ZX_IRQ_CLASS_MCCK) ? 2U : 1U;
         pcp.irq_nesting += raise;
@@ -164,7 +164,7 @@ namespace zxfoundation::sys::irq {
     /// @note Memory order is release so the bit set is visible before any
     ///       IRQ return path context restore.
     auto deferred_set(u32 bit) noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         discard_value pcp.deferred_pending.fetch_or(bit,
             std::memory_order::release);
     }
@@ -174,7 +174,7 @@ namespace zxfoundation::sys::irq {
     /// @note Drains the bit atomically so the caller cannot accidentally
     ///       re-process work after a context switch.
     [[nodiscard]] auto deferred_test_clear(u32 bit) noexcept -> bool {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         const u32 old = pcp.deferred_pending.fetch_and(~bit,
             std::memory_order::acq_rel);
         return (old & bit) != 0U;

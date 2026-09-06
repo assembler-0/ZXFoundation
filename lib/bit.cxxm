@@ -4,7 +4,7 @@
 
 export module lib.bit;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 using std::countl_zero;
 using std::countr_zero;

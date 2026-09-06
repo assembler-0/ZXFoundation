@@ -6,6 +6,10 @@ export module arch.s390x.cpu.cpu_mf;
 import zxfoundation.base.types;
 import lib.bit;
 
+#define __zxmacro_want_bits
+#define __zxmacro_want_asm
+#include macro_extensions
+
 export {
 
 namespace arch::s390x::cpu::cpu_mf {

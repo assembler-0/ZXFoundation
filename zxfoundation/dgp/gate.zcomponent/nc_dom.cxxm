@@ -2,7 +2,7 @@
 /// @file zxfoundation/dgp/gate.zcomponent/nc_dom.cxxm
 /// @brief Domain namespace dispatch handler — Pure DGP (cap-gated).
 
-export module zxfoundation.dgp.gate.nc_dom;
+export module zxfoundation.dgp.gate.registration:nc_dom;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.domain.types;
@@ -21,7 +21,7 @@ import zxfoundation.sched.policy;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.uaccess;
 import lib.error;
-import std;
+import lib.stl;
 
 static constexpr u64 NC_DOM_ERROR = ~0ULL;
 
@@ -38,7 +38,7 @@ namespace zxfoundation::dgp::gate::nc_dom::detail {
     [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
         if (!lc) [[unlikely]] return nullptr;
-        return reinterpret_cast<domain::domain*>(lc->current_domain);
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
     }
 
     auto copy_from_user(void* dst, u64 src, u64 len, domain::domain* d) noexcept -> i32 {

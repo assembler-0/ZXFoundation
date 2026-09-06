@@ -14,14 +14,14 @@ import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
 import zxfoundation.sched.core;
 import zxfoundation.sched.topology.core;
-import std;
+import lib.stl;
 
 namespace arch::s390x::cpu::ipi {
 
     /// @brief Site-targeted helper: fetch-or a bit into the target's ec_bits
     ///        and (if newly set) punch a SIGP to deliver the IPI.
     auto send_bit_punch(u16 target_cpu_id, u64 bit_mask, u8 sigp_order) noexcept -> void {
-        percpu::percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
+        percpu::percpu_data* pcp = percpu::cpu_percpu(target_cpu_id);
         if (!pcp) [[unlikely]] return;
         const u64 old = pcp->ec_bits.fetch_or(bit_mask,
             std::memory_order::seq_cst);
@@ -43,7 +43,7 @@ namespace arch::s390x::cpu::ipi {
 
     /// @brief Send a self-IPI via external call (MCCK deferred work, irq_work).
     auto send_self_extcall(u64 ec_bit_mask) noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         discard_value pcp.ec_bits.fetch_or(ec_bit_mask,
             std::memory_order::seq_cst);
         discard_value sigp::issue_bounded(pcp.cpu_addr,
@@ -61,7 +61,7 @@ namespace arch::s390x::cpu::ipi {
     }
 
     auto send_call_function(u16 target_cpu_id) noexcept -> void {
-        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        auto* pcp = percpu::cpu_percpu(target_cpu_id);
         if (!pcp) [[unlikely]] return;
         const u32 old = pcp->deferred_pending.fetch_or(
             zxfoundation::sys::irq::DEFERRED_CALL_FUNCTION_BIT,
@@ -71,7 +71,7 @@ namespace arch::s390x::cpu::ipi {
     }
 
     auto send_irq_work(u16 target_cpu_id) noexcept -> void {
-        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        auto* pcp = percpu::cpu_percpu(target_cpu_id);
         if (!pcp) [[unlikely]] return;
         const u32 old = pcp->deferred_pending.fetch_or(
             zxfoundation::sys::irq::DEFERRED_IRQ_WORK_BIT,
@@ -81,7 +81,7 @@ namespace arch::s390x::cpu::ipi {
     }
 
     auto send_mcck_pending(u16 target_cpu_id) noexcept -> void {
-        auto* pcp = lowcore::cpu_percpu(target_cpu_id);
+        auto* pcp = percpu::cpu_percpu(target_cpu_id);
         if (!pcp) [[unlikely]] return;
         discard_value pcp->deferred_pending.fetch_or(
             zxfoundation::sys::irq::DEFERRED_MCCK_PENDING_BIT,
@@ -91,7 +91,7 @@ namespace arch::s390x::cpu::ipi {
 
     /// @brief Send a halt IPI to a logical CPU via SIGP_STOP_AND_STORE_STATUS.
     auto send_halt_ipi(u16 target_cpu_id) noexcept -> void {
-        percpu::percpu_data* pcp = lowcore::cpu_percpu(target_cpu_id);
+        percpu::percpu_data* pcp = percpu::cpu_percpu(target_cpu_id);
         if (!pcp) [[unlikely]] return;
         discard_value pcp->ec_bits.fetch_or(smp::EC_HALT_BIT_OFFSET,
             std::memory_order::seq_cst);
@@ -106,7 +106,7 @@ namespace arch::s390x::cpu::ipi {
         [[maybe_unused]] irq::irq_frame* frame,
         [[maybe_unused]] void* data
     ) noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         const u64 bits = pcp.ec_bits.exchange(0,
             std::memory_order::seq_cst);
         using namespace arch::s390x::cpu::smp;

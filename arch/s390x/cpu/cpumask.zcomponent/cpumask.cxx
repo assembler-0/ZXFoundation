@@ -4,7 +4,7 @@
 
 module arch.s390x.cpu.cpumask;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 import :storage;
 
 namespace arch::s390x::cpu::cpumask {

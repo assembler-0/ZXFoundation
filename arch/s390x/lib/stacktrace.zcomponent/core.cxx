@@ -17,22 +17,22 @@ namespace arch::s390x::lib::stacktrace {
     [[nodiscard]] auto get_stack_info(u64 sp) noexcept -> stack_info {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
 
-        if (lc->kernel_stack != 0) {
-            const u64 top  = lc->kernel_stack;
+        if (lc->get<"kernel_stack">() != 0) {
+            const u64 top  = lc->get<"kernel_stack">();
             const u64 base = top - STACK_SIZE;
             if (sp >= base && sp < top)
                 return { stack_type::task, base, top };
         }
 
-        if (lc->async_stack != 0) {
-            const u64 top  = lc->async_stack;
+        if (lc->get<"async_stack">() != 0) {
+            const u64 top  = lc->get<"async_stack">();
             const u64 base = top - ASYNC_STACK_SIZE;
             if (sp >= base && sp < top)
                 return { stack_type::async, base, top };
         }
 
-        if (lc->mcck_stack != 0) {
-            const u64 top  = lc->mcck_stack;
+        if (lc->get<"mcck_stack">() != 0) {
+            const u64 top  = lc->get<"mcck_stack">();
             const u64 base = top - MCCK_STACK_SIZE;
             if (sp >= base && sp < top)
                 return { stack_type::mcck, base, top };

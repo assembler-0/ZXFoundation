@@ -6,7 +6,7 @@
 module zxfoundation.sys.zxallsyms.core;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 from_global(nomangle) {
     from_global(reference) const u64  zxallsyms_addrs[];   ///< Sorted ascending virtual addresses.

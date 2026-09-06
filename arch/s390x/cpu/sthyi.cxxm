@@ -4,14 +4,19 @@
 /// @ref IBM z/VM 7.3 CP Programming (chapter 29. STHYI - STORE HYPERVISOR INFORMATION)
 
 export module arch.s390x.cpu.sthyi;
-import zxfoundation.base.types;
 import arch.s390x.cpu.types;
 import arch.s390x.cpu.features;
+import zxfoundation.base.types;
 import lib.cstring;
 import lib.bit;
 import lib.error;
 import lib.charconv;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_bits
+#define __zxmacro_want_asm
+#define __zxmacro_want_assert
+#include macro_extensions
 
 __endian__(BIG);
 

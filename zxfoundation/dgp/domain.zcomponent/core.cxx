@@ -48,7 +48,7 @@ import lib.list;
 import lib.format;
 import lib.cstring;
 import lib.container_of;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::domain::detail {
 
@@ -411,7 +411,7 @@ namespace zxfoundation::dgp::domain::detail {
 
             {
                 auto* user_r1 = reinterpret_cast<u64*>(hhdm::phys_to_virt(m_root_phys));
-                const u64 kernel_asce = lc::get_current()->kernel_asce;
+                const u64 kernel_asce = lc::get_current()->get<"kernel_asce">();
                 const u64 kernel_r1_phys = kernel_asce & 0xFFFFFFFFFFFFF000ULL;
                 auto* kern_r1 = reinterpret_cast<const u64*>(hhdm::phys_to_virt(kernel_r1_phys));
 
@@ -897,7 +897,7 @@ namespace zxfoundation::dgp::domain {
         d->granted_rights           = zxfoundation::dgp::isolation::isolation_rights::all;
 
         u64 cr1{0};
-        arch::s390x::cpu::ctlreg::ctl_store<1U, 1U>(cr1);
+        arch::s390x::cpu::ctlreg::crread<1U, 1U>(cr1);
         if (cr1 == 0U) {
             sys::printk::pcrit("domain: kernel CR1 is zero at nucleus init\n");
             return std::unexpected(
@@ -930,7 +930,7 @@ namespace zxfoundation::dgp::domain {
         {
             auto* lc = arch::s390x::cpu::lowcore::get_current();
             if (lc) [[likely]] {
-                lc->current_domain = reinterpret_cast<u64>(d);
+                lc->set<"current_domain">(reinterpret_cast<u64>(d));
             }
         }
 

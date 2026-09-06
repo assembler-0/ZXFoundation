@@ -8,7 +8,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.memory.numa.types;
 import lib.cpumask;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::topology::detail {
 

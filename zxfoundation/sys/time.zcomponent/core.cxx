@@ -9,7 +9,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.irq;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sys::time::detail {
 

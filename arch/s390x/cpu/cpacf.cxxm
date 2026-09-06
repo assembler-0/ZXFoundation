@@ -6,7 +6,12 @@ export module arch.s390x.cpu.cpacf;
 import arch.s390x.cpu.types;
 import zxfoundation.base.types;
 import lib.bit;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_bits
+#define __zxmacro_want_assert
+#define __zxmacro_want_asm
+#include macro_extensions
 
 __endian__(BIG);
 

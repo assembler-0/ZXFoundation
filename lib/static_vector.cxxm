@@ -6,7 +6,7 @@ export module lib.static_vector;
 import zxfoundation.base.types;
 import lib.error;
 import lib.format;
-import std;
+import lib.stl;
 
 export {
 

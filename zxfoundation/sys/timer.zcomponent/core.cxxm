@@ -7,7 +7,7 @@ import zxfoundation.sys.timer.types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.irq;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

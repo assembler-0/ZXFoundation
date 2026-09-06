@@ -10,11 +10,11 @@ import zxfoundation.base.config;
 import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
 import zxfoundation.sys.syschk.core;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.ipi;
 import arch.s390x.cpu.cpumask;
-import std;
+import lib.stl;
 
 namespace lib::detail {
 
@@ -28,7 +28,7 @@ namespace lib::detail {
 
     /// @brief Compute the per-CPU softirq state for the running CPU.
     [[nodiscard]] inline auto current_state() noexcept -> softirq_state& {
-        const u16 cpu = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 cpu = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] {
             zxfoundation::sys::syschk::syschk_fatal(
                 lib::kernel_error::from_arch(lib::arch_error::invalid_cpu_id),

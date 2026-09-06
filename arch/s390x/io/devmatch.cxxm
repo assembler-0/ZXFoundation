@@ -4,7 +4,7 @@
 
 export module arch.s390x.io.devmatch;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 namespace arch::s390x::css::devmatch::detail {
 

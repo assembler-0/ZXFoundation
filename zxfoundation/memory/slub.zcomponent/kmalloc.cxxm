@@ -9,7 +9,10 @@ import zxfoundation.sys.syschk.core;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.error;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_symalias
+#include macro_extensions
 
 namespace zxfoundation::memory::kmalloc::detail {
 

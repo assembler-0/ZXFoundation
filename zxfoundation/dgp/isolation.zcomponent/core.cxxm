@@ -10,7 +10,7 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.sched.policy;
 import arch.s390x.mmu.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 namespace zxfoundation::dgp::isolation {

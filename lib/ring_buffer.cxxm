@@ -4,7 +4,7 @@
 
 export module lib.ring_buffer;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 export {
 

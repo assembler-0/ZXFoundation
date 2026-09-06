@@ -4,7 +4,7 @@
 
 export module zxfoundation.dgp.signal.types;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 export {
 

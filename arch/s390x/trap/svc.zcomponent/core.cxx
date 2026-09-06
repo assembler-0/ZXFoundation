@@ -2,8 +2,9 @@
 /// @file svc.cxxm
 /// @brief Centralized SVC dispatch.
 
-export module arch.s390x.trap.svc;
+module arch.s390x.trap.svc.core;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.dgp.gate.dispatch;
@@ -12,15 +13,13 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 
-export {
+using zxfoundation::dgp::gate::call_namespace;
+using zxfoundation::dgp::gate::sys_op;
+using zxfoundation::dgp::gate::dispatch::dispatch;
+using zxfoundation::base::lifecycle_state;
 
 namespace arch::s390x::trap::svc {
 
-    using zxfoundation::dgp::gate::call_namespace;
-    using zxfoundation::dgp::gate::sys_op;
-    using zxfoundation::dgp::gate::dispatch::dispatch;
-    using zxfoundation::base::lifecycle_state;
-    
     /// @brief Centralized SVC nucleus-call dispatcher.
     [[nodiscard]] auto handle(cpu::irq::irq_frame* frame, const u16 svc_code) noexcept -> u64 {
         const u32 packed_nr = svc_code;
@@ -31,7 +30,7 @@ namespace arch::s390x::trap::svc {
         const u64 a4 = frame->gprs[6];
 
         const auto* lc = cpu::lowcore::get_current();
-        if (const auto* d  = lc ? reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain) : nullptr;
+        if (const auto* d  = lc ? reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->get<"current_domain">()) : nullptr;
             !d || d->ko.state != lifecycle_state::active) {
             return ~0ULL;
         }
@@ -43,7 +42,7 @@ namespace arch::s390x::trap::svc {
             call_namespace::sys, static_cast<u32>(sys_op::shm_map));
         if ((packed_nr == shm_import || packed_nr == shm_map) && result < 16U) {
             auto* strand = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
-                lc->percpu.current_strand);
+                cpu::percpu::this_cpu().current_strand);
             if (strand && strand->body) {
                 frame->access_regs[result] = strand->body->uregs.access_regs[result];
             }
@@ -52,5 +51,3 @@ namespace arch::s390x::trap::svc {
     }
 
 } // namespace arch::s390x::trap::svc
-
-} // end export

@@ -8,7 +8,7 @@ import zxfoundation.sched.softirq.core;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

@@ -5,7 +5,7 @@
 export module zxfoundation.dgp.sync_contract.core;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

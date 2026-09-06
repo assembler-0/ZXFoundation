@@ -38,7 +38,7 @@ import lib.error;
 import lib.rbtree;
 import lib.format;
 import lib.container_of;
-import std;
+import lib.stl;
 
 namespace zxfoundation::memory::vm::detail {
 
@@ -888,7 +888,7 @@ namespace zxfoundation::memory::vm {
                         rgn.va_start
                         + (drain_phys_end - rgn.phys_base);
                     const u64 k_asce =
-                        arch::s390x::cpu::lowcore::get_current()->kernel_asce;
+                        arch::s390x::cpu::lowcore::get_current()->get<"kernel_asce">();
                     detail::unmap_range_pages(
                         k_asce & arch::s390x::mmu::ASCE_ORIGIN_MASK,
                         drain_va_start, drain_va_end);
@@ -903,7 +903,7 @@ namespace zxfoundation::memory::vm {
                 const u64 sp = slot.phys;
                 if (sp < phys_start || sp >= phys_end) continue;
 
-                const u64 k_asce = arch::s390x::cpu::lowcore::get_current()->kernel_asce;
+                const u64 k_asce = arch::s390x::cpu::lowcore::get_current()->get<"kernel_asce">();
                 discard_value arch::s390x::mmu::unmap_page_dispatch(k_asce, slot.va_page);
                 arch::s390x::mmu::tlb_flush_local();
                 rmap::remove(rgn, i, slot.phys);

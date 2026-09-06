@@ -5,8 +5,13 @@
 export module arch.s390x.io.css.core;
 import arch.s390x.io.types;
 import zxfoundation.base.types;
+import lib.bitfield;
 import lib.bit;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_asm
+#define __zxmacro_want_bits
+#include macro_extensions
 
 export {
 
@@ -17,7 +22,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=canceled, 1=status pending, 2=not applicable, 3=not operational.
     [[nodiscard]] auto xsch(subchannel_id schid) noexcept -> condition_code {
         condition_code cc{};
-        register u64 r1 asm("1") = schid.to_raw();
+        register u64 r1 asm("1") = schid.underlying();
         __asm__ volatile(
             "xsch\n"
             __asm_capture_cc()
@@ -33,7 +38,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=cleared, 3=not operational.
     [[nodiscard]] auto csch(subchannel_id schid) noexcept -> condition_code {
         condition_code cc;
-        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.underlying());
         __asm__ volatile(
             "csch\n\t"
             __asm_capture_cc()
@@ -49,7 +54,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=halted, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto hsch(subchannel_id schid) noexcept -> condition_code {
         condition_code cc;
-        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.underlying());
         __asm__ volatile(
             "hsch\n\t"
             __asm_capture_cc()
@@ -65,7 +70,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=canceled, 1=status pending, 2=not applicable, 3=not operational.
     [[nodiscard]] auto rsch(subchannel_id schid) noexcept -> condition_code {
         condition_code cc{};
-        register u64 r1 asm("1") = schid.to_raw();
+        register u64 r1 asm("1") = schid.underlying();
         __asm__ volatile(
             "rsch\n"
             __asm_capture_cc()
@@ -110,11 +115,11 @@ namespace arch::s390x::io::css {
     /// @brief Issue SAL (Set Address Limit) instruction.
     /// @param address_limit Set address limit (loaded into GR1).
     /// @return Condition code: 0=canceled, 1=status pending, 2=not applicable, 3=not operational.
-    [[nodiscard]] auto sal(bit_int<31> address_limit) noexcept -> condition_code {
+    [[nodiscard]] auto sal(u32 address_limit) noexcept -> condition_code {
         condition_code cc{};
-        u64 limit{0};
-        lib::bit_insert_msb<u64>(limit, 33, 63, address_limit);
-        register u64 r1 asm("1") = limit;
+        lib::bf64 limit{0};
+        limit.insert<33, 63>(address_limit);
+        register u64 r1 asm("1") = limit.raw();
         __asm__ volatile(
             "rsch\n"
             __asm_capture_cc()
@@ -131,7 +136,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=started, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto ssch(subchannel_id schid, const orb& orb_ref) noexcept -> condition_code {
         condition_code cc;
-        register u64 r1 asm("1") = schid.to_raw();
+        register u64 r1 asm("1") = schid.underlying();
         __asm__ volatile(
             "ssch 0(%[orb])\n\t"
             __asm_capture_cc()
@@ -148,9 +153,9 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=initiated, 1=_, 2=busy, 3=not operational.
     [[nodiscard]] auto rchp(u8 chpid) noexcept -> condition_code {
         condition_code cc;
-        u64 _r1{0};
-        lib::bit_insert_msb<u64>(_r1, 56, 63, chpid);
-        register u64 r1 asm("1") = _r1;
+        lib::bf64 _r1{0};
+        _r1.insert<56, 63>(chpid);
+        register u64 r1 asm("1") = _r1.raw();
         __asm__ volatile(
             "rchp  \n"
             __asm_capture_cc()
@@ -167,7 +172,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=status stored, 1=no status pending, 3=not operational.
     [[nodiscard]] auto tsch(subchannel_id schid, irb& irb_ref) noexcept -> condition_code {
         condition_code cc;
-        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.underlying());
         __asm__ volatile(
             "tsch 0(%[irb])\n\t"
             __asm_capture_cc()
@@ -185,7 +190,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=stored, 3=not operational.
     [[nodiscard]] auto stsch(subchannel_id schid, schib& schib_ref) noexcept -> condition_code {
         condition_code cc;
-        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.underlying());
         __asm__ volatile(
             "stsch 0(%[schib])\n\t"
             __asm_capture_cc()
@@ -203,7 +208,7 @@ namespace arch::s390x::io::css {
     /// @return Condition code: 0=modified, 1=status pending, 2=busy, 3=not operational.
     [[nodiscard]] auto msch(subchannel_id schid, const schib& schib_ref) noexcept -> condition_code {
         condition_code cc;
-        register u64 r1 asm("1") = static_cast<u64>(schid.to_raw());
+        register u64 r1 asm("1") = static_cast<u64>(schid.underlying());
         __asm__ volatile(
             "msch 0(%[schib])\n\t"
             __asm_capture_cc()

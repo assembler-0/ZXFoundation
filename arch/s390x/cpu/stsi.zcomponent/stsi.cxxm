@@ -6,7 +6,11 @@ export module arch.s390x.cpu.stsi;
 export import :common;
 import zxfoundation.base.types;
 import lib.cstring;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_bits
+#define __zxmacro_want_assert
+#include macro_extensions
 
 __endian__(BIG);
 
@@ -519,7 +523,8 @@ namespace arch::s390x::cpu::stsi {
 			stsi_combo{15, 1, 2, 6},
 		};
 
-		consteval bool is_valid_stsi(u8 fc, u8 sel1, u8 sel2) {
+		template <u8 fc, u8 sel1, u8 sel2>
+		consteval bool is_valid_stsi() {
 			return std::ranges::any_of(valid_combos, [&](stsi_combo const& c) {
 				return c.fc == fc && c.sel1 == sel1 && sel2 >= c.sel2_lo && sel2 <= c.sel2_hi;
 			});
@@ -530,13 +535,14 @@ namespace arch::s390x::cpu::stsi {
 		/// @param fc Function code (e.g. 1).
 		/// @param sel1 Selector 1 (e.g. 1).
 		/// @param sel2 Selector 2 (e.g. 1).
+		/// @param curr_level current configuration level (valid only for 0/0/0)
 		/// @return 0 on success, -1 if not supported.
 		auto invoke(void* sysinfo, u4 fc, u8 sel1, u8 sel2, u4& curr_level) noexcept -> std::expected<condition_code, lib::kernel_error>;
 	}
 
 	template <typename Out, stsi_fc Fc, selector1 Sel1, u8 Sel2>
 	concept ValidStsiArguments =
-		detail::is_valid_stsi(static_cast<u8>(Fc), static_cast<u8>(Sel1), Sel2) && sizeof(Out) == PAGE_SIZE;
+		detail::is_valid_stsi<static_cast<u8>(Fc), static_cast<u8>(Sel1), Sel2>() && sizeof(Out) == PAGE_SIZE;
 
 	/// @brief Issue STSI instruction to store system information.
 	/// @tparam Out Output block type.

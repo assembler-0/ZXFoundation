@@ -5,7 +5,7 @@
 module arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 namespace arch::s390x::cpu::irq {
 

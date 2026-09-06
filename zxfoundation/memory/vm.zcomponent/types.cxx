@@ -4,7 +4,7 @@
 
 module zxfoundation.memory.vm.types;
 import zxfoundation.memory.kmalloc;
-import std;
+import lib.stl;
 
 namespace zxfoundation::memory::vm {
 

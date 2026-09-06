@@ -19,7 +19,7 @@ import zxfoundation.sync.lockable;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sys.printk.core;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::gate::dispatch::detail {
 

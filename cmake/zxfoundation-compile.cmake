@@ -30,6 +30,7 @@ macro(_zx_kernel_flags _tgt)
         ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${ZXLIBSTDCXX_INCLUDE}
+        ${ZXLIBC_INCLUDE}
     )
     target_compile_options(${_tgt} PRIVATE
         -include ${ZX_VALIDATE_HEADER}

@@ -1,5 +1,5 @@
 !files : !compile_group -> [auto] {
     interface.cxxm
-    types.cxxm
+    types.cxxm !compile_options -> [ !compiler_id:clang(-Wno-packed-non-pod) ]
     devmatch.cxxm
 }

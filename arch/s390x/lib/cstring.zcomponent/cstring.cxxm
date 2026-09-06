@@ -21,4 +21,4 @@ export declscope(C) {
     auto __zx_strnlen(const char* str, usize max) -> usize;
     auto __zx_strstr(const char* s1, const char* s2) -> char*;
 
-} // no_mangle
+} // declscope(C)

@@ -12,7 +12,8 @@
 // SAVE_FRAME — save interrupt register state on the async stack.
 .macro SAVE_FRAME reg, old_psw_lc, stack_lc, irq_class_val
     stg     \reg, LC_SCRATCH0(0)
-    icm     \reg, 15, LC_IRQ_NESTING(0)
+    lg      \reg, LC_PERCPU_PTR(0)
+    icm     \reg, 15, PCP_IRQ_NESTING(\reg)
     jnz     1f
     lg      \reg, \stack_lc(0)
     .ifnc \stack_lc, LC_MCCK_STACK
@@ -37,10 +38,11 @@
     // that RESTORE_FRAME gives back the correct register contents.
     lg      \reg, LC_SCRATCH0(0)
     stg     \reg, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
-    asi     LC_IRQ_NESTING(0), 1
+    lg      %r0, LC_PERCPU_PTR(0)
+    asi     PCP_IRQ_NESTING(%r0), 1
     la      %r2, IRQ_FRAME_BIAS(%r15)
     lhi     \reg, \irq_class_val
-    stc     \reg, LC_IRQ_CLASS(0)
+    stc     \reg, PCP_IRQ_CLASS(%r0)
 .endm
 
 .macro RESTORE_FRAME
@@ -49,9 +51,11 @@
     lfpc    (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
     mvc     LC_PSW_TEMP(16, 0), (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(%r15)
-    asi     LC_IRQ_NESTING(0), -1
-    lhi     %r0, 0
-    stc     %r0, LC_IRQ_CLASS(0)
+    // r0-r14 haven't been reloaded from the frame yet (that happens below),
+    // so %r0 is free scratch here too.
+    lg      %r0, LC_PERCPU_PTR(0)
+    asi     PCP_IRQ_NESTING(%r0), -1
+    mvi     PCP_IRQ_CLASS(%r0), 0
     lmg     %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm
@@ -60,11 +64,12 @@
     stg     \reg, LC_SCRATCH0(0)
     tm      (\old_psw_lc + 1)(0), 0x01
     jz      1f
-    xgr     \reg, \reg
-    st      \reg, LC_IRQ_NESTING(0)
-    st      \reg, LC_NUCLEUS_NESTING(0)
+    lg      \reg, LC_PERCPU_PTR(0)
+    xc      PCP_IRQ_NESTING(4,\reg), PCP_IRQ_NESTING(\reg)
+    xc      PCP_NUCLEUS_NESTING(4,\reg), PCP_NUCLEUS_NESTING(\reg)
 1:
-    icm     \reg, 15, LC_NUCLEUS_NESTING(0)
+    lg      \reg, LC_PERCPU_PTR(0)
+    icm     \reg, 15, PCP_NUCLEUS_NESTING(\reg)
     jnz     2f
     lg      \reg, \stack_lc(0)
     j       3f
@@ -81,10 +86,11 @@
     lgr     %r15, \reg
     lg      \reg, LC_SCRATCH0(0)
     stg     \reg, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
-    asi     LC_NUCLEUS_NESTING(0), 1
+    lg      %r0, LC_PERCPU_PTR(0)
+    asi     PCP_NUCLEUS_NESTING(%r0), 1
     la      %r2, IRQ_FRAME_BIAS(%r15)
     lhi     \reg, \irq_class_val
-    stc     \reg, LC_IRQ_CLASS(0)
+    stc     \reg, PCP_IRQ_CLASS(%r0)
 .endm
 
 .macro RESTORE_NUCLEUS_FRAME
@@ -93,9 +99,9 @@
     lfpc    (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
     mvc     LC_PSW_TEMP(16, 0), (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(%r15)
-    asi     LC_NUCLEUS_NESTING(0), -1
-    lhi     %r0, 0
-    stc     %r0, LC_IRQ_CLASS(0)
+    lg      %r0, LC_PERCPU_PTR(0)
+    asi     PCP_NUCLEUS_NESTING(%r0), -1
+    mvi     PCP_IRQ_CLASS(%r0), 0
     lmg     %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm
@@ -105,7 +111,8 @@
     tm      (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK + 1)(%r15), 0x01
     jz      1f
 
-    l       %r1, LC_PREEMPT_COUNT(0)
+    lg      %r1, LC_PERCPU_PTR(0)
+    l       %r1, PCP_PREEMPT_COUNT(%r1)
     ltr     %r1, %r1
     jnz     1f
 

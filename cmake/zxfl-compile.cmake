@@ -37,15 +37,18 @@ set(ZXFL_STAGE1_SOURCES
 add_executable(zxfl_stage1.elf ${ZXFL_STAGE1_SOURCES})
 target_include_directories(zxfl_stage1.elf SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
-)
-target_include_directories(zxfl_stage1.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${ZXLIBC_INCLUDE}
 )
 target_compile_options(zxfl_stage1.elf PRIVATE ${ZX_C_FLAGS})
 target_compile_definitions(zxfl_stage1.elf PUBLIC __zxfoundation__)
 
 set(STAGE1_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage1/stage1.ld")
-set_target_properties(zxfl_stage1.elf PROPERTIES LINK_DEPENDS "${STAGE1_LINKER_SCRIPT}")
+set_target_properties(zxfl_stage1.elf
+    PROPERTIES
+        LINK_DEPENDS "${STAGE1_LINKER_SCRIPT}"
+)
+
 target_link_options(zxfl_stage1.elf PRIVATE
     -T ${STAGE1_LINKER_SCRIPT}
     ${ZX_C_LINK_FLAGS}
@@ -62,15 +65,17 @@ set(ZXFL_STAGE2_SOURCES
 add_executable(zxfl_stage2.elf ${ZXFL_STAGE2_SOURCES})
 target_include_directories(zxfl_stage2.elf SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/include
-)
-target_include_directories(zxfl_stage2.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${ZXLIBC_INCLUDE}
 )
 target_compile_options(zxfl_stage2.elf PRIVATE ${ZX_C_FLAGS})
 target_compile_definitions(zxfl_stage2.elf PUBLIC __zxfoundation__)
 
 set(STAGE2_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/arch/s390x/init/zxfl/stage2/stage2.ld")
-set_target_properties(zxfl_stage2.elf PROPERTIES LINK_DEPENDS "${STAGE2_LINKER_SCRIPT}")
+set_target_properties(zxfl_stage2.elf
+    PROPERTIES
+        LINK_DEPENDS "${STAGE2_LINKER_SCRIPT}"
+)
 target_link_options(zxfl_stage2.elf PRIVATE
     -T ${STAGE2_LINKER_SCRIPT}
     ${ZX_C_LINK_FLAGS}

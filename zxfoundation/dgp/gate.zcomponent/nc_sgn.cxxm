@@ -2,7 +2,7 @@
 /// @file zxfoundation/dgp/gate.zcomponent/nc_sgn.cxxm
 /// @brief Signal namespace dispatch handler.
 
-export module zxfoundation.dgp.gate.nc_sgn;
+export module zxfoundation.dgp.gate.registration:nc_sgn;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.domain.types;
@@ -13,10 +13,11 @@ import zxfoundation.base.types;
 import zxfoundation.sys.printk.core;
 import zxfoundation.dgp.domain.core;
 import zxfoundation.sched.core;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.ipi;
 import lib.error;
-import std;
+import lib.stl;
 
 static constexpr u64 NC_SGN_ERROR = ~0ULL;
 
@@ -27,7 +28,7 @@ namespace zxfoundation::dgp::gate::nc_sgn::detail {
     [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
         if (!lc) [[unlikely]] return nullptr;
-        return reinterpret_cast<domain::domain*>(lc->current_domain);
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
     }
 
     auto nc_signal_register(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
@@ -49,6 +50,7 @@ namespace zxfoundation::dgp::gate::nc_sgn::detail {
 
         const auto kind = static_cast<signal_kind>(a0 & 0xFFU);
         const u64 handler_addr = a1;
+
         const u64 user_data    = a2;
 
         zxfoundation::dgp::signal::signal_handler_info info{};
@@ -138,7 +140,7 @@ namespace zxfoundation::dgp::gate::nc_sgn::detail {
 
         const auto target_cpu = target->primary_strand.cpu;
         if (target_cpu != 0xFFFFU) {
-            auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
             if (target_cpu != pcp.cpu_id) {
                 arch::s390x::cpu::ipi::send_reschedule(target_cpu);
             }

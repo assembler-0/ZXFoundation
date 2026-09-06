@@ -10,12 +10,13 @@ import zxfoundation.dgp.isolation.types;
 import zxfoundation.sys.syschk.core;
 import arch.s390x.sched.types;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.aste;
 import arch.s390x.cpu.psw;
 import lib.cstring;
-import std;
+import lib.stl;
 
 from_global(nomangle) {
 
@@ -249,9 +250,9 @@ namespace zxfoundation::sched::strandctx {
             }
         }
 
-        lc->user_asce = d ? d->asce.val : 0;
+        lc->set<"user_asce"> (d ? d->asce.val : 0);
         const u64 user_asce = d ? d->asce.val : 0;
-        arch::s390x::cpu::ctlreg::ctl_load<1, 1>(user_asce);
+        arch::s390x::cpu::ctlreg::crwrite<1, 1>(user_asce);
         if (d) arch::s390x::cpu::aste::art_context_load(d->art);
 
         if (d) {
@@ -272,12 +273,13 @@ namespace zxfoundation::sched::strandctx {
         psw[0] = s->body->uregs.psw_mask;
         psw[1] = s->body->uregs.psw_addr;
 
-        lc->current_domain = reinterpret_cast<u64>(d);
-        lc->kernel_stack   = s->kstack_top;
-        lc->percpu.current_strand = reinterpret_cast<u64>(s);
-        lc->percpu.attached_asce = user_asce;
-        lc->percpu.attached_domain_id = d ? d->ko.id : 0;
-        lc->percpu.attached_dgp_state = d ? static_cast<u8>(d->ko.state) : static_cast<u8>(0);
+        lc->set<"current_domain"> (reinterpret_cast<u64>(d));
+        lc->set<"kernel_stack">   (s->kstack_top);
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        pcp.current_strand = reinterpret_cast<u64>(s);
+        pcp.attached_asce = user_asce;
+        pcp.attached_domain_id = d ? d->ko.id : 0;
+        pcp.attached_dgp_state = d ? static_cast<u8>(d->ko.state) : static_cast<u8>(0);
 
         __domain_enter_user_asm(frame_base, &s->body->uregs);
     }

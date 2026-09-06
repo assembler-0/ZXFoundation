@@ -9,7 +9,10 @@ import arch.s390x.mmu.core;
 import arch.s390x.mmu.types;
 import zxfoundation.base.types;
 import zxfoundation.memory.hhdm;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_extable
+#include macro_extensions
 
 namespace arch::s390x::cpu::uaccess::detail {
 

@@ -8,7 +8,7 @@ import zxfoundation.sched.topology.types;
 import zxfoundation.sched.topology.core;
 import zxfoundation.base.types;
 import lib.cpumask;
-import std;
+import lib.stl;
 
 export {
 

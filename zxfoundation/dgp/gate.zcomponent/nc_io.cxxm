@@ -2,7 +2,7 @@
 /// @file zxfoundation/dgp/gate.zcomponent/nc_io.cxxm
 /// @brief I/O namespace dispatch handler.
 
-export module zxfoundation.dgp.gate.nc_io;
+export module zxfoundation.dgp.gate.registration:nc_io;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.base.types;
 import zxfoundation.dgp.authorize;
@@ -16,7 +16,7 @@ import zxfoundation.sys.zxio.types;
 import arch.s390x.cpu.uaccess;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import std;
+import lib.stl;
 
 static constexpr u64 NC_IO_ERROR = ~0ULL;
 
@@ -27,7 +27,7 @@ namespace zxfoundation::dgp::gate::nc_io::detail {
     [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
         if (!lc) [[unlikely]] return nullptr;
-        return reinterpret_cast<domain::domain*>(lc->current_domain);
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
     }
 
     auto copy_from_user(void* dst, u64 src, u64 len, domain::domain* d) noexcept -> i32 {

@@ -10,7 +10,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.error;
 import lib.cpumask;
-import std;
+import lib.stl;
 
 using zxfoundation::dgp::domain::domain;
 using zxfoundation::sched::rq::run_queue;

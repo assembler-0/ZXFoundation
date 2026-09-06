@@ -7,7 +7,7 @@ import zxfoundation.sys.zxio.types;
 import zxfoundation.dgp.cap.types;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

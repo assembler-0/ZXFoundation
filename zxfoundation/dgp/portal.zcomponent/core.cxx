@@ -37,7 +37,7 @@ import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.sync;
 import arch.s390x.mmu;
 import lib.error;
-import std;
+import lib.stl;
 
 using zxfoundation::dgp::portal::portal_desc;
 using zxfoundation::dgp::portal::portal_prot;

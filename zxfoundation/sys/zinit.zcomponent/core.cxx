@@ -7,7 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.sys.syschk;
 import zxfoundation.sys.printk.core;
 import lib.error;
-import std;
+import lib.stl;
 
 from_global(nomangle) {
     from_global(reference) const zxfoundation::sys::zinit::zi_desc __zinit_start[];

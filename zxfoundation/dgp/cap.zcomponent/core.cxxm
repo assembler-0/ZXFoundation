@@ -12,7 +12,7 @@ import zxfoundation.dgp.gate.types;
 import zxfoundation.dgp.portal.types;
 import zxfoundation.memory.objects.core;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

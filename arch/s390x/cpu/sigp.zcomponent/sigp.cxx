@@ -7,7 +7,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.sync;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 namespace arch::s390x::cpu::sigp {
 

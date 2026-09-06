@@ -21,7 +21,7 @@ import zxfoundation.scoms.table;
 import zxfoundation.sys.printk.core;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import std;
+import lib.stl;
 
 using zxfoundation::dgp::gate::gate_desc;
 using zxfoundation::dgp::gate::gate_type;
@@ -59,8 +59,8 @@ namespace zxfoundation::dgp::gate {
 
         auto* caller = []() -> zxfoundation::dgp::domain::domain* {
             auto* lc = arch::s390x::cpu::lowcore::get_current();
-            if (lc && lc->current_domain != 0)
-                return reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain);
+            if (lc && lc->get<"current_domain">() != 0)
+                return reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->get<"current_domain">());
             return nullptr;
         }();
         auto* target = zxfoundation::dgp::domain::domain_find(target_domain_id);

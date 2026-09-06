@@ -12,7 +12,7 @@ import zxfoundation.memory.objects;
 import zxfoundation.memory.page_cache.types;
 import zxfoundation.sync.qspinlock.core;
 import lib.rbtree;
-import std;
+import lib.stl;
 import lib.error;
 
 export {

@@ -2,7 +2,7 @@
 /// @file io.cxxm
 /// @brief Centralized io dispatch.
 
-export module arch.s390x.trap.io;
+module arch.s390x.trap.io.core;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.io.css.subchannel;
 import arch.s390x.cpu.irq;
@@ -10,15 +10,13 @@ import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
 import zxfoundation.base.types;
 
-export {
-
 namespace arch::s390x::trap::io {
 
     /// @brief Centralized io dispatcher.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
         const auto* lc = cpu::lowcore::get_current();
-        const u16 sch_no       = lc->subchannel_nr;
-        const u32 io_int_parm  = lc->io_int_parm;
+        const u16 sch_no       = lc->get<R"(io_interruption_code\sid\sch_no)">();
+        const u32 io_int_parm  = lc->get<R"(io_interruption_code\interruption_parameter)">();
 
         // Dispatch to the CSS layer for command-RB / TSCH processing.
         s390x::io::css::io_interrupt(sch_no);
@@ -30,5 +28,3 @@ namespace arch::s390x::trap::io {
     }
 
 } // namespace arch::s390x::trap::io
-
-} // end export

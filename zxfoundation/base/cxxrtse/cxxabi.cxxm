@@ -12,7 +12,7 @@ import arch.s390x.cpu.clock;
 import arch.s390x.cpu.sync;
 import lib.static_vector;
 import lib.error;
-import std;
+import lib.stl;
 
 using zxfoundation::sys::printk::pinfo;
 
@@ -34,7 +34,7 @@ auto atexit_unlock() noexcept -> void { g_atexit_lock.unlock(); }
 
 } // anonymous namespace
 
-no_mangle {
+declscope(C) {
 
 extern void (*__init_array_start[])() __attribute__((weak));
 
@@ -48,7 +48,7 @@ extern void *__dso_handle __attribute__((weak));
 
 }
 
-no_mangle {
+declscope(C) {
 
 auto __cxa_atexit(void (*destructor)(void*), void* obj, void* dso) -> int {
     if (!destructor) return 0;
@@ -186,7 +186,7 @@ u64 __stack_chk_guard = 0x595A465353500001ULL; // "ZXFSSP" + version tag
     __builtin_unreachable();
 }
 
-} // no_mangle
+} // declscope(C)
 
 export {
 

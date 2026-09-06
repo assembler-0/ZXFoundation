@@ -7,7 +7,7 @@ import zxfoundation.base.types;
 import arch.s390x.cpu.cpacf;
 import arch.s390x.cpu.features;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace crypto::sha256::detail {
 

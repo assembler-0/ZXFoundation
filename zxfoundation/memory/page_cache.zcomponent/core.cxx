@@ -18,7 +18,7 @@ import zxfoundation.sync.lockable;
 import arch.s390x.cpu.skey;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 
 namespace zxfoundation::memory::page_cache::detail {

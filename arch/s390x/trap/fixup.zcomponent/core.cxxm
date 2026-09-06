@@ -1,0 +1,35 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file fixup.cxxm
+/// @brief Program-check fixup table
+
+export module arch.s390x.trap.fixup.core;
+import arch.s390x.cpu.irq;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::trap::fixup {
+
+    struct fixup_entry {
+        i32 fault_delta{};
+        i32 fixup_delta{};
+        u16 type{};
+        u16 data{};
+    };
+
+    /// @brief Search exception table and apply entry-type-specific recovery.
+    /// @param faulting_addr  PSW instruction address at fault.
+    /// @param frame          Current interrupt frame (to patch saved GPRs).
+    /// @return true if a fixup was applied, false otherwise.
+    [[nodiscard]] auto try_applying_fixup(
+        u64 faulting_addr,
+        arch::s390x::cpu::irq::irq_frame* frame
+    ) noexcept -> bool;
+
+    auto clear() noexcept -> void;
+
+    [[nodiscard]] auto was_applied() noexcept -> bool;
+
+} // namespace arch::s390x::trap::fixup
+
+} // end export

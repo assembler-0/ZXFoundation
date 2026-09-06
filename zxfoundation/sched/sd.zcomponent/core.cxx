@@ -12,7 +12,7 @@ import zxfoundation.base.config;
 import zxfoundation.sched.policy;
 import lib.cpumask;
 import lib.error;
-import std;
+import lib.stl;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.lowcore;
 

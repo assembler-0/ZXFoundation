@@ -13,12 +13,12 @@ import zxfoundation.sched.context.core;
 import zxfoundation.sched.core;
 import zxfoundation.base.typestate;
 import zxfoundation.sched.policy;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.lowcore;
-import arch.s390x.cpu.irq;
 import arch.s390x.cpu.irq;
 import lib.list;
 import lib.container_of;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sync::mutex {
 
@@ -118,16 +118,16 @@ namespace zxfoundation::sync::mutex {
 
     /// @brief Slow path: add to wait queue, block, re-contend.
     auto mutex::slow_lock(const irqflags flags) noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto* current = reinterpret_cast<strand*>(pcp.current_strand);
 
         mutex_waiter w{};
         w.strand_ptr = current;
 
         const auto* lc = arch::s390x::cpu::lowcore::get_current();
-        if (lc->current_domain != 0) {
+        if (lc->get<"current_domain">() != 0) {
             w.entry.domain_id =
-                *reinterpret_cast<const u32*>(lc->current_domain);
+                *reinterpret_cast<const u32*>(lc->get<"current_domain">());
         }
 
         {

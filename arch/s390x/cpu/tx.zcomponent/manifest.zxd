@@ -1,0 +1,4 @@
+!files : !compile_group -> [auto] {
+    tx.cxxm !compile_options -> [ !compiler_id:gcc(-Wno-pedantic) !compiler_id:clang(-Wno-c99-extensions -Wno-gnu-anonymous-struct) ]
+    tx.cxx
+}

@@ -5,19 +5,19 @@
 module zxfoundation.dgp.gate.registration;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.dgp.gate.dispatch;
-import zxfoundation.dgp.gate.nc_dom;
-import zxfoundation.dgp.gate.nc_sgn;
-import zxfoundation.dgp.gate.nc_cap;
-import zxfoundation.dgp.gate.nc_gate;
-import zxfoundation.dgp.gate.nc_io;
-import zxfoundation.dgp.gate.nc_mem;
-import zxfoundation.dgp.gate.nc_portal;
-import zxfoundation.dgp.gate.nc_sys;
 import zxfoundation.dgp.authorize;
 import zxfoundation.sys.printk.core;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
+import :nc_dom;
+import :nc_sgn;
+import :nc_cap;
+import :nc_gate;
+import :nc_io;
+import :nc_mem;
+import :nc_portal;
+import :nc_sys;
 
 namespace zxfoundation::dgp::gate::registration {
 

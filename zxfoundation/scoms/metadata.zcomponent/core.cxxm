@@ -7,7 +7,7 @@ import zxfoundation.scoms.kobject.types;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

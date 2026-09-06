@@ -2,10 +2,11 @@
 /// @file pgm.cxxm
 /// @brief Centralized pgm dispatch.
 
-export module arch.s390x.trap.pgm;
+export module arch.s390x.trap.pgm.core;
 import arch.s390x.cpu.irq;
 import zxfoundation.base.types;
-import std;
+import lib.bitfield;
+import lib.stl;
 
 export {
 
@@ -64,14 +65,15 @@ namespace arch::s390x::trap::pgm {
         integer_divide            = 0b1000,
     };
 
-    union [[gnu::packed]] vector_exception_code {
-        u8 vxc{};
-        struct {
-            bitsfield(4, vix);
-            bitlimit(vector_interruption_code vic, 4);
-        };
-    };
-    assert_size(vector_exception_code, 1);
+    using vector_exception_code = lib::record<u8, lib::msb0_t,
+        lib::rw<"vix", lib::bits<0, 3>>,
+        lib::rw<"vic", lib::bits<4, 7>, vector_interruption_code>
+    >;
+
+    using vector_exception_code_view = lib::record_ref<u8, lib::msb0_t,
+        lib::rw<"vix", lib::bits<0, 3>>,
+        lib::rw<"vic", lib::bits<4, 7>, vector_interruption_code>
+    >;
 
     enum class data_exception_code : u8 {
         general_operand = 0x00,
@@ -100,11 +102,66 @@ namespace arch::s390x::trap::pgm {
         vector_instruction = 0xFE,
         compare_and_trap_instruction = 0xFF,
     };
+    enum class per_asce_type : u8 {
+        primary_asce   = 0b00,
+        ar_asce        = 0b01,
+        secondary_asce = 0b10,
+        home_asce      = 0b11,
+    };
+
+    using per_code = lib::record<u16, lib::msb0_t,
+        lib::rw<R"(per_code\successful_branching)", lib::bits<0, 0>>,
+        lib::rw<R"(per_code\instruction_fetching)", lib::bits<1, 1>>,
+        lib::rw<R"(per_code\storage_alter)", lib::bits<2, 2>>,
+        lib::rw<R"(per_code\storage_key_alter)", lib::bits<3, 3>>,
+        lib::rw<R"(per_code\store_using_real_addr)", lib::bits<4, 4>>,
+        lib::rw<R"(per_code\zero_addr_detection)", lib::bits<5, 5>>,
+        lib::rw<R"(per_code\transaction_end)", lib::bits<6, 6>>,
+        lib::rw<R"(per_code\inst_fetching_nullification)", lib::bits<7, 7>>,
+        lib::rw<R"(atmid\psw_bit_31)", lib::bits<8, 8>>,
+        lib::rw<R"(atmid\validity_bit)", lib::bits<9, 9>>,
+        lib::rw<R"(atmid\psw_bit_32)", lib::bits<10, 10>>,
+        lib::rw<R"(atmid\psw_bit_5)", lib::bits<11, 11>>,
+        lib::rw<R"(atmid\psw_bit_16)", lib::bits<12, 12>>,
+        lib::rw<R"(atmid\psw_bit_17)", lib::bits<13, 13>>,
+        lib::rw<"per_asce_id", lib::bits<14, 15>, per_asce_type>
+    >;
+
+    using per_code_view = lib::record_ref<u16, lib::msb0_t,
+        lib::rw<R"(per_code\successful_branching)", lib::bits<0, 0>>,
+        lib::rw<R"(per_code\instruction_fetching)", lib::bits<1, 1>>,
+        lib::rw<R"(per_code\storage_alter)", lib::bits<2, 2>>,
+        lib::rw<R"(per_code\storage_key_alter)", lib::bits<3, 3>>,
+        lib::rw<R"(per_code\store_using_real_addr)", lib::bits<4, 4>>,
+        lib::rw<R"(per_code\zero_addr_detection)", lib::bits<5, 5>>,
+        lib::rw<R"(per_code\transaction_end)", lib::bits<6, 6>>,
+        lib::rw<R"(per_code\inst_fetching_nullification)", lib::bits<7, 7>>,
+        lib::rw<R"(atmid\psw_bit_31)", lib::bits<8, 8>>,
+        lib::rw<R"(atmid\validity_bit)", lib::bits<9, 9>>,
+        lib::rw<R"(atmid\psw_bit_32)", lib::bits<10, 10>>,
+        lib::rw<R"(atmid\psw_bit_5)", lib::bits<11, 11>>,
+        lib::rw<R"(atmid\psw_bit_16)", lib::bits<12, 12>>,
+        lib::rw<R"(atmid\psw_bit_17)", lib::bits<13, 13>>,
+        lib::rw<"per_asce_id", lib::bits<14, 15>, per_asce_type>
+    >;
+
+    using eaid = lib::record<u8, lib::msb0_t,
+        lib::rw<"access_register_num", lib::bits<4, 7>>
+    >;
+
+    using eaid_view = lib::record_ref<u8, lib::msb0_t,
+        lib::rw<"access_register_num", lib::bits<4, 7>>
+    >;
+
+    using per_access_id = lib::record<u8, lib::msb0_t,
+        lib::rw<"paid", lib::bits<4, 7>>
+    >;
+    using per_access_id_view = lib::record_ref<u8, lib::msb0_t,
+        lib::rw<"paid", lib::bits<4, 7>>
+    >;
 
     [[nodiscard]] constexpr auto vxc_pgm_name_for(const vector_exception_code vxc) noexcept -> std::string_view;
-
     [[nodiscard]] constexpr auto dxc_pgm_name_for(const u8 code) noexcept -> std::string_view;
-
     [[nodiscard]] constexpr auto master_pgm_name_for(const u16 code) noexcept -> std::string_view;
 
     /// @brief Centralized program-check dispatcher.

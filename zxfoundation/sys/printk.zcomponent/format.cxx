@@ -12,7 +12,7 @@ import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
 import lib.format;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sys::printk {
 

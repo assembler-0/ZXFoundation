@@ -22,7 +22,7 @@ import zxfoundation.sync.lockable;
 import zxfoundation.memory.kmalloc;
 import lib.error;
 import lib.format;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::cap::detail {
 

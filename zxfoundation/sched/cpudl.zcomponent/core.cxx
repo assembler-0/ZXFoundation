@@ -10,7 +10,7 @@ import lib.rbtree;
 import lib.cpumask;
 import lib.error;
 import lib.container_of;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::cpudl::detail {
 

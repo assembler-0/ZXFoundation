@@ -142,7 +142,7 @@ declscope(C) {
             return dest;
         }
 
-        if (arch::s390x::cpu::features::has(facility::misc_inst_ext1)) {
+        if (arch::s390x::cpu::features::has(facility::misc_inst_ext3)) {
             while (n >= 256) {
                 __asm__ volatile(
                     "       lghi    %%r0,255\n"
@@ -168,22 +168,10 @@ declscope(C) {
     }
 
     auto __zx_memcmp(const void *s1, const void *s2, usize n) -> int {
-        using arch::s390x::cpu::processor::register_pair;
-        register_pair r1{ .even = reinterpret_cast<u64>(s1), .odd = n };
-        register_pair r3{ .even = reinterpret_cast<u64>(s2), .odd = n };
-
-        condition_code cc;
-        __asm__ volatile(
-            "0:     clcle   %[r1],%[r3],0\n"
-            "       jo      0b\n"
-            "       ipm     %[cc]\n"
-            "       srl     %[cc],28"
-            : [cc] "=d" (cc), [r1] "+d" (r1.pair), [r3] "+d" (r3.pair)
-            :
-            : "cc", "memory");
-
-        if (cc) cc = (cc == 1) ? -1 : 1;
-        return cc;
+        int ret = __zx_clcle(static_cast<const char*>(s1), n, static_cast<const char*>(s2), n);
+        if (ret)
+            ret = ret == 1 ? -1 : 1;
+        return ret;
     }
 
     auto __zx_strcmp(const char *s1, const char *s2) -> int {
@@ -296,4 +284,4 @@ declscope(C) {
     char* strnend(const char* s, usize n)
         __attribute__((alias("__zx_strnend")));
 
-} // no_mangle
+} // declscope(C)

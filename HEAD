@@ -1,24 +1,20 @@
-arch/s390x, zxfoundation, drivers, build: NNPA facility API, STSI wrapper, kernel-wide zcomponent refactor
+arch/s390x, zxfoundation, lib, build: glibc sysroot, precpp split, lib eDSL expansion, trap zcomponent migration, lowcore/percpu unification
 
-* Architecture API: NNPA (Neural Network Processing Assist) facility interface for z16; typed STSI 15 configuration topology wrapper
-* Source refactorization: ~350 files reorganized into zcomponent layout (manifest, interface, core implementation) across arch/s390x, zxfoundation/, lib/, drivers/, crypto/, fs/
-* Build: linker scripts OUTPUT_FORMAT/OUTPUT_ARCH fixes; sysroot for s390x-glibc; zxlibstdc++ submodule update
+* build/deps:
+    glibc sysroot added as deps/zxlibc submodule; zxlibstdc++ updated.
+* build:
+    cmake/deps.cmake includes zxlibc; flags, source, zxfl-compile, zxfoundation-compile updated for new modules and sysroot.
+* compiler/preprocess:
+    precpp.hxx split into focused headers under zxfoundation/base/preprocessor precpp.hxx reduced to validation wrapper.
+* lib:
+    added structure.cxxm and reworked bitfield.cxxm as a whole C++ hardware eDSL (see docs/misc/hwfields.md)
+* arch/s390x/trap:
+    full migration to .zcomponent layout, trap.cxxm retired.
+* arch/s390x/cpu:
+    lowcore.zcomponent/lowcore.cxxm and percpu.zcomponent/percpu.cxxm unified with static offset asserts matching entry.S macros; many components rewritten using bitfield/structure
+* arch/s390x/io:
+    types.cxxm major update with CCW/CSS/device structures.
+* deps/zxlibstdc++:
+    module std now exported as lib.stl, reference updated
 
-Bug fixes:
-    - PAGE_MASK corrected (was offset mask, now alignment mask: ~(PAGE_SIZE-1))
-    - New trap_assert/trap_on macros using __builtin_trap()
-    - Watchdog heartbeat_bump() added for per-CPU heartbeat
-    - lib/bitfield.cxxm (561 lines) and lib/rwonce.cxxm added for type-safe bitfields and volatile access
-    - Control registers & transactional execution now use lib::bitfield records
-    - Signed i128 division/modulo (__divti3/__modti3) with overflow clamping added
-    - CPU relax/yield abstraction via DIAG 0x44 (replaces inline asm in cxxabi)
-    - namespace std violations fixed in lib/queue, string_parser, scope_guard, min_heap
-    - C++23 module extern syntax: no_mangle → from_global(nomangle)/declscope(C)
-    - Namespace _internal → detail system-wide (~50 files)
-    - SCOMS allocator: __raw_alloc/free → kmalloc/kfree via symalias_reference
-    - Scheduler: sched_cpu_up/down → cpu_up/down, sched_idle_enter → idle_enter
-    - Sync contract functions renamed (snapshot/validate_irq_state/validate_teardown_phase/advance_teardown_phase)
-    - Capability namespace: sys::cap → dgp::cap system-wide
-    - New DGP authorization component with 60+ operation→rights mappings
-    - MMU pre-init DAT validation removed; impl moved to .cxx; mmu_init → init
-    - Assembly: ret_from_fork added with user/kernel first-entry paths (lpswe for user)
+git-diff(--stat): 257 files changed, 4351 insertions(+), 3159 deletions(-)

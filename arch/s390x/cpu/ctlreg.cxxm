@@ -4,76 +4,333 @@
 
 export module arch.s390x.cpu.ctlreg;
 import zxfoundation.base.types;
+import lib.bitfield;
 import lib.bit;
 
 export {
 
 namespace arch::s390x::cpu::ctlreg {
 
-    struct ctlreg {
-        u64 val;
+    using cr0 = lib::record<u64, lib::msb0_t,
+        lib::rw<"transactional_exec_control", lib::bits<8, 8>>,
+        lib::rw<"transactional_exec_interruption_override", lib::bits<9, 9>>,
+        lib::rw<"clock_comparator_sign_control", lib::bits<10, 10>>,
+        lib::rw<"cryptography_counter_control", lib::bits<13, 13>>,
+        lib::rw<"processor_activity_extension_ctl", lib::bits<14, 14>>,
+        lib::rw<"measurement_cnt_extr_auth_ctl", lib::bits<15, 15>>,
+        lib::rw<"warning_track_ssm", lib::bits<30, 30>>,
+        lib::rw<"trace_tod_clock_control", lib::bits<32, 32>>,
+        lib::rw<"ssm_suppression_control", lib::bits<33, 33>>,
+        lib::rw<"tod_clock_sync_control", lib::bits<34, 34>>,
+        lib::rw<"low_address_protection_control", lib::bits<35, 35>>,
+        lib::rw<"extraction_auth_control", lib::bits<36, 36>>,
+        lib::rw<"secondary_space_control", lib::bits<37, 37>>,
+        lib::rw<"fetch_protection_override_ctl", lib::bits<38, 38>>,
+        lib::rw<"storage_protection_override_ctl", lib::bits<39, 39>>,
+        lib::rw<"edat_enablement_control", lib::bits<40, 40>>,
+        lib::rw<"inst_exec_prot_enablement_ctl", lib::bits<43, 43>>,
+        lib::rw<"asn_lx_reuse_ctl", lib::bits<44, 44>>,
+        lib::rw<"afp_register_control", lib::bits<45, 45>>,
+        lib::rw<"vector_enablement_control", lib::bits<46, 46>>,
+        lib::rw<"malfunction_alert_ssm", lib::bits<48, 48>>,
+        lib::rw<"emerg_signal_ssm", lib::bits<49, 49>>,
+        lib::rw<"ext_call_ssm", lib::bits<50, 50>>,
+        lib::rw<"clock_comparator_ssm", lib::bits<52, 52>>,
+        lib::rw<"cpu_timer_ssm", lib::bits<53, 53>>,
+        lib::rw<"svc_signal_ssm", lib::bits<54, 54>>,
+        lib::rw<"interrupt_key_ssm", lib::bits<57, 57>>,
+        lib::rw<"measurement_alert_ssm", lib::bits<58, 58>>,
+        lib::rw<"timing_alert_ssm", lib::bits<59, 59>>
+    >;
+
+    using cr0_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"transactional_exec_control", lib::bits<8, 8>>,
+        lib::rw<"transactional_exec_interruption_override", lib::bits<9, 9>>,
+        lib::rw<"clock_comparator_sign_control", lib::bits<10, 10>>,
+        lib::rw<"cryptography_counter_control", lib::bits<13, 13>>,
+        lib::rw<"processor_activity_extension_ctl", lib::bits<14, 14>>,
+        lib::rw<"measurement_cnt_extr_auth_ctl", lib::bits<15, 15>>,
+        lib::rw<"warning_track_ssm", lib::bits<30, 30>>,
+        lib::rw<"trace_tod_clock_control", lib::bits<32, 32>>,
+        lib::rw<"ssm_suppression_control", lib::bits<33, 33>>,
+        lib::rw<"tod_clock_sync_control", lib::bits<34, 34>>,
+        lib::rw<"low_address_protection_control", lib::bits<35, 35>>,
+        lib::rw<"extraction_auth_control", lib::bits<36, 36>>,
+        lib::rw<"secondary_space_control", lib::bits<37, 37>>,
+        lib::rw<"fetch_protection_override_ctl", lib::bits<38, 38>>,
+        lib::rw<"storage_protection_override_ctl", lib::bits<39, 39>>,
+        lib::rw<"edat_enablement_control", lib::bits<40, 40>>,
+        lib::rw<"inst_exec_prot_enablement_ctl", lib::bits<43, 43>>,
+        lib::rw<"asn_lx_reuse_ctl", lib::bits<44, 44>>,
+        lib::rw<"afp_register_control", lib::bits<45, 45>>,
+        lib::rw<"vector_enablement_control", lib::bits<46, 46>>,
+        lib::rw<"malfunction_alert_ssm", lib::bits<48, 48>>,
+        lib::rw<"emerg_signal_ssm", lib::bits<49, 49>>,
+        lib::rw<"ext_call_ssm", lib::bits<50, 50>>,
+        lib::rw<"clock_comparator_ssm", lib::bits<52, 52>>,
+        lib::rw<"cpu_timer_ssm", lib::bits<53, 53>>,
+        lib::rw<"svc_signal_ssm", lib::bits<54, 54>>,
+        lib::rw<"interrupt_key_ssm", lib::bits<57, 57>>,
+        lib::rw<"measurement_alert_ssm", lib::bits<58, 58>>,
+        lib::rw<"timing_alert_ssm", lib::bits<59, 59>>
+    >;
+
+    enum class asce_type : u8 {
+        region_table_destination   = 0,
+        segment_table_destination  = 1,
+        real_space_destination     = 3,
     };
 
-    union cr0 {
-        u64 val;
-        ctlreg reg;
-        struct {
-            u64	   : 8;
-            u64 tcx  : 1; /* Transactional-Execution control */
-            u64 pifo : 1; /* Transactional-Execution Program-
-                           Interruption-Filtering Override */
-            u64	   : 3;
-            u64 ccc  : 1; /* Cryptography counter control */
-            u64 pec  : 1; /* PAI extension control */
-            u64	   : 15;
-            u64 wti  : 1; /* Warning-track */
-            u64	   : 4;
-            u64 lap  : 1; /* Low-address-protection control */
-            u64	   : 4;
-            u64 edat : 1; /* Enhanced-DAT-enablement control */
-            u64	   : 2;
-            u64 iep  : 1; /* Instruction-Execution-Protection */
-            u64	   : 1;
-            u64 afp  : 1; /* AFP-register control */
-            u64 vx   : 1; /* Vector enablement control */
-            u64	   : 7;
-            u64 sssm : 1; /* Service signal subclass mask */
-            u64	   : 9;
-        };
+    template <typename T>
+    struct primary_asce_extension {
+        [[nodiscard]] auto asce_type(this const T& self) noexcept -> asce_type {
+            if (self.template get<"primary_real_space_ctl">()) return asce_type::real_space_destination;
+            if (self.template get<"primary_degsination_type_ctl">() == 0b00) return asce_type::segment_table_destination;
+            return asce_type::region_table_destination;
+        }
     };
 
-    union cr2 {
-        u64 val;
-        ctlreg reg;
-        struct {
-            u64	    : 33;
-            u64 ducto : 25;
-            u64	    : 1;
-            u64 gse   : 1;
-            u64	    : 1;
-            u64 tds   : 1;
-            u64 tdc   : 2;
-        };
+    using cr1 = lib::record<u64, lib::msb0_t,
+        lib::extensions<primary_asce_extension>,
+        lib::rw<"primary_origin", lib::bits<0, 51>>,
+        lib::rw<"primary_subspace_group_ctl", lib::bits<54, 54>>,
+        lib::rw<"primary_private_space_ctl", lib::bits<55, 55>>,
+        lib::rw<"primary_storage_alter_event_ctl", lib::bits<57, 57>>,
+        lib::rw<"primary_real_space_ctl", lib::bits<58, 58>>,
+        lib::rw<"primary_degsination_type_ctl", lib::bits<60, 61>>,
+        lib::rw<"primary_table_length", lib::bits<62, 63>>
+    >;
+
+    using cr1_view = lib::record_ref<u64, lib::msb0_t,
+        lib::extensions<primary_asce_extension>,
+        lib::rw<"primary_origin", lib::bits<0, 51>>,
+        lib::rw<"primary_subspace_group_ctl", lib::bits<54, 54>>,
+        lib::rw<"primary_private_space_ctl", lib::bits<55, 55>>,
+        lib::rw<"primary_storage_alter_event_ctl", lib::bits<57, 57>>,
+        lib::rw<"primary_real_space_ctl", lib::bits<58, 58>>,
+        lib::rw<"primary_degsination_type_ctl", lib::bits<60, 61>>,
+        lib::rw<"primary_table_length", lib::bits<62, 63>>
+    >;
+
+    using cr2 = lib::record<u64, lib::msb0_t,
+        lib::rw<"dispatch_unit_ctl_table_origin", lib::bits<33, 57>>,
+        lib::rw<"guarded_stor_fac_enablement_ctl", lib::bits<59, 59>>,
+        lib::rw<"transaction_diagnostic_scope", lib::bits<61, 61>>,
+        lib::rw<"transaction_diagnostic_ctl", lib::bits<62, 63>>
+    >;
+
+    using cr2_view = lib::record_ref<u64, lib::msb0_t,
+       lib::rw<"dispatch_unit_ctl_table_origin", lib::bits<33, 57>>,
+       lib::rw<"guarded_stor_fac_enablement_ctl", lib::bits<59, 59>>,
+       lib::rw<"transaction_diagnostic_scope", lib::bits<61, 61>>,
+       lib::rw<"transaction_diagnostic_ctl", lib::bits<62, 63>>
+   >;
+
+    using cr3 = lib::record<u64, lib::msb0_t,
+        lib::rw<"secondary_asn_instance_num", lib::bits<0, 31>>,
+        lib::rw<"psw_key_mask", lib::bits<32, 47>>,
+        lib::rw<"secondary_asn", lib::bits<48, 63>>
+    >;
+
+    using cr3_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"secondary_asn_instance_num", lib::bits<0, 31>>,
+        lib::rw<"psw_key_mask", lib::bits<32, 47>>,
+        lib::rw<"secondary_asn", lib::bits<48, 63>>
+    >;
+
+    using cr4 = lib::record<u64, lib::msb0_t,
+        lib::rw<"primary_asn_instance_num", lib::bits<0, 31>>,
+        lib::rw<"auth_index", lib::bits<32, 47>>,
+        lib::rw<"parimary_asn", lib::bits<48, 63>>
+    >;
+
+    using cr4_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"primary_asn_instance_num", lib::bits<0, 31>>,
+        lib::rw<"auth_index", lib::bits<32, 47>>,
+        lib::rw<"parimary_asn", lib::bits<48, 63>>
+    >;
+
+    using cr5 = lib::record<u64, lib::msb0_t,
+        lib::rw<"primary_asn_origin", lib::bits<33, 57>>
+    >;
+
+    using cr5_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"primary_asn_origin", lib::bits<33, 57>>
+    >;
+
+    using cr6 = lib::record<u64, lib::msb0_t,
+        lib::rw<"io_interruption_ssm", lib::bits<32, 39>>
+    >;
+
+    using cr6_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"io_interruption_ssm", lib::bits<32, 39>>
+    >;
+
+    template <typename T>
+    struct secondary_asce_extension {
+        [[nodiscard]] auto asce_type(this const T& self) noexcept -> asce_type {
+            if (self.template get<"secondary_real_space_ctl">()) return asce_type::real_space_destination;
+            if (self.template get<"secondary_degsination_type_ctl">() == 0b00) return asce_type::segment_table_destination;
+            return asce_type::region_table_destination;
+        }
     };
 
-    union cr5 {
-        u64 val;
-        ctlreg reg;
-        struct {
-            u64	    : 33;
-            u64 pasteo: 25;
-            u64	    : 6;
-        };
+    using cr7 = lib::record<u64, lib::msb0_t,
+        lib::extensions<secondary_asce_extension>,
+        lib::rw<"secondary_origin", lib::bits<0, 51>>,
+        lib::rw<"secondary_subspace_group_ctl", lib::bits<54, 54>>,
+        lib::rw<"secondary_private_space_ctl", lib::bits<55, 55>>,
+        lib::rw<"secondary_storage_alter_event_ctl", lib::bits<57, 57>>,
+        lib::rw<"secondary_real_space_ctl", lib::bits<58, 58>>,
+        lib::rw<"secondary_degsination_type_ctl", lib::bits<60, 61>>,
+        lib::rw<"secondary_table_length", lib::bits<62, 63>>
+    >;
+
+    using cr7_view = lib::record_ref<u64, lib::msb0_t,
+        lib::extensions<secondary_asce_extension>,
+        lib::rw<"secondary_origin", lib::bits<0, 51>>,
+        lib::rw<"secondary_subspace_group_ctl", lib::bits<54, 54>>,
+        lib::rw<"secondary_private_space_ctl", lib::bits<55, 55>>,
+        lib::rw<"secondary_storage_alter_event_ctl", lib::bits<57, 57>>,
+        lib::rw<"secondary_real_space_ctl", lib::bits<58, 58>>,
+        lib::rw<"secondary_degsination_type_ctl", lib::bits<60, 61>>,
+        lib::rw<"secondary_table_length", lib::bits<62, 63>>
+    >;
+
+    using cr8 = lib::record<u64, lib::msb0_t,
+        lib::rw<"enhanced_monitor_masks", lib::bits<16, 31>>,
+        lib::rw<"extended_auth_index", lib::bits<32, 47>>,
+        lib::rw<"monitor_masks", lib::bits<48, 63>>
+    >;
+
+    using cr8_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"enhanced_monitor_masks", lib::bits<16, 31>>,
+        lib::rw<"extended_auth_index", lib::bits<32, 47>>,
+        lib::rw<"monitor_masks", lib::bits<48, 63>>
+    >;
+
+    using cr9 = lib::record<u64, lib::msb0_t,
+        lib::rw<"successful_branching_event_mask", lib::bits<32, 32>>,
+        lib::rw<"instruction_fetching_event_mask", lib::bits<33, 33>>,
+        lib::rw<"storage_alteration_event_mask", lib::bits<34, 34>>,
+        lib::rw<"storage_key_alteration_event_mask", lib::bits<35, 35>>,
+        lib::rw<"store_using_real_address_event_mask", lib::bits<36, 36>>,
+        lib::rw<"zero_address_detection_event_mask", lib::bits<37, 37>>,
+        lib::rw<"transaction_end_event_mask", lib::bits<38, 38>>,
+        lib::rw<"instruction_fetching_nullification_event_mask", lib::bits<39, 39>>,
+        lib::rw<"branch_address_ctl", lib::bits<40, 40>>,
+        lib::rw<"per_event_suppression_ctl", lib::bits<41, 41>>,
+        lib::rw<"storage_alteration_space_ctl", lib::bits<42, 42>>
+    >;
+
+    using cr9_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"successful_branching_event_mask", lib::bits<32, 32>>,
+        lib::rw<"instruction_fetching_event_mask", lib::bits<33, 33>>,
+        lib::rw<"storage_alteration_event_mask", lib::bits<34, 34>>,
+        lib::rw<"storage_key_alteration_event_mask", lib::bits<35, 35>>,
+        lib::rw<"store_using_real_address_event_mask", lib::bits<36, 36>>,
+        lib::rw<"zero_address_detection_event_mask", lib::bits<37, 37>>,
+        lib::rw<"transaction_end_event_mask", lib::bits<38, 38>>,
+        lib::rw<"instruction_fetching_nullification_event_mask", lib::bits<39, 39>>,
+        lib::rw<"branch_address_ctl", lib::bits<40, 40>>,
+        lib::rw<"per_event_suppression_ctl", lib::bits<41, 41>>,
+        lib::rw<"storage_alteration_space_ctl", lib::bits<42, 42>>
+    >;
+
+    using cr10 = lib::record<u64, lib::msb0_t,
+        lib::rw<"per_starting_address", lib::bits<0, 63>>
+    >;
+
+    using cr10_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"per_starting_address", lib::bits<0, 63>>
+    >;
+
+    using cr11 = lib::record<u64, lib::msb0_t,
+        lib::rw<"per_ending_address", lib::bits<0, 63>>
+    >;
+
+    using cr11_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"per_ending_address", lib::bits<0, 63>>
+    >;
+
+    using cr12 = lib::record<u64, lib::msb0_t,
+        lib::rw<"branch_trace_ctl", lib::bits<0, 0>>,
+        lib::rw<"mode_trace_ctl", lib::bits<1, 1>>,
+        lib::rw<"trace_entry_address", lib::bits<2, 61>>,
+        lib::rw<"asn_trace_ctl", lib::bits<62, 62>>,
+        lib::rw<"explicit_trace_ctl", lib::bits<63, 63>>
+    >;
+
+    using cr12_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"branch_trace_ctl", lib::bits<0, 0>>,
+        lib::rw<"mode_trace_ctl", lib::bits<1, 1>>,
+        lib::rw<"trace_entry_address", lib::bits<2, 61>>,
+        lib::rw<"asn_trace_ctl", lib::bits<62, 62>>,
+        lib::rw<"explicit_trace_ctl", lib::bits<63, 63>>
+    >;
+
+    template <typename T>
+    struct home_asce_extension {
+        [[nodiscard]] auto asce_type(this const T& self) noexcept -> asce_type {
+            if (self.template get<"home_real_space_ctl">()) return asce_type::real_space_destination;
+            if (self.template get<"home_degsination_type_ctl">() == 0b00) return asce_type::segment_table_destination;
+            return asce_type::region_table_destination;
+        }
     };
 
-    union cr15 {
-        u64 val;
-        ctlreg reg;
-        struct {
-            u64 lsea  : 61;
-            u64	    : 3;
-        };
-    };
+    using cr13 = lib::record<u64, lib::msb0_t,
+        lib::extensions<home_asce_extension>,
+        lib::rw<"home_origin", lib::bits<0, 51>>,
+        lib::rw<"home_subspace_group_ctl", lib::bits<54, 54>>,
+        lib::rw<"home_private_space_ctl", lib::bits<55, 55>>,
+        lib::rw<"home_storage_alter_event_ctl", lib::bits<57, 57>>,
+        lib::rw<"home_real_space_ctl", lib::bits<58, 58>>,
+        lib::rw<"home_degsination_type_ctl", lib::bits<60, 61>>,
+        lib::rw<"home_table_length", lib::bits<62, 63>>
+    >;
+
+    using cr13_view = lib::record_ref<u64, lib::msb0_t,
+        lib::extensions<home_asce_extension>,
+        lib::rw<"home_origin", lib::bits<0, 51>>,
+        lib::rw<"home_subspace_group_ctl", lib::bits<54, 54>>,
+        lib::rw<"home_private_space_ctl", lib::bits<55, 55>>,
+        lib::rw<"home_storage_alter_event_ctl", lib::bits<57, 57>>,
+        lib::rw<"home_real_space_ctl", lib::bits<58, 58>>,
+        lib::rw<"home_degsination_type_ctl", lib::bits<60, 61>>,
+        lib::rw<"home_table_length", lib::bits<62, 63>>
+    >;
+
+    using cr14 = lib::record<u64, lib::msb0_t,
+        lib::rw<"extended_save_area_ctl", lib::bits<34, 34>>,
+        lib::rw<"channel_report_pending_subclass_mask", lib::bits<35, 35>>,
+        lib::rw<"recovery_subclass_mask", lib::bits<36, 36>>,
+        lib::rw<"degradation_subclass_mask", lib::bits<37, 37>>,
+        lib::rw<"external_damage_subclass_mask", lib::bits<38, 38>>,
+        lib::rw<"warning_subclass_mask", lib::bits<39, 39>>,
+        lib::rw<"tod_clock_control_override_ctl", lib::bits<42, 42>>,
+        lib::rw<"asn_translation_ctl", lib::bits<44, 44>>,
+        lib::rw<"asn_first_table_origin", lib::bits<45, 63>>
+    >;
+
+    using cr14_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"extended_save_area_ctl", lib::bits<34, 34>>,
+        lib::rw<"channel_report_pending_subclass_mask", lib::bits<35, 35>>,
+        lib::rw<"recovery_subclass_mask", lib::bits<36, 36>>,
+        lib::rw<"degradation_subclass_mask", lib::bits<37, 37>>,
+        lib::rw<"external_damage_subclass_mask", lib::bits<38, 38>>,
+        lib::rw<"warning_subclass_mask", lib::bits<39, 39>>,
+        lib::rw<"tod_clock_control_override_ctl", lib::bits<42, 42>>,
+        lib::rw<"asn_translation_ctl", lib::bits<44, 44>>,
+        lib::rw<"asn_first_table_origin", lib::bits<45, 63>>
+    >;
+
+    using cr15 = lib::record<u64, lib::msb0_t,
+        lib::rw<"linkage_stack_entry_address", lib::bits<0, 60>>
+    >;
+
+    using cr15_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"linkage_stack_entry_address", lib::bits<0, 60>>
+    >;
 
     /// @brief Store control registers [Low..High] into a storage area (STCTG).
     /// @tparam Low   Starting control register index (0–15).
@@ -83,7 +340,7 @@ namespace arch::s390x::cpu::ctlreg {
     template <u32 Low, u32 High, typename T>
         requires (Low <= 15 && High <= 15 && Low <= High &&
                   sizeof(T) >= (High - Low + 1) * 8)
-    auto ctl_store(T& storage) noexcept -> void {
+    auto crread(T& storage) noexcept -> void {
         __asm__ volatile (
             "stctg %1, %2, %0\n\t"
             : "=Q" (storage)
@@ -100,37 +357,13 @@ namespace arch::s390x::cpu::ctlreg {
     template <u32 Low, u32 High, typename T>
         requires (Low <= 15 && High <= 15 && Low <= High &&
                   sizeof(T) >= (High - Low + 1) * 8)
-    auto ctl_load(const T& storage) noexcept -> void {
+    auto crwrite(const T& storage) noexcept -> void {
         __asm__ volatile (
             "lctlg %1, %2, %0\n\t"
             :
             : "Q"  (storage), "i" (Low), "i" (High)
             : "memory"
         );
-    }
-
-    /// @brief Set a single bit (IBM MSB numbering) in a control register.
-    /// @tparam Reg  Control register index (0–15).
-    /// @param  bit  Bit number in IBM MSB-0 notation (bit 0 = MSB of the 64-bit register).
-    template <u32 Reg>
-    auto ctl_set_bit(const u32 bit) noexcept -> void {
-        static_assert(Reg <= 15, "s390x has only control registers 0–15");
-        u64 reg;
-        ctl_store<Reg, Reg>(reg);
-        lib::bit_set_msb(reg, bit);
-        ctl_load<Reg, Reg>(reg);
-    }
-
-    /// @brief Clear a single bit (IBM MSB numbering) in a control register.
-    /// @tparam Reg  Control register index (0–15).
-    /// @param  bit  Bit number in IBM MSB-0 notation.
-    template <u32 Reg>
-    auto ctl_clear_bit(const u32 bit) noexcept -> void {
-        static_assert(Reg <= 15, "s390x has only control registers 0–15");
-        u64 reg;
-        ctl_store<Reg, Reg>(reg);
-        lib::bit_clear_msb(reg, bit);
-        ctl_load<Reg, Reg>(reg);
     }
 
 } // namespace arch::s390x::cpu::ctlreg

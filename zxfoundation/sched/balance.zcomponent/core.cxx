@@ -21,10 +21,11 @@ import zxfoundation.sched.admit.core;
 import zxfoundation.sched.core;
 import zxfoundation.sched.rq.types;
 import arch.s390x.cpu.cpumask;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.lowcore;
 import lib.error;
 import lib.rbtree;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::balance::detail {
 
@@ -250,7 +251,7 @@ namespace zxfoundation::sched::balance {
                                 lib::generic_error::invalid_arg));
                     }
                     if (const auto* tgt_pcp =
-                            arch::s390x::cpu::lowcore::cpu_percpu(local_rq.cpu_id)) {
+                            arch::s390x::cpu::percpu::cpu_percpu(local_rq.cpu_id)) {
                         const u32 tgt_attach = tgt_pcp->attached_domain_id;
                         if (tgt_attach != 0U && tgt_attach != src_dom) {
                             placement_result = std::unexpected(

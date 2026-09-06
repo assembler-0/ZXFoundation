@@ -8,6 +8,9 @@ import arch.s390x.cpu.types;
 import zxfoundation.base.types;
 import lib.bit;
 
+#define __zxmacro_want_extable
+#include macro_extensions
+
 namespace arch::s390x::cpu::diag {
 
     /// Generic diagnose — issue any code with arbitrary R1/R2 register values.

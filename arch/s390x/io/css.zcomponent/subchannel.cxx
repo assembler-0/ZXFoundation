@@ -17,7 +17,8 @@ import arch.s390x.cpu.sync;
 import lib.error;
 import lib.format;
 import lib.bit;
-import std;
+import lib.fixed_string;
+import lib.stl;
 
 namespace arch::s390x::io::css::detail {
 
@@ -53,7 +54,11 @@ namespace arch::s390x::io::css {
         const auto irq_state = arch::s390x::cpu::irq::irq_save_disable();
 
         for (u32 sch_no = 0; sch_no <= 0xFFFF && found < detail::MAX_SCH_ENTRIES; ++sch_no) {
-            const auto id = subchannel_id::from_parts(0, 0, static_cast<u16>(sch_no));
+            const subchannel_id id {
+                "ssid"_f = 0,
+                "one"_f = true,
+                "sch_no"_f = static_cast<u16>(sch_no),
+            };
 
             schib info{};
             const int cc = stsch(id, info);
@@ -64,14 +69,14 @@ namespace arch::s390x::io::css {
             }
 
             // Skip subchannels with no installed paths.
-            if (info.pmcw_data.pim == 0) {
+            if (info.get<R"(pmcw\path_installed_mask)">().raw() == 0) {
                 continue;
             }
 
-            if (!info.pmcw_data.is_enabled()) {
-                info.pmcw_data.flags &= static_cast<u16>(~0x3800U); // clear ISC -> 0
-                info.pmcw_data.flags |= 0x0080;                     // set E-bit
-                info.pmcw_data.intparm = static_cast<u32>(sch_no) << 3;
+            if (!info.get<R"(pmcw\flags\enabled)">()) {
+                info.set<R"(pmcw\io_subclass_code)">(0);
+                info.set<R"(pmcw\flags\enabled)">(true);
+                info.set<R"(pmcw\interruption_parameter)">(static_cast<u32>(sch_no) << 3);
                 const int mcc = msch(id, info);
                 if (mcc != 0) {
                     pwarn("css: msch failed for 0.0.{} cc={}",
@@ -81,7 +86,7 @@ namespace arch::s390x::io::css {
                 }
 
                 schib verify{};
-                if (stsch(id, verify) != 0 || !verify.pmcw_data.is_enabled()) {
+                if (stsch(id, verify) != 0 || !verify.get<R"(pmcw\flags\enabled)">()) {
                     pnotice("css: 0.0.{} enable did not take effect, skipping",
                            ::lib::format::hex{sch_no, 4, true});
                     continue;
@@ -90,19 +95,19 @@ namespace arch::s390x::io::css {
 
             // Record in the table under the lock.
             {
-                zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+                zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
 
                 auto& entry = detail::g_subchannel_table[found];
                 entry.schid  = id;
-                entry.devno  = info.pmcw_data.devno;
-                entry.available_lpm = info.pmcw_data.pam != 0U
-                    ? info.pmcw_data.pam : info.pmcw_data.pim;
+                entry.devno  = info.get<R"(pmcw\device_number)">();
+                entry.available_lpm = info.get<R"(pmcw\path_available_mask)">().raw() != 0U
+                    ? info.get<R"(pmcw\path_available_mask)">() : info.get<R"(pmcw\path_installed_mask)">();
                 entry.state  = subchannel_state::idle;
             }
 
             pverbose("css: found subchannel 0.0.{} devno={}",
                   ::lib::format::hex{sch_no, 4, true},
-                  ::lib::format::hex{static_cast<u64>(info.pmcw_data.devno), 4, true});
+                  ::lib::format::hex{static_cast<u64>(info.get<R"(pmcw\device_number)">()), 4, true});
 
             ++found;
         }
@@ -111,10 +116,10 @@ namespace arch::s390x::io::css {
         detail::g_css_initialized = true;
 
         {
-            u64 cr6 = 0;
-            cpu::ctlreg::ctl_store<6, 6>(cr6);          // read current CR6
-            cr6 |= 0x00000000FF000000ULL;                 // unmask ISC 0-7
-            cpu::ctlreg::ctl_load<6, 6>(cr6);          // write back to CR6
+            cpu::ctlreg::cr6 cr6{};
+            cpu::ctlreg::crread<6, 6>(cr6);
+            cr6.set<"io_interruption_ssm">(0xff);
+            cpu::ctlreg::crwrite<6, 6>(cr6);
         }
 
         cpu::irq::irq_restore(irq_state);
@@ -142,7 +147,7 @@ namespace arch::s390x::io::css {
         auto& entry = detail::g_subchannel_table[sch_index];
         {
             const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
-            if (entry.binding_id == ~0U || orb_ref.intparm != entry.binding_id) {
+            if (entry.binding_id == ~0U || orb_ref.get<"interruption_parameter">() != entry.binding_id) {
                 return ::std::unexpected(
                     ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
             }
@@ -280,13 +285,12 @@ namespace arch::s390x::io::css {
 
         // Store a copy for interrupt-path inspection.
         {
-            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+            zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
             entry.last_irb = irb_ref;
             if (cc == 0) {
-                const auto stctl = irb_ref.scsw_data.stctl();
-                const auto actl = irb_ref.scsw_data.actl();
-                if ((stctl & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0U &&
-                    (actl & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0U) {
+                const auto status_ctl = irb_ref.get<R"(scsw\control)">();
+                if (status_ctl.get<R"(status\primary)">() && status_ctl.get<R"(status\secondary)">() &&
+                    status_ctl.get<R"(activity\sch_active)">() && status_ctl.get<R"(activity\device_active)">()) {
                     entry.state = subchannel_state::idle;
                 }
             }
@@ -366,7 +370,7 @@ namespace arch::s390x::io::css {
 
         u32 idx = 0xFFFFFFFF;
         for (u32 i = 0; i < detail::g_sch_count; ++i) {
-            if (detail::g_subchannel_table[i].schid.sch_no() == static_cast<u16>(sch_no)) {
+            if (detail::g_subchannel_table[i].schid.get<"sch_no">() == static_cast<u16>(sch_no)) {
                 idx = i;
                 break;
             }
@@ -375,7 +379,11 @@ namespace arch::s390x::io::css {
         if (idx == 0xFFFFFFFF) {
             // Unknown subchannel — issue TSCH anyway to clear the status
             // condition, then discard the result.
-            const auto id = subchannel_id::from_parts(0, 0, static_cast<u16>(sch_no));
+            const subchannel_id id {
+                "ssid"_f = 0,
+                "one"_f = true,
+                "sch_no"_f = static_cast<u16>(sch_no),
+            };
             irb discard{};
             static_cast<void>(tsch(id, discard));
             return;
@@ -396,10 +404,12 @@ namespace arch::s390x::io::css {
             zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
             entry.last_irb = status;
             if (cc == 0) {
-                const auto stctl = status.scsw_data.stctl();
-                const auto actl  = status.scsw_data.actl();
-                if ((stctl & (STCTL_PRIMARY | STCTL_SECONDARY)) != 0 &&
-                    (actl  & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0) {
+                const auto status_ctl = status.get<R"(scsw\control)">();
+                const bool terminal = status_ctl.get<R"(status\primary)">() ||
+                                      status_ctl.get<R"(status\secondary)">();
+                const bool inactive = !status_ctl.get<R"(activity\sch_active)">() &&
+                                      !status_ctl.get<R"(activity\device_active)">();
+                if (terminal && inactive) {
                     const bool owned_completion =
                         (entry.state == subchannel_state::active ||
                          entry.state == subchannel_state::halting) &&

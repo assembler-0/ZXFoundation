@@ -4,7 +4,7 @@
 
 export module zxfoundation.base.types;
 #ifdef ZX_NO_BITINT
-import std;
+import lib.stl;
 #endif
 
 export {

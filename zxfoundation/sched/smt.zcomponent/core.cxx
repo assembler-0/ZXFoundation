@@ -9,11 +9,11 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.sched.policy;
 import zxfoundation.base.types;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.cpumask;
 import lib.cpumask;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::smt {
 
@@ -78,7 +78,7 @@ namespace zxfoundation::sched::smt {
             zxfoundation::sched::topology::cpu_relation::same_smt_core,
             [&](u16 y) noexcept -> void {
                 if (violated) return;
-                const auto* pcp = arch::s390x::cpu::lowcore::cpu_percpu(y);
+                const auto* pcp = arch::s390x::cpu::percpu::cpu_percpu(y);
                 if (!pcp) return;
                 const u32 attached_dom = pcp->attached_domain_id;
                 if (my_dom && attached_dom != 0U && attached_dom != my_dom->ko.id) {

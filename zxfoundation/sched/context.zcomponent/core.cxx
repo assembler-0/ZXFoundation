@@ -5,7 +5,7 @@
 module zxfoundation.sched.context.core;
 import zxfoundation.sys.syschk;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::context {
 

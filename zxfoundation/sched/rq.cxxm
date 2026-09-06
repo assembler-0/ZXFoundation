@@ -11,7 +11,7 @@ import zxfoundation.sched.rt.bandwidth;
 import zxfoundation.sched.entity;
 import lib.rbtree;
 import lib.list;
-import std;
+import lib.stl;
 
 export {
 

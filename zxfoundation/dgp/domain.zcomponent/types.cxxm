@@ -24,7 +24,7 @@ import arch.s390x.sched.types;
 import lib.error;
 import lib.rbtree;
 import lib.list;
-import std;
+import lib.stl;
 
 export {
 

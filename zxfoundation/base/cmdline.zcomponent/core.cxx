@@ -8,7 +8,7 @@ import lib.error;
 import lib.string_parser;
 import lib.cstring;
 import lib.static_vector;
-import std;
+import lib.stl;
 
 namespace zxfoundation::base::cmdline::detail {
 

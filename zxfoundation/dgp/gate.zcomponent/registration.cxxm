@@ -5,11 +5,8 @@
 export module zxfoundation.dgp.gate.registration;
 import zxfoundation.dgp.authorize.core;
 import zxfoundation.dgp.gate.types;
-import zxfoundation.dgp.gate.types;
 import zxfoundation.dgp.gate.dispatch;
 import zxfoundation.base.types;
-import lib.error;
-import std;
 
 export {
 

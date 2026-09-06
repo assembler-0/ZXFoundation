@@ -2,7 +2,8 @@
 /// @file arch/s390x/trap/ext.cxxm
 /// @brief Centralized external-interruption dispatcher.
 
-export module arch.s390x.trap.ext;
+module arch.s390x.trap.ext.core;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.cputimer;
@@ -23,40 +24,22 @@ import zxfoundation.smp.csd.core;
 import lib.error;
 import lib.softirq.core;
 
-export {
+namespace arch::s390x::trap::ext::detail {
+
+    /// @brief Acknowledge the current external interrupt in lowcore.
+    auto ack_lowcore() noexcept -> void {
+        cpu::lowcore::get_current()->set<"external_interruption_code">(0U);
+    }
+
+} // namespace detail
 
 namespace arch::s390x::trap::ext {
-
-    /// @brief Raw z/Architecture external-interruption codes per PoP §7-3.
-    /// @{
-    constexpr u16 EXT_INTERRUPT_KEY      = 0x0040;  ///< External-interrupt-key.
-    constexpr u16 EXT_CLOCK_COMPARATOR   = 0x1004;  ///< Clock comparator.
-    constexpr u16 EXT_CPU_TIMER          = 0x1005;  ///< CPU timer.
-    constexpr u16 EXT_WARNING_TRACK      = 0x1007;  ///< Warning track (STP).
-    constexpr u16 EXT_MALFUNCTION_ALERT  = 0x1200;  ///< Malfunction alert.
-    constexpr u16 EXT_EMERGENCY_SIGNAL   = 0x1201;  ///< Emergency-signal IPI.
-    constexpr u16 EXT_EXTERNAL_CALL      = 0x1202;  ///< External-call IPI.
-    constexpr u16 EXT_TIMING_ALERT       = 0x1406;  ///< STP timing alert.
-    constexpr u16 EXT_MEASUREMENT_ALERT  = 0x1407;  ///< CPU-MF measurement alert.
-    constexpr u16 EXT_SERVICE_SIGNAL     = 0x2401;  ///< SCLP service signal.
-    constexpr u16 EXT_CP_SERVICE         = 0x2603;  ///< CP service (pfault).
-    /// @}
-
-    namespace detail {
-
-        /// @brief Acknowledge the current external interrupt in lowcore.
-        auto ack_lowcore() noexcept -> void {
-            auto* lc = arch::s390x::cpu::lowcore::get_current();
-            lc->ext_int_code = 0U;
-        }
-
-    } // namespace detail
 
     /// @brief Centralized external-interruption dispatcher.
     /// @param[in,out] frame  Saved interrupt frame from entry.S.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
         auto* lc = cpu::lowcore::get_current();
-        const u16 ext_code = lc->ext_int_code;
+        const u16 ext_code = lc->get<"external_interruption_code">();
 
         detail::ack_lowcore();
 
@@ -79,12 +62,12 @@ namespace arch::s390x::trap::ext {
         if (irq::deferred_test_clear(irq::DEFERRED_MCCK_PENDING_BIT)) {
             // TODO:
             // The actual deferred-MCCK handler is currently inline in the
-            // MCCK dispatcher (Phase 3.2 / 11.7 pending); until that chapter
+            // MCCK dispatcher; until that chapter
             // is wired we simply acknowledge the bit was set so the trap
             // path stays self-consistent.
             zxfoundation::sys::printk::pverbose(
                 "ext: deferred MCCK work armed on cpu={}\n",
-                arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id);
+                arch::s390x::cpu::percpu::this_cpu().cpu_id);
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_CALL_FUNCTION_BIT)) {
@@ -97,7 +80,7 @@ namespace arch::s390x::trap::ext {
 
         if (irq::deferred_test_clear(irq::DEFERRED_STOP_CPU_BIT)) {
             const auto cpu_id =
-                arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+                arch::s390x::cpu::percpu::this_cpu().cpu_id;
             zxfoundation::sys::printk::pnotice(
                 "ext: stop-cpu deferred work on cpu={} — halting\n", cpu_id);
             arch::s390x::cpu::cpumask::cpu_clear_online(cpu_id);
@@ -107,5 +90,3 @@ namespace arch::s390x::trap::ext {
     }
 
 } // namespace arch::s390x::trap::ext
-
-} // end export

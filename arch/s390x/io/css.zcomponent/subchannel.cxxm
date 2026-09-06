@@ -8,7 +8,7 @@ import arch.s390x.io.types;
 import zxfoundation.base.types;
 import zxfoundation.sync.waitqueue.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

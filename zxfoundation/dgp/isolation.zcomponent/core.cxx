@@ -13,7 +13,7 @@ import zxfoundation.sched.policy;
 import zxfoundation.base.config;
 import arch.s390x.mmu.types;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::isolation::detail {
 

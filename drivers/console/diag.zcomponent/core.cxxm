@@ -4,7 +4,7 @@
 
 export module drivers.console.diag.core;
 import zxfoundation.sys.printk.types;
-import std;
+import lib.stl;
 
 export {
 

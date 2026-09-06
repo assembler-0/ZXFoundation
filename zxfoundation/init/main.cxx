@@ -57,7 +57,8 @@ import crypto.sha256.core;
 import drivers.console.diag.core;
 import drivers.watchdog.core;
 import lib.error;
-import std;
+import lib.bitfield;
+import lib.stl;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;
@@ -68,12 +69,6 @@ namespace zxfoundation::init::detail {
 
     using namespace zxfoundation::memory::hhdm;
     using namespace zxfoundation::sys::syschk;
-
-    [[nodiscard]] auto reclaim_for_pmm(u8 node, u32 target_pages) noexcept -> u32 {
-        auto reclaimed = zxfoundation::memory::reclaim::reclaim_node(
-            node, target_pages);
-        return reclaimed ? *reclaimed : 0U;
-    }
 
     /// @brief Verify the boot protocol magic and binding token.
     auto verify_protocol_integrity(const arch::s390x::init::zxfl::protocol& boot) -> void {
@@ -203,8 +198,6 @@ namespace zxfoundation::init::detail {
 
     /// @brief Initialize the HHDM coverage contract exported by ZXFL.
     /// @param[in] boot Loader protocol containing the active direct-map coverage evidence.
-    /// @note The kernel treats ZXFL as the IPL authority for the initial DAT map and verifies the reported bounds locally.
-    /// @warning Failure is fatal because later PMM/MMU table initialization writes through the HHDM.
     auto initialize_hhdm_contract(const arch::s390x::init::zxfl::protocol& boot) -> void {
         if (boot.hhdm_phys_coverage_end == 0U
             || (boot.hhdm_phys_coverage_end & (4096ULL - 1ULL)) != 0U
@@ -308,15 +301,7 @@ namespace zxfoundation::init::detail {
             zxfoundation::memory::pmm::max_pfn()); !rmap_init) {
             zxfoundation::sys::syschk::syschk_fatal(
                 rmap_init.error(), "sys: rmap initialization failed");
-        }
-    }
-
-    auto reclaim_entry_install() -> void {
-        if (auto reclaim_hook = zxfoundation::memory::pmm::install_allocation_retry(
-            detail::reclaim_for_pmm); !reclaim_hook) {
-            zxfoundation::sys::syschk::syschk_fatal(
-                reclaim_hook.error(), "sys: PMM reclaim retry initialization failed");
-        }
+            }
     }
 
 } // namespace detail
@@ -364,7 +349,6 @@ declscope(C) [[noreturn]] auto zxfoundation_global_initialize(
     detail::cap_register_lookup();
     zxfoundation::memory::slub::slub_attach_authorities();
     detail::rmap_init();
-    detail::reclaim_entry_install();
     zxfoundation::sys::ipc::ipc_init();
     zxfoundation::dgp::policy::init();
 

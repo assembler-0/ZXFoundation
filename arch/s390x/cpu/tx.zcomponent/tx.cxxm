@@ -3,13 +3,15 @@
 /// @brief Verified z/Architecture transactional execution primitives.
 
 export module arch.s390x.cpu.tx;
-import arch.s390x.cpu.ctlreg;
-import arch.s390x.cpu.features;
 import arch.s390x.cpu.teid;
-import arch.s390x.trap.pgm;
+import arch.s390x.trap.pgm.core;
 import zxfoundation.base.types;
-import lib.bit;
-import std;
+import lib.bitfield;
+import lib.stl;
+
+#define __zxmacro_want_assert
+#define __zxmacro_want_bits
+#include macro_extensions
 
 export {
 
@@ -47,14 +49,10 @@ namespace arch::s390x::cpu::tx {
     /// @brief Transaction Diagnostic Block
     struct [[gnu::packed]] tdb {
         tdb_format format{};
-        union {
-            u8 flags{};
-            struct {
-                bitfield(conflict_token_validity);
-                bitfield(constrained_transaction_indication);
-                bitrsvd(6);
-            };
-        };
+        lib::record<u8, lib::msb0_t,
+            lib::rw<"conflict_token_validity", lib::bits<0, 0>>,
+            lib::rw<"constrained_transaction_indication", lib::bits<1, 1>>
+        > flags;
         bytersvd(tobytes(w, 1)){};
         u16 transaction_nesting_depth{};
         tdb_abort_code transaction_abort_code{};
@@ -67,7 +65,7 @@ namespace arch::s390x::cpu::tx {
         teid::teid translation_exception_id;
         u64 breaking_event_addr{};
         bytersvd(tobytes(dw, 9)){};
-        std::array<u64, 16> general_registers;
+        u64 general_registers[16];
     };
     assert_size(tdb, 256);
 
@@ -91,17 +89,10 @@ namespace arch::s390x::cpu::tx {
     constexpr u16 TBEGIN_FLOAT_ALLOWED  = 0x0004;
 
     /// @brief Check that TX is installed and enabled for this CPU.
-    [[nodiscard]] inline auto available() noexcept -> bool {
-        if (!features::has(features::facility::transactional_exec)) return false;
-        u64 cr0{0};
-        ctlreg::ctl_store<0, 0>(cr0);
-        return lib::bit_test_msb(cr0, 8);
-    }
+    [[nodiscard]] auto available() noexcept -> bool;
 
     /// @brief Check that constrained TX is installed and TX is enabled.
-    [[nodiscard]] inline auto constrained_available() noexcept -> bool {
-        return available() && features::has(features::facility::constr_te);
-    }
+    [[nodiscard]] auto constrained_available() noexcept -> bool;
 
     /// @brief Begin a non-constrained transaction (no TDB).
     /// @tparam Ctrl  I2 control field (GRSM | A | F | PIFC).

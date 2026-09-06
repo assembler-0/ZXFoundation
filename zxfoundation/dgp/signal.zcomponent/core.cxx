@@ -10,7 +10,7 @@ import zxfoundation.sys.printk.core;
 import zxfoundation.base.typestate;
 import zxfoundation.scoms.kobject.ref;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::signal {
 

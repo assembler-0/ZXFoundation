@@ -32,8 +32,10 @@ import arch.s390x.io.css;
 import arch.s390x.cpu.skey;
 import arch.s390x.cpu.sync;
 import lib.error;
-import std;
 import lib.format;
+import lib.bitfield;
+import lib.structure;
+import lib.stl;
 
 namespace zxfoundation::sys::zxio::detail {
 
@@ -137,42 +139,49 @@ namespace zxfoundation::sys::zxio::detail {
                 lib::memory_error::invalid_address));
         }
 
-        const auto* source = reinterpret_cast<const ccw1*>(
-            hhdm::phys_to_virt(
-                binding.dma_base + DRIVER_DMA_OFFSET + request.ccw_offset));
-        auto* staged = reinterpret_cast<ccw1*>(
-            hhdm::phys_to_virt(binding.dma_base + CCW_STAGE_OFFSET));
+        lib::structure_span<ccw1> source(
+            reinterpret_cast<void*>(hhdm::phys_to_virt(
+                binding.dma_base + DRIVER_DMA_OFFSET + request.ccw_offset)),
+            request.ccw_count);
+        lib::structure_span<ccw1> staged(
+            reinterpret_cast<void*>(hhdm::phys_to_virt(
+                binding.dma_base + CCW_STAGE_OFFSET)),
+            request.ccw_count);
 
         for (u16 i = 0U; i < request.ccw_count; ++i) {
-            const ccw1 ccw = source[i];
-            if ((ccw.flags & ~CCW_USER_FLAGS) != 0U ||
-                (ccw.flags & (CCW_FLAG_IDA | CCW_FLAG_MIDA)) != 0U ||
-                ccw.cmd == CCW_CMD_TIC) {
+            const auto ccw  = source[i];
+            const u8 flags  = static_cast<u8>(ccw.get<"flags">());
+            const auto cmd  = ccw.get<"cmd_code">();
+            const u16 count = ccw.get<"count">();
+            const u32 daddr = ccw.get<"data_addr">();
+
+            if ((flags & ~CCW_USER_FLAGS) != 0U ||
+                (flags & (CCW_FLAG_IDA | CCW_FLAG_MIDA)) != 0U ||
+                cmd == ccw_commands::tic) {
                 return std::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::capability_invalid));
             }
 
-            const bool transfers_data = ccw.count != 0U &&
-                (ccw.flags & CCW_FLAG_SKIP) == 0U && ccw.cmd != CCW_CMD_NOP;
+            const bool transfers_data = count != 0U &&
+                (flags & CCW_FLAG_SKIP) == 0U && ccw_cmd_valid(static_cast<u8>(cmd));
             if (transfers_data) {
-                if (ccw.data_addr + ccw.count < ccw.data_addr ||
-                    static_cast<u64>(ccw.data_addr) + ccw.count > DRIVER_DMA_BYTES) {
+                if (daddr + count < daddr ||
+                    static_cast<u64>(daddr) + count > DRIVER_DMA_BYTES) {
                     return std::unexpected(lib::kernel_error::from_memory(
                         lib::memory_error::invalid_address));
                 }
-            } else if (ccw.data_addr != 0U) {
+            } else if (daddr != 0U) {
                 return std::unexpected(lib::kernel_error::from_generic(
                     lib::generic_error::invalid_arg));
             }
 
-            staged[i] = ccw1{
-                .cmd = ccw.cmd,
-                .flags = ccw.flags,
-                .count = ccw.count,
-                .data_addr = transfers_data
-                    ? static_cast<u32>(binding.dma_base + DRIVER_DMA_OFFSET + ccw.data_addr)
-                    : 0U,
-            };
+            auto out = staged[i];
+            out.set<"cmd_code">(cmd);
+            out.set<"flags">(ccw.get<"flags">());
+            out.set<"count">(count);
+            out.set<"data_addr">(transfers_data
+                ? static_cast<u32>(binding.dma_base + DRIVER_DMA_OFFSET + daddr)
+                : 0U);
         }
         return {};
     }
@@ -188,10 +197,10 @@ namespace zxfoundation::sys::zxio::detail {
 
         io_completion completion{
             .request_id = binding.pending_request_id,
-            .residual_count = status.scsw_data.count,
-            .device_status = status.scsw_data.dev_status,
-            .subchannel_status = status.scsw_data.sch_status,
-            .flags = status.scsw_data.has_error() ? u16{1} : u16{0},
+            .residual_count = status.get<R"(scsw\count)">(),
+            .device_status = status.get<R"(scsw\dev_status)">().underlying(),
+            .subchannel_status = status.get<R"(scsw\sch_status)">().underlying(),
+            .flags = status.get<"scsw">().has_device_error() || status.get<"scsw">().has_sch_error() ? u16{1} : u16{0},
         };
         if (binding.completion_count == IO_COMPLETION_DEPTH) {
             binding.completion_head =
@@ -205,7 +214,7 @@ namespace zxfoundation::sys::zxio::detail {
         ++binding.completion_count;
         binding.pending_request_id = 0U;
         if (!binding.teardown_started) {
-            binding.op_state = status.scsw_data.has_error()
+            binding.op_state = status.get<"scsw">().has_device_error() || status.get<"scsw">().has_sch_error()
                 ? io_substate::error : io_substate::bound;
         }
         return true;
@@ -248,7 +257,9 @@ namespace zxfoundation::sys::zxio::detail {
             auto test = css::test_io(binding.sch_index, status);
             if (!test) return std::unexpected(test.error());
             if (*test == 0U &&
-                (status.scsw_data.actl() & (ACTL_DEV_ACTIVE | ACTL_SCH_ACTIVE)) == 0U) {
+                !status.get<R"(scsw\control\activity\sch_active)">() &&
+                !status.get<R"(scsw\control\activity\device_active)">())
+            {
                 discard_value enqueue_completion(binding, status);
                 return {};
             }
@@ -542,7 +553,7 @@ namespace zxfoundation::sys::zxio {
         {
             // Serializing staging and SSCH against unbind closes the interval
             // where a teardown could clear the subchannel before it is started.
-            const sync::irq_lock_guard guard{binding->ko.lock};
+            const sync::irq_lock_guard _{binding->ko.lock};
             if (binding->teardown_started || binding->op_state != io_substate::bound) {
                 return std::unexpected(lib::kernel_error::from_driver(
                     lib::driver_error::busy));
@@ -552,11 +563,11 @@ namespace zxfoundation::sys::zxio {
 
             binding->op_state = io_substate::pending;
             binding->pending_request_id = request.request_id;
-            kernel_orb.intparm = binding->ko.id;
-            kernel_orb.set_format1();
-            kernel_orb.set_key(binding->storage_key);
-            kernel_orb.set_cpa(static_cast<u32>(binding->dma_base + detail::CCW_STAGE_OFFSET));
-            kernel_orb.set_lpm(binding->allowed_lpm);
+            kernel_orb.set<"interruption_parameter">(binding->ko.id);
+            kernel_orb.set<"subchannel_key">(binding->storage_key);
+            kernel_orb.set<"channel_program_address">(static_cast<u32>(binding->dma_base + detail::CCW_STAGE_OFFSET));
+            kernel_orb.set<"logical_path_mask">(lib::bf8{binding->allowed_lpm}); // Try all installed paths.
+            kernel_orb.set<R"(control\ccw_format)">(1);
             auto start = arch::s390x::io::css::start_io(binding->sch_index, kernel_orb);
             if (!start) {
                 binding->op_state = io_substate::bound;

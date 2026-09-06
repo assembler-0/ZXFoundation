@@ -20,4 +20,7 @@
     container_of.cxxm
     align.cxxm
     rwonce.cxxm
+    fixed_string.cxxm
+    structure.cxxm
+    pack_indexing.cxxm
 }

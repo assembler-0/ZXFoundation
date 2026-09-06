@@ -1,0 +1,32 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/trap/ext.cxxm
+/// @brief Centralized external-interruption dispatcher.
+
+export module arch.s390x.trap.ext.core;
+import arch.s390x.cpu.irq;
+import zxfoundation.base.types;
+import lib.bitfield;
+
+export {
+
+namespace arch::s390x::trap::ext {
+
+    using ext_parameter = lib::record<u32, lib::msb0_t,
+        lib::rw<"timing_status_change", lib::bits<14, 14>>,
+        lib::rw<"link_availability_change", lib::bits<15, 15>>,
+        lib::rw<"time_control_parameter_change", lib::bits<16, 16>>
+    >;
+
+    using ext_parameter_view = lib::record_ref<u32, lib::msb0_t,
+        lib::rw<"timing_status_change", lib::bits<14, 14>>,
+        lib::rw<"link_availability_change", lib::bits<15, 15>>,
+        lib::rw<"time_control_parameter_change", lib::bits<16, 16>>
+    >;
+
+    /// @brief Centralized external-interruption dispatcher.
+    /// @param[in,out] frame  Saved interrupt frame from entry.S.
+    auto handle(cpu::irq::irq_frame* frame) noexcept -> void;
+
+} // namespace arch::s390x::trap::ext
+
+} // end export

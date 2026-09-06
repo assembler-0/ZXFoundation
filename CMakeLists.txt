@@ -25,7 +25,6 @@ include(preconf)              # Pre-configuration
 include(toolchain-validate)	  # Host dependencies
 include(ccache)				  # CCache configuration
 include(platform)       	  # Platform checks
-include(standard)   	      # C/C++ Standards
 include(hosttools)			  # Host tools
 include(zx-discovery)         # zx-discovery DSL interpreter
 include(source)        		  # Core kernel sources

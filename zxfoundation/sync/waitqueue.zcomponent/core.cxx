@@ -28,7 +28,7 @@ namespace zxfoundation::sync::waitqueue {
                          wait_flags flags) noexcept -> void {
         // Capture the sleeping domain's ID from lowcore before taking the lock.
         const auto* lc = arch::s390x::cpu::lowcore::get_current();
-        const u64 dom_addr = lc->current_domain;
+        const u64 dom_addr = lc->get<"current_domain">();
         u32 dom_id = 0xFFFFFFFFU;
         if (dom_addr != 0) {
             dom_id = *reinterpret_cast<const u32*>(dom_addr);

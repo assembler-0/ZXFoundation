@@ -25,7 +25,7 @@ import arch.s390x.init.zxfl.protocol;
 import fs.exec.elf.core;
 import lib.error;
 import lib.cstring;
-import std;
+import lib.stl;
 
 using zxfoundation::sys::printk::pinfo;
 using zxfoundation::sys::printk::perr;

@@ -29,7 +29,7 @@ import zxfoundation.base.typestate;
 import zxfoundation.sys.printk.core;
 import arch.s390x.cpu.lowcore;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sys::ipc::detail {
 

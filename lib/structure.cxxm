@@ -1,0 +1,1403 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file structure.cxxm
+/// @brief C++26 memory-mapped structure framework built on the unified `field`.
+export module lib.structure;
+import lib.bitfield;
+import lib.fixed_string;
+import lib.rwonce;
+import lib.cstring;
+import lib.pack_indexing;
+import lib.error;
+import zxfoundation.base.types;
+import zxfoundation.sys.syschk.barebones;
+import lib.stl;
+
+#define __zxmacro_want_assert
+#include macro_extensions
+
+export {
+
+using lib::literals::operator""_f;
+
+namespace lib {
+
+    namespace detail {
+
+        template<class T>
+        struct is_byte_span : std::false_type {
+        };
+
+        template<usize S, usize E>
+        struct is_byte_span<byte_span<S, E> > : std::true_type {
+        };
+
+        template<class T>
+        struct is_slice : std::false_type {
+        };
+
+        template<usize O, usize A, usize B, class N>
+        struct is_slice<slice<O, A, B, N> > : std::true_type {
+        };
+
+        template<class T>
+        struct is_bank_tag : std::false_type {
+        };
+
+        template<usize C, usize S>
+        struct is_bank_tag<bank<C, S> > : std::true_type {
+        };
+
+        template<class T>
+        struct is_auto_tag : std::false_type {
+        };
+
+        template<>
+        struct is_auto_tag<auto_layout> : std::true_type {
+        };
+
+        template<class T>
+        struct all_slices : std::false_type {
+        };
+
+        template<class... Ss>
+        struct all_slices<std::tuple<Ss...> > : std::bool_constant<(is_slice<Ss>::value && ...)> {
+        };
+
+        template<class T>
+        struct all_byte_spans : std::false_type {
+        };
+
+        template<class... Ss>
+        struct all_byte_spans<std::tuple<Ss...> > : std::bool_constant<(is_byte_span<Ss>::value && ...)> {
+        };
+
+        template<class L>
+        struct loc_slices {
+            using type = std::tuple<>;
+        };
+
+        template<usize O, usize A, usize B, class N>
+        struct loc_slices<slice<O, A, B, N> > {
+            using type = std::tuple<slice<O, A, B, N> >;
+        };
+
+        template<class... Ss>
+        struct loc_slices<std::tuple<Ss...> > {
+            using type = std::tuple<Ss...>;
+        };
+
+        template<class L>
+        struct loc_spans {
+            using type = std::tuple<>;
+        };
+
+        template<class... Ss>
+        struct loc_spans<std::tuple<Ss...> > {
+            using type = std::tuple<Ss...>;
+        };
+
+        template<class Tuple>
+        struct fold_min_byte_offset {
+            static constexpr usize value = 0;
+        };
+
+        template<class... Sls>
+        struct fold_min_byte_offset<std::tuple<Sls...> > {
+            static constexpr usize value = std::min({Sls::byte_offset...});
+        };
+
+        template<class Tuple>
+        struct fold_max_end_byte {
+            static constexpr usize value = 0;
+        };
+
+        template<class... Sls>
+        struct fold_max_end_byte<std::tuple<Sls...> > {
+            static constexpr usize value = std::max({Sls::end_byte...});
+        };
+
+        template<class Tuple>
+        struct fold_slice_width {
+            static constexpr usize value = 0;
+        };
+
+        template<class... Sls>
+        struct fold_slice_width<std::tuple<Sls...> > {
+            static constexpr usize value = (Sls::width + ...);
+        };
+
+        template<class Tuple>
+        struct fold_min_span_byte {
+            static constexpr usize value = 0;
+        };
+
+        template<class... Sps>
+        struct fold_min_span_byte<std::tuple<Sps...> > {
+            static constexpr usize value = std::min({Sps::min_byte...});
+        };
+
+        template<class Tuple>
+        struct fold_span_size_sum {
+            static constexpr usize value = 0;
+        };
+
+        template<class... Sps>
+        struct fold_span_size_sum<std::tuple<Sps...> > {
+            static constexpr usize value = (Sps::size + ...);
+        };
+
+        template<class Loc>
+        struct span_size_of {
+            static constexpr usize value = 0;
+        };
+
+        template<usize S, usize E>
+        struct span_size_of<byte_span<S, E> > {
+            static constexpr usize value = byte_span<S, E>::size;
+        };
+
+        template<class Loc>
+        struct bank_count_of {
+            static constexpr usize value = 1;
+        };
+
+        template<usize Count, usize Stride>
+        struct bank_count_of<bank<Count, Stride> > {
+            static constexpr usize value = Count;
+        };
+
+        template<class Loc>
+        struct bank_stride_of {
+            static constexpr usize value = 0;
+        };
+
+        template<usize Count, usize Stride>
+        struct bank_stride_of<bank<Count, Stride> > {
+            static constexpr usize value = Stride;
+        };
+
+        template<class Loc, class Slices, class Spans, bool IsCross, bool IsDisjoint, bool IsByte>
+        consteval auto resolve_start() noexcept -> usize {
+            if constexpr (IsCross) return fold_min_byte_offset<Slices>::value;
+            else if constexpr (IsDisjoint) return fold_min_span_byte<Spans>::value;
+            else if constexpr (IsByte) return Loc::min_byte;
+            else return static_cast<usize>(0);
+        }
+
+        template<class Loc, class Slices, class Spans, class ElementType, bool IsCross, bool IsDisjoint, bool IsByte,
+                 bool IsBank>
+        consteval auto resolve_total_size() noexcept -> usize {
+            if constexpr (IsCross) {
+                return fold_max_end_byte<Slices>::value - fold_min_byte_offset<Slices>::value;
+            } else if constexpr (IsDisjoint) {
+                return fold_span_size_sum<Spans>::value;
+            } else if constexpr (IsBank) {
+                constexpr usize cnt = Loc::count;
+                constexpr usize strd = Loc::stride;
+                return (cnt > 0) ? ((cnt - 1) * strd + sizeof(ElementType)) : 0;
+            } else {
+                return sizeof(ElementType);
+            }
+        }
+
+        template<class Slices, bool IsCross>
+        consteval auto resolve_total_width() noexcept -> usize {
+            if constexpr (IsCross) return fold_slice_width<Slices>::value;
+            else return static_cast<usize>(0);
+        }
+
+        template<class T>
+        concept is_record_like = requires
+                                 {
+                                     typename std::remove_cvref_t<T>::storage_type;
+                                     typename std::remove_cvref_t<T>::numbering;
+                                     typename std::remove_cvref_t<T>::ref_type;
+                                     typename std::remove_cvref_t<T>::mmio_ref_type;
+                                 } && !requires { typename std::remove_cvref_t<T>::value_record; }
+                                 && bit_storage<typename std::remove_cvref_t<T>::storage_type>;
+
+        template<class T>
+        inline constexpr bool is_record_v = is_record_like<T>;
+
+        template<class T>
+        concept is_structure_like = requires
+        {
+            typename std::remove_cvref_t<T>::ref_type;
+            typename std::remove_cvref_t<T>::mmio_ref_type;
+            std::remove_cvref_t<T>::extent;
+            std::remove_cvref_t<T>::alignment;
+        } && !is_record_like<T>;
+
+        template<class T>
+        inline constexpr bool is_structure_v = is_structure_like<T>;
+
+        template<class T>
+        struct is_bitfield_trait : std::false_type {
+        };
+
+        template<bit_storage T, class Num>
+        struct is_bitfield_trait<bit_field<T, Num> > : std::true_type {
+        };
+
+        template<class T>
+        inline constexpr bool is_bitfield_v = is_bitfield_trait<std::remove_cvref_t<T> >::value;
+
+        template<usize N>
+        struct computed_layout_meta {
+            std::array<usize, N> offsets{};
+            std::array<usize, N> sizes{};
+            std::array<std::string_view, N> names{};
+            usize total_extent = 0;
+            usize max_alignment = 1;
+            bool has_overlap = false;
+        };
+
+        template<class ValT, class FieldEndian, class StructEndian>
+        [[nodiscard]] constexpr auto adjust_endian_on_read(ValT val) noexcept -> ValT {
+            if constexpr (std::is_enum_v<ValT>) {
+                using U = std::underlying_type_t<ValT>;
+                return static_cast<ValT>(adjust_endian_on_read<U, FieldEndian, StructEndian>(static_cast<U>(val)));
+            } else if constexpr (std::is_integral_v<ValT> && sizeof(ValT) > 1) {
+                using ActiveEndian = std::conditional_t<
+                    !std::is_same_v<FieldEndian, endian::native>, FieldEndian, StructEndian>;
+                if constexpr (std::is_same_v<ActiveEndian, endian::little> &&std::endian::native == std::endian::big) {
+                    return std::byteswap(val);
+                } else if constexpr (std::is_same_v<ActiveEndian, endian::big> &&std::endian::native == std::endian::little) {
+                    return std::byteswap(val);
+                }
+            }
+            return val;
+        }
+
+        template<class ValT, class FieldEndian, class StructEndian>
+        [[nodiscard]] constexpr auto adjust_endian_on_write(ValT val) noexcept -> ValT {
+            return adjust_endian_on_read<ValT, FieldEndian, StructEndian>(val);
+        }
+    } // namespace detail
+
+    /// @brief Structure-domain resolution of a unified `field`
+    template<class Field>
+    struct structure_field_view : Field {
+        static_assert(!std::is_void_v<typename Field::type>,
+                      "lib::structure: structure fields require an explicit value type.");
+
+        using value_type = typename Field::type;
+        using loc = typename Field::locator;
+
+        static constexpr bool is_array = std::is_bounded_array_v<value_type>;
+        using element_type = std::conditional_t<is_array, std::remove_all_extents_t<value_type>, value_type>;
+        static constexpr usize array_count = is_array ? std::extent_v<value_type> : 1;
+
+        static constexpr bool loc_is_byte = detail::is_byte_span<loc>::value;
+        static constexpr bool loc_is_slice = detail::is_slice<loc>::value;
+        static constexpr bool loc_is_bank = detail::is_bank_tag<loc>::value;
+        static constexpr bool loc_is_auto = detail::is_auto_tag<loc>::value;
+        static constexpr bool loc_multi_slice = detail::all_slices<loc>::value;
+        static constexpr bool loc_multi_span = detail::all_byte_spans<loc>::value;
+
+        static constexpr bool is_bank = loc_is_bank;
+        static constexpr bool is_cross = loc_is_slice || loc_multi_slice;
+        static constexpr bool is_disjoint = loc_multi_span;
+        static constexpr bool is_pinned = loc_is_byte || loc_is_slice || loc_multi_slice || loc_multi_span;
+        static constexpr bool is_auto = loc_is_auto && !is_bank;
+
+        using slices = typename detail::loc_slices<loc>::type;
+        using spans = typename detail::loc_spans<loc>::type;
+
+        static constexpr usize count = detail::bank_count_of<loc>::value;
+        static constexpr usize stride = detail::bank_stride_of<loc>::value;
+
+        static constexpr usize start = detail::resolve_start<loc, slices, spans, is_cross, is_disjoint,
+                                                                 loc_is_byte>();
+
+        static constexpr usize total_size = detail::resolve_total_size<loc, slices, spans, element_type, is_cross,
+                                                                       is_disjoint, loc_is_byte, is_bank>();
+
+        static constexpr usize total_width = detail::resolve_total_width<slices, is_cross>();
+
+        static constexpr usize alignment = Field::is_unaligned ? 1 : alignof(element_type);
+
+        static constexpr usize declared_span_size = detail::span_size_of<loc>::value;
+
+        static_assert(!loc_is_byte || (sizeof(value_type) == declared_span_size),
+                      "lib::structure: declared byte range does not match sizeof(Type)!");
+        static_assert(!is_cross || (total_width <= sizeof(value_type) * 8),
+                      "lib::structure: cross field total slice width exceeds sizeof(Type) in bits!");
+        static_assert(!is_disjoint || (total_size == sizeof(value_type)),
+                      "lib::structure: disjoint_byte total span bytes does not match sizeof(Type)!");
+        static_assert(!(is_cross && is_disjoint), "lib::structure: field cannot be both cross and disjoint.");
+    };
+
+    namespace detail {
+        template<class Tuple>
+        struct map_structure_fields;
+
+        template<class... Fs>
+        struct map_structure_fields<std::tuple<Fs...> > {
+            using type = std::tuple<structure_field_view<Fs>...>;
+        };
+
+        template<usize Extent, usize Alignment, class... Fields>
+        consteval auto calculate_structure_layout() {
+            constexpr usize N = sizeof...(Fields);
+            computed_layout_meta<N> meta{};
+            usize cursor = 0;
+            usize max_align = Alignment;
+            bool is_overlay_arr[N > 0 ? N : 1]{};
+
+            usize idx = 0;
+            auto process_field = [&]<class F>() {
+                constexpr usize f_size = F::total_size;
+                constexpr usize f_align = F::alignment;
+
+                if (f_align > max_align) max_align = f_align;
+
+                usize resolved_offset = 0;
+                if constexpr (F::is_cross) {
+                    resolved_offset = F::start;
+                    auto get_max = []<class... Sls>(const std::tuple<Sls...> *) {
+                        return std::max({Sls::end_byte...});
+                    };
+                    cursor = std::max(cursor, get_max(static_cast<const typename F::slices *>(nullptr)));
+                } else if constexpr (F::is_disjoint) {
+                    resolved_offset = F::start;
+                    auto get_max = []<class... Sps>(const std::tuple<Sps...> *) {
+                        return std::max({(Sps::max_byte + 1)...});
+                    };
+                    cursor = std::max(cursor, get_max(static_cast<const typename F::spans *>(nullptr)));
+                } else if constexpr (F::is_pinned) {
+                    resolved_offset = F::start;
+                    if constexpr (!F::is_unaligned) {
+                        static_assert((F::start % f_align) == 0,
+                                      "lib::structure: Pinned field offset violates natural alignment!");
+                    }
+                    cursor = std::max(cursor, resolved_offset + f_size);
+                } else {
+                    usize pad = (f_align - (cursor % f_align)) % f_align;
+                    resolved_offset = cursor + pad;
+                    cursor = resolved_offset + f_size;
+                }
+
+                meta.offsets[idx] = resolved_offset;
+                meta.sizes[idx] = f_size;
+                meta.names[idx] = F::name;
+                is_overlay_arr[idx] = F::is_overlay || F::is_cross || F::is_disjoint;
+                meta.total_extent = std::max(meta.total_extent, cursor);
+                ++idx;
+            };
+
+            (process_field.template operator()<Fields>(), ...);
+
+            for (usize i = 0; i < N; ++i) {
+                if (is_overlay_arr[i]) continue;
+                for (usize j = i + 1; j < N; ++j) {
+                    if (is_overlay_arr[j]) continue;
+                    const usize a_start = meta.offsets[i];
+                    const usize a_end = a_start + meta.sizes[i];
+                    const usize b_start = meta.offsets[j];
+                    const usize b_end = b_start + meta.sizes[j];
+                    if (!(a_end <= b_start || b_end <= a_start)) meta.has_overlap = true;
+                }
+            }
+
+            usize tail_pad = (max_align - (meta.total_extent % max_align)) % max_align;
+            meta.total_extent += tail_pad;
+            meta.max_alignment = max_align;
+            return meta;
+        }
+    } // namespace detail
+
+    template<usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+    struct structure_layout_info {
+        using raw_field_tuple = typename detail::filter_fields<FieldOrExts...>::type;
+        using field_tuple = typename detail::map_structure_fields<raw_field_tuple>::type;
+
+        template<class Tuple>
+        struct layout_holder;
+
+        template<class... Fs>
+        struct layout_holder<std::tuple<Fs...> > {
+            static constexpr auto meta = detail::calculate_structure_layout<Extent, Alignment, Fs...>();
+        };
+
+        static constexpr auto meta = layout_holder<field_tuple>::meta;
+        static constexpr usize field_count = std::tuple_size_v<field_tuple>;
+        static constexpr usize extent = (Extent != 0) ? Extent : meta.total_extent;
+        static constexpr usize alignment = meta.max_alignment;
+
+        template<fixed_string Name>
+        static consteval auto index_of() noexcept -> usize {
+            for (usize i = 0; i < meta.names.size(); ++i) {
+                if (meta.names[i] == Name) return i;
+            }
+            return static_cast<usize>(-1);
+        }
+    };
+
+    template<class ElementType, usize Count, bool IsConst, bool IsMMIO, class StructEndian>
+    class array_proxy {
+    public:
+        using pointer_type = std::conditional_t<IsConst, const ElementType *, ElementType *>;
+
+        constexpr explicit array_proxy(u8 *base_ptr) noexcept
+            : ptr_(reinterpret_cast<pointer_type>(base_ptr)) {
+        }
+
+        [[nodiscard]] constexpr auto size() const noexcept -> usize { return Count; }
+
+        [[nodiscard]] constexpr auto operator[](usize idx) const noexcept -> ElementType {
+            chk_assert(idx < Count);
+            ElementType v{};
+            if constexpr (IsMMIO) v = rwonce::read_once(ptr_[idx]);
+            else v = ptr_[idx];
+            return detail::adjust_endian_on_read<ElementType, endian::native, StructEndian>(v);
+        }
+
+        [[nodiscard]] constexpr auto try_get(usize idx) const noexcept
+            -> std::expected<ElementType, kernel_error> {
+            if (idx >= Count) return std::unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            return (*this)[idx];
+        }
+
+        constexpr auto set(usize idx, ElementType val) const noexcept -> void requires (!IsConst) {
+            chk_assert(idx < Count);
+            auto adjusted = detail::adjust_endian_on_write<ElementType, endian::native, StructEndian>(val);
+            if constexpr (IsMMIO) rwonce::write_once(ptr_[idx], adjusted);
+            else ptr_[idx] = adjusted;
+        }
+
+        constexpr auto try_set(usize idx, ElementType val) const noexcept
+            -> std::expected<void, kernel_error> requires (!IsConst) {
+            if (idx >= Count) return std::unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            set(idx, val);
+            return {};
+        }
+
+        [[nodiscard]] constexpr auto data() const noexcept -> pointer_type { return ptr_; }
+        [[nodiscard]] constexpr auto begin() const noexcept -> pointer_type { return ptr_; }
+        [[nodiscard]] constexpr auto end() const noexcept -> pointer_type { return ptr_ + Count; }
+
+    private:
+        pointer_type ptr_;
+    };
+
+    template<class ElementType, usize Count, usize Stride, bool IsConst, bool IsMMIO, class StructEndian>
+    class bank_proxy {
+    public:
+        constexpr explicit bank_proxy(u8 *base_ptr) noexcept : base_ptr_(base_ptr) {
+        }
+
+        [[nodiscard]] constexpr auto size() const noexcept -> usize { return Count; }
+        [[nodiscard]] constexpr auto stride() const noexcept -> usize { return Stride; }
+
+        [[nodiscard]] constexpr auto operator[](usize idx) const noexcept {
+            chk_assert(idx < Count);
+            u8 *target_ptr = base_ptr_ + (idx * Stride);
+
+            if constexpr (detail::is_record_v<ElementType>) {
+                using RefT = typename ElementType::ref_type;
+                using MMIORefT = typename ElementType::mmio_ref_type;
+                if constexpr (IsMMIO) return MMIORefT(target_ptr);
+                else return RefT(target_ptr);
+            } else if constexpr (detail::is_bitfield_v<ElementType>) {
+                using StorageT = typename ElementType::storage_type;
+                using Numbering = typename ElementType::numbering;
+                return bitfield_ref<StorageT, Numbering>(*reinterpret_cast<StorageT *>(target_ptr));
+            } else if constexpr (detail::is_structure_v<ElementType>) {
+                using RefT = typename ElementType::ref_type;
+                using MMIORefT = typename ElementType::mmio_ref_type;
+                if constexpr (IsMMIO) return MMIORefT(target_ptr);
+                else return RefT(target_ptr);
+            } else {
+                ElementType val = IsMMIO
+                                      ? rwonce::read_once(
+                                          *reinterpret_cast<const volatile ElementType *>(target_ptr))
+                                      : *reinterpret_cast<const ElementType *>(target_ptr);
+                return detail::adjust_endian_on_read<ElementType, endian::native, StructEndian>(val);
+            }
+        }
+
+        template<class ValT>
+        constexpr auto set(usize idx, ValT &&val) const noexcept -> void requires (!IsConst) {
+            chk_assert(idx < Count);
+            u8 *target_ptr = base_ptr_ + (idx * Stride);
+
+            if constexpr (detail::is_record_v<ElementType> || detail::is_bitfield_v<ElementType>) {
+                using StorageT = typename ElementType::storage_type;
+                auto raw_val = static_cast<StorageT>(val);
+                if constexpr (IsMMIO) rwonce::write_once(*reinterpret_cast<volatile StorageT *>(target_ptr),
+                                                         raw_val);
+                else *reinterpret_cast<StorageT *>(target_ptr) = raw_val;
+            } else {
+                auto adjusted = detail::adjust_endian_on_write<ElementType, endian::native, StructEndian>(
+                    static_cast<ElementType>(std::forward<ValT>(val)));
+                if constexpr (IsMMIO) rwonce::write_once(*reinterpret_cast<volatile ElementType *>(target_ptr),
+                                                         adjusted);
+                else *reinterpret_cast<ElementType *>(target_ptr) = adjusted;
+            }
+        }
+
+    private:
+        u8 *base_ptr_;
+    };
+
+    template<usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+    class structure_ref;
+
+    template<usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+    class mmio_structure_ref;
+
+    template<usize Extent, usize Alignment, class StructEndian, bool IsMMIO, class... FieldOrExts>
+    class structure_impl {
+    private:
+        using Layout = structure_layout_info<Extent, Alignment, StructEndian, FieldOrExts...>;
+        using FieldTuple = typename Layout::field_tuple;
+
+    public:
+        static constexpr usize field_count = Layout::field_count;
+        static constexpr auto layout_meta = Layout::meta;
+        static constexpr usize extent = Layout::extent;
+        static constexpr usize alignment = Layout::alignment;
+
+        static_assert(!layout_meta.has_overlap,
+                      "lib::structure: Accidental overlap between distinct fields! Use overlay fields for intentional aliases.")
+        ;
+        static_assert(Extent == 0 || layout_meta.total_extent <= Extent,
+                      "lib::structure: Computed structure size exceeds declared Extent!");
+
+    private:
+        template<class Field, usize Offset, bool IsConst>
+        [[nodiscard]] constexpr decltype(auto) project_field(this auto &&self) noexcept {
+            u8 *target_ptr = const_cast<u8 *>(self.raw_ptr()) + Offset;
+            using DeclType = typename Field::value_type;
+            using ElemType = typename Field::element_type;
+            static constexpr bool has_gran = !std::is_void_v<typename Field::granularity>;
+
+            if constexpr (Field::is_bank) {
+                return bank_proxy<ElemType, Field::count, Field::stride, IsConst, IsMMIO, StructEndian>(target_ptr);
+            } else if constexpr (Field::is_array) {
+                return array_proxy<ElemType, Field::array_count, IsConst, IsMMIO, StructEndian>(target_ptr);
+            } else if constexpr (Field::is_cross) {
+                using ValT = typename Field::value_type;
+                using RawAccum = detail::optimal_uint_t<Field::total_width>;
+                RawAccum accum = 0;
+                auto extract_all = [&]<usize... Is>(std::index_sequence<Is...>) {
+                    auto process_slice = [&]<usize I>() {
+                        using Sl = std::tuple_element_t<I, typename Field::slices>;
+                        constexpr usize byte_off = Sl::byte_offset;
+                        constexpr usize width = Sl::width;
+                        constexpr usize max_bit = std::max(Sl::start, Sl::end);
+                        using ChunkT = detail::optimal_uint_t<max_bit + 1>;
+                        using WordT = detail::optimal_uint_t<width>;
+                        WordT slice_bits = 0;
+
+                        if constexpr (has_gran) {
+                            using BusW = typename Field::granularity;
+                            if constexpr (sizeof(ChunkT) < sizeof(BusW)) {
+                                constexpr usize aligned_off = (byte_off / sizeof(BusW)) * sizeof(BusW);
+                                BusW word{};
+                                if (std::is_constant_evaluated()) {
+                                    std::array<u8, sizeof(BusW)> buf{};
+                                    for (usize i = 0; i < sizeof(BusW); ++i)
+                                        buf[i] = *(self.raw_ptr() + aligned_off + i);
+                                    word = std::bit_cast<BusW>(buf);
+                                } else {
+                                    word = IsMMIO
+                                               ? rwonce::read_once(
+                                                   *reinterpret_cast<const volatile BusW *>(
+                                                       self.raw_ptr() + aligned_off))
+                                               : *reinterpret_cast<const BusW *>(self.raw_ptr() + aligned_off);
+                                }
+                                word = detail::adjust_endian_on_read<BusW, endian::native, StructEndian>(word);
+                                bitfield_ref<BusW, typename Sl::numbering> bref(word);
+                                slice_bits = static_cast<WordT>(bref.template extract<Sl::start, Sl::end>());
+                            }
+                        } else {
+                            ChunkT chunk{};
+                            if (std::is_constant_evaluated() || (byte_off % alignof(ChunkT) != 0)) {
+                                std::array<u8, sizeof(ChunkT)> buf{};
+                                for (usize i = 0; i < sizeof(ChunkT); ++i)
+                                    buf[i] = *(self.raw_ptr() + byte_off + i);
+                                chunk = std::bit_cast<ChunkT>(buf);
+                            } else {
+                                chunk = IsMMIO
+                                            ? rwonce::read_once(
+                                                *reinterpret_cast<const volatile ChunkT *>(
+                                                    self.raw_ptr() + byte_off))
+                                            : *reinterpret_cast<const ChunkT *>(self.raw_ptr() + byte_off);
+                            }
+                            chunk = detail::adjust_endian_on_read<ChunkT, endian::native, StructEndian>(chunk);
+                            bitfield_ref<ChunkT, typename Sl::numbering> bref(chunk);
+                            slice_bits = static_cast<WordT>(bref.template extract<Sl::start, Sl::end>());
+                        }
+                        if constexpr (width < sizeof(RawAccum) * 8) {
+                            accum = static_cast<RawAccum>(accum << width);
+                        }
+                        accum = static_cast<RawAccum>(accum | static_cast<RawAccum>(slice_bits));
+                    };
+                    (process_slice.template operator()<Is>(), ...);
+                };
+                extract_all(std::make_index_sequence<std::tuple_size_v<typename Field::slices> >{});
+                if constexpr (!std::is_void_v<typename Field::transformer>) {
+                    return Field::transformer::template from_bits<Field::total_width>(accum);
+                } else if constexpr (Field::has_fixed) {
+                    return static_cast<ValT>(Field::fixed_value);
+                } else {
+                    return static_cast<ValT>(accum);
+                }
+            } else if constexpr (Field::is_disjoint) {
+                using ValT = typename Field::value_type;
+                using UnsignedValT = std::make_unsigned_t<ValT>;
+                UnsignedValT result = 0;
+                auto extract_spans = [&]<usize... Is>(std::index_sequence<Is...>) {
+                    auto process_span = [&]<usize S, usize E>(byte_span<S, E>) {
+                        constexpr usize span_sz = (S <= E) ? (E - S + 1) : (S - E + 1);
+                        constexpr usize min_s = (S <= E) ? S : E;
+                        for (usize b = 0; b < span_sz; ++b) {
+                            u8 byte_val = IsMMIO
+                                              ? rwonce::read_once(*(self.raw_ptr() + min_s + b))
+                                              : *(self.raw_ptr() + min_s + b);
+                            result = static_cast<UnsignedValT>((result << 8) | byte_val);
+                        }
+                    };
+                    (process_span(pack_indexing_element_t<Is, typename Field::spans>{}), ...);
+                };
+                extract_spans(std::make_index_sequence<std::tuple_size_v<typename Field::spans> >{});
+                if constexpr (Field::has_fixed) return static_cast<ValT>(Field::fixed_value);
+                else return detail::adjust_endian_on_read<ValT, typename Field::endian_mode, StructEndian>(
+                    static_cast<ValT>(result));
+            } else if constexpr (detail::is_record_v<DeclType>) {
+                using RefT = typename DeclType::ref_type;
+                using MMIORefT = typename DeclType::mmio_ref_type;
+                if constexpr (IsMMIO) return MMIORefT(target_ptr);
+                else return RefT(target_ptr);
+            } else if constexpr (detail::is_bitfield_v<DeclType>) {
+                using StorageT = typename DeclType::storage_type;
+                using Numbering = typename DeclType::numbering;
+                return bitfield_ref<StorageT, Numbering>(*reinterpret_cast<StorageT *>(target_ptr));
+            } else if constexpr (detail::is_structure_v<DeclType>) {
+                using RefT = typename DeclType::ref_type;
+                using MMIORefT = typename DeclType::mmio_ref_type;
+                if constexpr (IsMMIO) return MMIORefT(target_ptr);
+                else return RefT(target_ptr);
+            } else {
+                if constexpr (Field::has_fixed) {
+                    return static_cast<DeclType>(Field::fixed_value);
+                } else if constexpr (std::is_same_v<typename Field::access, attr::rz> ||
+                                     std::is_same_v<typename Field::access, attr::raz>) {
+                    return DeclType{0};
+                } else if constexpr (std::is_same_v<typename Field::access, attr::rao>) {
+                    return static_cast<DeclType>(storage_traits<DeclType>::bitmask(sizeof(DeclType) * 8));
+                } else {
+                    DeclType val{};
+
+                    if constexpr (has_gran) {
+                        using BusW = typename Field::granularity;
+                        if constexpr (sizeof(DeclType) < sizeof(BusW)) {
+                            usize aligned_off = (Offset / sizeof(BusW)) * sizeof(BusW);
+                            usize byte_off = Offset % sizeof(BusW);
+                            BusW word{};
+                            if (std::is_constant_evaluated()) {
+                                std::array<u8, sizeof(BusW)> buf{};
+                                for (usize i = 0; i < sizeof(BusW); ++i)
+                                    buf[i] = *(self.raw_ptr() + aligned_off + i);
+                                word = std::bit_cast<BusW>(buf);
+                            } else {
+                                word = IsMMIO
+                                           ? rwonce::read_once(
+                                               *reinterpret_cast<const volatile BusW *>(
+                                                   self.raw_ptr() + aligned_off))
+                                           : *reinterpret_cast<const BusW *>(self.raw_ptr() + aligned_off);
+                            }
+                            word = detail::adjust_endian_on_read<BusW, endian::native, StructEndian>(word);
+                            val = static_cast<DeclType>(
+                                (word >> (byte_off * 8)) & static_cast<BusW>(storage_traits<DeclType>::bitmask(
+                                    sizeof(DeclType) * 8)));
+                            return detail::adjust_endian_on_read<DeclType, typename Field::endian_mode,
+                                StructEndian>(val);
+                        }
+                    }
+
+                    if (std::is_constant_evaluated() || Field::is_unaligned) {
+                        std::array<u8, sizeof(DeclType)> buf{};
+                        for (usize i = 0; i < sizeof(DeclType); ++i) buf[i] = *(target_ptr + i);
+                        val = std::bit_cast<DeclType>(buf);
+                    } else {
+                        if constexpr (IsMMIO) val = rwonce::read_once(
+                                                  *reinterpret_cast<const volatile DeclType *>(target_ptr));
+                        else val = *reinterpret_cast<const DeclType *>(target_ptr);
+                    }
+
+                    if constexpr (std::is_same_v<typename Field::access, attr::rc>) {
+                        static_assert(
+                            !IsConst, "lib::structure: Cannot execute Read-to-Clear (RC) on const context!");
+                        if constexpr (IsMMIO) rwonce::write_once(*reinterpret_cast<volatile DeclType *>(target_ptr),
+                                                                 DeclType{0});
+                        else *reinterpret_cast<DeclType *>(target_ptr) = DeclType{0};
+                    }
+
+                    return detail::adjust_endian_on_read<DeclType, typename Field::endian_mode, StructEndian>(val);
+                }
+            }
+        }
+
+    public:
+        template<fixed_string Path>
+        [[nodiscard]] constexpr decltype(auto) get(this auto &&self) noexcept {
+            constexpr usize exact_idx = Layout::template index_of<Path>();
+            if constexpr (exact_idx != static_cast<usize>(-1)) {
+                using F = pack_indexing_element_t<exact_idx, FieldTuple>;
+                static_assert(!std::is_same_v<typename F::access, attr::wo>, "Illegal read from WO field!");
+                constexpr usize offset = layout_meta.offsets[exact_idx];
+                constexpr bool is_const = std::is_const_v<std::remove_reference_t<decltype(self)> >;
+                if constexpr (std::is_same_v<typename F::access, attr::rc>) {
+                    static_assert(!is_const,
+                                  "lib::structure: Cannot execute Read-to-Clear (RC) on a const structure view!");
+                }
+                return self.template project_field<F, offset, is_const>();
+            } else {
+                using Split = detail::path_split<Path>;
+                constexpr auto head_name = Split::head;
+                constexpr usize idx = Layout::template index_of<head_name>();
+                static_assert(idx != static_cast<usize>(-1), "lib::structure: Unknown field identifier!");
+
+                using F = pack_indexing_element_t<idx, FieldTuple>;
+                static_assert(!std::is_same_v<typename F::access, attr::wo>, "Illegal read from WO field!");
+
+                constexpr usize offset = layout_meta.offsets[idx];
+                constexpr bool is_const = std::is_const_v<std::remove_reference_t<decltype(self)> >;
+
+                if constexpr (std::is_same_v<typename F::access, attr::rc>) {
+                    static_assert(!is_const,
+                                  "lib::structure: Cannot execute Read-to-Clear (RC) on a const structure view!");
+                }
+
+                auto field_view = self.template project_field<F, offset, is_const>();
+
+                if constexpr (Split::has_tail) return field_view.template get<Split::tail>();
+                else return field_view;
+            }
+        }
+
+        template<fixed_string Path, class ValT>
+        constexpr decltype(auto) set(this auto &&self, ValT &&val) noexcept {
+            constexpr usize exact_idx = Layout::template index_of<Path>();
+            using Split = detail::path_split<Path>;
+            constexpr usize idx = (exact_idx != static_cast<usize>(-1))
+                                      ? exact_idx
+                                      : Layout::template index_of<Split::head>();
+            static_assert(idx != static_cast<usize>(-1), "lib::structure: Unknown field identifier!");
+
+            using F = pack_indexing_element_t<idx, FieldTuple>;
+            constexpr usize offset = layout_meta.offsets[idx];
+            constexpr bool is_const = std::is_const_v<std::remove_reference_t<decltype(self)> >;
+
+            if constexpr ((exact_idx == static_cast<usize>(-1)) && Split::has_tail) {
+                auto field_view = self.template project_field<F, offset, is_const>();
+                field_view.template set<Split::tail>(std::forward<ValT>(val));
+            } else {
+                static_assert(!std::is_same_v<typename F::access, attr::ro>, "Illegal write to RO field!");
+                using DeclType = typename F::value_type;
+                u8 *target_ptr = const_cast<u8 *>(self.raw_ptr()) + offset;
+                static constexpr bool has_gran = !std::is_void_v<typename F::granularity>;
+
+                if constexpr (F::has_fixed) {
+                    chk_assert(static_cast<u64>(val) == F::fixed_value &&
+                        "lib::structure: write to architectural constant field must equal its fixed value!");
+                } else if constexpr (std::is_same_v<typename F::access, attr::rz>) {
+                    chk_assert(val == 0 && "Write non-zero to RZ field!");
+                } else if constexpr (F::is_array) {
+                    auto proxy = self.template project_field<F, offset, is_const>();
+                    for (usize i = 0; i < F::array_count; ++i) proxy.set(i, val[i]);
+                } else if constexpr (F::is_cross) {
+                    using RawT = detail::optimal_uint_t<F::total_width>;
+                    auto get_raw_input = [&]() {
+                        if constexpr (!std::is_void_v<typename F::transformer>) {
+                            return F::transformer::template to_bits<F::total_width>(std::forward<ValT>(val));
+                        } else {
+                            return std::forward<ValT>(val);
+                        }
+                    };
+                    RawT raw_val = static_cast<RawT>(get_raw_input());
+                    constexpr usize slice_count = std::tuple_size_v<typename F::slices>;
+                    auto write_all = [&]<usize... Is>(std::index_sequence<Is...>) {
+                        auto process_s_rev = [&]<usize I>() {
+                            using Sl = std::tuple_element_t<slice_count - 1 - I, typename F::slices>;
+                            constexpr usize byte_off = Sl::byte_offset;
+                            constexpr usize width = Sl::width;
+                            constexpr usize max_bit = std::max(Sl::start, Sl::end);
+                            using ChunkT = detail::optimal_uint_t<max_bit + 1>;
+                            using PartT = detail::optimal_uint_t<width>;
+                            PartT part_mask = detail::safe_bitmask<PartT>(width, sizeof(PartT) * 8);
+                            PartT part_val = static_cast<PartT>(raw_val & part_mask);
+
+                            if constexpr (has_gran) {
+                                using BusW = typename F::granularity;
+                                if constexpr (sizeof(ChunkT) < sizeof(BusW)) {
+                                    constexpr usize aligned_off = (byte_off / sizeof(BusW)) * sizeof(BusW);
+                                    BusW word{};
+                                    if (std::is_constant_evaluated()) {
+                                        std::array<u8, sizeof(BusW)> buf{};
+                                        for (usize i = 0; i < sizeof(BusW); ++i)
+                                            buf[i] = *(self.raw_ptr() + aligned_off + i);
+                                        word = std::bit_cast<BusW>(buf);
+                                    } else {
+                                        word = IsMMIO
+                                                   ? rwonce::read_once(
+                                                       *reinterpret_cast<const volatile BusW *>(
+                                                           self.raw_ptr() + aligned_off))
+                                                   : *reinterpret_cast<const BusW *>(self.raw_ptr() + aligned_off);
+                                    }
+                                    word = detail::adjust_endian_on_read<BusW, endian::native, StructEndian>(word);
+                                    bitfield_ref<BusW, typename Sl::numbering> bref(word);
+                                    bref.template insert<Sl::start, Sl::end>(part_val);
+                                    word = detail::adjust_endian_on_write<BusW, endian::native, StructEndian>(word);
+                                    if (std::is_constant_evaluated()) {
+                                        auto buf = std::bit_cast<std::array<u8, sizeof(BusW)> >(word);
+                                        for (usize i = 0; i < sizeof(BusW); ++i)
+                                            *(self.raw_ptr() + aligned_off + i) = buf[i];
+                                    } else {
+                                        if constexpr (IsMMIO) rwonce::write_once(
+                                            *reinterpret_cast<volatile BusW *>(self.raw_ptr() + aligned_off), word);
+                                        else *reinterpret_cast<BusW *>(self.raw_ptr() + aligned_off) = word;
+                                    }
+                                }
+                            } else {
+                                ChunkT chunk{};
+                                if (std::is_constant_evaluated() || (byte_off % alignof(ChunkT) != 0)) {
+                                    std::array<u8, sizeof(ChunkT)> buf{};
+                                    for (usize i = 0; i < sizeof(ChunkT); ++i)
+                                        buf[i] = *(self.raw_ptr() + byte_off + i);
+                                    chunk = std::bit_cast<ChunkT>(buf);
+                                } else {
+                                    chunk = IsMMIO
+                                                ? rwonce::read_once(
+                                                    *reinterpret_cast<const volatile ChunkT *>(
+                                                        self.raw_ptr() + byte_off))
+                                                : *reinterpret_cast<const ChunkT *>(self.raw_ptr() + byte_off);
+                                }
+                                chunk = detail::adjust_endian_on_read<ChunkT, endian::native, StructEndian>(chunk);
+                                bitfield_ref<ChunkT, typename Sl::numbering> bref(chunk);
+                                bref.template insert<Sl::start, Sl::end>(part_val);
+                                chunk = detail::adjust_endian_on_write<ChunkT, endian::native, StructEndian>(chunk);
+                                if (std::is_constant_evaluated() || (byte_off % alignof(ChunkT) != 0)) {
+                                    auto buf = std::bit_cast<std::array<u8, sizeof(ChunkT)> >(chunk);
+                                    for (usize i = 0; i < sizeof(ChunkT); ++i)
+                                        *(self.raw_ptr() + byte_off + i) = buf[i];
+                                } else {
+                                    if constexpr (IsMMIO) rwonce::write_once(
+                                        *reinterpret_cast<volatile ChunkT *>(self.raw_ptr() + byte_off), chunk);
+                                    else *reinterpret_cast<ChunkT *>(self.raw_ptr() + byte_off) = chunk;
+                                }
+                            }
+                            if constexpr (width < sizeof(RawT) * 8) raw_val = static_cast<RawT>(raw_val >> width);
+                        };
+                        (process_s_rev.template operator()<Is>(), ...);
+                    };
+                    write_all(std::make_index_sequence<slice_count>{});
+                } else if constexpr (F::is_disjoint) {
+                    using UnsignedValT = std::make_unsigned_t<DeclType>;
+                    auto raw_in = static_cast<UnsignedValT>(detail::adjust_endian_on_write<DeclType, typename
+                        F::endian_mode, StructEndian>(
+                        static_cast<DeclType>(std::forward<ValT>(val))));
+                    auto write_spans = [&]<usize... Is>(std::index_sequence<Is...>) {
+                        auto process_s_rev = [&]<usize S, usize E>(byte_span<S, E>) {
+                            constexpr usize span_sz = (S <= E) ? (E - S + 1) : (S - E + 1);
+                            constexpr usize max_s = (S <= E) ? E : S;
+                            for (usize b = 0; b < span_sz; ++b) {
+                                u8 byte_val = static_cast<u8>(raw_in & 0xFF);
+                                raw_in >>= 8;
+                                if constexpr (IsMMIO) rwonce::write_once(*(self.raw_ptr() + max_s - b), byte_val);
+                                else *(self.raw_ptr() + max_s - b) = byte_val;
+                            }
+                        };
+                        (process_s_rev(pack_indexing_element_t<sizeof...(Is) - 1 - Is, typename F::spans>{}), ...);
+                    };
+                    write_spans(std::make_index_sequence<std::tuple_size_v<typename F::spans> >{});
+                } else if constexpr (detail::is_bitfield_v<DeclType> || detail::is_record_v<DeclType>) {
+                    using StorageT = typename DeclType::storage_type;
+                    auto raw_val = detail::adjust_endian_on_write<StorageT, typename F::endian_mode, StructEndian>(
+                        static_cast<StorageT>(val));
+                    if (std::is_constant_evaluated()) {
+                        auto buf = std::bit_cast<std::array<u8, sizeof(StorageT)> >(raw_val);
+                        for (usize i = 0; i < sizeof(StorageT); ++i) *(target_ptr + i) = buf[i];
+                    } else {
+                        if constexpr (IsMMIO) rwonce::write_once(*reinterpret_cast<volatile StorageT *>(target_ptr),
+                                                                 raw_val);
+                        else *reinterpret_cast<StorageT *>(target_ptr) = raw_val;
+                    }
+                } else if constexpr (detail::is_structure_v<DeclType>) {
+                    if (std::is_constant_evaluated()) {
+                        for (usize i = 0; i < sizeof(DeclType); ++i) *(target_ptr + i) = *(val.raw_ptr() + i);
+                    } else {
+                        lib::memcpy(target_ptr, val.raw_ptr(), sizeof(DeclType));
+                    }
+                } else {
+                    auto to_write = detail::adjust_endian_on_write<DeclType, typename F::endian_mode, StructEndian>(
+                        static_cast<DeclType>(std::forward<ValT>(val)));
+
+                    if constexpr (std::is_same_v<typename F::access, attr::wac>) to_write = DeclType{0};
+                    else if constexpr (std::is_same_v<typename F::access, attr::woo>) {
+                        auto cur = self.template get<Path>();
+                        chk_assert(cur == 0 && "lib::structure: Write-Once-Only (woo) field already latched!");
+                    } else if constexpr (std::is_same_v<typename F::access, attr::w1c>) {
+                        auto cur = self.template get<Path>();
+                        to_write = cur & ~to_write;
+                    } else if constexpr (std::is_same_v<typename F::access, attr::w0c>) {
+                        auto cur = self.template get<Path>();
+                        to_write = cur & to_write;
+                    } else if constexpr (std::is_same_v<typename F::access, attr::w1s>) {
+                        auto cur = self.template get<Path>();
+                        to_write = cur | to_write;
+                    } else if constexpr (std::is_same_v<typename F::access, attr::w1t>) {
+                        auto cur = self.template get<Path>();
+                        to_write = cur ^ to_write;
+                    }
+
+                    if constexpr (has_gran) {
+                        using BusW = typename F::granularity;
+                        if constexpr (sizeof(DeclType) < sizeof(BusW)) {
+                            usize aligned_off = (offset / sizeof(BusW)) * sizeof(BusW);
+                            usize byte_off = offset % sizeof(BusW);
+                            BusW word{};
+                            if (std::is_constant_evaluated()) {
+                                std::array<u8, sizeof(BusW)> buf{};
+                                for (usize i = 0; i < sizeof(BusW); ++i)
+                                    buf[i] = *(self.raw_ptr() + aligned_off + i);
+                                word = std::bit_cast<BusW>(buf);
+                            } else {
+                                word = IsMMIO
+                                           ? rwonce::read_once(
+                                               *reinterpret_cast<const volatile BusW *>(
+                                                   self.raw_ptr() + aligned_off))
+                                           : *reinterpret_cast<const BusW *>(self.raw_ptr() + aligned_off);
+                            }
+                            word = detail::adjust_endian_on_read<BusW, endian::native, StructEndian>(word);
+                            BusW mask = static_cast<BusW>(storage_traits<DeclType>::bitmask(sizeof(DeclType) * 8))
+                                        << (byte_off * 8);
+                            word = static_cast<BusW>(
+                                (word & ~mask) | (static_cast<BusW>(to_write) << (byte_off * 8)));
+                            word = detail::adjust_endian_on_write<BusW, endian::native, StructEndian>(word);
+                            if (std::is_constant_evaluated()) {
+                                auto buf = std::bit_cast<std::array<u8, sizeof(BusW)> >(word);
+                                for (usize i = 0; i < sizeof(BusW); ++i)
+                                    *(self.raw_ptr() + aligned_off + i) = buf[i];
+                            } else {
+                                if constexpr (IsMMIO) rwonce::write_once(
+                                    *reinterpret_cast<volatile BusW *>(self.raw_ptr() + aligned_off), word);
+                                else *reinterpret_cast<BusW *>(self.raw_ptr() + aligned_off) = word;
+                            }
+                        }
+                    } else if (std::is_constant_evaluated() || F::is_unaligned) {
+                        auto buf = std::bit_cast<std::array<u8, sizeof(DeclType)> >(to_write);
+                        for (usize i = 0; i < sizeof(DeclType); ++i) *(target_ptr + i) = buf[i];
+                    } else {
+                        if constexpr (IsMMIO) rwonce::write_once(*reinterpret_cast<volatile DeclType *>(target_ptr),
+                                                                 to_write);
+                        else *reinterpret_cast<DeclType *>(target_ptr) = to_write;
+                    }
+                }
+            }
+            return std::forward<decltype(self)>(self);
+        }
+
+        template<fixed_string Name>
+        [[nodiscard]] constexpr decltype(auto) operator[](this auto &&self, field_tag<Name>) noexcept {
+            return self.template get<Name>();
+        }
+
+        [[nodiscard]] constexpr auto as_bytes(this auto &self) noexcept -> std::span<u8, extent> requires (!
+            std::is_const_v<std::remove_reference_t<decltype(self)> >) {
+            return {self.raw_ptr(), extent};
+        }
+
+        [[nodiscard]] constexpr auto as_bytes(this const auto &self) noexcept -> std::span<const u8, extent> {
+            return {self.raw_ptr(), extent};
+        }
+
+        template<class T>
+        [[nodiscard]] constexpr auto raw_read(this const auto &self, usize byte_offset) noexcept -> T {
+            chk_assert(byte_offset + sizeof(T) <= extent);
+            if constexpr (IsMMIO) return rwonce::read_once(
+                *reinterpret_cast<const volatile T *>(self.raw_ptr() + byte_offset));
+            else return *reinterpret_cast<const T *>(self.raw_ptr() + byte_offset);
+        }
+
+        template<class T>
+        [[nodiscard]] constexpr auto try_raw_read(this const auto &self, usize byte_offset) noexcept
+            -> std::expected<T, kernel_error> {
+            if (byte_offset + sizeof(T) > extent) {
+                return std::unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            }
+            return self.template raw_read<T>(byte_offset);
+        }
+
+        template<class T>
+        constexpr auto raw_write(this auto &&self, usize byte_offset, T val) noexcept -> void {
+            chk_assert(byte_offset + sizeof(T) <= extent);
+            if constexpr (IsMMIO) rwonce::write_once(
+                *reinterpret_cast<volatile T *>(const_cast<u8 *>(self.raw_ptr()) + byte_offset), val);
+            else *reinterpret_cast<T *>(const_cast<u8 *>(self.raw_ptr()) + byte_offset) = val;
+        }
+
+        template<class T>
+        constexpr auto try_raw_write(this auto &&self, usize byte_offset, T val) noexcept
+            -> std::expected<void, kernel_error> {
+            if (byte_offset + sizeof(T) > extent) {
+                return std::unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            }
+            self.raw_write(byte_offset, val);
+            return {};
+        }
+
+        template<fixed_string Name>
+        [[nodiscard]] static consteval auto offset_of() noexcept -> usize {
+            constexpr usize idx = Layout::template index_of<Name>();
+            static_assert(idx != static_cast<usize>(-1), "Unknown field identifier!");
+            return layout_meta.offsets[idx];
+        }
+
+        template<fixed_string Name>
+        [[nodiscard]] static consteval auto size_of() noexcept -> usize {
+            constexpr usize idx = Layout::template index_of<Name>();
+            static_assert(idx != static_cast<usize>(-1), "Unknown field identifier!");
+            return layout_meta.sizes[idx];
+        }
+
+        /// @brief Materialize init<>/fixed<> default values into raw storage.
+        constexpr void apply_default_values() noexcept {
+            apply_defaults_impl(static_cast<FieldTuple *>(nullptr));
+        }
+
+    private:
+        template<class... Fs>
+        constexpr void apply_defaults_impl(std::tuple<Fs...> *) noexcept {
+            (apply_one_default<Fs>(), ...);
+        }
+
+        template<class F>
+        constexpr void apply_one_default() noexcept {
+            if constexpr (F::has_init || F::has_fixed) {
+                constexpr u64 v = F::has_fixed ? F::fixed_value : F::init_value;
+                this->template set<F::name>(static_cast<u64>(v));
+            }
+        }
+    };
+
+    template<usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+    class structure_ref : public structure_impl<Extent, Alignment, StructEndian, false, FieldOrExts...>,
+                          public detail::mixin_invoker<
+                              typename detail::filter_extensions<FieldOrExts...>::type,
+                              structure_ref<Extent, Alignment, StructEndian, FieldOrExts...>
+                          > {
+    public:
+        constexpr explicit structure_ref(void *ptr) noexcept
+            : ptr_(static_cast<u8 *>(ptr)) {
+            if (!std::is_constant_evaluated()) {
+                chk_assert(reinterpret_cast<uptr>(ptr_) % Alignment == 0);
+            }
+        }
+
+        [[nodiscard]] constexpr auto raw_ptr() noexcept -> u8 * { return ptr_; }
+        [[nodiscard]] constexpr auto raw_ptr() const noexcept -> const u8 * { return ptr_; }
+
+    private:
+        u8 *ptr_;
+    };
+
+    template<usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+    class mmio_structure_ref : public structure_impl<Extent, Alignment, StructEndian, true, FieldOrExts...>,
+                               public detail::mixin_invoker<
+                                   typename detail::filter_extensions<FieldOrExts...>::type,
+                                   mmio_structure_ref<Extent, Alignment, StructEndian, FieldOrExts...>
+                               > {
+    public:
+        using Layout = structure_layout_info<Extent, Alignment, StructEndian, FieldOrExts...>;
+
+        constexpr explicit mmio_structure_ref(volatile void *ptr) noexcept
+            : ptr_(const_cast<u8 *>(static_cast<const volatile u8 *>(ptr))) {
+            if (!std::is_constant_evaluated()) {
+                chk_assert(reinterpret_cast<uptr>(ptr_) % Alignment == 0);
+            }
+        }
+
+        [[nodiscard]] constexpr auto raw_ptr() noexcept -> u8 * { return ptr_; }
+        [[nodiscard]] constexpr auto raw_ptr() const noexcept -> const u8 * { return ptr_; }
+
+        template<fixed_string Name>
+        [[nodiscard]] auto atomic_load(std::memory_order order = std::memory_order_seq_cst) const noexcept {
+            constexpr usize idx = Layout::template index_of<Name>();
+            static_assert(idx != static_cast<usize>(-1), "Unknown field identifier!");
+            constexpr usize off = Layout::meta.offsets[idx];
+            using FieldTuple = typename Layout::field_tuple;
+            using F = pack_indexing_element_t<idx, FieldTuple>;
+            using ValT = typename F::value_type;
+
+            static_assert(std::is_trivially_copyable_v<ValT>,
+                          "lib::structure: atomic_load target type must be trivially copyable!");
+            static_assert(off % alignof(ValT) == 0,
+                          "lib::structure: atomic_load target field must be naturally aligned!");
+
+            auto *target = reinterpret_cast<ValT *>(this->ptr_ + off);
+            std::atomic_ref<ValT> atomic_target(*target);
+            return atomic_target.load(order);
+        }
+
+        template<fixed_string Name, class ValT>
+        auto atomic_store(ValT &&val, std::memory_order order = std::memory_order_seq_cst) const noexcept -> void {
+            constexpr usize idx = Layout::template index_of<Name>();
+            static_assert(idx != static_cast<usize>(-1), "Unknown field identifier!");
+            constexpr usize off = Layout::meta.offsets[idx];
+            using FieldTuple = typename Layout::field_tuple;
+            using F = pack_indexing_element_t<idx, FieldTuple>;
+            using TargetT = typename F::value_type;
+
+            static_assert(std::is_trivially_copyable_v<TargetT>,
+                          "lib::structure: atomic_store target type must be trivially copyable!");
+            static_assert(off % alignof(TargetT) == 0,
+                          "lib::structure: atomic_store target field must be naturally aligned!");
+
+            auto *target = reinterpret_cast<TargetT *>(this->ptr_ + off);
+            std::atomic_ref<TargetT> atomic_target(*target);
+            atomic_target.store(std::forward<ValT>(val), order);
+        }
+
+        template<fixed_string Name, class ValT>
+        auto atomic_compare_exchange(ValT &expected, ValT desired,
+                                     std::memory_order success = std::memory_order_seq_cst,
+                                     std::memory_order failure = std::memory_order_seq_cst) const noexcept -> bool {
+            constexpr usize idx = Layout::template index_of<Name>();
+            static_assert(idx != static_cast<usize>(-1), "Unknown field identifier!");
+            constexpr usize off = Layout::meta.offsets[idx];
+            using FieldTuple = typename Layout::field_tuple;
+            using F = pack_indexing_element_t<idx, FieldTuple>;
+            using TargetT = typename F::value_type;
+
+            static_assert(std::is_trivially_copyable_v<TargetT>,
+                          "lib::structure: atomic_cas target type must be trivially copyable!");
+            static_assert(off % alignof(TargetT) == 0,
+                          "lib::structure: atomic_cas target field must be naturally aligned!");
+
+            auto *target = reinterpret_cast<TargetT *>(this->ptr_ + off);
+            std::atomic_ref<TargetT> atomic_target(*target);
+            return atomic_target.compare_exchange_strong(expected, desired, success, failure);
+        }
+
+    private:
+        u8 *ptr_;
+    };
+
+    template<usize Extent, usize Alignment = 8, class StructEndian = endian::native, class... FieldOrExts>
+    class structure : public structure_impl<Extent, Alignment, StructEndian, false, FieldOrExts...>,
+                      public detail::mixin_invoker<
+                          typename detail::filter_extensions<FieldOrExts...>::type,
+                          structure<Extent, Alignment, StructEndian, FieldOrExts...>
+                      > {
+    public:
+        using ref_type = structure_ref<Extent, Alignment, StructEndian, FieldOrExts...>;
+        using mmio_ref_type = mmio_structure_ref<Extent, Alignment, StructEndian, FieldOrExts...>;
+
+        constexpr structure() noexcept {
+            storage_.fill(0);
+            this->apply_default_values();
+        }
+
+        constexpr structure(const structure &other) noexcept : storage_(other.storage_) {
+        }
+
+        template<class... Bindings>
+            requires (sizeof...(Bindings) > 0 && ((requires { Bindings::name; }) && ...))
+        constexpr explicit structure(Bindings &&... bindings) noexcept {
+            storage_.fill(0);
+            this->apply_default_values();
+            (this->template set<Bindings::name>(std::forward<decltype(bindings.value)>(bindings.value)), ...);
+        }
+
+        template<fixed_string... FieldNames, class... Values>
+        [[nodiscard]] static constexpr auto make(Values &&... vals) noexcept -> structure {
+            static_assert(sizeof...(FieldNames) == sizeof...(Values),
+                          "Number of field names must match the number of values!");
+            structure s{};
+            (s.template set<FieldNames>(std::forward<Values>(vals)), ...);
+            return s;
+        }
+
+        constexpr auto operator=(const structure &other) noexcept -> structure & {
+            if (this != &other) storage_ = other.storage_;
+            return *this;
+        }
+
+        [[nodiscard]] constexpr auto raw_ptr() noexcept -> u8 * { return storage_.data(); }
+        [[nodiscard]] constexpr auto raw_ptr() const noexcept -> const u8 * { return storage_.data(); }
+
+        [[nodiscard]] constexpr auto ref() noexcept -> ref_type { return ref_type(storage_.data()); }
+        [[nodiscard]] constexpr auto mmio_ref() noexcept -> mmio_ref_type { return mmio_ref_type(storage_.data()); }
+
+    private:
+        alignas(Alignment) std::array<u8, structure_impl<Extent, Alignment, StructEndian, false, FieldOrExts
+            ...>::extent> storage_{};
+    };
+
+    template<class StructT>
+    struct structure_traits;
+
+    template<usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+    struct structure_traits<structure<Extent, Alignment, StructEndian, FieldOrExts...> > {
+        using ref_type = structure_ref<Extent, Alignment, StructEndian, FieldOrExts...>;
+        using mmio_ref_type = mmio_structure_ref<Extent, Alignment, StructEndian, FieldOrExts...>;
+        static constexpr usize extent = Extent;
+        static constexpr usize alignment = Alignment;
+    };
+
+    template<class StructT>
+    using structure_as_ref_t = typename structure_traits<StructT>::ref_type;
+
+    template<class StructT>
+    using structure_as_mmio_ref_t = typename structure_traits<StructT>::mmio_ref_type;
+
+    /// @brief Zero-overhead span of structures over contiguous memory
+    template<class StructT, bool IsMMIO = false>
+    class structure_span {
+    public:
+        using element_ref = std::conditional_t<
+            IsMMIO, typename StructT::mmio_ref_type, typename StructT::ref_type>;
+
+        constexpr explicit structure_span(void *base_ptr, usize count = static_cast<usize>(-1)) noexcept
+            : base_(static_cast<u8 *>(base_ptr)), count_(count) {
+        }
+
+        [[nodiscard]] constexpr auto operator[](usize index) const noexcept -> element_ref {
+            chk_assert(count_ == static_cast<usize>(-1) || index < count_);
+            return element_ref(base_ + (index * StructT::extent));
+        }
+
+        [[nodiscard]] constexpr auto try_at(usize index) const noexcept
+            -> std::expected<element_ref, kernel_error> {
+            if (count_ != static_cast<usize>(-1) && index >= count_) {
+                return std::unexpected(kernel_error::from_generic(generic_error::out_of_range));
+            }
+            return element_ref(base_ + (index * StructT::extent));
+        }
+
+        [[nodiscard]] constexpr auto size() const noexcept -> usize { return count_; }
+        [[nodiscard]] constexpr auto data() const noexcept -> u8 * { return base_; }
+
+    private:
+        u8 *base_;
+        usize count_;
+    };
+
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using rw_byte = field<Name, byte_span<Start, End>, Type, attr::rw>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using ro_byte = field<Name, byte_span<Start, End>, Type, attr::ro>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using wo_byte = field<Name, byte_span<Start, End>, Type, attr::wo>;
+    template<fixed_string Name, usize Start, usize End, class Type = u8>
+    using rz_byte = field<Name, byte_span<Start, End>, Type, attr::rz>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using w1c_byte = field<Name, byte_span<Start, End>, Type, attr::w1c>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using w1s_byte = field<Name, byte_span<Start, End>, Type, attr::w1s>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using w1t_byte = field<Name, byte_span<Start, End>, Type, attr::w1t>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using w0c_byte = field<Name, byte_span<Start, End>, Type, attr::w0c>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using rc_byte = field<Name, byte_span<Start, End>, Type, attr::rc>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using raz_byte = field<Name, byte_span<Start, End>, Type, attr::raz>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using rao_byte = field<Name, byte_span<Start, End>, Type, attr::rao>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using wac_byte = field<Name, byte_span<Start, End>, Type, attr::wac>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using woo_byte = field<Name, byte_span<Start, End>, Type, attr::woo>;
+
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using unaligned_rw_byte = field<Name, byte_span<Start, End>, Type, attr::rw, attr::unaligned>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using unaligned_ro_byte = field<Name, byte_span<Start, End>, Type, attr::ro, attr::unaligned>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using unaligned_wo_byte = field<Name, byte_span<Start, End>, Type, attr::wo, attr::unaligned>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using unaligned_w1c_byte = field<Name, byte_span<Start, End>, Type, attr::w1c, attr::unaligned>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using unaligned_w1s_byte = field<Name, byte_span<Start, End>, Type, attr::w1s, attr::unaligned>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using unaligned_w1t_byte = field<Name, byte_span<Start, End>, Type, attr::w1t, attr::unaligned>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using unaligned_w0c_byte = field<Name, byte_span<Start, End>, Type, attr::w0c, attr::unaligned>;
+
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using overlay_rw_byte = field<Name, byte_span<Start, End>, Type, attr::rw, attr::overlay>;
+    template<fixed_string Name, usize Start, usize End, class Type>
+    using overlay_ro_byte = field<Name, byte_span<Start, End>, Type, attr::ro, attr::overlay>;
+
+    template<fixed_string Name, class Type>
+    using rw_byte_auto = field<Name, auto_layout, Type, attr::rw>;
+    template<fixed_string Name, class Type>
+    using ro_byte_auto = field<Name, auto_layout, Type, attr::ro>;
+    template<fixed_string Name, class Type>
+    using wo_byte_auto = field<Name, auto_layout, Type, attr::wo>;
+    template<fixed_string Name, class Type = u8>
+    using rz_byte_auto = field<Name, auto_layout, Type, attr::rz>;
+    template<fixed_string Name, class Type>
+    using w1c_byte_auto = field<Name, auto_layout, Type, attr::w1c>;
+    template<fixed_string Name, class Type>
+    using w1s_byte_auto = field<Name, auto_layout, Type, attr::w1s>;
+    template<fixed_string Name, class Type>
+    using w1t_byte_auto = field<Name, auto_layout, Type, attr::w1t>;
+    template<fixed_string Name, class Type>
+    using w0c_byte_auto = field<Name, auto_layout, Type, attr::w0c>;
+    template<fixed_string Name, class Type>
+    using rc_byte_auto = field<Name, auto_layout, Type, attr::rc>;
+    template<fixed_string Name, class Type>
+    using raz_byte_auto = field<Name, auto_layout, Type, attr::raz>;
+    template<fixed_string Name, class Type>
+    using rao_byte_auto = field<Name, auto_layout, Type, attr::rao>;
+    template<fixed_string Name, class Type>
+    using wac_byte_auto = field<Name, auto_layout, Type, attr::wac>;
+    template<fixed_string Name, class Type>
+    using woo_byte_auto = field<Name, auto_layout, Type, attr::woo>;
+
+    template<fixed_string Name, class Type, class... Spans>
+    using disjoint_rw_byte = field<Name, std::tuple<Spans...>, Type, attr::rw>;
+    template<fixed_string Name, class Type, class... Spans>
+    using disjoint_ro_byte = field<Name, std::tuple<Spans...>, Type, attr::ro>;
+
+    template<usize ByteOffset, usize StartBit, usize EndBit, class Numbering = msb0_t>
+    using cross_slice = lib::slice<ByteOffset, StartBit, EndBit, Numbering>;
+
+    template<fixed_string Name, class Type, class... Slices>
+    using cross_rw_field = field<Name, std::tuple<Slices...>, Type, attr::rw>;
+    template<fixed_string Name, class Type, class... Slices>
+    using cross_ro_field = field<Name, std::tuple<Slices...>, Type, attr::ro>;
+    template<fixed_string Name, usize Alignment, class... Slices>
+    using cross_aligned_rw_field = field<Name, std::tuple<Slices...>, u64, attr::rw, attr::aligned<Alignment> >;
+
+    template<fixed_string Name, class ElementType, usize Count, usize Stride = sizeof(ElementType)>
+    using bank_array = field<Name, bank<Count, Stride>, ElementType, attr::rw>;
+    template<fixed_string Name, class ElementType, usize Count, usize Stride = sizeof(ElementType)>
+    using ro_bank_array = field<Name, bank<Count, Stride>, ElementType, attr::ro>;
+
+} // namespace lib
+
+template<usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+struct std::tuple_size<lib::structure<Extent, Alignment, StructEndian, FieldOrExts...> >
+        : std::integral_constant<usize, lib::structure<Extent, Alignment, StructEndian, FieldOrExts
+            ...>::field_count> {
+};
+
+template<usize I, usize Extent, usize Alignment, class StructEndian, class... FieldOrExts>
+struct std::tuple_element<I, lib::structure<Extent, Alignment, StructEndian, FieldOrExts...> > {
+private:
+    using RawFieldTuple = typename lib::detail::filter_fields<FieldOrExts...>::type;
+    using FieldTuple = typename lib::detail::map_structure_fields<RawFieldTuple>::type;
+    using Field = lib::pack_indexing_element_t<I, FieldTuple>;
+
+public:
+    using type = typename Field::value_type;
+};
+
+} // export

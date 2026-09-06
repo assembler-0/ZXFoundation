@@ -1,0 +1,160 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/trap/mcck.cxxm
+/// @brief Centralized Machine-Check (MCCK) dispatcher.
+
+export module arch.s390x.trap.mcck.core;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.features;
+import zxfoundation.base.types;
+import lib.structure;
+import lib.bitfield;
+import lib.stl;
+
+#define __zxmacro_want_assert
+#define __zxmacro_want_bits
+#include macro_extensions
+
+export {
+
+namespace arch::s390x::trap::mcck {
+
+    /// @brief Machine-Check Interruption Code bits
+    /// @{
+    constexpr u64 MCIC_SD = 1ULL << 63;   // bit  0 — system damage
+    constexpr u64 MCIC_PD = 1ULL << 62;   // bit  1 — instruction-processing damage
+    constexpr u64 MCIC_SR = 1ULL << 61;   // bit  2 — system recovery
+    constexpr u64 MCIC_CD = 1ULL << 59;   // bit  4 — timing-facility damage
+    constexpr u64 MCIC_ED = 1ULL << 58;   // bit  5 — external damage
+    constexpr u64 MCIC_BACKLOG = 1ULL << 57; // bit  6 — stacked machine check (MCIC not cleared)
+    constexpr u64 MCIC_DG = 1ULL << 56;   // bit  7 — degradation
+    constexpr u64 MCIC_W  = 1ULL << 55;   // bit  8 — warning
+    constexpr u64 MCIC_CP = 1ULL << 54;   // bit  9 — channel-report pending
+    constexpr u64 MCIC_SP = 1ULL << 53;   // bit 10 — service-processor damage
+    constexpr u64 MCIC_CK = 1ULL << 52;   // bit 11 — channel-subsystem damage
+    constexpr u64 MCIC_B  = 1ULL << 49;   // bit 14 — backed-up (nullifying IPD survived)
+    constexpr u64 MCIC_SE = 1ULL << 47;   // bit 16 — storage error uncorrected
+    constexpr u64 MCIC_SC = 1ULL << 46;   // bit 17 — storage error corrected
+    constexpr u64 MCIC_KE = 1ULL << 45;   // bit 18 — storage-key error uncorrected
+    constexpr u64 MCIC_DS = 1ULL << 44;   // bit 19 — storage degradation
+    constexpr u64 MCIC_WP = 1ULL << 43;   // bit 20 — PSW-MWP validity
+    constexpr u64 MCIC_MS = 1ULL << 42;   // bit 21 — PSW mask and key validity
+    constexpr u64 MCIC_PM = 1ULL << 41;   // bit 22 — PSW program-mask and CC validity
+    constexpr u64 MCIC_IA = 1ULL << 40;   // bit 23 — PSW-instruction-address validity
+    constexpr u64 MCIC_FA = 1ULL << 39;   // bit 24 — failing-storage-address validity
+    constexpr u64 MCIC_VR = 1ULL << 38;   // bit 25 — vector-register validity
+    constexpr u64 MCIC_EC = 1ULL << 37;   // bit 26 — external-damage-code validity
+    constexpr u64 MCIC_FP = 1ULL << 36;   // bit 27 — floating-point-register validity
+    constexpr u64 MCIC_GR = 1ULL << 35;   // bit 28 — general-register validity
+    constexpr u64 MCIC_CR = 1ULL << 34;   // bit 29 — control-register validity
+    constexpr u64 MCIC_ST = 1ULL << 32;   // bit 31 — storage logical validity
+    constexpr u64 MCIC_IE = 1ULL << 31;   // bit 32 — indirect storage error
+    constexpr u64 MCIC_AR = 1ULL << 30;   // bit 33 — access-register validity
+    constexpr u64 MCIC_DA = 1ULL << 29;   // bit 34 — delayed-access exception
+    constexpr u64 MCIC_GS = 1ULL << 27;   // bit 36 — guarded-storage-registers validity
+    constexpr u64 MCIC_PR = 1ULL << 21;   // bit 42 — TOD-programmable-register validity
+    constexpr u64 MCIC_FC = 1ULL << 20;   // bit 43 — FP-control-register validity
+    constexpr u64 MCIC_AP = 1ULL << 19;   // bit 44 — ancillary report
+    constexpr u64 MCIC_CT = 1ULL << 17;   // bit 46 — CPU-timer validity
+    constexpr u64 MCIC_CC = 1ULL << 16;   // bit 47 — clock-comparator validity
+    /// @}
+
+    /// @brief IPD damage-window constants
+    /// @{
+    constexpr u32 MAX_IPD_COUNT        = 29;
+    constexpr u64 MAX_IPD_WINDOW_TOD  = 5ULL * 60ULL * 4'096'000'000ULL;
+    /// @}
+
+    struct [[gnu::packed]] mcesa10 {
+        u64 vector_register[32][2]{};
+        bytersvd(tobytes(dw, 64)){};
+    };
+    assert_size(mcesa10, 1024);
+
+    struct [[gnu::packed]] mcesa11 {
+        u64 vector_register[32][2]{};
+        bytersvd(tobytes(dw, 65)){};
+        u64 gsd_register{};
+        u64 gssm_register{};
+        u64 gsepla_register{};
+        bytersvd(tobytes(dw, 124)){};
+    };
+    assert_size(mcesa11, 2048);
+
+    struct [[gnu::packed]] mcesa12 {
+        u64 vector_register[32][2]{};
+        bytersvd(tobytes(dw, 65)){};
+        u64 gsd_register{};
+        u64 gssm_register{};
+        u64 gsepla_register{};
+        bytersvd(tobytes(dw, 380)){};
+    };
+    assert_size(mcesa12, 4096);
+
+    using mcesa = std::variant<mcesa10 const*, mcesa11 const*, mcesa12 const*>;
+
+    template <class Derived>
+    struct mcesad_ops {
+
+        [[nodiscard]] auto lc(this const Derived& self) noexcept -> u8 {
+            if (!cpu::features::has(cpu::features::facility::guarded_storage)) return 0;
+            return static_cast<u8>(self
+                .template get<"designation_area">()
+                .template extract<60, 63>());
+        }
+
+        [[nodiscard]] auto save_area_characteristic(this const Derived& self) noexcept -> std::pair<u64, usize> {
+            const auto da = self.template get<"designation_area">();
+            switch (self.lc()) {
+                case 0:
+                case 10:
+                    return { da.template extract_aligned<0, 53, 1024>(), 1024 };
+                case 11:
+                    return { da.template extract_aligned<0, 52, 2048>(), 2048 };
+                case 12:
+                    return { da.template extract_aligned<0, 51, 4096>(), 4096 };
+                default:
+                    return { 0, 0 };
+            }
+        }
+
+        [[nodiscard]] auto save_area(this const Derived& self) noexcept -> std::optional<mcesa> {
+            auto [address, size] = self.save_area_characteristic();
+            if (address == 0) return std::nullopt;
+
+            switch (self.lc()) {
+                case 0:
+                case 10:
+                    return reinterpret_cast<mcesa10 const*>(address);
+                case 11:
+                    return reinterpret_cast<mcesa11 const*>(address);
+                case 12:
+                    return reinterpret_cast<mcesa12 const*>(address);
+                default:
+                    return std::nullopt;
+            }
+        }
+
+    };
+
+    using mcesad = lib::structure<8, 8, lib::endian::big,
+        lib::extensions<mcesad_ops>,
+        lib::rw<"designation_area", lib::auto_layout, lib::bf64>
+    >;
+    assert_size(mcesad, 8);
+
+    /// @brief Centralized machine-check dispatcher
+    /// @param[in] frame  Saved interrupt frame from entry.S SAVE_FRAME on the
+    ///                   MCCK stack
+    auto handle(cpu::irq::irq_frame* frame) noexcept -> void;
+
+    using external_damage_code = lib::record<u32, lib::msb0_t,
+        lib::rw<"etr_sync_check",        lib::bits<19, 19>>,
+        lib::rw<"stp_sync_check",        lib::bits<24, 24>>,
+        lib::rw<"island_condition",      lib::bits<25, 25>>,
+        lib::rw<"ctn_config_change",     lib::bits<26, 26>>,
+        lib::rw<"stp_clock_source_err",  lib::bits<27, 27>>
+    >;
+
+} // namespace arch::s390x::trap::mcck
+
+} // end export

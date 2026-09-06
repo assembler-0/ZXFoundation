@@ -8,7 +8,7 @@ import zxfoundation.dgp.isolation.types;
 import arch.s390x.mmu.types;
 import arch.s390x.mmu.consts;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

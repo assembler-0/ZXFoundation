@@ -11,7 +11,7 @@ import zxfoundation.sched.rq.types;
 import lib.rbtree;
 import lib.error;
 import lib.container_of;
-import std;
+import lib.stl;
 
 using zxfoundation::sched::rq::run_queue;
 using zxfoundation::dgp::domain::strand;

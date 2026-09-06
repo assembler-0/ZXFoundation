@@ -24,9 +24,11 @@ if(ENABLE_LTO)
     endif()
 endif()
 
-set_target_properties(zxf.init PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/link.ld"
+set_target_properties(zxf.init
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/link.ld"
+        CXX_MODULE_STD OFF
 )
 
 target_link_options(zxf.init PRIVATE

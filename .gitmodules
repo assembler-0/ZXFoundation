@@ -1,3 +1,6 @@
 [submodule "deps/zxlibstdc++"]
 	path = deps/zxlibstdc++
 	url = https://github.com/assembler-0/zxlibstdcxx
+[submodule "deps/zxlibc"]
+	path = deps/zxlibc
+	url = https://github.com/assembler-0/zxlibc

@@ -20,14 +20,14 @@ import zxfoundation.sync.qspinlock.core;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.scoms.kobject.types;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import zxfoundation.sys.syschk.core;
 import lib.error;
 import lib.align;
-import std;
-
+import lib.stl;
 
 namespace zxfoundation::memory::slub::detail {
 
@@ -262,7 +262,7 @@ namespace zxfoundation::memory::slub::detail {
     [[nodiscard]] auto alloc_slow(kmem_cache& cache) noexcept -> void* {
         sched::context::preempt_disable();
         const auto setup_flags = arch::s390x::cpu::irq::irq_save_disable();
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto& cs  = cache.cpu[pcp.cpu_id];
         const u8 local_node = [&]() noexcept -> u8 {
             auto node = numa::node_for_cpu(pcp.cpu_id);
@@ -631,7 +631,7 @@ namespace zxfoundation::memory::slub {
 
         sched::context::preempt_disable();
         const auto iflags = arch::s390x::cpu::irq::irq_save_disable();
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto& cs  = cache.cpu[pcp.cpu_id];
 
         void* obj = cs.freelist;
@@ -664,7 +664,7 @@ namespace zxfoundation::memory::slub {
 
         sched::context::preempt_disable();
         const auto iflags = arch::s390x::cpu::irq::irq_save_disable();
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto& cs  = cache.cpu[pcp.cpu_id];
 
         if (sh == cs.slab) [[likely]] {

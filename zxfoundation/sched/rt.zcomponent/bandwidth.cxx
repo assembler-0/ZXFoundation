@@ -11,7 +11,7 @@ import arch.s390x.cpu.clock;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::rt::bw {
 

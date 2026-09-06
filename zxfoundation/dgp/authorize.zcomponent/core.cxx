@@ -10,7 +10,7 @@ import zxfoundation.dgp.sync_contract.core;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.scoms.kobject.base;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::detail {
     [[nodiscard]] auto validate_common(

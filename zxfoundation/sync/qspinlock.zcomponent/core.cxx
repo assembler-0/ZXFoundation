@@ -8,11 +8,11 @@ import zxfoundation.base.types;
 import zxfoundation.sched.context.core;
 import arch.s390x.cpu.sync;
 import arch.s390x.cpu.psw;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import zxfoundation.memory.hhdm;
 import lib.bit;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sync::qspinlock::detail {
     no_export constexpr u32 _Q_LOCKED_VAL   = 1U;      ///< Bit 0: lock held.
@@ -102,7 +102,7 @@ namespace zxfoundation::sync::qspinlock {
             v = m_val.load(std::memory_order::relaxed);
         }
 
-        auto& pcp = arch::s390x::cpu::lowcore::get_current()->percpu;
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
 
         const u32 node_idx = pcp.lock_depth;
         if (node_idx >= MCS_MAX_LOCK_DEPTH) [[unlikely]]
@@ -115,10 +115,13 @@ namespace zxfoundation::sync::qspinlock {
         node->locked.store(1, std::memory_order::relaxed);
         node->next.store(nullptr, std::memory_order::relaxed);
 
-        // Compute absolute pointer to node for cross-CPU access.
+        // Compute absolute pointer to node for cross-CPU access.  pcp.self_phys
+        // is percpu_data's OWN physical address (percpu_data is a standalone
+        // static-array block, no longer embedded in the lowcore page — see
+        // percpu.zcomponent), not the lowcore's.
         const u64 node_offset = reinterpret_cast<u64>(node) -
-                                reinterpret_cast<u64>(arch::s390x::cpu::lowcore::get_current());
-        const u64 node_phys = pcp.prefix_phys + node_offset;
+                                reinterpret_cast<u64>(&pcp);
+        const u64 node_phys = pcp.self_phys + node_offset;
         mcs_node* const node_absolute = reinterpret_cast<mcs_node*>(
             zxfoundation::memory::hhdm::phys_to_virt(node_phys));
 
@@ -137,12 +140,12 @@ namespace zxfoundation::sync::qspinlock {
             const u16 prev_cpu = detail::decode_tail_cpu(old_val);
             const u32 prev_idx = detail::decode_tail_node(old_val);
 
-            arch::s390x::cpu::lowcore::zx_lowcore* prev_lc =
-                arch::s390x::cpu::lowcore::get_for_cpu(prev_cpu);
-            if (!prev_lc) [[unlikely]]
+            arch::s390x::cpu::percpu::percpu_data* prev_pcp =
+                arch::s390x::cpu::percpu::cpu_percpu(prev_cpu);
+            if (!prev_pcp) [[unlikely]]
                 arch::s390x::cpu::psw::disabled_wait();
 
-            mcs_node* const prev_node = &prev_lc->percpu.qnodes[prev_idx];
+            mcs_node* const prev_node = &prev_pcp->qnodes[prev_idx];
 
             prev_node->next.store(node_absolute, std::memory_order::release);
 

@@ -1,0 +1,17 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file io.cxxm
+/// @brief Centralized io dispatch.
+
+export module arch.s390x.trap.io.core;
+import arch.s390x.cpu.irq;
+
+export {
+
+namespace arch::s390x::trap::io {
+
+    /// @brief Centralized io dispatcher.
+    auto handle(cpu::irq::irq_frame* frame) noexcept -> void;
+
+} // namespace arch::s390x::trap::io
+
+} // end export

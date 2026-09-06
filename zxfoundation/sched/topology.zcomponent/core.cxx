@@ -9,10 +9,10 @@ import zxfoundation.base.types;
 import zxfoundation.memory.numa.types;
 import zxfoundation.base.config;
 import arch.s390x.init.zxfl.protocol;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.cpumask;
 import lib.cpumask;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::topology::detail {
 
@@ -68,7 +68,7 @@ namespace zxfoundation::sched::topology::detail {
     }
 
     auto apply_percpu_evidence(cpu_topology_record& record) noexcept -> void {
-        auto* pcp = arch::s390x::cpu::lowcore::cpu_percpu(record.cpu_id);
+        auto* pcp = arch::s390x::cpu::percpu::cpu_percpu(record.cpu_id);
         if (!pcp) return;
 
         record.cpu_addr = pcp->cpu_addr;

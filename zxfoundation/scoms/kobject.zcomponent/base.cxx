@@ -7,7 +7,7 @@ import zxfoundation.scoms.kobject.types;
 import zxfoundation.base.types;
 import zxfoundation.base.typestate;
 import zxfoundation.sync.qspinlock.core;
-import std;
+import lib.stl;
 
 namespace zxfoundation::scoms::kobject::detail {
 

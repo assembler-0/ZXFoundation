@@ -8,7 +8,7 @@ import zxfoundation.base.typestate;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.numa.types;
 import zxfoundation.scoms.kobject.types;
-import std;
+import lib.stl;
 
 export {
 

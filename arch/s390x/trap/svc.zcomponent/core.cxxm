@@ -1,0 +1,18 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file svc.cxxm
+/// @brief Centralized SVC dispatch.
+
+export module arch.s390x.trap.svc.core;
+import arch.s390x.cpu.irq;
+import zxfoundation.base.types;
+
+export {
+
+namespace arch::s390x::trap::svc {
+
+    /// @brief Centralized SVC nucleus-call dispatcher.
+    [[nodiscard]] auto handle(cpu::irq::irq_frame* frame, u16 svc_code) noexcept -> u64;
+
+} // namespace arch::s390x::trap::svc
+
+} // end export

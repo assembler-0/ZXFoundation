@@ -4,7 +4,7 @@
 
 export module zxfoundation.base.typestate;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 export {
 

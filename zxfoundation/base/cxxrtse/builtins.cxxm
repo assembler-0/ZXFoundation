@@ -204,4 +204,4 @@ auto __multi3(u128 a, u128 b) noexcept -> u128 {
     return detail::combine(res_hi, res_lo);
 }
 
-} // no_mangle
+} // declscope(C)

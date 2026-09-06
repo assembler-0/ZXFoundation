@@ -9,14 +9,14 @@ import zxfoundation.base.config;
 import zxfoundation.sync.rcu.core;
 import zxfoundation.sys.printk.core;
 import zxfoundation.sync.rcu.types;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.ipi;
 import arch.s390x.cpu.sync;
 import arch.s390x.cpu.cpumask;
 import lib.cpumask;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::smp::csd::detail {
 
@@ -69,7 +69,7 @@ namespace zxfoundation::smp::csd::detail {
     /// @brief Atomically pop the entire csd LIFO for the running CPU.
     /// @return The previous head (list to walk) or nullptr when empty.
     [[nodiscard]] auto queue_drain_all() noexcept -> call_single_data* {
-        const u16 cpu = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 cpu = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         auto& head = g_csd_head[cpu];
         return head.exchange(nullptr, std::memory_order::acq_rel);
     }
@@ -150,8 +150,8 @@ namespace zxfoundation::smp::csd {
             }
             if (flags & CSD_F_DISPATCH_LEASE)
                 detail::dispatch_lease_release(
-                    arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id);
-            ++detail::g_csd_stats[arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id]
+                    arch::s390x::cpu::percpu::this_cpu().cpu_id);
+            ++detail::g_csd_stats[arch::s390x::cpu::percpu::this_cpu().cpu_id]
                  .dispatch_count;
             node = next;
         }
@@ -181,7 +181,7 @@ namespace zxfoundation::smp::csd {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 self = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         ++detail::g_csd_stats[self].csd_call_count;
 
         if (cpu != self) {
@@ -243,7 +243,7 @@ namespace zxfoundation::smp::csd {
         }
         call_single_data csd;
         init(csd, func, data, info, CSD_F_SYNC);
-        const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 self = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         if (cpu == self) {
             func(info, data);
             return {};
@@ -274,7 +274,7 @@ namespace zxfoundation::smp::csd {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
-        const u16 self = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 self = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         ++detail::g_csd_stats[self].csd_call_many_count;
 
         u32 remote_targets = 0U;
@@ -321,7 +321,7 @@ namespace zxfoundation::smp::csd {
     /// @brief Test whether the running CPU has any pending csd nodes.
     /// @return True when the running CPU's CSD queue is non-empty.
     [[nodiscard]] auto pending() noexcept -> bool {
-        const u16 cpu = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 cpu = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         return detail::g_csd_head[cpu].load(std::memory_order::acquire) != nullptr;
     }
 

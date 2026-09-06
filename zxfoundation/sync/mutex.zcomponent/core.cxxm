@@ -6,7 +6,7 @@ export module zxfoundation.sync.mutex.core;
 import zxfoundation.sync.waitqueue.types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.irq;
-import std;
+import lib.stl;
 
 export {
 

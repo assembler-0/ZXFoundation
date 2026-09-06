@@ -16,12 +16,12 @@ import zxfoundation.sched.policy;
 import zxfoundation.sched.context.core;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.isolation;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import lib.list;
 import lib.error;
 import lib.container_of;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sync::detail {
 
@@ -117,7 +117,7 @@ namespace zxfoundation::sync::rtmutex {
         u32 expected = 0U;
         if (m_lock_word.compare_exchange_strong(
                 expected, 1U, memory_order::acquire, memory_order::relaxed)) {
-            auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
             m_owner = reinterpret_cast<strand*>(pcp.current_strand);
             arch::s390x::cpu::irq::irq_restore(flags);
             return;
@@ -131,7 +131,7 @@ namespace zxfoundation::sync::rtmutex {
         u32 expected = 0U;
         if (m_lock_word.compare_exchange_strong(
                 expected, 1U, memory_order::acquire, memory_order::relaxed)) {
-            auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
             m_owner = reinterpret_cast<strand*>(pcp.current_strand);
             return true;
                 }
@@ -219,7 +219,7 @@ namespace zxfoundation::sync::rtmutex {
         using detail::reboost_owner;
         using detail::MAX_PI_DEPTH;
 
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto* self = reinterpret_cast<strand*>(pcp.current_strand);
 
         for (;;) {

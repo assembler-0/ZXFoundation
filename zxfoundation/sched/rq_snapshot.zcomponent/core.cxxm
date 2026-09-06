@@ -6,7 +6,7 @@ export module zxfoundation.sched.rq_snapshot.core;
 import zxfoundation.sched.rq.types;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

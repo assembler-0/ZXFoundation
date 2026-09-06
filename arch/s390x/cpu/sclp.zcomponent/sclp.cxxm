@@ -154,18 +154,38 @@ namespace arch::s390x::cpu::sclp {
     constexpr u32 SCLP_FC_CEI     = 5U;
     constexpr u32 SCLP_FC_SKEY    = 6U;
     constexpr u32 SCLP_FC_DIAG318 = 7U;
+    constexpr u32 SCLP_CMDW_WRITE_EVENT_DATA = 0x00760005U;
+    constexpr u32 SCLP_CMDW_WRITE_EVENT_MASK = 0x00780005U;
+    constexpr u8  EVTYP_VT220MSG             = 0x1AU;
+    constexpr u32 EVTYP_VT220MSG_MASK        = 0x00000040U; // 1 << (32 - 0x1A)
+
+    struct [[gnu::packed]] write_event_mask_sccb {
+        sccb_header header;
+        u16 mask_length{4};
+        u32 cp_receive_mask{0};
+        u32 cp_send_mask{EVTYP_VT220MSG_MASK};
+        u32 receive_mask{0};
+        u32 send_mask{EVTYP_VT220MSG_MASK};
+    };
+
+    template <usize N>
+    struct alignas(4096) write_event_sccb {
+        sccb_header   header;
+        evbuf_header  evbuf;
+        char          data[N];
+    };
 
 
     enum class sclp_cmdw : u32 {
-        read_scp_info   = 0x00010001U,
-        read_cpu_info   = 0x00020001U,
+        read_cpu_info   = 0x00010001U,
+        read_scp_info   = 0x00020001U,
     };
 
     /// @brief Issue an SCLP service call.
     /// @tparam Cmd Command word.
     /// @param  sccb 4KB-aligned SCCB.
     /// @return Condition code (0 = success).
-    template <sclp_cmdw Cmd>
+    template <u32 Cmd>
     auto invoke(void* sccb) noexcept -> condition_code {
         condition_code cc;
         __asm__ volatile(

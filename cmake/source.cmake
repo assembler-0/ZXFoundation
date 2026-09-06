@@ -10,7 +10,7 @@
 set(ZX_SOURCES_64 "")
 set(ZX_SOURCES_MODULES_64 "")
 set(ZX_MANIFEST_LIST "")
-set(ZX_VALIDATE_HEADER "${CMAKE_SOURCE_DIR}/zxfoundation/base/precpp.hxx")
+set(ZX_VALIDATE_HEADER "${CMAKE_SOURCE_DIR}/zxfoundation/base/preprocessor/precpp.hxx")
 
 zx_discover_nucleus(ZX_SOURCES_64 ZX_SOURCES_MODULES_64 ZX_MANIFEST_LIST
     "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -14,7 +14,7 @@ import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.lowcore;
 import lib.cpumask;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::numa::detail {
 

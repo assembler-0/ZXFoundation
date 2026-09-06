@@ -10,7 +10,7 @@ import zxfoundation.sys.timer.core;
 import zxfoundation.sys.time.core;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sched::cbs {
 

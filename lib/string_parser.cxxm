@@ -4,7 +4,7 @@
 
 export module lib.string_parser;
 import zxfoundation.base.types;
-import std;
+import lib.stl;
 
 export {
 

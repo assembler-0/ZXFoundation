@@ -5,7 +5,7 @@
 module zxfoundation.memory.oom.core;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::memory::oom::detail {
 

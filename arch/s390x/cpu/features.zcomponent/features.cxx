@@ -7,7 +7,7 @@ module arch.s390x.cpu.features;
 import arch.s390x.cpu.ctlreg;
 import zxfoundation.base.types;
 import lib.cstring;
-import std;
+import lib.stl;
 
 namespace arch::s390x::cpu::features {
 
@@ -38,11 +38,39 @@ namespace arch::s390x::cpu::features {
 
     /// @brief Enable hardware facilities (AFP, Vector) in CR0 for the current CPU.
     auto enable_hardware_facilities() noexcept -> void {
-        ctlreg::ctl_set_bit<0>(45);
+        ctlreg::cr0 cr0{};
+        ctlreg::crread<0, 0>(cr0);
+        cr0.set<"afp_register_control">(true);
+        cr0.set<"secondary_space_control">(true);
+        cr0.set<"clock_comparator_ssm">(true);
         if (has(facility::vector))
-            ctlreg::ctl_set_bit<0>(46);
+            cr0.set<"vector_enablement_control">(true);
         if (has(facility::transactional_exec))
-            ctlreg::ctl_set_bit<0>(8);
+            cr0.set<"transactional_exec_control">(true);
+        ctlreg::crwrite<0, 0>(cr0);
+
+        ctlreg::cr3 cr3{};
+        cr3.set<"psw_key_mask">(0xFFFF);
+
+        ctlreg::cr4 cr4{};
+        cr4.set<"auth_index">(0xFFFF);
+
+        ctlreg::crwrite<3, 3>(cr3);
+        ctlreg::crwrite<4, 4>(cr4);
+
+        ctlreg::cr6 cr6{};
+        ctlreg::crread<6, 6>(cr6);
+        cr6.set<"io_interruption_ssm">(0xff);
+        ctlreg::crwrite<6, 6>(cr6);
+
+        ctlreg::cr14 cr14{};
+        ctlreg::crread<14, 14>(cr14);
+        cr14.set<"channel_report_pending_subclass_mask">(true);
+        cr14.set<"recovery_subclass_mask">(true);
+        cr14.set<"degradation_subclass_mask">(true);
+        cr14.set<"external_damage_subclass_mask">(true);
+        cr14.set<"warning_subclass_mask">(true);
+        ctlreg::crwrite<14, 14>(cr14);
     }
 
 } // namespace arch::s390x::cpu::features

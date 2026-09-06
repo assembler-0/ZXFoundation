@@ -13,7 +13,7 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import arch.s390x.cpu.irq;
-import std;
+import lib.stl;
 import :common;
 
 using zxfoundation::memory::pmm::alloc;
@@ -341,7 +341,7 @@ namespace arch::s390x::cpu::aste {
 
     auto art_context_load(const art_context& context) noexcept -> void {
         const u64 cr2 = context.duct_phys & 0x7FFF'FFC0ULL;
-        ctlreg::ctl_load<2, 2>(cr2);
+        ctlreg::crwrite<2, 2>(cr2);
     }
 
     /// @brief Allocate an ASTE slot and populate it with a target ASCE.

@@ -8,7 +8,7 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.scoms.table;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 /// @brief The global domain table — SCOMS scoms_table.
 from_global(nomangle) namespace zxfoundation::dgp::domain {

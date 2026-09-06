@@ -5,7 +5,10 @@
 export module zxfoundation.sys.syschk.types;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_assert
+#include macro_extensions
 
 export {
 
@@ -33,7 +36,7 @@ namespace zxfoundation::sys::syschk {
     }
 
     /// @brief Maximum length (bytes) of the crash message field, NUL included.
-    constexpr u32 ZX_CRASH_MSG_LEN = 128U;
+    inline constexpr usize ZX_CRASH_MSG_LEN = 224;
 
     /// @brief Magic value that marks an initialized @c zx_crash_record.
     ///        ASCII: "ZXCRUNCH".
@@ -44,19 +47,16 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Crash record written into the BSP lowcore on every @c system_check call.
     struct [[gnu::packed]] zx_crash_record {
-        u64  magic{};                 ///< ZX_CRASH_RECORD_MAGIC when record is valid.
-        u8   severity{};              ///< Raw @c syschk_severity value.
-        u8   err_category{};          ///< @c lib::error_category value of the triggering error.
-        u32  err_code{};              ///< Per-category error code.
-        u16  cpu_id{};                ///< Logical CPU ID of the reporting processor.
-        u8   _pad[4]{};               ///< Reserved; must be zero.
-        u64  psw_mask{};              ///< PSW mask word at time of check.
-        u64  psw_addr{};              ///< PSW instruction address at time of check.
-        char msg[ZX_CRASH_MSG_LEN]{}; ///< NUL-terminated human-readable reason string.
+        u64  magic{};                 ///< 0x00..0x07: ZX_CRASH_RECORD_MAGIC (8 bytes)
+        u8   severity{};              ///< 0x08: Raw syschk_severity value (1 byte)
+        u8   err_category{};          ///< 0x09: lib::error_category value (1 byte)
+        u16  cpu_id{};                ///< 0x0A..0x0B: Logical CPU ID (2 bytes)
+        u32  err_code{};              ///< 0x0C..0x0F: Per-category error code (4 bytes)
+        u64  psw_mask{};              ///< 0x10..0x17: PSW mask word at crash (8 bytes)
+        u64  psw_addr{};              ///< 0x18..0x1F: PSW instruction address (8 bytes)
+        char msg[ZX_CRASH_MSG_LEN]{}; ///< 0x20..0xFF: Reason string (224 bytes)
     };
-
-    static_assert(sizeof(zx_crash_record) <= 256U,
-        "zx_crash_record must fit within the 256-byte budget at ZX_CRASH_RECORD_OFFSET");
+    assert_size(zx_crash_record, 256);
 
     /// @brief Bundle carrying a format-string and its call-site source location.
     struct fmt_loc {

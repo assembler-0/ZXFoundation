@@ -6,6 +6,8 @@ export module arch.s390x.cpu.aste;
 export import arch.s390x.cpu.aste.consts;
 export import :common;
 import zxfoundation.base.types;
+import lib.structure;
+import lib.bitfield;
 
 export {
 
@@ -48,6 +50,7 @@ namespace arch::s390x::cpu::aste {
         /// @brief Test the subsystem-linkage control bit (V, LTD bit 0).
         /// Must be 1 for PC/PT instructions to proceed.
         [[nodiscard]] auto ltd_valid() const noexcept -> bool;
+
         /// @brief Set or clear the V bit in the LTD.
         auto set_ltd_valid(bool v) noexcept -> void;
 
@@ -148,7 +151,6 @@ namespace arch::s390x::cpu::aste {
     ) noexcept -> ::std::expected<u32, ::lib::kernel_error>;
 
     /// @brief Invalidate an ALE and purge the ALB.
-    ///
     /// @param alet  The ALET value (ALE slot index) to destroy.
     /// @return Success, or an error if the ALET is invalid.
     [[nodiscard]] auto ale_destroy(

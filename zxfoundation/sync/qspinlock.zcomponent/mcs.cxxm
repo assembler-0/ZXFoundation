@@ -3,7 +3,7 @@
 /// @brief mcs types
 
 export module zxfoundation.sync.qspinlock.mcs;
-import std;
+import lib.stl;
 
 export {
 

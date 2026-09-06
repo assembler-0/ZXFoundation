@@ -8,13 +8,13 @@ import zxfoundation.sched.context.core;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.sync;
-import arch.s390x.cpu.percpu;
 import lib.cpumask;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sync::rcu::detail {
 
@@ -86,7 +86,7 @@ namespace zxfoundation::sync::rcu {
     /// @brief Enter an RCU read-side critical section.
     auto read_unlock() noexcept -> void {
         sched::context::preempt_disable();
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         ++pcp.in_rcu_read_side;
         arch::s390x::cpu::sync::barrier();
     }
@@ -95,7 +95,7 @@ namespace zxfoundation::sync::rcu {
     auto read_lock() noexcept -> void {
         using namespace detail;
         arch::s390x::cpu::sync::barrier();
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         if (pcp.in_rcu_read_side > 0) --pcp.in_rcu_read_side;
         sched::context::preempt_enable();
         if (pcp.in_rcu_read_side == 0U) {
@@ -112,7 +112,7 @@ namespace zxfoundation::sync::rcu {
         head->next = nullptr;
 
         sched::context::preempt_disable();
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
 
         const gp_seq_t cur_seq   = g_gp_seq.load(memory_order::acquire);
         const gp_seq_t mature_at = cur_seq + 2U;
@@ -149,7 +149,7 @@ namespace zxfoundation::sync::rcu {
             [](u16 cpu) noexcept -> void {
                 auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(cpu);
                 if (!lc) return;
-                while (lc->percpu.rcu_pending_count > 0U)
+                while (arch::s390x::cpu::percpu::at(cpu).rcu_pending_count > 0U)
                     arch::s390x::cpu::sync::cpu_relax();
             });
     }
@@ -159,7 +159,7 @@ namespace zxfoundation::sync::rcu {
         using namespace detail;
         if (!g_initialized) return;
 
-        auto& pcp         = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp         = arch::s390x::cpu::percpu::this_cpu();
         const u32 cpu_id  = pcp.cpu_id;
 
         const gp_seq_t cur_gp = g_gp_seq.load(memory_order::acquire);
@@ -179,7 +179,7 @@ namespace zxfoundation::sync::rcu {
                 arch::s390x::cpu::cpumask::for_each_online_cpu(
                     [&](u16 cpu) noexcept -> void {
                         auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(cpu);
-                        if (lc && lc->percpu.rcu_pending_count > 0U)
+                        if (lc && arch::s390x::cpu::percpu::at(cpu).rcu_pending_count > 0U)
                             need_gp = true;
                     });
                 if (need_gp) {

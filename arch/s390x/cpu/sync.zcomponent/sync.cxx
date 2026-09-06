@@ -4,7 +4,7 @@
 
 module arch.s390x.cpu.sync;
 import arch.s390x.cpu.diag;
-import std;
+import lib.stl;
 
 namespace arch::s390x::cpu::sync {
 

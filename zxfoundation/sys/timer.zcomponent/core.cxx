@@ -9,13 +9,13 @@ import zxfoundation.base.config;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.irq;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
 import lib.min_heap;
 import lib.error;
 import lib.format;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sys::timer::detail {
 
@@ -30,9 +30,6 @@ namespace zxfoundation::sys::timer::detail {
 
     static lib::min_heap<kernel_timer*, TIMER_HEAP_CAPACITY>
         g_heaps[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS]{};
-
-    /// @brief Subsystem initialization flag.
-    static bool g_timer_initialized{false};
 
     /// @brief Program the clock comparator for the next timer deadline.
     auto rearm_comparator(u16 cpu_id) noexcept -> void {
@@ -91,7 +88,7 @@ namespace zxfoundation::sys::timer {
 
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
 
-        const u16 cpu_id = arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+        const u16 cpu_id = arch::s390x::cpu::percpu::this_cpu().cpu_id;
         t.cpu = cpu_id;
 
         if (!detail::g_heaps[cpu_id].push(&t, detail::timer_less{})) {
@@ -124,7 +121,7 @@ namespace zxfoundation::sys::timer {
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
 
         const u16 current_cpu =
-            arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+            arch::s390x::cpu::percpu::this_cpu().cpu_id;
         if (t.cpu != current_cpu) {
             arch::s390x::cpu::irq::irq_restore(flags);
             return std::unexpected(
@@ -144,7 +141,7 @@ namespace zxfoundation::sys::timer {
     /// @brief Clock comparator interrupt handler.
     auto timer_interrupt() noexcept -> void {
         const u16 cpu_id =
-            arch::s390x::cpu::lowcore::this_cpu_percpu().cpu_id;
+            arch::s390x::cpu::percpu::this_cpu().cpu_id;
         const u64 now = arch::s390x::cpu::clock::stck();
 
         auto& heap = detail::g_heaps[cpu_id];
@@ -181,8 +178,6 @@ namespace zxfoundation::sys::timer {
 
     /// @brief Initialize the timer subsystem on the BSP (CPU 0).
     auto init() noexcept -> void {
-        detail::g_timer_initialized = true;
-
         using irq::IRQ_BASE_EXT;
         using irq::EXT_IRQ_CLOCK_COMPARATOR;
         using irq::EXT_IRQ_TIMING_ALERT;

@@ -6,7 +6,7 @@ export module lib.cpumask;
 import lib.bitmap;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
-import std;
+import lib.stl;
 
 export {
 

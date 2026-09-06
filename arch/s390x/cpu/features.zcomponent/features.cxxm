@@ -6,7 +6,7 @@
 export module arch.s390x.cpu.features;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

@@ -1,0 +1,21 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file barebones.cxxm
+/// @brief Barebones mode
+
+export module zxfoundation.sys.syschk.barebones;
+import lib.stl;
+
+export {
+
+namespace zxfoundation::sys::syschk {
+
+    struct panic_info {
+        const char* msg;
+        std::source_location loc;
+    };
+
+    [[noreturn]] auto bug(const panic_info& info) noexcept -> void;
+
+} // namespace zxfoundation::sys::syschk
+
+} // end export

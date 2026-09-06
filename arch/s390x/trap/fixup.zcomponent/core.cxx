@@ -1,52 +1,43 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file fixup.cxxm
-/// @brief Program-check fixup table — enables safe user-space memory access
-///        and hypervisor diagnose calls with exception recovery.
+/// @brief Program-check fixup table
 
-export module arch.s390x.trap.fixup;
+module arch.s390x.trap.fixup.core;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import zxfoundation.base.types;
 import zxfoundation.base.linksym;
 
-export {
+#define __zxmacro_want_extable
+#include macro_extensions
+
+namespace arch::s390x::trap::fixup::detail {
+
+    [[nodiscard]] auto base() noexcept -> const fixup_entry* {
+        return reinterpret_cast<const fixup_entry*>(
+            zxfoundation::base::linksym::__ex_table_start);
+    }
+
+    [[nodiscard]] auto end_ptr() noexcept -> const fixup_entry* {
+        return reinterpret_cast<const fixup_entry*>(
+            zxfoundation::base::linksym::__ex_table_end);
+    }
+
+    [[nodiscard]] auto count() noexcept -> usize {
+        const auto* b = base();
+        const auto* e = end_ptr();
+        return (!b || !e || b >= e) ? 0 : static_cast<usize>(e - b);
+    }
+
+    [[nodiscard]] auto extract_reg(u16 data) noexcept -> u8 {
+        return static_cast<u8>((data >> 12) & 0xF);
+    }
+
+} // namespace detail
 
 namespace arch::s390x::trap::fixup {
-
-    struct fixup_entry {
-        i32 fault_delta{};
-        i32 fixup_delta{};
-        u16 type{};
-        u16 data{};
-    };
-
-    static_assert(sizeof(fixup_entry) == 12,
-                  "exception-table entries must be 12 bytes");
-
-    namespace detail {
-
-        [[nodiscard]] auto base() noexcept -> const fixup_entry* {
-            return reinterpret_cast<const fixup_entry*>(
-                zxfoundation::base::linksym::__ex_table_start);
-        }
-
-        [[nodiscard]] auto end_ptr() noexcept -> const fixup_entry* {
-            return reinterpret_cast<const fixup_entry*>(
-                zxfoundation::base::linksym::__ex_table_end);
-        }
-
-        [[nodiscard]] auto count() noexcept -> usize {
-            const auto* b = base();
-            const auto* e = end_ptr();
-            return (!b || !e || b >= e) ? 0 : static_cast<usize>(e - b);
-        }
-
-        [[nodiscard]] auto extract_reg(u16 data) noexcept -> u8 {
-            return static_cast<u8>((data >> 12) & 0xF);
-        }
-
-    } // namespace detail
 
     /// @brief Search exception table and apply entry-type-specific recovery.
     /// @param faulting_addr  PSW instruction address at fault.
@@ -72,7 +63,7 @@ namespace arch::s390x::trap::fixup {
             if (field_address(&e, 0, e.fault_delta) != faulting_addr)
                 continue;
 
-            auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
             pcp.pgm_fixup_applied = 1U;
             pcp.pgm_fixup_addr    = field_address(&e, 4, e.fixup_delta);
 
@@ -83,7 +74,7 @@ namespace arch::s390x::trap::fixup {
             case EX_TYPE_UA_LOAD_REG: {
                 const u8 reg = detail::extract_reg(e.data);
                 auto* lc = arch::s390x::cpu::lowcore::get_current();
-                const u64 fsa = lc->failing_storage_address;
+                const u64 fsa = lc->get<"failing_storage_address">();
                 if (frame) {
                     frame->gprs[reg] = fsa;
                 }
@@ -125,15 +116,13 @@ namespace arch::s390x::trap::fixup {
     }
 
     auto clear() noexcept -> void {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         pcp.pgm_fixup_applied = 0U;
         pcp.pgm_fixup_addr    = 0U;
     }
 
     [[nodiscard]] auto was_applied() noexcept -> bool {
-        return arch::s390x::cpu::lowcore::this_cpu_percpu().pgm_fixup_applied != 0U;
+        return arch::s390x::cpu::percpu::this_cpu().pgm_fixup_applied != 0U;
     }
 
 } // namespace arch::s390x::trap::fixup
-
-} // end export

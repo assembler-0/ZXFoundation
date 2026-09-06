@@ -6,7 +6,7 @@ export module zxfoundation.dgp.gate.core;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

@@ -6,7 +6,10 @@ export module arch.s390x.cpu.ptf;
 import arch.s390x.cpu.features;
 import zxfoundation.base.types;
 import lib.bit;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_asm
+#include macro_extensions
 
 export {
 

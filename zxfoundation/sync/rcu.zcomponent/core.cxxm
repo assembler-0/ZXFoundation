@@ -5,7 +5,7 @@
 export module zxfoundation.sync.rcu.core;
 import zxfoundation.sync.rcu.types;
 import arch.s390x.cpu.sync;
-import std;
+import lib.stl;
 
 export {
 

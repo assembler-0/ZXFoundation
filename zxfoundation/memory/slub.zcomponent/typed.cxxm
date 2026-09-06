@@ -7,7 +7,7 @@ import zxfoundation.memory.slub;
 import zxfoundation.memory.slub.types;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

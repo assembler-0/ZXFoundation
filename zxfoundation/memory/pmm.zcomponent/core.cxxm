@@ -9,20 +9,11 @@ import zxfoundation.memory.numa.types;
 import zxfoundation.base.transaction;
 import arch.s390x.init.zxfl.protocol;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 
 namespace zxfoundation::memory::pmm {
-
-    /// @brief Callback invoked once after a sleepable allocation exhausts all
-    ///        eligible node zones.
-    using allocation_retry_fn = auto (*)(u8 node, u32 target_pages) noexcept -> u32;
-
-    /// @brief Install the allocation-pressure reclaim callback.
-    [[nodiscard]] auto install_allocation_retry(
-        allocation_retry_fn callback
-    ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Initialize the PMM from the ZXFL boot protocol.
     /// @param[in] proto  Validated ZXFL boot protocol.

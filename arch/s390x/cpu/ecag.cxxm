@@ -6,7 +6,11 @@ export module arch.s390x.cpu.ecag;
 import zxfoundation.base.types;
 import lib.bit;
 import lib.error;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_assert
+#define __zxmacro_want_bits
+#include macro_extensions
 
 __endian__(BIG);
 

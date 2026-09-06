@@ -20,7 +20,7 @@ import zxfoundation.dgp.isolation.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::dgp::policy::detail {
 

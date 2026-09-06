@@ -18,7 +18,7 @@ import arch.s390x.cpu.lowcore;
 import lib.format;
 import lib.ring_buffer;
 import lib.static_vector;
-import std;
+import lib.stl;
 import :state;
 
 namespace zxfoundation::sys::printk {

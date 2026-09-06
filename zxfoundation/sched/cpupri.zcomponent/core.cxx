@@ -7,7 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import lib.cpumask;
 import lib.error;
-import std;
+import lib.stl;
 import arch.s390x.cpu.cpumask;
 
 namespace zxfoundation::sched::cpupri::detail {

@@ -6,24 +6,22 @@ export module arch.s390x.io.ccw.core;
 import arch.s390x.io.types;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 
 namespace arch::s390x::io::ccw {
 
     /// @brief Execute a CCW chain synchronously (polling mode).
-    /// @param sch_index  Index into the subchannel table.
-    /// @param ccw_chain  Pointer to CCW chain in DMA31-addressable memory.
-    /// @param ccw_count  Number of CCWs in the chain (logging only).
-    /// @param key        Storage key for the ORB (default 0 = nucleus).
-    /// @param timeout_us Timeout in microseconds (default 5 s).
+    /// @param sch_index            Index into the subchannel table.
+    /// @param channel_program_addr 31-bit physical address of the first CCW.
+    /// @param key                  Storage key for the ORB (default 0 = nucleus).
+    /// @param timeout_us           Timeout in microseconds (default 5 s).
     /// @return The IRB captured by the interrupt handler on success,
     ///         kernel_error on timeout or I/O failure.
     [[nodiscard]] auto sync(
         u32 sch_index,
-        const ccw1* ccw_chain,
-        [[maybe_unused]] u32 ccw_count,
+        u32 channel_program_addr,
         u8 key = 0,
         u64 timeout_us = 5'000'000
     ) noexcept -> ::std::expected<irb, ::lib::kernel_error>;

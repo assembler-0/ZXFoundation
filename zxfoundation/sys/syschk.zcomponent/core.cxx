@@ -21,7 +21,7 @@ import drivers.watchdog.core;
 import lib.error;
 import lib.cstring;
 import lib.format;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sys::syschk::detail {
 
@@ -29,15 +29,6 @@ namespace zxfoundation::sys::syschk::detail {
 
     /// @brief Atomic flag: set to 1 by the first CPU to call system_check.
     no_export std::atomic<u32> g_halting{0};
-
-    /// @brief Snapshot of the boot-protocol CPU map pointer.
-    no_export const arch::s390x::init::zxfl::cpu_info* g_cpu_map{nullptr};
-
-    /// @brief Number of CPUs in @c g_cpu_map.
-    no_export u32 g_cpu_count{0};
-
-    /// @brief Hardware CPU address of the BSP — used to skip self when halting APs.
-    no_export u16 g_bsp_cpu_addr{0};
 
     no_export auto to_log_level(syschk_severity sev) -> printk::log_level {
         switch (sev) {
@@ -55,11 +46,7 @@ namespace zxfoundation::sys::syschk {
 
     /// @brief Initialize the system-check subsystem.
     /// @param[in] proto  The ZXFL boot protocol.
-    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {
-        detail::g_cpu_map       = proto.cpu_map;
-        detail::g_cpu_count     = proto.cpu_count;
-        detail::g_bsp_cpu_addr  = proto.bsp_cpu_addr;
-    }
+    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {}
 
     /// @brief Record a kernel error. Conditionally halt.
     /// @param[in] err      The @c lib::kernel_error that triggered this check.
@@ -98,10 +85,9 @@ namespace zxfoundation::sys::syschk {
         rec->err_code     = err.code;
         rec->cpu_id       = arch::s390x::cpu::percpu::cpu_id();
 
-        // Capture current PSW (EPSW; addr is always 0 — PoP SA22-7832 §7.9.4).
         const auto current_psw = arch::s390x::cpu::psw::extract_psw();
-        rec->psw_mask = current_psw.mask;
-        rec->psw_addr = current_psw.addr;
+        rec->psw_mask = current_psw.get<"mask">().underlying();
+        rec->psw_addr = current_psw.get<"address">();
 
         // Write the message — strncpy guarantees NUL termination.
         lib::string_copy(rec->msg, msg);

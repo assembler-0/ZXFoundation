@@ -4,11 +4,11 @@
 
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
-import arch.s390x.trap.io;
-import arch.s390x.trap.svc;
-import arch.s390x.trap.mcck;
-import arch.s390x.trap.ext;
-import arch.s390x.trap.pgm;
+import arch.s390x.trap.io.core;
+import arch.s390x.trap.svc.core;
+import arch.s390x.trap.mcck.core;
+import arch.s390x.trap.ext.core;
+import arch.s390x.trap.pgm.core;
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk.core;
 import zxfoundation.sys.irq.core;
@@ -65,7 +65,7 @@ declscope(C) [[noreturn]] auto do_restart_interrupt(
     discard_value flags;
     discard_value cpu_id;
     auto& lc = *arch::s390x::cpu::lowcore::get_current();
-    const auto fn = reinterpret_cast<void(*)(void*)>(lc.restart_fn);
+    const auto fn = lc.get<"restart_fn">();
     if (!fn) {
         zxfoundation::sys::syschk::syschk_fatal(
             ::lib::kernel_error::from_generic(::lib::generic_error::internal_error),

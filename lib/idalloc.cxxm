@@ -7,7 +7,7 @@ import lib.bitmap;
 import zxfoundation.base.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
-import std;
+import lib.stl;
 
 export {
 

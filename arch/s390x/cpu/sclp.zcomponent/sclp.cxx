@@ -13,7 +13,7 @@ namespace arch::s390x::cpu::sclp {
     auto read_scp_info(read_info_sccb& info) noexcept -> condition_code {
         info.header.length = sizeof(read_info_sccb);
         info.header.function_code = 0x01;
-        const condition_code cc = invoke<sclp_cmdw::read_scp_info>(&info);
+        const condition_code cc = invoke<static_cast<u32>(sclp_cmdw::read_scp_info)>(&info);
         if (cc != 0)
             return cc;
         return (info.header.response_code == SCLP_RC_NORMAL_COMPLETION) ? 0 : -1;
@@ -25,7 +25,7 @@ namespace arch::s390x::cpu::sclp {
     auto read_cpu_info(read_cpu_info_sccb& info) noexcept -> condition_code {
         info.header.length = sizeof(read_cpu_info_sccb);
         info.header.function_code = 0x01;
-        const condition_code cc = invoke<sclp_cmdw::read_cpu_info>(&info);
+        const condition_code cc = invoke<static_cast<u32>(sclp_cmdw::read_cpu_info)>(&info);
         if (cc != 0)
             return cc;
         return (info.header.response_code == SCLP_RC_NORMAL_COMPLETION) ? 0 : -1;

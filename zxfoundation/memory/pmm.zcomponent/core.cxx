@@ -15,13 +15,14 @@ import zxfoundation.base.types;
 import zxfoundation.base.linksym;
 import zxfoundation.sys.syschk.core;
 import zxfoundation.scoms.kobject.types;
-import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.skey;
 import lib.error;
 import lib.static_vector;
-import std;
+import lib.stl;
+import zxfoundation.memory.reclaim.core;
 
 
 namespace zxfoundation::memory::pmm::detail {
@@ -104,11 +105,10 @@ namespace zxfoundation::memory::pmm::detail {
     static u64 g_max_pfn{0};
 
     /// @brief Frames deliberately retired after validation or MCCK failure.
-    static u64 g_retired_pages{0};
+    [[maybe_unused]] static u64 g_retired_pages{0};
 
     static bool g_initialized{false};
 
-    allocation_retry_fn g_allocation_retry{nullptr};
     std::atomic<u32> g_reclaim_active{0U};
 
     [[nodiscard]] constexpr auto zone_of(u64 phys) noexcept -> zone {
@@ -127,7 +127,7 @@ namespace zxfoundation::memory::pmm::detail {
     }
 
     [[nodiscard]] auto local_node_id() noexcept -> u8 {
-        auto& pcp = arch::s390x::cpu::lowcore::this_cpu_percpu();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         if (auto node = numa::node_for_cpu(pcp.cpu_id)) return normalize_node_id(*node);
         return numa::NUMA_NODE_BOOT;
     }
@@ -499,16 +499,6 @@ namespace zxfoundation::memory::pmm::detail {
 
 namespace zxfoundation::memory::pmm {
 
-    /// @brief Install the allocation-pressure reclaim callback.
-    [[nodiscard]] auto install_allocation_retry(
-        allocation_retry_fn callback
-    ) noexcept -> std::expected<void, lib::kernel_error> {
-        if (!callback) return std::unexpected(lib::kernel_error::from_generic(
-            lib::generic_error::invalid_arg));
-        detail::g_allocation_retry = callback;
-        return {};
-    }
-
     auto reserve(u64 phys, u32 order) noexcept -> void;
 
     /// @brief Initialize the PMM from the ZXFL boot protocol.
@@ -876,7 +866,7 @@ namespace zxfoundation::memory::pmm {
 
         if (request.order <= PCP_MAX_ORDER) {
             const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
-            auto& percpu = arch::s390x::cpu::lowcore::this_cpu_percpu();
+            auto& percpu = arch::s390x::cpu::percpu::this_cpu();
             const u8 pcp_node = normalize_node_id(placement.preferred_node);
             pcp_list& lst = percpu.pcp.lists[pcp_node][zi][request.order];
 
@@ -894,14 +884,13 @@ namespace zxfoundation::memory::pmm {
             allocation = alloc_node_aware(request.order, z, placement, local_node);
         }
 
-        if (!allocation.phys && detail::g_allocation_retry
-            && sched::context::can_sleep()) {
+        if (!allocation.phys && sched::context::can_sleep()) {
             u32 expected = 0U;
             if (detail::g_reclaim_active.compare_exchange_strong(
                     expected, 1U, std::memory_order::acq_rel,
                     std::memory_order::acquire)) {
                 const u32 target_pages = 1U << request.order;
-                discard_value detail::g_allocation_retry(
+                discard_value reclaim::reclaim_node(
                     placement.preferred_node, target_pages);
                 detail::g_reclaim_active.store(0U, std::memory_order::release);
                 allocation = alloc_node_aware(request.order, z, placement, local_node);
@@ -992,7 +981,7 @@ namespace zxfoundation::memory::pmm {
         }
         if (order <= PCP_MAX_ORDER && !sched::context::in_interrupt()) {
             const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
-            pcp_list& lst = arch::s390x::cpu::lowcore::this_cpu_percpu()
+            pcp_list& lst = arch::s390x::cpu::percpu::this_cpu()
                                 .pcp.lists[node][static_cast<u32>(z)][order];
             pcp_push(lst, phys);
             if (lst.count > PCP_HIGH)

@@ -5,7 +5,7 @@
 import zxfoundation.base.types;
 import zxfoundation.sys.syschk.core;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace std {
     auto terminate() noexcept -> void {

@@ -1,109 +1,134 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file teid_types.cxxm
-/// @brief Translation-Exception Identification (TEID) bit layout per
+/// @brief Translation-Exception Identification (TEID) layout
 
 export module arch.s390x.cpu.teid;
 import zxfoundation.base.types;
+import lib.bitfield;
+import lib.stl;
+
+#define __zxmacro_want_bits
+#include macro_extensions
 
 export {
 
 namespace arch::s390x::cpu::teid {
 
-    /// @brief bit-position helpers.
+    enum class teid_aefsi : u8 {
+        could_not_determine  = 0b00,
+        store_operation      = 0b01,
+        fetch_operation      = 0b10,
+    };
+
+    enum class teid_asce_id : u8 {
+        primary_asce   = 0b00,
+        ar_mode        = 0b01,
+        secondary_asce = 0b10,
+        home_asce      = 0b11
+    };
+
+    /// @name Translation-Exception Identification for DAT Exceptions
     /// @{
-    constexpr u8 ADDR_LSB_OFF   = 12;  ///<  bits 0-51  (translation-exc addr).
-    constexpr u8 FSI_LSB_OFF    = 10;  ///<  bits 52-53 (Access-Exc Fetch/Store).
-    constexpr u8 SE_LSB_OFF     = 9;   ///<  bit  54    (side-effect access).
-    constexpr u8 B56_LSB_OFF    = 7;   ///<  bit  56    (protection-code bit 0).
-    constexpr u8 B60_LSB_OFF    = 3;   ///<  bit  60    (protection-code bit 1 / ALC).
-    constexpr u8 B61_LSB_OFF    = 2;   ///<  bit  61    (protection-code bit 2 / MOVE PAGE).
-    constexpr u8 AS_LSB_OFF     = 0;   ///<  bits 62-63 (ASCE identifier).
+
+    using teid_dat = lib::record<u64, lib::msb0_t,
+        lib::rw<"translation_exception_address", lib::bits<0, 51>>,
+        lib::rw<"access_exec_fs_id", lib::bits<52, 53>, teid_aefsi>,
+        lib::rw<"side_effect_indication", lib::bits<54, 54>>,
+        lib::rw<"move_page_indication", lib::bits<61, 61>>,
+        lib::rw<"asce_identifier", lib::bits<62, 63>, teid_asce_id>
+    >;
+
+    using teid_dat_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"translation_exception_address", lib::bits<0, 51>>,
+        lib::rw<"access_exec_fs_id", lib::bits<52, 53>, teid_aefsi>,
+        lib::rw<"side_effect_indication", lib::bits<54, 54>>,
+        lib::rw<"move_page_indication", lib::bits<61, 61>>,
+        lib::rw<"asce_identifier", lib::bits<62, 63>, teid_asce_id>
+    >;
+
     /// @}
 
-    /// @brief Access-Exception Fetch/Store Indication (AEFSI) — TEID bits 52-53.
-    /// @details Available only when STFLE bit 75 (AEFSI facility) is installed;
+    /// @name Translation-Exception Identification for Protection Exceptions:
     /// @{
-    constexpr u64 TEID_FSI_UNKNOWN = 0;  ///< 00 — indeterminate (or facility not installed).
-    constexpr u64 TEID_FSI_STORE   = 1;  ///< 01 — store-type access.
-    constexpr u64 TEID_FSI_FETCH   = 2;  ///< 10 — instruction-fetch access.
+
+    enum class teid_protection_cause : u8 {
+        keyctl_lowaddr_protection = 0b000,
+        dat_protection            = 0b001,
+        key_controlled_protection = 0b010,
+        alc_protection            = 0b011,
+        low_address_protection    = 0b100,
+        execution_protection      = 0b101,
+    };
+
+    using teid_prot_except = lib::record<u64, lib::msb0_t,
+        lib::rw<"translation_exception_address", lib::bits<0, 51>>,
+        lib::rw<"access_exec_fs_id", lib::bits<52, 53>, teid_aefsi>,
+        lib::rw<"side_effect_indication", lib::bits<54, 54>>,
+        lib::rw<"!protection_cause", std::tuple<lib::bit_span<56, 56>, lib::bit_span<60, 60>, lib::bit_span<61, 61>>, teid_protection_cause>,
+        lib::rw<R"(protection_code\esop2)", lib::bits<56, 56>>,
+        lib::rw<R"(protection_code\alc)", lib::bits<60, 60>>,
+        lib::rw<R"(protection_code\esop1)", lib::bits<61, 61>>,
+        lib::rw<"asce_identifier", lib::bits<62, 63>, teid_asce_id>
+    >;
+
+    using teid_prot_except_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"translation_exception_address", lib::bits<0, 51>>,
+        lib::rw<"access_exec_fs_id", lib::bits<52, 53>, teid_aefsi>,
+        lib::rw<"side_effect_indication", lib::bits<54, 54>>,
+        lib::rw<"!protection_cause", std::tuple<lib::bit_span<56, 56>, lib::bit_span<60, 60>, lib::bit_span<61, 61>>, teid_protection_cause>,
+        lib::rw<R"(protection_code\esop2)", lib::bits<56, 56>>,
+        lib::rw<R"(protection_code\alc)", lib::bits<60, 60>>,
+        lib::rw<R"(protection_code\esop1)", lib::bits<61, 61>>,
+        lib::rw<"asce_identifier", lib::bits<62, 63>, teid_asce_id>
+    >;
+
     /// @}
 
-    /// @brief ASCE identifier encoding (TEID bits 62-63)
+    /// @name Translation-Exception Identification for ASN-Translation Exceptions
     /// @{
-    constexpr u64 TEID_AS_PRIMARY   = 0;  ///< 00 — primary ASCE.
-    constexpr u64 TEID_AS_AR        = 1;  ///< 01 — access-register mode (AR-specified).
-    constexpr u64 TEID_AS_SECONDARY = 2;  ///< 10 — secondary ASCE.
-    constexpr u64 TEID_AS_HOME     = 3;   ///< 11 — home ASCE.
+
+    struct [[gnu::packed]] teid_asn_view {
+        bytersvd(tobytes(b, 6)){};
+        u16 asn_location{};
+    };
+
     /// @}
 
-    /// @brief Union view of a 64-bit TEID.
-    union teid {
-        u64 val;
-        struct {
-            u64 addr : 52;  ///<  bits 0-51  — translation-exception address.
-            u64 fsi  : 2;   ///<  bits 52-53 — Access-Exc Fetch/Store Indication.
-            u64 sea  : 1;   ///<  bit  54    — side-effect access (use is_side_effect()).
-            u64      : 1;   ///<  bit  55    — unpredictable.
-            u64 b56  : 1;   ///<  bit  56    — protection-code bit 0 (ESOP-2).
-            u64      : 3;   ///<  bits 57-59 — unpredictable.
-            u64 b60  : 1;   ///<  bit  60    — protection-code bit 1 / ALC indication.
-            u64 b61  : 1;   ///<  bit  61    — protection-code bit 2 / MOVE PAGE / TEID remainder.
-            u64 as   : 2;   ///<  bits 62-63 — ASCE identifier.
-        };
+    /// @name Translation-Exception Identification During PC-Number Translation
+    /// @{
 
-        /// @brief Extract the page-aligned translation-exception address.
-        /// @return The high 52 bits of @c val, shifted down to bit 0.
-        [[nodiscard]] constexpr auto address() const noexcept -> u64 {
-            return val >> ADDR_LSB_OFF;
-        }
+    struct [[gnu::packed]] teid_pcnum_view {
+        bytersvd(tobytes(b, 4)){};
+        u32 second_operand_address{};
 
-        /// @brief Extract the AEFSI fetch/store indication.
-        /// @return One of @c TEID_FSI_UNKNOWN / @c TEID_FSI_STORE /
-        ///         @c TEID_FSI_FETCH.
-        [[nodiscard]] constexpr auto fsi_raw() const noexcept -> u64 {
-            return (val >> FSI_LSB_OFF) & 0x3ULL;
-        }
-
-        /// @brief True if AEFSI says the access was a store.
-        [[nodiscard]] constexpr auto is_store() const noexcept -> bool {
-            return fsi_raw() == TEID_FSI_STORE;
-        }
-
-        /// @brief True if AEFSI says the access was an instruction fetch.
-        [[nodiscard]] constexpr auto is_fetch() const noexcept -> bool {
-            return fsi_raw() == TEID_FSI_FETCH;
-        }
-
-        /// @brief True if  bit 54 (side-effect-access indication) is set.
-        [[nodiscard]] constexpr auto is_side_effect() const noexcept -> bool {
-            return (val & (1ULL << SE_LSB_OFF)) != 0;
-        }
-
-        /// @brief True if the protection code reported by basic SOP / ESOP-1
-        ///        indicates access-list-controlled (ALC) protection.
-        [[nodiscard]] constexpr auto protection_is_alc() const noexcept -> bool {
-            return (val & (1ULL << B60_LSB_OFF)) != 0;
-        }
-
-        /// @brief True if the 3-bit protection code (bits 56, 60, 61) decodes
-        ///        to `101`
-        [[nodiscard]] constexpr auto protection_is_exec() const noexcept -> bool {
-            const u64 b56 = (val >> B56_LSB_OFF) & 1ULL;
-            const u64 b60 = (val >> B60_LSB_OFF) & 1ULL;
-            const u64 b61 = (val >> B61_LSB_OFF) & 1ULL;
-            return ((b56 << 2) | (b60 << 1) | b61) == 0b101ULL;
-        }
-
-        /// @brief Extract the ASCE identifier ( bits 62-63).
-        [[nodiscard]] constexpr auto asce_id() const noexcept -> u64 {
-            return (val >> AS_LSB_OFF) & 0x3ULL;
+        [[nodiscard]] auto operand_address() noexcept -> u32 {
+            lib::bf32 view{second_operand_address};
+            return view.extract<12, 31>();
         }
     };
 
-    static_assert(sizeof(teid) == sizeof(u64),
-        "teid must overlay a 64-bit TEID word");
-    static_assert(alignof(teid) == alignof(u64),
-        "teid must be u64-aligned");
+    /// @}
+
+    /// @name Translation-Exception Identification for DAT Exceptions
+    /// @{
+
+    using teid_secure_storage = lib::record<u64, lib::msb0_t,
+        lib::rw<"translation_exception_address", lib::bits<0, 51>>,
+        lib::rw<"access_exec_fs_id", lib::bits<52, 53>, teid_aefsi>,
+        lib::rw<"teid_valid", lib::bits<61, 61>>,
+        lib::rw<"asce_identifier", lib::bits<62, 63>, teid_asce_id>
+    >;
+
+    using teid_secure_storage_view = lib::record_ref<u64, lib::msb0_t,
+        lib::rw<"translation_exception_address", lib::bits<0, 51>>,
+        lib::rw<"access_exec_fs_id", lib::bits<52, 53>, teid_aefsi>,
+        lib::rw<"teid_valid", lib::bits<61, 61>>,
+        lib::rw<"asce_identifier", lib::bits<62, 63>, teid_asce_id>
+    >;
+
+    /// @}
+
+    using teid = u64;
 
 } // namespace arch::s390x::cpu::teid
 

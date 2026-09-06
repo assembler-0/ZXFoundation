@@ -9,7 +9,7 @@ import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.scoms.kobject.base;
 import lib.error;
-import std;
+import lib.stl;
 
 export {
 

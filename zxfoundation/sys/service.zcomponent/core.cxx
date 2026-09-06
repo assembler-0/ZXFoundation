@@ -19,7 +19,7 @@ import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import lib.error;
 import lib.cstring;
-import std;
+import lib.stl;
 
 namespace zxfoundation::sys::service::detail {
 

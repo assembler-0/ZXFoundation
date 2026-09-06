@@ -8,7 +8,7 @@ import arch.s390x.init.zxfl.protocol;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
 import lib.error;
-import std;
+import lib.stl;
 
 namespace zxfoundation::memory::numa::detail {
 

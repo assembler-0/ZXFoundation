@@ -2,12 +2,13 @@
 /// @file arch/s390x/trap/mcck.cxxm
 /// @brief Centralized Machine-Check (MCCK) dispatcher.
 
-export module arch.s390x.trap.mcck;
+module arch.s390x.trap.mcck.core;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.features;
 import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
 import zxfoundation.base.types;
@@ -19,130 +20,77 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.scoms.kobject.ref;
 import zxfoundation.sched.core;
 import lib.error;
+import lib.bitfield;
 
-export {
+namespace arch::s390x::trap::mcck::detail {
+
+    /// @brief Validate register-state validit
+    [[nodiscard]] auto nmi_registers_valid(u64 mcic) noexcept -> bool {
+        constexpr u64 required =
+            MCIC_GR | MCIC_FP | MCIC_FC | MCIC_AR |
+            MCIC_MS | MCIC_PM | MCIC_IA;
+        if ((mcic & required) != required) return false;
+        if ((mcic & MCIC_VR) == 0ULL) return false;
+        return true;
+    }
+
+    /// @brief Structured MCESA diagnosis dump.
+    auto dump_mcesa(const arch::s390x::cpu::lowcore::zlowcore& lc) noexcept
+        -> void
+    {
+        zxfoundation::sys::printk::pcrit(
+            "mcck: mcesa dump — psw={:#018x}:{:#018x}\n",
+            static_cast<u64>(lc.get<R"(psw_save_area\mask)">().underlying()),
+            static_cast<u64>(lc.get<R"(psw_save_area\address)">()));
+        zxfoundation::sys::printk::pcrit(
+            "mcck: mcesa gprs:\n  {:#018x} {:#018x} {:#018x} {:#018x}\n  "
+            "{:#018x} {:#018x} {:#018x} {:#018x}\n  "
+            "{:#018x} {:#018x} {:#018x} {:#018x}\n  "
+            "{:#018x} {:#018x} {:#018x} {:#018x}\n",
+            lc.get<"gpregs_save_area">()[0],  lc.get<"gpregs_save_area">()[1],
+            lc.get<"gpregs_save_area">()[2],  lc.get<"gpregs_save_area">()[3],
+            lc.get<"gpregs_save_area">()[4],  lc.get<"gpregs_save_area">()[5],
+            lc.get<"gpregs_save_area">()[6],  lc.get<"gpregs_save_area">()[7],
+            lc.get<"gpregs_save_area">()[8],  lc.get<"gpregs_save_area">()[9],
+            lc.get<"gpregs_save_area">()[10], lc.get<"gpregs_save_area">()[11],
+            lc.get<"gpregs_save_area">()[12], lc.get<"gpregs_save_area">()[13],
+            lc.get<"gpregs_save_area">()[14], lc.get<"gpregs_save_area">()[15]);
+        zxfoundation::sys::printk::pcrit(
+            "mcck: mcesa CRS:\n  {:#018x} {:#018x} {:#018x} {:#018x}\n",
+            lc.get<"cregs_save_area">()[0],  lc.get<"cregs_save_area">()[1],
+            lc.get<"cregs_save_area">()[2],  lc.get<"cregs_save_area">()[3]);
+        zxfoundation::sys::printk::pcrit(
+            "mcck: mcesa — last_break={:#018x} prefix={:#010x} "
+            "fpc={:#010x} tod_pg={:#010x}\n",
+            lc.get<"last_break_save_area">(), lc.get<"prefixreg_save_area">(),
+            lc.get<"fpt_creg_save_area">(), lc.get<"tod_progreg_save_area">());
+        zxfoundation::sys::printk::pcrit(
+            "mcck: mcesa — cpu_timer={:#010x}{:#010x} clock_comp="
+            "{:#010x}{:#010x}\n",
+            lc.get<"cpu_timer_save_area">()[1], lc.get<"cpu_timer_save_area">()[0],
+            lc.get<"clock_comp_save_area">()[1], lc.get<"clock_comp_save_area">()[0]);
+    }
+
+    [[nodiscard]] auto ipd_window_expired(
+        arch::s390x::cpu::percpu::percpu_data& pcp,
+        u64 now
+    ) noexcept -> bool {
+        return now >= pcp.ipd_window_deadline;
+    }
+
+} // namespace detail
 
 namespace arch::s390x::trap::mcck {
 
-    /// @brief Machine-Check Interruption Code bits per PoP §11-14, Figure 11-5.
-    ///        Bit N in PoP notation = mask 1ULL<<(63-N).  Bits not listed here
-    ///        are unassigned per the 13th-edition PoP.
-    /// @{
-    constexpr u64 MCIC_SD = 1ULL << 63;   // bit  0 — system damage
-    constexpr u64 MCIC_PD = 1ULL << 62;   // bit  1 — instruction-processing damage
-    constexpr u64 MCIC_SR = 1ULL << 61;   // bit  2 — system recovery
-    constexpr u64 MCIC_CD = 1ULL << 59;   // bit  4 — timing-facility damage
-    constexpr u64 MCIC_ED = 1ULL << 58;   // bit  5 — external damage
-    constexpr u64 MCIC_BACKLOG = 1ULL << 57; // bit  6 — stacked machine check (MCIC not cleared)
-    constexpr u64 MCIC_DG = 1ULL << 56;   // bit  7 — degradation
-    constexpr u64 MCIC_W  = 1ULL << 55;   // bit  8 — warning
-    constexpr u64 MCIC_CP = 1ULL << 54;   // bit  9 — channel-report pending
-    constexpr u64 MCIC_SP = 1ULL << 53;   // bit 10 — service-processor damage
-    constexpr u64 MCIC_CK = 1ULL << 52;   // bit 11 — channel-subsystem damage
-    constexpr u64 MCIC_B  = 1ULL << 49;   // bit 14 — backed-up (nullifying IPD survived)
-    constexpr u64 MCIC_SE = 1ULL << 47;   // bit 16 — storage error uncorrected
-    constexpr u64 MCIC_SC = 1ULL << 46;   // bit 17 — storage error corrected
-    constexpr u64 MCIC_KE = 1ULL << 45;   // bit 18 — storage-key error uncorrected
-    constexpr u64 MCIC_DS = 1ULL << 44;   // bit 19 — storage degradation
-    constexpr u64 MCIC_WP = 1ULL << 43;   // bit 20 — PSW-MWP validity
-    constexpr u64 MCIC_MS = 1ULL << 42;   // bit 21 — PSW mask and key validity
-    constexpr u64 MCIC_PM = 1ULL << 41;   // bit 22 — PSW program-mask and CC validity
-    constexpr u64 MCIC_IA = 1ULL << 40;   // bit 23 — PSW-instruction-address validity
-    constexpr u64 MCIC_FA = 1ULL << 39;   // bit 24 — failing-storage-address validity
-    constexpr u64 MCIC_VR = 1ULL << 38;   // bit 25 — vector-register validity
-    constexpr u64 MCIC_EC = 1ULL << 37;   // bit 26 — external-damage-code validity
-    constexpr u64 MCIC_FP = 1ULL << 36;   // bit 27 — floating-point-register validity
-    constexpr u64 MCIC_GR = 1ULL << 35;   // bit 28 — general-register validity
-    constexpr u64 MCIC_CR = 1ULL << 34;   // bit 29 — control-register validity
-    constexpr u64 MCIC_ST = 1ULL << 32;   // bit 31 — storage logical validity
-    constexpr u64 MCIC_IE = 1ULL << 31;   // bit 32 — indirect storage error
-    constexpr u64 MCIC_AR = 1ULL << 30;   // bit 33 — access-register validity
-    constexpr u64 MCIC_DA = 1ULL << 29;   // bit 34 — delayed-access exception
-    constexpr u64 MCIC_GS = 1ULL << 27;   // bit 36 — guarded-storage-registers validity
-    constexpr u64 MCIC_PR = 1ULL << 21;   // bit 42 — TOD-programmable-register validity
-    constexpr u64 MCIC_FC = 1ULL << 20;   // bit 43 — FP-control-register validity
-    constexpr u64 MCIC_AP = 1ULL << 19;   // bit 44 — ancillary report
-    constexpr u64 MCIC_CT = 1ULL << 17;   // bit 46 — CPU-timer validity
-    constexpr u64 MCIC_CC = 1ULL << 16;   // bit 47 — clock-comparator validity
-    /// @}
-
-    /// @brief IPD damage-window constants (mirror Linux nmi.c MAX_IPD_COUNT /
-    ///        MAX_IPD_TIME).  The window is 5 minutes in TOD-clock units
-    ///        (1 µs = 4096 ticks -> 5*60*4096*1e6 ticks).
-    /// @{
-    constexpr u32 MAX_IPD_COUNT        = 29;
-    constexpr u64 MAX_IPD_WINDOW_TOD  = 5ULL * 60ULL * 4'096'000'000ULL;
-    /// @}
-
-    namespace detail {
-
-        /// @brief Validate register-state validity per Linux's
-        ///        @c nmi_registers_valid() and PoP §11-15.
-        [[nodiscard]] auto nmi_registers_valid(u64 mcic) noexcept -> bool {
-            constexpr u64 required =
-                MCIC_GR | MCIC_FP | MCIC_FC | MCIC_AR |
-                MCIC_MS | MCIC_PM | MCIC_IA;
-            if ((mcic & required) != required) return false;
-            if ((mcic & MCIC_VR) == 0ULL) return false;
-            return true;
-        }
-
-        /// @brief Structured MCESA diagnosis dump.
-        auto dump_mcesa(const arch::s390x::cpu::lowcore::zx_lowcore& lc) noexcept
-            -> void
-        {
-            zxfoundation::sys::printk::pcrit(
-                "mcck: mcesa dump — psw={:#018x}:{:#018x}\n",
-                static_cast<u64>(lc.psw_save_area.mask),
-                static_cast<u64>(lc.psw_save_area.addr));
-            zxfoundation::sys::printk::pcrit(
-                "mcck: mcesa gprs:\n  {:#018x} {:#018x} {:#018x} {:#018x}\n  "
-                "{:#018x} {:#018x} {:#018x} {:#018x}\n  "
-                "{:#018x} {:#018x} {:#018x} {:#018x}\n  "
-                "{:#018x} {:#018x} {:#018x} {:#018x}\n",
-                lc.gpregs_save_area[0],  lc.gpregs_save_area[1],
-                lc.gpregs_save_area[2],  lc.gpregs_save_area[3],
-                lc.gpregs_save_area[4],  lc.gpregs_save_area[5],
-                lc.gpregs_save_area[6],  lc.gpregs_save_area[7],
-                lc.gpregs_save_area[8],  lc.gpregs_save_area[9],
-                lc.gpregs_save_area[10], lc.gpregs_save_area[11],
-                lc.gpregs_save_area[12], lc.gpregs_save_area[13],
-                lc.gpregs_save_area[14], lc.gpregs_save_area[15]);
-            zxfoundation::sys::printk::pcrit(
-                "mcck: mcesa CRS:\n  {:#018x} {:#018x} {:#018x} {:#018x}\n",
-                lc.cregs_save_area[0],  lc.cregs_save_area[1],
-                lc.cregs_save_area[2],  lc.cregs_save_area[3]);
-            zxfoundation::sys::printk::pcrit(
-                "mcck: mcesa — last_break={:#018x} prefix={:#010x} "
-                "fpc={:#010x} tod_pg={:#010x}\n",
-                lc.last_break_save_area, lc.prefixreg_save_area,
-                lc.fpt_creg_save_area, lc.tod_progreg_save_area);
-            zxfoundation::sys::printk::pcrit(
-                "mcck: mcesa — cpu_timer={:#010x}{:#010x} clock_comp="
-                "{:#010x}{:#010x}\n",
-                lc.cpu_timer_save_area[1], lc.cpu_timer_save_area[0],
-                lc.clock_comp_save_area[1], lc.clock_comp_save_area[0]);
-        }
-
-        [[nodiscard]] auto ipd_window_expired(
-            arch::s390x::cpu::percpu::percpu_data& pcp,
-            u64 now
-        ) noexcept -> bool {
-            return now >= pcp.ipd_window_deadline;
-        }
-
-    } // namespace detail
-
     /// @brief Centralized machine-check dispatcher
     /// @param[in] frame  Saved interrupt frame from entry.S SAVE_FRAME on the
-    ///                   MCCK stack.  Untouched by all fatal paths except via
-    ///                   dump_stack at the bottom of syschk_fatal.
+    ///                   MCCK stack.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
         auto* lc = cpu::lowcore::get_current();
-        const u64 mcic = lc->mcck_interruption_code;
+        const u64 mcic = lc->get<"mcck_interruption_code">();
         if (mcic == 0ULL) return;
 
-        lc->mcck_interruption_code = 0ULL;
+        lc->set<"mcck_interruption_code">(0ULL);
 
         if ((mcic & MCIC_BACKLOG) != 0ULL) {
             zxfoundation::sys::syschk::syschk_warning(
@@ -169,8 +117,8 @@ namespace arch::s390x::trap::mcck {
 
         if ((mcic & MCIC_PD) != 0ULL) {
             if ((mcic & MCIC_B) != 0ULL) {
-                auto& pcp = cpu::lowcore::this_cpu_percpu();
-                const u64 now = static_cast<u64>(cpu::clock::stcke().tod);
+                auto& pcp = cpu::percpu::this_cpu();
+                const u64 now = static_cast<u64>(cpu::clock::stcke().get<"tod">());
                 if (detail::ipd_window_expired(pcp, now)) {
                     pcp.ipd_count = 0U;
                     pcp.ipd_window_deadline = now + MAX_IPD_WINDOW_TOD;
@@ -199,7 +147,7 @@ namespace arch::s390x::trap::mcck {
         }
 
         if ((mcic & MCIC_ED) != 0ULL && (mcic & MCIC_EC) != 0ULL) {
-            const u32 ext_code = lc->external_damage_code;
+            const u32 ext_code = lc->get<"external_damage_code">().underlying();
             zxfoundation::sys::syschk::syschk_warning(
                 ::lib::kernel_error::from_machine(::lib::machine_error::external_damage),
                 "mcck: external damage code={:#010x}", ext_code);
@@ -220,7 +168,7 @@ namespace arch::s390x::trap::mcck {
                 "mcck: storage-key error uncorrected");
         }
         if ((mcic & MCIC_DS) != 0ULL && (mcic & MCIC_FA) != 0ULL) {
-            const u64 fsa = lc->failing_storage_address;
+            const u64 fsa = lc->get<"failing_storage_address">();
             zxfoundation::sys::syschk::syschk_fatal(
                 ::lib::kernel_error::from_machine(
                     ::lib::machine_error::storage_degradation),
@@ -235,7 +183,7 @@ namespace arch::s390x::trap::mcck {
                 "mcck: storage degradation — failing address unknown");
         }
         if ((mcic & MCIC_FA) != 0ULL) {
-            const u64 fsa = lc->failing_storage_address;
+            const u64 fsa = lc->get<"failing_storage_address">();
             zxfoundation::sys::syschk::syschk_warning(
                 ::lib::kernel_error::from_machine(
                     ::lib::machine_error::failing_storage_addr),
@@ -297,12 +245,12 @@ namespace arch::s390x::trap::mcck {
                     "mcck: nmi registers invalid in nucleus — register state unreliable");
             }
             auto* d =
-                reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain);
+                reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->get<"current_domain">());
             if (d != nullptr) {
                 zxfoundation::dgp::signal::signal_enqueue(
                     *d,
                     zxfoundation::dgp::signal::signal_kind::fault,
-                    static_cast<u64>(lc->failing_storage_address));
+                    static_cast<u64>(lc->get<"failing_storage_address">()));
                 zxfoundation::sched::sched_resched_current();
             }
             detail::dump_mcesa(*lc);
@@ -314,5 +262,3 @@ namespace arch::s390x::trap::mcck {
     }
 
 } // namespace arch::s390x::trap::mcck
-
-} // end export

@@ -6,7 +6,7 @@ export module zxfoundation.sched.entity;
 import zxfoundation.base.types;
 import lib.rbtree;
 import lib.list;
-import std;
+import lib.stl;
 
 export {
 

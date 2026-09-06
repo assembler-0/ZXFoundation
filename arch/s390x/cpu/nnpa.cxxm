@@ -5,7 +5,12 @@
 export module arch.s390x.cpu.nnpa;
 import zxfoundation.base.types;
 import lib.bit;
-import std;
+import lib.stl;
+
+#define __zxmacro_want_bits
+#define __zxmacro_want_asm
+#define __zxmacro_want_assert
+#include macro_extensions
 
 __endian__(BIG);
 __machine__(z16);

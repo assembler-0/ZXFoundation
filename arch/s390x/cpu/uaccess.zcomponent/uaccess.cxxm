@@ -5,6 +5,9 @@
 export module arch.s390x.cpu.uaccess;
 import zxfoundation.base.types;
 
+#define __zxmacro_want_extable
+#include macro_extensions
+
 export {
 
 namespace arch::s390x::cpu::uaccess {

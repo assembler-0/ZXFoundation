@@ -2,11 +2,11 @@
 /// @file pgm.cxxm
 /// @brief Centralized pgm dispatch.
 
-module arch.s390x.trap.pgm;
+module arch.s390x.trap.pgm.core;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
-import arch.s390x.trap.fixup;
+import arch.s390x.trap.fixup.core;
 import arch.s390x.cpu.teid;
 import arch.s390x.cpu.features;
 import arch.s390x.lib.stacktrace.core;
@@ -23,7 +23,7 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.base.typestate;
 import zxfoundation.dgp.signal;
 import lib.error;
-import std;
+import lib.stl;
 
 from_global(nomangle) [[noreturn]] void sched_strand_trampoline_exit() noexcept;
 
@@ -39,9 +39,9 @@ namespace arch::s390x::trap::pgm::detail {
             "tex={:#018x} domain={}\n",
             pgm_code, frame->psw_mask, frame->psw_addr, trans_exc,
             reinterpret_cast<zxfoundation::dgp::domain::domain*>(
-                arch::s390x::cpu::lowcore::get_current()->current_domain) ?
+                arch::s390x::cpu::lowcore::get_current()->get<"current_domain">()) ?
                 reinterpret_cast<zxfoundation::dgp::domain::domain*>(
-                    arch::s390x::cpu::lowcore::get_current()->current_domain)->ko.id :
+                    arch::s390x::cpu::lowcore::get_current()->get<"current_domain">())->ko.id :
                 0xFFFFFFFFU);
     }
 
@@ -155,22 +155,24 @@ namespace arch::s390x::trap::pgm::detail {
 
     /// @brief Determine whether the access at the given TEID was an
     ///        instruction-fetch.
-    [[nodiscard]] inline auto is_exec_from_teid(u64 raw) noexcept -> bool {
+    [[nodiscard]] inline auto is_exec_from_teid(cpu::teid::teid teid) noexcept -> bool {
         using cpu::features::facility;
-        const cpu::teid::teid t{ .val = raw };
-        if (cpu::features::has(facility::instruction_exec_protection) && t.protection_is_exec())
+        if (cpu::features::has(facility::instruction_exec_protection) &&
+            cpu::teid::teid_prot_except_view{teid}.get<"!protection_cause">()
+                == cpu::teid::teid_protection_cause::execution_protection)
             return true;
         if (cpu::features::has(facility::access_exc_fetch_store_ind))
-            return t.is_fetch();
+            return cpu::teid::teid_prot_except_view{teid}.get<"access_exec_fs_id">()
+                == cpu::teid::teid_aefsi::fetch_operation;
         return false;
     }
 
     /// @brief Determine whether the access at the given TEID was a store.
-    [[nodiscard]] inline auto is_write_from_teid(u64 raw) noexcept -> bool {
+    [[nodiscard]] inline auto is_write_from_teid(cpu::teid::teid teid) noexcept -> bool {
         using cpu::features::facility;
-        const cpu::teid::teid t{ .val = raw };
         if (cpu::features::has(facility::access_exc_fetch_store_ind))
-            return t.is_store();
+            return cpu::teid::teid_prot_except_view{teid}.get<"access_exec_fs_id">()
+                == cpu::teid::teid_aefsi::store_operation;
         return true;
     }
 
@@ -180,7 +182,7 @@ namespace arch::s390x::trap::pgm {
 
     [[nodiscard]] constexpr auto vxc_pgm_name_for(const vector_exception_code vxc) noexcept -> std::string_view {
         for (const auto& [c, name] : detail::vxc_pgm_names) {
-            if (c == static_cast<u8>(vxc.vic)) return name;
+            if (c == static_cast<u8>(vxc.get<"vic">())) return name;
         }
         return {};
     }
@@ -202,9 +204,9 @@ namespace arch::s390x::trap::pgm {
     /// @brief Centralized program-check dispatcher.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
         auto* lc = arch::s390x::cpu::lowcore::get_current();
-        const u16 pgm_code     = lc->pgm_code;
-        const u64 trans_exc    = lc->trans_exc_code;
-        const u32 data_exc_code = (pgm_code == PGM_DATA) ? lc->data_exc_code : 0U;
+        const u16 pgm_code     = lc->get<R"(pgm_interruption_id\instruction_code)">();
+        u64 trans_exc    = lc->get<"translation_except_id">();
+        const u32 data_exc_code = (pgm_code == PGM_DATA) ? static_cast<u32>(lc->get<R"(exception_code\data_exception_code)">()) : 0U;
 
         const bool in_problem_state =
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
@@ -235,7 +237,7 @@ namespace arch::s390x::trap::pgm {
                 static_cast<u64>(frame->psw_addr), trans_exc);
         }
 
-        auto* d = reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->current_domain);
+        auto* d = reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->get<"current_domain">());
 
         const bool is_translation_exception =
             pgm_code == PGM_SEGMENT_TRANS       ||
@@ -248,9 +250,8 @@ namespace arch::s390x::trap::pgm {
             pgm_code == PGM_ASCE_TYPE;
 
         if (is_translation_exception && d) {
-            const cpu::teid::teid teid{.val = trans_exc};
-            if (teid.asce_id() == cpu::teid::TEID_AS_AR) {
-                const u8 ar_num = lc->exc_access_id;
+            if (cpu::teid::teid_prot_except_view{trans_exc}.get<"asce_identifier">() == cpu::teid::teid_asce_id::ar_mode) {
+                const u8 ar_num = lc->get<R"(exception_address_id\access_register_num)">();
                 if (ar_num < 16U && frame->access_regs[ar_num] > 2U) {
                     goto portal_fault;
                 }

@@ -1,0 +1,26 @@
+/// SPDX-License-Identifier: Apache 2.0
+/// @file lib/pack_indexing.cxxm
+/// @brief C++26 pack indexing
+
+export module lib.pack_indexing;
+import zxfoundation.base.types;
+import lib.stl;
+
+export {
+
+namespace lib {
+
+    template <usize I, class Tuple>
+       struct pack_indexing_element;
+
+    template <usize I, class... Ts>
+    struct pack_indexing_element<I, std::tuple<Ts...>> {
+        using type = Ts...[I];
+    };
+
+    template <usize I, class Tuple>
+    using pack_indexing_element_t = typename pack_indexing_element<I, Tuple>::type;
+
+} // namespace lib
+
+} // end export
