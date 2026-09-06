@@ -99,7 +99,8 @@ set(_ZX_NEEDED_CXX_FLAGS
     "-fno-exceptions|REQUIRED"
     "-fno-rtti|REQUIRED"
     "-nostdlib|REQUIRED"
-    "-Wno-reserved-module-identifier|OPTIONAL"
+    "--sysroot=${ZXLIBC_BASE}|REQUIRED"
+    "-nostdinc++|REQUIRED"
     "-Wno-c2y-extensions|REQUIRED"
     "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=|OPTIONAL"
     "-march=${MARCH_MODE}|OPTIONAL"
@@ -113,7 +114,6 @@ set(_ZX_NEEDED_CXX_LTO_FLAGS "")
 if(COMPILER_ID STREQUAL "gcc")
     list(APPEND _ZX_NEEDED_CXX_FLAGS
         "-static-libgcc|REQUIRED"
-        "-nostdinc++|REQUIRED"
         "-mzarch|REQUIRED"
         "-w|REQUIRED" # TODO: non-POD issues
     )
