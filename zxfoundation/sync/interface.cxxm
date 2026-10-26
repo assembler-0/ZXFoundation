@@ -1,3 +1,4 @@
+/// @file zxfoundation/sync/interface.cxxm
 export module zxfoundation.sync;
 export import zxfoundation.sync.mutex;
 export import zxfoundation.sync.qspinlock;
@@ -5,4 +6,6 @@ export import zxfoundation.sync.rcu;
 export import zxfoundation.sync.rtmutex;
 export import zxfoundation.sync.waitqueue;
 export import zxfoundation.sync.lockable;
-export import zxfoundation.sync.seqlock ;
+export import zxfoundation.sync.seqlock;
+export import zxfoundation.sync.rwsem;
+export import zxfoundation.sync.turnstile;

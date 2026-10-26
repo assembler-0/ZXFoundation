@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/policy_types.cxxm
+/// @file zxfoundation/sched/rq.cxxm
 /// @brief Scheduler policy records shared by classed scheduling backends.
 
 export module zxfoundation.sched.rq.types;
@@ -19,8 +19,8 @@ namespace zxfoundation::sched::rq {
 
     /// @brief Per-CPU run queue — schedules strands (execution contexts).
     struct run_queue {
-        sync::qspinlock::qspinlock      lock{};          ///< Protects run queue data (enqueue/dequeue/select).
-        sync::qspinlock::qspinlock      context_lock{};  ///< Serializes ASCE / CR1 loads during context switch.
+        sync::qspinlock::qspinlock<sync::lock_rank::rq>      lock{};          ///< Protects run queue data (enqueue/dequeue/select).
+        sync::qspinlock::qspinlock<sync::lock_rank::rq_context>      context_lock{};  ///< Serializes ASCE / CR1 loads during context switch.
         u32                             nr_running{0};   ///< Total runnable strands on this CPU.
 
         dgp::domain::strand*            curr{nullptr};   ///< Currently running strand.
@@ -84,6 +84,6 @@ namespace zxfoundation::sched::rq {
         auto operator=(run_queue&&)            = delete;
     };
 
-} // namespace zxfoundation::sched
+} // namespace zxfoundation::sched::rq
 
 } // end export

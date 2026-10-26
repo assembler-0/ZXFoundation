@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/diag.cxxm
+/// @file arch/s390x/cpu/diag.zcomponent/diag.cxx
 /// @brief z/Architecture DIAGNOSE instruction — generic low-level interface +
 ///        typed helper wrappers for all standard diagnose codes (0x00–0x500).
 
@@ -247,10 +247,10 @@ namespace arch::s390x::cpu::diag {
         return diagnose12<DIAG_3270_DISPLAY>(r1, r2);
     }
 
-    /// @brief Yield to a specific virtual CPU.
-    /// @param cpu_addr  Target CPU address (physical CPU address).
+    /// @brief Yield the current virtual CPU and favor a target virtual CPU.
+    /// @param[in] cpu_addr Target virtual CPU address in bits 48–63 of Rx.
     auto diag9c(u16 cpu_addr) noexcept -> void {
-        u64 r1 = static_cast<u64>(cpu_addr) << 32;
+        u64 r1 = static_cast<u64>(cpu_addr) << 48;
         u64 r2 = 0;
         diagnose12<DIAG_RELINQUISH_DIR>(r1, r2);
     }

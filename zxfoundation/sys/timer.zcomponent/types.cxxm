@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/timer_types.cxxm
+/// @file zxfoundation/sys/timer.zcomponent/types.cxxm
 /// @brief Kernel timer type definitions and per-CPU min-heap storage.
 
 export module zxfoundation.sys.timer.types;
@@ -52,21 +52,6 @@ namespace zxfoundation::sys::timer {
         auto operator=(const kernel_timer&)          = delete;
         kernel_timer(kernel_timer&&)                 = delete;
         auto operator=(kernel_timer&&)               = delete;
-    };
-
-    /// @brief Fixed-capacity binary min-heap of kernel_timer pointers.
-    /// @note  Non-copyable, non-movable.
-    struct timer_heap {
-        kernel_timer* entries[TIMER_HEAP_CAPACITY]{}; ///< Heap-ordered array of timer pointers.
-        u32           count{0};                       ///< Number of active entries.
-
-        /// @brief Default constructor.
-        timer_heap() noexcept = default;
-
-        timer_heap(const timer_heap&)            = delete;
-        auto operator=(const timer_heap&)        = delete;
-        timer_heap(timer_heap&&)                 = delete;
-        auto operator=(timer_heap&&)             = delete;
     };
 
 } // namespace zxfoundation::sys::timer

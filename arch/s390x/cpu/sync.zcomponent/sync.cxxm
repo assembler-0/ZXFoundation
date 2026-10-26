@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/processor_types.cxxm
+/// @file arch/s390x/cpu/sync.zcomponent/sync.cxxm
 /// @brief cpu synchronization
 
 export module arch.s390x.cpu.sync;

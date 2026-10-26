@@ -18,4 +18,6 @@ build/
 docs/papers/
 docs/papers-vn/
 docs/handbook/
+docs/architecture/
 *.pm
+.commandcode/

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/stage2/entry.c
+/// @file arch/s390x/init/zxfl/stage2/entry.c
 
 #include <arch/s390x/init/zxfl/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
@@ -32,9 +32,6 @@ static char s_cmdline[512];
 
 static zxfl_sclp_info_t s_sclp_info;
 static zxfl_ecag_info_t s_ecag_info;
-
-static uint8_t s_kernel_stack[16384] __attribute__((aligned(16)));
-#define s_kernel_stack_top (s_kernel_stack + sizeof(s_kernel_stack))
 
 static void setup_control_regs(void) {
     uint64_t cr0;
@@ -443,12 +440,6 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     s_proto.loader_timestamp = ZXVL_BUILD_TS;
     s_proto.ipl_schid = schid;
     s_proto.binding_token = ZXVL_COMPUTE_TOKEN(s_proto.stfle_fac[0], schid);
-    {
-        auto frame = (uint64_t *) ((uint8_t *) s_kernel_stack_top - ZXVL_FRAME_SIZE);
-        frame[0] = ZXVL_FRAME_MAGIC_A;
-        frame[1] = ZXVL_FRAME_MAGIC_B ^ s_proto.binding_token;
-        s_proto.kernel_stack_top = (uint64_t) (uintptr_t) frame;
-    }
     snapshot_control_regs(&s_proto);
 
     // SCLP feature info

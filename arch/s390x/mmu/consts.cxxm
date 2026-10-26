@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/mmu/mmu_const.cxxm
+/// @file arch/s390x/mmu/consts.cxxm
 /// @brief Hardware DAT entry bit definitions for z/Architecture.
 
 export module arch.s390x.mmu.consts;
@@ -10,10 +10,10 @@ export {
 
 namespace arch::s390x::mmu {
 
-    inline constexpr u64 PTE_IEP         = 0x100ULL;   ///< PoP bit 55: IEP control.
-    inline constexpr u64 PTE_PROTECT     = 0x200ULL;   ///< PoP bit 54: DAT-protection.
-    inline constexpr u64 PTE_INVALID     = 0x400ULL;   ///< PoP bit 53: page-invalid.
-    inline constexpr u64 PTE_BIT52_ZERO  = 0x800ULL;   ///< PoP bit 52: must be zero in PTE.
+    inline constexpr u64 PTE_CO          = 0x100ULL;   ///< Bit 55: change-recording override (EDAT only).
+    inline constexpr u64 PTE_PROTECT     = 0x200ULL;   ///< Bit 54: DAT-protection.
+    inline constexpr u64 PTE_INVALID     = 0x400ULL;   ///< Bit 53: page-invalid.
+    inline constexpr u64 PTE_IEP         = 0x800ULL;   ///< Bit 52: instruction-execution protection (facility-gated).
     inline constexpr u64 PTE_ORIGIN_MASK = ~0xFFFULL;  ///< PoP bits 0-51: PFRA.
 
     /// @brief Alias: IEP bit doubles as no-execute for kernel page_prot.

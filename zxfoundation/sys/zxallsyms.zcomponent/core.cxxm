@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/zxallsyms.cxxm
+/// @file zxfoundation/sys/zxallsyms.zcomponent/core.cxxm
 /// @brief Global kernel symbol table — address/name lookup over a static
 ///        read-only table generated at link time by zxallsyms_gen.
 

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/pelt.cxxm
+/// @file zxfoundation/sched/pelt.zcomponent/core.cxxm
 /// @brief Per-Entity Load Tracking (PELT) — decayed-load averaging.
 
 export module zxfoundation.sched.pelt.core;

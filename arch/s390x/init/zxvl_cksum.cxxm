@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxvl_cksum.cxxm
+/// @file arch/s390x/init/zxvl_cksum.cxxm
 /// @brief ZXVerfiedLoad placeholder
 
 export module arch.s390x.init.zxvl_chksum;

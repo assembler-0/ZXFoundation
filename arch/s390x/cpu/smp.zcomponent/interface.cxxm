@@ -1,0 +1,7 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/smp.zcomponent/interface.cxxm
+/// @brief Serialized CPU lifecycle manager interface.
+
+export module arch.s390x.cpu.smp;
+export import arch.s390x.cpu.smp.core;
+export import arch.s390x.cpu.smp.types;

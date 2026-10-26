@@ -1,9 +1,10 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file zxfoundation/locking/lock.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/lockable.cxxm
 /// @brief locking concepts and RAII guards
 
 export module zxfoundation.sync.lockable;
 import zxfoundation.base.types;
+import zxfoundation.sync.lockgraph;
 import arch.s390x.cpu.irq;
 import lib.stl;
 
@@ -36,12 +37,39 @@ namespace zxfoundation::sync {
         /// @brief Acquire the lock (blocking).
         /// @param[in] l The lock to acquire.
         explicit lock_guard(L& l) noexcept : m_lock(l) {
+            if constexpr (requires { L::class_depmap(); }) {
+                lockgraph::acquire(L::class_depmap(), &m_lock);
+            }
             m_lock.lock();
         }
 
         /// @brief Release the lock.
         ~lock_guard() noexcept {
             m_lock.unlock();
+            if constexpr (requires { L::class_depmap(); }) {
+                lockgraph::release(&m_lock);
+            }
+        }
+
+
+        /// @brief This guard's rank (the lock's rank, carried in the type).
+        static constexpr auto rank = L::rank;
+
+        /// @brief Typestate descent
+        template <irq_lockable L2>
+        [[nodiscard]] auto acquire(L2& l2) const noexcept -> lock_guard<L2> {
+            static_assert(static_cast<u8>(L2::rank) > static_cast<u8>(L::rank),
+                "lock-rank descent violation: a held lock may only be followed by a strictly lower rank (acquire_equal is the audited same-rank path)");
+            return lock_guard<L2>{l2};
+        }
+
+        /// @brief Same-rank nesting: instance ordering is the lockgraph's
+        ///        job
+        template <irq_lockable L2>
+        [[nodiscard]] auto acquire_equal(L2& l2) const noexcept -> lock_guard<L2> {
+            static_assert(static_cast<u8>(L2::rank) == static_cast<u8>(L::rank),
+                "acquire_equal requires the same rank; use acquire for descent");
+            return lock_guard<L2>{l2};
         }
 
         lock_guard(const lock_guard&)     = delete;
@@ -59,11 +87,39 @@ namespace zxfoundation::sync {
     struct irq_lock_guard {
         /// @brief Acquire the lock and save IRQ state (blocking).
         /// @param[in] l The lock to acquire.
-        explicit irq_lock_guard(L& l) noexcept : m_lock(l), m_flags(m_lock.lock_irqsave()) {}
+        explicit irq_lock_guard(L& l) noexcept : m_lock(l), m_flags{} {
+            if constexpr (requires { L::class_depmap(); }) {
+                lockgraph::acquire(L::class_depmap(), &m_lock);
+            }
+            m_flags = m_lock.lock_irqsave();
+        }
 
         /// @brief Release the lock and restore IRQ state.
         ~irq_lock_guard() noexcept {
             m_lock.unlock_irqrestore(m_flags);
+            if constexpr (requires { L::class_depmap(); }) {
+                lockgraph::release(&m_lock);
+            }
+        }
+
+
+        /// @brief This guard's rank (the lock's rank, carried in the type).
+        static constexpr auto rank = L::rank;
+
+        template <irq_lockable L2>
+        [[nodiscard]] auto acquire(L2& l2) const noexcept -> irq_lock_guard<L2> {
+            static_assert(static_cast<u8>(L2::rank) > static_cast<u8>(L::rank),
+                "lock-rank descent violation: a held lock may only be followed by a strictly lower rank (acquire_equal is the audited same-rank path)");
+            return irq_lock_guard<L2>{l2};
+        }
+
+        /// @brief Same-rank nesting: instance ordering is the lockgraph's
+        ///        job
+        template <irq_lockable L2>
+        [[nodiscard]] auto acquire_equal(L2& l2) const noexcept -> irq_lock_guard<L2> {
+            static_assert(static_cast<u8>(L2::rank) == static_cast<u8>(L::rank),
+                "acquire_equal requires the same rank; use acquire for descent");
+            return irq_lock_guard<L2>{l2};
         }
 
         irq_lock_guard(const irq_lock_guard&)     = delete;
@@ -74,6 +130,44 @@ namespace zxfoundation::sync {
     private:
         L& m_lock;
         irqflags m_flags;
+    };
+
+    /// @brief Scoped try-acquire guard that saves and restores IRQ state.
+    /// @tparam L A type satisfying the @c lockable concept.
+    template <lockable L>
+    struct irq_try_guard {
+        explicit irq_try_guard(L& l) noexcept : m_lock(l) {
+            m_flags = arch::s390x::cpu::irq::irq_save_disable();
+            m_acquired = m_lock.try_lock();
+            if (m_acquired) {
+                if constexpr (requires { L::class_depmap(); }) {
+                    lockgraph::acquire(L::class_depmap(), &m_lock);
+                }
+            } else {
+                arch::s390x::cpu::irq::irq_restore(m_flags);
+            }
+        }
+
+        ~irq_try_guard() noexcept {
+            if (!m_acquired) return;
+            m_lock.unlock();
+            if constexpr (requires { L::class_depmap(); }) {
+                lockgraph::release(&m_lock);
+            }
+            arch::s390x::cpu::irq::irq_restore(m_flags);
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept { return m_acquired; }
+
+        irq_try_guard(const irq_try_guard&)     = delete;
+        irq_try_guard(irq_try_guard&&)          = delete;
+        auto operator=(const irq_try_guard&)    = delete;
+        auto operator=(irq_try_guard&&)         = delete;
+
+    private:
+        L& m_lock;
+        ::irqflags m_flags{};
+        bool m_acquired{false};
     };
 
     /// @brief Deduction guide for lock_guard.

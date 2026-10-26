@@ -13,8 +13,6 @@ export {
 
 namespace zxfoundation::dgp::policy {
 
-    auto init() noexcept -> void;
-
     /// @brief Remove policy registrations owned by a domain entering teardown.
     auto destroy_for_domain(u32 domain_id) noexcept -> void;
 

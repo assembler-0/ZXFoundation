@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lib/format.cxxm
 /// @brief Type-safe minimal formatter for kernel usage.
 

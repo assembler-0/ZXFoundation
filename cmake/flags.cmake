@@ -92,6 +92,7 @@ set(_ZX_NEEDED_CXX_FLAGS
     "-fno-omit-frame-pointer|REQUIRED"
     "-mbackchain|OPTIONAL"
     "-fstack-protector-strong|OPTIONAL"
+    "-fno-optimize-sibling-calls|OPTIONAL"
     "-pipe|OPTIONAL"
     "-mno-packed-stack|OPTIONAL"
     "-mhard-float|REQUIRED"

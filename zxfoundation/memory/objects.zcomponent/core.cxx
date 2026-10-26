@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/memory/memory_objects.zcomponent/core.cxx
+/// @file zxfoundation/memory/objects.zcomponent/core.cxx
 /// @brief Unified SCOMS-backed memory object hierarchy — implementation.
 
 module zxfoundation.memory.objects.core;
@@ -13,10 +13,15 @@ import zxfoundation.scoms.metadata.core;
 import zxfoundation.dgp.memory_contract;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sys.zinit.core;
 import zxfoundation.sync.lockable;
+import zxfoundation.dgp.cap.core;
+import zxfoundation.dgp.cap.types;
 import lib.error;
 import lib.stl;
 
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::memory::objects::detail {
 
@@ -81,11 +86,21 @@ namespace zxfoundation::memory::objects::detail {
 
 namespace zxfoundation::memory::objects {
 
-    auto memory_objects_init() noexcept -> void {
-        if (detail::g_initialized) return;
+    auto zi_memory_objects_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
+        if (detail::g_initialized) return {};
         detail::g_table.init(scoms::kobject::kobject_type::none);
         detail::g_initialized = true;
+        return zxfoundation::dgp::cap::register_lookup(
+            zxfoundation::dgp::cap::cap_type::memory_extent,
+        [](u16 object_id) noexcept -> zxfoundation::scoms::kobject::bobject* {
+            auto* object = zxfoundation::memory::objects::memory_object_resolve_id(
+                static_cast<u32>(object_id));
+            return object && object->ko.type == zxfoundation::scoms::kobject::kobject_type::memory_extent
+                ? &object->ko : nullptr;
+        });
     }
+    __zinit_dep__(mm, p70, zi_memory_objects_init, fatal, "zi_vm_init")
+
 
     [[nodiscard]] auto memory_object_ref_of(
         const memory_object& object
@@ -127,7 +142,7 @@ namespace zxfoundation::memory::objects {
         scoms::kobject::bobject* parent,
         u64 range_start,
         u64 range_length,
-         dgp::isolation::isolation_rights authority_rights,
+         ::zxfoundation::dgp::right_mask authority_rights,
         memory_object_policy policy
     ) noexcept -> std::expected<memory_object*, lib::kernel_error> {
         if (!detail::g_initialized || !detail::valid_memory_type(type)) {
@@ -198,7 +213,7 @@ namespace zxfoundation::memory::objects {
         auto r = memory_object_resolve(ref);
         if (!r) return std::unexpected(r.error());
         auto& obj = **r;
-        const sync::irq_lock_guard guard{obj.ko.lock};
+        const sync::irq_lock_guard _{obj.ko.lock};
         if (obj.view_kind != memory_view_kind::none) return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         obj.view_kind = kind;
@@ -207,8 +222,6 @@ namespace zxfoundation::memory::objects {
             case memory_view_kind::kmem_cache:       obj.body.kmem_cache = body;     break;
             case memory_view_kind::policy_server:    obj.body.policy_server = body;  break;
             case memory_view_kind::service_entry:    obj.body.service_entry = body;  break;
-            case memory_view_kind::device_binding:   obj.body.device_binding = body; break;
-            case memory_view_kind::dataset_extent:   obj.body.dataset_extent = body; break;
             default: break;
         }
         return {};
@@ -220,7 +233,7 @@ namespace zxfoundation::memory::objects {
         auto r = memory_object_resolve(ref);
         if (!r) return std::unexpected(r.error());
         auto& obj = **r;
-        const sync::irq_lock_guard guard{obj.ko.lock};
+        const sync::irq_lock_guard _{obj.ko.lock};
         obj.view_kind = memory_view_kind::none;
         obj.body = {};
         return {};
@@ -234,7 +247,7 @@ namespace zxfoundation::memory::objects {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        const sync::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard _{object.ko.lock};
         object.related_type = related.ko.type;
         object.related_id = related.ko.id;
         object.related_generation = related.ko.generation;
@@ -248,7 +261,7 @@ namespace zxfoundation::memory::objects {
             lib::generic_error::not_found));
         bool extent_was_retiring = false;
         if (object->ko.type == scoms::kobject::kobject_type::memory_extent) {
-            const sync::irq_lock_guard guard{object->ko.lock};
+            const sync::irq_lock_guard _{object->ko.lock};
             if (object->active_mappings.load(std::memory_order::acquire) != 0U) {
                 return std::unexpected(lib::kernel_error::from_driver(
                     lib::driver_error::busy));
@@ -274,7 +287,7 @@ namespace zxfoundation::memory::objects {
 
     [[nodiscard]] auto memory_object_delegate(
         memory_object_ref source, u32 caller_domain,
-        u32 owner_domain,  dgp::isolation::isolation_rights authority_rights
+        u32 owner_domain,  ::zxfoundation::dgp::right_mask authority_rights
     ) noexcept -> std::expected<memory_object_ref, lib::kernel_error> {
         auto source_result = memory_object_resolve(source);
         if (!source_result) return std::unexpected(source_result.error());
@@ -282,10 +295,10 @@ namespace zxfoundation::memory::objects {
         if (original.ko.type != scoms::kobject::kobject_type::grant ||
             caller_domain != original.owner_domain ||
             owner_domain == caller_domain ||
-            authority_rights ==  dgp::isolation::isolation_rights::none ||
-            !dgp::isolation::has_all_rights(original.authority_rights, authority_rights) ||
-            !dgp::isolation::has_all_rights(original.authority_rights,
-                 dgp::isolation::isolation_rights::delegate)) {
+            authority_rights ==  ::zxfoundation::dgp::right::none ||
+            !dgp::has_all_rights(original.authority_rights, authority_rights) ||
+            !dgp::has_all_rights(original.authority_rights,
+                 ::zxfoundation::dgp::right::delegate)) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
@@ -304,7 +317,7 @@ namespace zxfoundation::memory::objects {
         auto object_result = memory_object_resolve(ref);
         if (!object_result) return std::unexpected(object_result.error());
         auto& object = **object_result;
-        const sync::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard _{object.ko.lock};
         return detail::policy_from(object);
     }
 
@@ -319,7 +332,7 @@ namespace zxfoundation::memory::objects {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        const sync::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard _{object.ko.lock};
         detail::assign_policy(object, policy);
         return {};
     }
@@ -353,7 +366,7 @@ namespace zxfoundation::memory::objects {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
-        const sync::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard _{object.ko.lock};
         if (object.ko.state != base::lifecycle_state::active ||
             object.extent_retiring.load(std::memory_order::acquire)) {
             return std::unexpected(lib::kernel_error::from_generic(
@@ -406,7 +419,7 @@ namespace zxfoundation::memory::objects {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
-        const sync::irq_lock_guard guard{object.ko.lock};
+        const sync::irq_lock_guard _{object.ko.lock};
         if (object.active_mappings.load(std::memory_order::acquire) != 0U ||
             object.extent_retiring.exchange(true, std::memory_order::acq_rel)) {
             return std::unexpected(lib::kernel_error::from_driver(

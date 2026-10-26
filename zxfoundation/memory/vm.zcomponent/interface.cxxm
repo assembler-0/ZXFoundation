@@ -1,2 +1,3 @@
+/// @file zxfoundation/memory/vm.zcomponent/interface.cxxm
 export module zxfoundation.memory.vm;
 export import zxfoundation.memory.vm.core;

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/percpu.cxxm
+/// @file arch/s390x/cpu/percpu.zcomponent/percpu.cxx
 /// @brief Per-CPU data initialization.
 
 module arch.s390x.cpu.percpu;
@@ -11,28 +11,29 @@ import zxfoundation.memory.numa.types;
 import zxfoundation.memory.pmm.types;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
+import zxfoundation.sys.zinit.core;
+import zxfoundation.sys.syschk.barebones;
 import lib.stl;
 
-namespace arch::s390x::cpu::percpu {
+#define __zxmacro_want_zinit
+#define __zxmacro_want_assert
+#include macro_extensions
 
-    /// @brief Offset of zlowcore::percpu_ptr within the 8 KiB prefix area.
-    no_export constexpr u64 LC_PERCPU_PTR_OFFSET = 0x0400UL;
+namespace arch::s390x::cpu::percpu {
 
     /// @brief Fixed-size, cpu_id-indexed storage for every CPU's percpu_data.
     alignas(processor::CACHE_LINE_SIZE) no_export
         std::array<percpu_data, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_percpu_data{};
 
     [[nodiscard]] auto at(const u16 cpu_id) noexcept -> percpu_data& {
-        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]]
-            psw::disabled_wait();
+        chk_on(cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS);
         return g_percpu_data[cpu_id];
     }
 
     /// @brief Reference to the current CPU's per-CPU block, reached through
     ///        zlowcore::percpu_ptr (one pointer indirection via prefixing).
     [[nodiscard]] auto this_cpu() noexcept -> percpu_data& {
-        const u64 ptr = *reinterpret_cast<const volatile u64*>(
-            zxfoundation::memory::hhdm::phys_to_virt(LC_PERCPU_PTR_OFFSET));
+        const u64 ptr = lowcore::get_current()->get<"percpu_ptr">();
         return *reinterpret_cast<percpu_data*>(ptr);
     }
 
@@ -79,6 +80,14 @@ namespace arch::s390x::cpu::percpu {
         pcp.capacity = 100;
     }
 
+    auto zi_percpu_init_bsp(const zxfoundation::sys::zinit::zi_desc&) noexcept
+        -> zxfoundation::sys::zinit::zi_result
+    {
+        init_bsp();
+        return {};
+    }
+    __zinit_dep__(early, p80, zi_percpu_init_bsp, fatal, "zi_lowcore_init_bsp")
+
     /// @brief Finish AP per-CPU initialization.
     /// @param pcp  Reference to the AP's percpu_data slot (percpu::at(cpu_id)).
     auto init_ap(percpu_data& pcp) noexcept -> void {
@@ -91,7 +100,7 @@ namespace arch::s390x::cpu::percpu {
 
         pcp.ipi_pending_count = 0;
 
-        pcp.current_domain    = 0;
+        pcp.attached        = {};
         pcp.user_asce         = 0;
 
         for (u32 n = 0; n < zxfoundation::memory::numa::MAX_NUMA_NODES; ++n)

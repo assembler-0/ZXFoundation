@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file io.cxxm
+/// @file zxfoundation/sys/zxio.zcomponent/core.cxxm
 /// @brief Capability-bound CSS I/O, DMA authority, and completion delivery.
 
 export module zxfoundation.sys.zxio.core;
@@ -12,8 +12,6 @@ import lib.stl;
 export {
 
 namespace zxfoundation::sys::zxio {
-
-    auto init() noexcept -> void;
 
     [[nodiscard]] auto bind(
         u16 dev_no, u32 domain_id, dgp::cap::cap_token& out_token
@@ -36,11 +34,6 @@ namespace zxfoundation::sys::zxio {
     [[nodiscard]] auto completion_dequeue(
         dgp::cap::cap_token token, u32 owner_domain
     ) noexcept -> std::expected<io_completion, lib::kernel_error>;
-
-    /// @brief Retired: hard IRQs never invoke user gates.
-    [[nodiscard]] auto irq_bind(
-        dgp::cap::cap_token token, u32 owner_domain, u32 retired_gate_id
-    ) noexcept -> std::expected<void, lib::kernel_error>;
 
     auto destroy_for_domain(u32 domain_id) noexcept -> void;
 

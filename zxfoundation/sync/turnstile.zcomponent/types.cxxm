@@ -1,0 +1,40 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/turnstile.zcomponent/types.cxxm
+/// @brief Common scheduler-independent waiter records for sleepable locks.
+
+export module zxfoundation.sync.turnstile.types;
+import zxfoundation.base.types;
+import lib.list;
+import lib.stl;
+
+export {
+
+namespace zxfoundation::sync::turnstile {
+
+    /// @brief State of a waiter in a turnstile queue.
+    enum class waiter_state : u8 {
+        initial = 0,
+        queued = 1,
+        granted = 2,
+        cancelled = 3,
+    };
+
+    /// @brief Intrusive waiter record.  The owner retains the record until
+    /// its state reaches granted or cancelled.
+    struct waiter {
+        lib::list_node link{};
+        std::atomic<waiter_state> state{waiter_state::initial};
+        u8 priority{0};
+        void* context{nullptr};
+        auto (*wake_fn)(void*) noexcept -> void{nullptr};
+
+        waiter() noexcept = default;
+        waiter(const waiter&) = delete;
+        waiter(waiter&&) = delete;
+        auto operator=(const waiter&) = delete;
+        auto operator=(waiter&&) = delete;
+    };
+
+}
+
+}

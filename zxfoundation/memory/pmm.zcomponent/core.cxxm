@@ -7,17 +7,12 @@ import zxfoundation.base.types;
 import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.numa.types;
 import zxfoundation.base.transaction;
-import arch.s390x.init.zxfl.protocol;
 import lib.error;
 import lib.stl;
 
 export {
 
 namespace zxfoundation::memory::pmm {
-
-    /// @brief Initialize the PMM from the ZXFL boot protocol.
-    /// @param[in] proto  Validated ZXFL boot protocol.
-    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void;
 
     /// @brief Mark a physical range as permanently reserved (runtime call).
     /// @param[in] phys   Start of the range (page-aligned).

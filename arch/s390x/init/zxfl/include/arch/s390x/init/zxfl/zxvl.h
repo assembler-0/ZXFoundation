@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/zxvl.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/zxvl.h
 
 #ifndef ZXFOUNDATION_ZXVL_PRIVATE_H
 #define ZXFOUNDATION_ZXVL_PRIVATE_H
@@ -10,7 +10,6 @@
 #define ZXVL_SEED_LO            0xB2D49687U
 
 /// @brief Handshake stub — first PT_LOAD segment (PF_X|PF_R, custom bit 22).
-///        The loader calls the stub at the segment's p_paddr (physical).
 #define ZXVL_HS_CHALLENGE       0xFEEDFACECAFEBABEUL
 #define ZXVL_HS_RESPONSE        0xDEADBEEF0BADF00DUL
 #define ZXVL_HS_RESPONSE_HI     0xDEADBEEFU
@@ -26,7 +25,6 @@
 #define ZXVL_FRAME_SIZE         64U
 
 /// @brief Structural lock p_flags fingerprint (PT_LOAD RW, no execute).
-///        The loader identifies the lock segment by this unique flag combination.
 #define ZXVL_LOCK_MASK          0x3C1E0F8704B2D596UL
 #define ZXVL_LOCK_EXPECTED      0xF0A5C3B2E1D49687UL
 #define ZXVL_LOCK_EMBED_HI      0xCCBBCC35U
@@ -36,7 +34,6 @@
 #define ZXVL_PFLAGS_LOCK        0x00100006U   ///< PF_R|PF_W + custom bit 20
 
 /// @brief SHA-256/512 kernel checksum table
-///        The loader identifies the checksum segment by p_flags == ZXVL_PFLAGS_CKSUM.
 #define ZXVL_CKSUM_MAGIC        0x5A58564CU
 #define ZXVL_CKSUM_VERSION      0x00000001U
 #define ZXVL_CKSUM_ALGO_SHA256  0x00000001U
@@ -45,8 +42,6 @@
 #define ZXVL_PFLAGS_CKSUM       0x00200004U   ///< PF_R + custom bit 21
 
 /// @brief Expected SHA-256 digest of the authorized stage2 loader.
-///        The build system MUST override this with the actual digest of the
-///        shipped stage2 image.  A zero digest disables loader verification.
 #define ZXFL_EXPECTED_DIGEST_INIT \
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
@@ -76,10 +71,6 @@ typedef struct __attribute__((packed)) {
 void zxfl_system_detect(zxfl_boot_protocol_t *proto);
 
 /// @brief Verify all kernel PT_LOAD segments against the embedded checksum table.
-///
-///        Called by stage-2 after zxfl_load_elf64() succeeds, before the
-///        handshake stub is invoked.  Panics on any mismatch.
-///
 /// @param cksum_table  Physical address of the zxvl_checksum_table_t,
 ///                          as populated by zxfl_load_elf64() via p_flags scan.
 void zxvl_verify_nucleus_checksums(uint64_t cksum_table);

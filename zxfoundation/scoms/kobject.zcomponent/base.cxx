@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/scoms/scoms_types.cxxm
+/// @file zxfoundation/scoms/kobject.zcomponent/base.cxx
 /// @brief SCOMS — Scalable Object Management System — core types.
 
 module zxfoundation.scoms.kobject.base;
@@ -84,5 +84,5 @@ namespace zxfoundation::scoms::kobject {
         object_flags = 0;
     }
 
-} // namespace zxfoundation::scoms
+} // namespace zxfoundation::scoms::kobject
 /// @}

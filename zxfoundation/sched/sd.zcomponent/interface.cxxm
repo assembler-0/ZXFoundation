@@ -1,3 +1,4 @@
+/// @file zxfoundation/sched/sd.zcomponent/interface.cxxm
 export module zxfoundation.sched.sd;
 export import zxfoundation.sched.sd.core;
 export import zxfoundation.sched.sd.types;

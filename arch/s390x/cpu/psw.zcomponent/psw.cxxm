@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/psw_types.cxxm
+/// @file arch/s390x/cpu/psw.zcomponent/psw.cxxm
 /// @brief z/Architecture PSW (Program Status Word) bit definitions.
 
 export module arch.s390x.cpu.psw;

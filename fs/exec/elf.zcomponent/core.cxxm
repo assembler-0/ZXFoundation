@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/exec/loader.cxxm
+/// @file fs/exec/elf.zcomponent/core.cxxm
 /// @brief ELF64 loader — loads s390x executables into domain address spaces.
 
 export module fs.exec.elf.core;
@@ -24,6 +24,6 @@ namespace fs::exec::elf {
         u64 elf_size
     ) noexcept -> std::expected<u64, lib::kernel_error>;
 
-} // namespace zxfoundation::exec
+} // namespace fs::exec::elf
 
 } // end export

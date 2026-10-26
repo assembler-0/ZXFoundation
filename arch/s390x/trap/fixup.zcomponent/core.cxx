@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file fixup.cxxm
+/// @file arch/s390x/trap/fixup.zcomponent/core.cxx
 /// @brief Program-check fixup table
 
 module arch.s390x.trap.fixup.core;
@@ -68,8 +68,12 @@ namespace arch::s390x::trap::fixup {
             pcp.pgm_fixup_addr    = field_address(&e, 4, e.fixup_delta);
 
             switch (e.type) {
-            case EX_TYPE_FIXUP:
+            case EX_TYPE_FIXUP: {
+                if (frame) {
+                    frame->psw_addr = field_address(&e, 4, e.fixup_delta);
+                }
                 break;
+            }
 
             case EX_TYPE_UA_LOAD_REG: {
                 const u8 reg = detail::extract_reg(e.data);

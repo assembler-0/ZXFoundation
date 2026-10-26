@@ -1,2 +1,3 @@
+/// @file arch/interface.cxxm
 export module arch;
 export import arch.s390x;

@@ -103,6 +103,7 @@ SECTIONS {
         __bss_start = .;
         *(COMMON)
         *(.bss .bss.*)
+        *(.bss.boot_stack .bss.boot_stack.*)
         . = ALIGN(PAGE);
         __bss_end = .;
     } :nucleus_bss

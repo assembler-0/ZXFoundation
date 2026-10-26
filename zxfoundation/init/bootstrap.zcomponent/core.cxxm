@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/init/bootstrap.cxxm
+/// @file zxfoundation/init/bootstrap.zcomponent/core.cxxm
 /// @brief sys/bootstrapd — first schedulable kernel domain.
 
 export module zxfoundation.init.bootstrap.core;

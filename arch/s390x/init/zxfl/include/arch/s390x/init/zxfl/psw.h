@@ -1,35 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/cpu/psw.h
-//
-/// @brief Unified z/Architecture PSW manager.
-///
-///        This is the single authoritative source for all PSW mask constants
-///        and new-PSW lowcore offsets.  It is safe to include from both C
-///        translation units and assembly files (.S).
-///
-///        z/Architecture PSW mask word bit layout (PoP SA22-7832, Figure 4-1):
-///
-///          Bit  0     (0x8000000000000000) PER mask
-///          Bit  1     (0x4000000000000000) reserved (must be 0)
-///          Bit  2     (0x2000000000000000) reserved (must be 0)
-///          Bit  3     (0x1000000000000000) reserved (must be 0)
-///          Bit  4     (0x0800000000000000) reserved (must be 0)
-///          Bit  5     (0x0400000000000000) DAT (address translation enable)
-///          Bit  6     (0x0200000000000000) I/O interrupt mask
-///          Bit  7     (0x0100000000000000) External interrupt mask
-///          Bits 8-11  (0x00F0000000000000) Storage key
-///          Bit 12     (0x0008000000000000) Machine-check mask
-///          Bit 13     (0x0004000000000000) reserved (must be 0)
-///          Bit 14     (0x0002000000000000) Wait state
-///          Bit 15     (0x0001000000000000) Problem state (user mode)
-///          Bits 16-17 (0x0000C00000000000) Address space control
-///          Bits 18-19 (0x0000300000000000) Condition code
-///          Bits 20-23 (0x00000F0000000000) Program mask
-///          Bit 31     (0x0000000100000000) EA (extended addressing — 64-bit)
-///          Bit 32     (0x0000000080000000) BA (basic addressing — 64-bit)
-///
-///        Setting any reserved bit causes a Specification Exception (ILC=0)
-///        when the PSW is loaded via LPSWE.
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/psw.h
+/// @brief z/Architecture PSW .
 
 #pragma once
 
@@ -57,21 +28,15 @@
 #define PSW_ARCH_BITS           (PSW_BIT_EA | PSW_BIT_BA)
 
 /// Supervisor mode, DAT off, all interrupts disabled, 64-bit.
-/// Used for early boot and AP restart PSW before DAT is enabled.
 #define PSW_MASK_KERNEL         (PSW_ARCH_BITS)
 
 /// Home Space Mode bit mask (ASC bits 16-17 = 11).
 #define PSW_BIT_HOME_SPACE      0x0000C00000000000ULL
 
 /// Supervisor mode, DAT on, all interrupts disabled, 64-bit.
-/// Used for the DAT-on transition PSW (return_psw in ap_entry).
-/// The kernel must run in Home Space when DAT is on.
 #define PSW_MASK_KERNEL_DAT     (PSW_BIT_DAT | PSW_BIT_HOME_SPACE | PSW_ARCH_BITS)
 
 /// Disabled wait: wait state set, DAT off, all interrupts disabled, 64-bit.
-/// The wait bit (bit 14) is the only correct way to enter a wait state.
-/// The old hardcoded value 0x0000800180000000 was WRONG — bit 16 is an
-/// address-space control bit, not the wait bit.
 #define PSW_MASK_DISABLED_WAIT  (PSW_BIT_WAIT | PSW_ARCH_BITS)
 
 /// Restart new PSW offset.

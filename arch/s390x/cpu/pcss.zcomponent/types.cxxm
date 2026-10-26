@@ -1,0 +1,192 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/pcss.zcomponent/types.cxxm
+/// @brief PC-ss substrate records
+
+export module arch.s390x.cpu.pcss.types;
+import zxfoundation.base.types;
+import lib.bitfield;
+import lib.structure;
+import lib.error;
+import lib.stl;
+
+export {
+
+namespace arch::s390x::cpu::pcss {
+
+    /// @brief PC number — canonical operand layout
+    using pc_number = lib::record<u32, lib::msb0_t,
+        lib::rw<"ex",   lib::bits<24, 31>, u8>,
+        lib::rw<"lx",   lib::bits<12, 23>, u16>
+    >;
+
+    static_assert(sizeof(pc_number) == 4);
+
+    /// @brief Table geometry
+    constexpr u32 LT_ENTRY_SIZE      = 4U;
+    constexpr u32 LT_MAX_ENTRIES     = 4096U;
+    constexpr u32 ET_ENTRY_SIZE      = 32U;
+    constexpr u32 ET_MAX_ENTRIES     = 256U;   ///< EX is eight bits.
+
+    /// @brief Linkage-table entry: the entry-table designation
+    using lt_entry = lib::structure<4, 4, lib::endian::big,
+        lib::rw<"word", lib::bytes<0, 3>, lib::record<u32, lib::msb0_t,
+            lib::rz<"reserved_0", lib::bits<0, 0>, u8>,
+            lib::rw<"entry_table_origin", lib::bits<1, 25>, u32>,
+            lib::rw<"etl",                lib::bits<26, 31>, u8>
+        >>
+    >;
+
+    /// @brief Linkage-first-table entry (LFTE)
+    using linkage_first_entry = lib::structure<4, 4, lib::endian::big,
+        lib::rw<"word", lib::bytes<0, 3>, lib::record<u32, lib::msb0_t,
+            lib::rw<"invalid", lib::bits<0, 0>, u8>,
+            lib::rw<"lst_origin", lib::bits<1, 23>, u32>,
+            lib::rw<"reserved_24", lib::bits<24, 31>, u8>>>>;
+    static_assert(sizeof(linkage_first_entry) == 4);
+
+    using linkage_second_entry = lib::structure<8, 8, lib::endian::big,
+        lib::rw<"word", lib::bytes<0, 3>, lib::record<u32, lib::msb0_t,
+            lib::rw<"invalid", lib::bits<0, 0>, u8>,
+            lib::rw<"entry_table_origin", lib::bits<1, 25>, u32>,
+            lib::rw<"entry_table_length", lib::bits<26, 31>, u8>>>,
+        lib::rw<"lstesn", lib::bytes<4, 7>, u32>>;
+    static_assert(sizeof(linkage_second_entry) == 8);
+
+    /// @brief Entry-table entry, 32 bytes 
+    using et_entry = lib::structure<32, 4, lib::endian::big,
+        lib::rw<"word1", lib::bytes<0, 7>, lib::record<u64, lib::msb0_t,
+            lib::rw<"entry_instruction_address", lib::bits<0, 62>, u64>,
+            lib::overlay_rw<"entry_basic_addressing_mode", lib::bits<32, 32>>,
+            lib::overlay_rw<"entry_problem_state", lib::bits<63, 63>>
+        >>,
+        lib::rw<"authorization_key_mask", lib::bytes<8, 9>, u16>,
+        lib::rw<"asn", lib::bytes<10, 11>, u16>,
+        lib::rw<"entry_key_mask", lib::bytes<12, 13>, u16>,
+        lib::rz<"reserved_112_127", lib::bytes<14, 15>, u16>,
+        lib::rw<"stack_word", lib::bytes<16, 19>, lib::record<u32, lib::msb0_t,
+            lib::rw<"stacking", lib::bits<0, 0>>,
+            lib::rw<"extended_addressing", lib::bits<1, 1>>,
+            lib::rw<"replace_psw_key", lib::bits<3, 3>>,
+            lib::rw<"replace_pkm", lib::bits<4, 4>>,
+            lib::rw<"replace_eax", lib::bits<5, 5>>,
+            lib::rw<"entry_ar_mode", lib::bits<6, 6>>,
+            lib::rw<"sasn_new_pasn", lib::bits<7, 7>>,
+            lib::rw<"entry_key", lib::bits<8, 11>, u8>
+        >>,
+        lib::rw<"aste_origin", lib::bytes<20, 23>, u32>,
+        lib::rw<"entry_parameter", lib::bytes<24, 31>, u64>
+    >;
+
+    static_assert(sizeof(et_entry) == 32);
+
+    /// @brief Linkage-stack geometry
+    constexpr u32 STACK_HEADER_SIZE = 16U;
+    constexpr u32 STACK_TRAILER_SIZE = 16U;
+    constexpr u32 STACK_STATE_SIZE  = 296U;
+    constexpr u32 STACK_DESC_SIZE   = 8U;
+
+    /// @brief Entry descriptor
+    using entry_descriptor = lib::structure<8, 4, lib::endian::big,
+        lib::rw<"word", lib::bytes<0, 7>, lib::record<u64, lib::msb0_t,
+            lib::rw<"unstack_suppression", lib::bits<0, 0>>,
+            lib::rw<"entry_type", lib::bits<1, 7>, u8>,
+            lib::rw<"section_id", lib::bits<8, 15>, u8>,
+            lib::rw<"remaining_free_space", lib::bits<16, 31>, u16>,
+            lib::rw<"next_entry_size", lib::bits<32, 47>, u16>
+        >
+    >>;
+
+    static_assert(sizeof(entry_descriptor) == 8);
+
+    /// @brief Linkage-stack entry types (descriptor ET field).
+    constexpr u8 STACK_ET_HEADER  = 0x09U;
+    constexpr u8 STACK_ET_TRAILER = 0x0AU;
+    constexpr u8 STACK_ET_STATE   = 0x0DU;
+
+    /// @brief Section link — ESAME doubleword per PoP 5-12 LSHE/LSTE
+    ///        (and hyperion FETCH_BSEA/FETCH_FSHA).
+    ///
+    ///        WIRE format: the doubleword IS the raw home VA with its
+    ///        low three bits zero (8-alignment); bit 63 (the LSB) is
+    ///        the validity bit; bits 61-62 are reserved zero.  The
+    ///        machine decodes it as `dw & ~7` after testing `dw & 1`
+    ///        (verified against the running libherc.so and the PoP's
+    ///        "bits 0-60, with three zeros appended on the right,
+    ///        form the 64-bit home virtual address").
+    ///
+    ///        FIELD semantics: msb0 bits<0,60> are the TOP 61 bits of
+    ///        the doubleword — numeric shift 3 — so the field STORES
+    ///        VA >> 3.  Call sites pass `va >> 3`, never the raw VA:
+    ///        writing the raw VA puts VA*8 on the wire and the machine
+    ///        walks eight times too high (the 13:50 capture walked
+    ///        0x1F3E30040 from a chained 0x3E7C6008).
+    using section_link = lib::record<u64, lib::msb0_t,
+        lib::rw<"address", lib::bits<0, 60>, u64>,
+        lib::rw<"valid", lib::bits<63, 63>, u8>>;
+
+    /// @brief Header entry
+    using header_entry = lib::structure<STACK_HEADER_SIZE, 4, lib::endian::big,
+        lib::rw<"backward", lib::bytes<0, 7>, section_link>,
+        lib::rw<"descriptor", lib::bytes<8, 15>, entry_descriptor>
+    >;
+
+    static_assert(sizeof(header_entry) == 16);
+
+    /// @brief Trailer entry
+    using trailer_entry = lib::structure<STACK_TRAILER_SIZE, 4, lib::endian::big,
+        lib::rw<"forward", lib::bytes<0, 7>, section_link>,
+        lib::rw<"descriptor", lib::bytes<8, 15>, entry_descriptor>
+    >;
+
+    static_assert(sizeof(trailer_entry) == 16);
+
+    /// @brief Program-call state entry (296 bytes).
+    using state_entry = lib::structure<STACK_STATE_SIZE, 4, lib::endian::big,
+        lib::ro<"sasn", lib::bytes<130, 131>, u16>,
+        lib::ro<"secondary_astein", lib::bytes<176, 179>, u32>,
+        lib::ro<"primary_astein",   lib::bytes<180, 183>, u32>,
+        lib::rw<"descriptor", lib::bytes<288, 295>, entry_descriptor>
+    >;
+
+    /// @brief Per-domain PC-ss table pair (PoP ch. 5 table geometry).
+    struct translation {
+        const et_entry* ete{nullptr};
+        u64             ete_phys{0};
+        u32             ex{0};
+        u32             lstesn{0};
+    };
+
+    struct domain_tables {
+        u64       lt_phys{0};
+        u64       et_phys{0};
+        lt_entry* lt{nullptr};
+        et_entry* et{nullptr};
+        u64       lft_phys{0};
+        u64       lst_phys{0};
+        u64       aste_phys{0};
+        u32       et_used{0};
+        u32       lst_used{0};   ///< Next LSTE slot (ASN-and-LX-reuse minting)
+    };
+
+    /// @brief Linkage-stack geometry
+    constexpr u32 STACK_SECTION_SIZE     = 4096U;
+    constexpr u32 STACK_STATE_PER_SECTION = 13U;
+    constexpr u32 STACK_MAX_SECTIONS     = 8U;
+
+    struct stack_section {
+        u64 base_phys{0};
+        u64 base_va{0};
+    };
+
+    /// @brief Per-strand linkage-stack substrate. CR15 discipline: the
+    ///        dispatch path saves/restores via stack_save/stack_load.
+    struct stack {
+        stack_section sections[STACK_MAX_SECTIONS]{};
+        u32           section_count{0};
+        u64           cr15{0};
+        u8            next_section_id{1};
+    };
+
+} // namespace arch::s390x::cpu::pcss
+
+} // end export

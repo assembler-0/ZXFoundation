@@ -30,6 +30,7 @@ import zxfoundation.base.typestate;
 import zxfoundation.base.types;
 import zxfoundation.dgp.cap.types;
 import zxfoundation.dgp.cap.core;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.mmu;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
@@ -39,6 +40,9 @@ import lib.rbtree;
 import lib.format;
 import lib.container_of;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::memory::vm::detail {
 
@@ -185,7 +189,7 @@ namespace zxfoundation::memory::vm::detail {
         if (!!(prot & vm_prot::write)) access = access | memory_access::write;
         if (!!(prot & vm_prot::exec)) access = access | memory_access::execute;
         if (!!(flags & (vm_flags::portal | vm_flags::ipc)) ||
-            backing == vm_backing::portal_shared || backing == vm_backing::ipc_shared) {
+            backing == vm_backing::ipc_shared) {
             access = access | memory_access::share;
         }
         return access;
@@ -198,7 +202,7 @@ namespace zxfoundation::memory::vm::detail {
     ) noexcept -> zxfoundation::dgp::memory_contract::memory_scope {
         if (!!(flags & vm_flags::kernel)) return zxfoundation::dgp::memory_contract::memory_scope::nucleus;
         if (!!(flags & (vm_flags::portal | vm_flags::ipc)) ||
-            backing == vm_backing::portal_shared || backing == vm_backing::ipc_shared) {
+            backing == vm_backing::ipc_shared) {
             return zxfoundation::dgp::memory_contract::memory_scope::portal_shared;
         }
         return zxfoundation::dgp::memory_contract::memory_scope::private_domain;
@@ -428,7 +432,7 @@ namespace zxfoundation::memory::vm::detail {
         auto storage_result = objects::memory_object_create(
             scoms::kobject::kobject_type::storage, space.owner_domain,
             space.address_space_object, rgn.va_start, rgn.size(),
-             dgp::isolation::isolation_rights::none, policy);
+             ::zxfoundation::dgp::right::none, policy);
         if (!storage_result) return std::unexpected(storage_result.error());
         rgn.storage_object = objects::memory_object_ref_of(**storage_result);
 
@@ -675,7 +679,6 @@ namespace zxfoundation::memory::vm {
         space.total_committed = 0;
         space.total_resident  = 0;
         space.commit_limit_pages = VM_DEFAULT_COMMIT_LIMIT_PAGES;
-        space.brk        = 0;
         space.mmap_base  = VM_MMAP_BASE;
         space.dgp_generation = 0;
         space.mapping_generation = 0;
@@ -690,7 +693,7 @@ namespace zxfoundation::memory::vm {
     [[nodiscard]] auto vm_space_set_commit_limit(
         vm_space& space, u64 limit_pages
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
         if (limit_pages < space.total_committed) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::code::out_of_memory));
@@ -704,7 +707,7 @@ namespace zxfoundation::memory::vm {
     [[nodiscard]] auto vm_space_try_charge_commit(
         vm_space& space, u64 pages
     ) noexcept -> bool {
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
         if (!vm_commit_admitted(space, pages)) return false;
         space.total_committed += pages;
         return true;
@@ -712,7 +715,7 @@ namespace zxfoundation::memory::vm {
 
     /// @brief Return a page charge obtained from @ref vm_space_try_charge_commit.
     auto vm_space_uncharge_commit(vm_space& space, u64 pages) noexcept -> void {
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
         if (pages > space.total_committed) {
             sys::syschk::syschk_fatal(
                 lib::kernel_error::from_memory(lib::memory_error::purpose_mismatch),
@@ -723,11 +726,33 @@ namespace zxfoundation::memory::vm {
 
     /// @brief RCU-protected lookup: find the vm_region containing VA.
     /// @return Pointer to the region, or nullptr if no region contains va.
-    [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region* {
+    [[nodiscard]] auto vm_find_locked(const vm_space& space, u64 va) noexcept -> vm_region* {
         sync::rcu::read_lock();
         auto* rgn = detail::rb_find_rcu(space, va);
         sync::rcu::read_unlock();
         return rgn;
+    }
+
+    [[nodiscard]] auto vm_find_ref(const vm_space& space, u64 va) noexcept -> vm_region_ref {
+        auto& mutable_space = const_cast<vm_space&>(space);
+        const sync::irq_lock_guard _{mutable_space.lock};
+        sync::rcu::read_lock();
+        auto* rgn = detail::rb_find_rcu(space, va);
+        u32 id = scoms::kobject::KOBJECT_ID_INVALID;
+        u32 generation = 0U;
+        if (rgn) {
+            id = rgn->ko.id;
+            generation = rgn->ko.generation;
+        }
+        sync::rcu::read_unlock();
+        if (id == scoms::kobject::KOBJECT_ID_INVALID || generation == 0U)
+            return {};
+        return detail::g_region_table.template acquire_ref_by_gen<
+            base::lifecycle_state::active>(id, generation);
+    }
+
+    [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region* {
+        return vm_find_locked(space, va);
     }
 
     /// @brief Find one live mapping view that consumes @p grant.
@@ -735,7 +760,7 @@ namespace zxfoundation::memory::vm {
         vm_space& space, objects::memory_object_ref grant
     ) noexcept -> vm_region* {
         if (!grant) return nullptr;
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
         for (lib::rb_node* node = lib::rb_first_cached(space.tree);
              node; node = lib::rb_next(node)) {
             auto* region = detail::region_of(node);
@@ -744,6 +769,25 @@ namespace zxfoundation::memory::vm {
             }
         }
         return nullptr;
+    }
+
+    [[nodiscard]] auto vm_find_grant_mapping_ref(
+        vm_space& space, objects::memory_object_ref grant
+    ) noexcept -> vm_region_ref {
+        const sync::irq_lock_guard _{space.lock};
+        if (!grant) return {};
+        vm_region* region = nullptr;
+        for (lib::rb_node* node = lib::rb_first_cached(space.tree);
+             node; node = lib::rb_next(node)) {
+            auto* candidate = detail::region_of(node);
+            if (candidate && detail::same_memory_ref(candidate->grant_object, grant)) {
+                region = candidate;
+                break;
+            }
+        }
+        if (!region) return {};
+        return detail::g_region_table.template acquire_ref_by_gen<
+            base::lifecycle_state::active>(region->ko.id, region->ko.generation);
     }
 
     /// @brief Walk every active vm_region in the system via callback.
@@ -783,8 +827,12 @@ namespace zxfoundation::memory::vm {
         vm_space& space, u64 phys_start, u64 phys_end
     ) noexcept -> u32 {
         if (phys_end <= phys_start) return 0U;
+        if (space.asce_val == 0U) [[unlikely]]
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_address),
+                "vm: drain on a space with no ASCE root");
 
-        sync::lock_guard g{space.lock};
+        sync::lock_guard _{space.lock};
 
         u32 freed = 0U;
         for (lib::rb_node* node = lib::rb_first_cached(space.tree);
@@ -851,79 +899,6 @@ namespace zxfoundation::memory::vm {
 
         if (freed > 0U && space.asce_val != 0U) {
             arch::s390x::mmu::tlb_flush_asce(space.asce_val);
-        }
-        return freed;
-    }
-
-    /// @brief Drain resident mappings whose phys lies in @c [phys_start,phys_end]
-    /// @param[in] phys_start Inclusive start of physical range.
-    /// @param[in] phys_end   Exclusive end of physical range.
-    /// @return Number of physical frames freed.
-    [[nodiscard]] auto vm_drain_phys_range(
-        u64 phys_start, u64 phys_end
-    ) noexcept -> u32 {
-        if (phys_end <= phys_start) return 0U;
-
-        u32 freed = 0U;
-        auto cb = [&]([[maybe_unused]] vm_region& rgn) noexcept -> bool {
-            if (!!(rgn.flags & vm_flags::pinned)) return true;
-
-            if (!rgn.pages.slots || rgn.pages.count == 0U) {
-                if (rgn.backing == vm_backing::physical
-                    && rgn.phys_base != 0ULL) {
-                    const u64 rgn_phys_end =
-                        rgn.phys_base + rgn.size();
-                    if (rgn_phys_end <= phys_start
-                        || rgn.phys_base >= phys_end) return true;
-                    const u64 drain_phys_start =
-                        (rgn.phys_base > phys_start)
-                            ? rgn.phys_base : phys_start;
-                    const u64 drain_phys_end =
-                        (rgn_phys_end < phys_end)
-                            ? rgn_phys_end : phys_end;
-                    const u64 drain_va_start =
-                        rgn.va_start
-                        + (drain_phys_start - rgn.phys_base);
-                    const u64 drain_va_end =
-                        rgn.va_start
-                        + (drain_phys_end - rgn.phys_base);
-                    const u64 k_asce =
-                        arch::s390x::cpu::lowcore::get_current()->get<"kernel_asce">();
-                    detail::unmap_range_pages(
-                        k_asce & arch::s390x::mmu::ASCE_ORIGIN_MASK,
-                        drain_va_start, drain_va_end);
-                }
-                return true;
-            }
-
-            for (u32 i = 0U; i < rgn.pages.count; ++i) {
-                auto& slot = rgn.pages.slots[i];
-                if (slot.state == vm_page_state::empty) continue;
-                if (slot.state == vm_page_state::portal) continue;
-                const u64 sp = slot.phys;
-                if (sp < phys_start || sp >= phys_end) continue;
-
-                const u64 k_asce = arch::s390x::cpu::lowcore::get_current()->get<"kernel_asce">();
-                discard_value arch::s390x::mmu::unmap_page_dispatch(k_asce, slot.va_page);
-                arch::s390x::mmu::tlb_flush_local();
-                rmap::remove(rgn, i, slot.phys);
-                if (detail::release_slot_mapping(slot)) ++freed;
-                slot.clear();
-                if (rgn.resident.load(std::memory_order::relaxed) > 0U)
-                    rgn.resident.fetch_sub(1U, std::memory_order::relaxed);
-            }
-            return true;
-        };
-
-        for (u32 i = 0U; i < MAX_VM_REGIONS; ++i) {
-            auto* rgn = detail::g_region_table.find_raw(i);
-            if (!rgn) continue;
-            if (rgn->ko.state != base::lifecycle_state::active) continue;
-            cb(*rgn);
-        }
-
-        if (freed > 0U) {
-            arch::s390x::mmu::tlb_flush_local();
         }
         return freed;
     }
@@ -1234,7 +1209,7 @@ namespace zxfoundation::memory::vm {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::code::invalid_arg));
 
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
 
         if (space.region_count >= space.max_regions)
             return std::unexpected(lib::kernel_error::from_memory(
@@ -1339,7 +1314,7 @@ namespace zxfoundation::memory::vm {
             if (!frame_check) return std::unexpected(frame_check.error());
         }
 
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
 
         const auto request = build_contract_request(
             space, va, size, prot, flags, backing, phys_base, 0U, 0U);
@@ -1457,7 +1432,7 @@ namespace zxfoundation::memory::vm {
             vm_backing::physical, phys_base, extent_ref);
         if (!vma_result) return std::unexpected(vma_result.error());
 
-        auto* region = vm_find(space, va);
+        auto* region = vm_find_locked(space, va);
         if (!region) {
             discard_value vm_unmap(space, root_phys, va, length);
             return std::unexpected(lib::kernel_error::from_generic(
@@ -1503,7 +1478,7 @@ namespace zxfoundation::memory::vm {
             vm_backing::ipc_shared, 0);
         if (!map_result) return std::unexpected(map_result.error());
 
-        auto* target_region = vm_find(target, target_va);
+        auto* target_region = vm_find_locked(target, target_va);
         if (!target_region) {
             discard_value vm_unmap(target, target_root_phys, target_va, length);
             return std::unexpected(lib::kernel_error::from_generic(
@@ -1630,7 +1605,7 @@ namespace zxfoundation::memory::vm {
         auto contract_result = zxfoundation::dgp::memory_contract::validate_range(va, unmap_end);
         if (!contract_result) return std::unexpected(contract_result.error());
 
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
 
         // Find the first region that could overlap [va, unmap_end).
         lib::rb_node* node = space.tree.root.node;
@@ -1672,7 +1647,7 @@ namespace zxfoundation::memory::vm {
 
         vm_region* split_lower = nullptr;
         vm_region* split_upper = nullptr;
-        auto* start_region = vm_find(space, va);
+        auto* start_region = vm_find_locked(space, va);
         if (start_region && start_region->va_start < va) {
             auto split_r = vm_split(space, start_region, va);
             if (!split_r) return std::unexpected(split_r.error());
@@ -1680,7 +1655,7 @@ namespace zxfoundation::memory::vm {
             split_upper = *split_r;
         }
 
-        auto* end_region = vm_find(space, unmap_end - PAGE_SIZE);
+        auto* end_region = vm_find_locked(space, unmap_end - PAGE_SIZE);
         if (end_region && end_region->va_end > unmap_end) {
             auto split_r = vm_split(space, end_region, unmap_end);
             if (!split_r) {
@@ -1762,7 +1737,7 @@ namespace zxfoundation::memory::vm {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
 
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
 
         const u64 prot_end = va + size;
 
@@ -1821,7 +1796,7 @@ namespace zxfoundation::memory::vm {
 
         vm_region* split_lower = nullptr;
         vm_region* split_upper = nullptr;
-        auto* start_region = vm_find(space, va);
+        auto* start_region = vm_find_locked(space, va);
         if (start_region && start_region->va_start < va) {
             auto split_result = vm_split(space, start_region, va);
             if (!split_result) return std::unexpected(split_result.error());
@@ -1829,7 +1804,7 @@ namespace zxfoundation::memory::vm {
             split_upper = *split_result;
         }
 
-        auto* end_region = vm_find(space, prot_end - PAGE_SIZE);
+        auto* end_region = vm_find_locked(space, prot_end - PAGE_SIZE);
         if (end_region && end_region->va_end > prot_end) {
             auto split_result = vm_split(space, end_region, prot_end);
             if (!split_result) {
@@ -1914,7 +1889,7 @@ namespace zxfoundation::memory::vm {
     auto vm_destroy_space(vm_space& space) noexcept -> void {
         using namespace detail;
 
-        const sync::irq_lock_guard guard{space.lock};
+        const sync::irq_lock_guard _{space.lock};
 
         lib::rb_node* cleanup_node = space.tree.leftmost;
         while (cleanup_node) {
@@ -1971,16 +1946,17 @@ namespace zxfoundation::memory::vm {
     }
 
     /// @brief Initialize the VME subsystem (create SCOMS table for vm_region).
-    auto vm_init() noexcept -> void {
+    auto zi_vm_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         using namespace detail;
 
-        if (g_vme_initialized) return;
+        if (g_vme_initialized) return {};
 
         g_region_table.init(scoms::kobject::kobject_type::vm_region);
         g_vme_initialized = true;
 
         detail::register_vm_cap_lookup();
+        return {};
     }
+    __zinit_dep__(mm, p60, zi_vm_init, fatal, "zi_kmalloc_init")
 
 } // namespace zxfoundation::memory::vm
-

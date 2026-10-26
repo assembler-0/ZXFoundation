@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/smt.cxxm
+/// @file zxfoundation/sched/smt.zcomponent/core.cxxm
 /// @brief SMT-aware strand-group or co-scheduling decisions
 
 export module zxfoundation.sched.smt.core;

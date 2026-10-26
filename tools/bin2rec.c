@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// bin2rec.c — convert a flat binary into an card-format text deck
+/// @file tools/bin2rec.c — convert a flat binary into an card-format text deck
 //
 // Record layout (80 bytes per card):
 //
@@ -18,22 +18,6 @@
 //  ------  ---
 //   80      total
 //
-// The END record is a full 80-byte card whose flag/type fields are set to
-// END and whose address field carries the entry-point address so that
-// firmware implementations that branch via the END record address work
-// correctly.  All other fields in the END card are zero.
-//
-// Bugs fixed vs. the original flatboot implementation:
-//   1. feof() was tested AFTER fread(), causing one spurious zero TXT record
-//      at EOF on exact-multiple-of-56 inputs.
-//   2. The END record was emitted inside the main loop after a stale fread(),
-//      potentially writing uninitialized data as a TXT record first.
-//   3. Short final reads (file not a multiple of 56 bytes) were not zero-padded,
-//      so the last TXT record contained garbage in its tail bytes.
-//   4. The END record's load address was always zero; it now carries the
-//      caller-supplied entry point.
-//   5. No error checking on fread/fwrite; errors are now detected and reported.
-//   6. MAX_REC_SIZE silently truncated large inputs; now treated as a hard error.
 
 #include <stdint.h>
 #include <stdio.h>

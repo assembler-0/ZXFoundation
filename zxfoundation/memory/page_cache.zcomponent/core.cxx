@@ -28,7 +28,7 @@ namespace zxfoundation::memory::page_cache::detail {
     u32* g_phys_heads{nullptr};
     u32 g_free_head{PAGE_CACHE_SLOT_INVALID};
     u32 g_resident_count{0U};
-    alignas(4) zxfoundation::sync::qspinlock::qspinlock g_lock{};
+    alignas(4) zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::page_cache> g_lock{};
     read_page_fn g_reader{nullptr};
     write_page_fn g_writer{nullptr};
 
@@ -292,7 +292,7 @@ namespace zxfoundation::memory::page_cache {
         -> std::expected<void, lib::kernel_error> {
         if (!reader) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::invalid_arg));
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         if (!ensure_entries_locked()) return std::unexpected(lib::kernel_error::from_memory(
             lib::memory_error::out_of_memory));
         g_reader = reader;
@@ -304,7 +304,7 @@ namespace zxfoundation::memory::page_cache {
         -> std::expected<void, lib::kernel_error> {
         if (!writer) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::invalid_arg));
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         if (!ensure_entries_locked()) return std::unexpected(lib::kernel_error::from_memory(
             lib::memory_error::out_of_memory));
         g_writer = writer;
@@ -324,7 +324,7 @@ namespace zxfoundation::memory::page_cache {
         for (;;) {
             u64 eviction_candidate = 0ULL;
             {
-                const zxfoundation::sync::irq_lock_guard guard{g_lock};
+                const zxfoundation::sync::irq_lock_guard _{g_lock};
                 if (!ensure_entries_locked()) return std::unexpected(
                     lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
                 if (auto* found = find_key_locked(node, index)) {
@@ -356,7 +356,7 @@ namespace zxfoundation::memory::page_cache {
         auto allocation = pmm::alloc(0U, pmm::zone::normal,
             pmm::purpose::file_cache, pmm::page_init::zeroed);
         if (!allocation) {
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             abort_loading_locked(*loading, loading_generation);
             return std::unexpected(allocation.error());
         }
@@ -364,7 +364,7 @@ namespace zxfoundation::memory::page_cache {
         const u64 phys = active.phys_base;
         if (reader(node, index, active.virt()) != 0U) {
             pmm::free(std::move(active));
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             abort_loading_locked(*loading, loading_generation);
             return std::unexpected(lib::kernel_error::from_driver(
                 lib::driver_error::io_error));
@@ -376,7 +376,7 @@ namespace zxfoundation::memory::page_cache {
             nullptr,
             phys,
             PAGE_SIZE,
-             dgp::isolation::isolation_rights::none,
+             ::zxfoundation::dgp::right::none,
             objects::memory_object_policy{
                 .storage_key = storage_key,
                 .dgp_access = dgp::memory_contract::memory_access::read,
@@ -384,7 +384,7 @@ namespace zxfoundation::memory::page_cache {
             });
         if (!authority) {
             pmm::free(std::move(active));
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             abort_loading_locked(*loading, loading_generation);
             return std::unexpected(authority.error());
         }
@@ -394,7 +394,7 @@ namespace zxfoundation::memory::page_cache {
         if (!resident_pin) {
             discard_value objects::memory_object_destroy((*authority)->ko.id);
             pmm::free(std::move(active));
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             abort_loading_locked(*loading, loading_generation);
             return std::unexpected(resident_pin.error());
         }
@@ -404,7 +404,7 @@ namespace zxfoundation::memory::page_cache {
         if (!metadata) {
             discard_value pmm::frame_release_pin(phys);
             discard_value objects::memory_object_destroy((*authority)->ko.id);
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             abort_loading_locked(*loading, loading_generation);
             return std::unexpected(metadata.error());
         }
@@ -412,7 +412,7 @@ namespace zxfoundation::memory::page_cache {
         arch::s390x::cpu::skey::sske(phys,
             arch::s390x::cpu::skey::make_skey(storage_key, false));
         {
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             if (loading->generation != loading_generation ||
                 loading->state != cache_entry_state::loading) {
                 __builtin_trap();
@@ -446,7 +446,7 @@ namespace zxfoundation::memory::page_cache {
                 lib::generic_error::invalid_arg));
         }
 
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         if (!g_entries) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
         auto& entry = g_entries[binding.slot];
@@ -471,7 +471,7 @@ namespace zxfoundation::memory::page_cache {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         if (!g_entries) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
         auto& entry = g_entries[source.slot];
@@ -492,7 +492,7 @@ namespace zxfoundation::memory::page_cache {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         if (!g_entries) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::not_found));
         auto& entry = g_entries[binding.slot];
@@ -507,7 +507,7 @@ namespace zxfoundation::memory::page_cache {
 
     /// @brief Return the number of cache-resident pages.
     [[nodiscard]] auto resident_count() noexcept -> u32 {
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         return g_resident_count;
     }
 
@@ -521,7 +521,7 @@ namespace zxfoundation::memory::page_cache {
             u64 candidates[RECLAIM_BATCH]{};
             u32 candidate_count = 0U;
             {
-                const zxfoundation::sync::irq_lock_guard guard{g_lock};
+                const zxfoundation::sync::irq_lock_guard _{g_lock};
                 if (!g_entries) break;
                 const u32 remaining = target_pages - reclaimed;
                 const u32 batch_limit = std::min(remaining, RECLAIM_BATCH);
@@ -547,7 +547,7 @@ namespace zxfoundation::memory::page_cache {
 
     /// @brief Probe dirty state by physical page through the PFN hash index.
     [[nodiscard]] auto is_dirty_phys(u64 phys) noexcept -> bool {
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         auto* entry = find_phys_locked(phys);
         if (!entry || entry->state != cache_entry_state::ready) return false;
         harvest_dirty_locked(*entry);
@@ -556,14 +556,14 @@ namespace zxfoundation::memory::page_cache {
 
     /// @brief Mark a cache page dirty by physical address.
     auto mark_dirty_phys(u64 phys) noexcept -> void {
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         auto* entry = find_phys_locked(phys);
         if (entry && entry->state == cache_entry_state::ready) entry->dirty = true;
     }
 
     /// @brief Clear software and hardware dirty state after a successful writeback.
     auto clear_dirty_phys(u64 phys) noexcept -> void {
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         auto* entry = find_phys_locked(phys);
         if (!entry || entry->state != cache_entry_state::ready) return;
         entry->dirty = false;
@@ -582,7 +582,7 @@ namespace zxfoundation::memory::page_cache {
         bool needs_writeback = false;
 
         {
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             entry = find_phys_locked(phys);
             if (!entry || entry->state != cache_entry_state::ready ||
                 entry->mapping_refs != 0U) return false;
@@ -601,14 +601,14 @@ namespace zxfoundation::memory::page_cache {
         if (needs_writeback) {
             if (writer(node, index, reinterpret_cast<const void*>(
                     hhdm::phys_to_virt(phys))) != 0U) {
-                const zxfoundation::sync::irq_lock_guard guard{g_lock};
+                const zxfoundation::sync::irq_lock_guard _{g_lock};
                 if (entry->generation == generation &&
                     entry->state == cache_entry_state::writeback) {
                     entry->state = cache_entry_state::ready;
                 }
                 return false;
             }
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             if (entry->generation != generation ||
                 entry->state != cache_entry_state::writeback) {
                 __builtin_trap();
@@ -621,14 +621,14 @@ namespace zxfoundation::memory::page_cache {
 
         u32 evict_generation = 0U;
         {
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             entry = find_phys_locked(phys);
             if (!entry || !begin_evict_locked(*entry)) return false;
             evict_generation = entry->generation;
         }
 
         auto released = pmm::frame_release_pin(phys);
-        const zxfoundation::sync::irq_lock_guard guard{g_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_lock};
         if (!released || !*released) {
             restore_ready_locked(*entry, evict_generation);
             return false;
@@ -650,7 +650,7 @@ namespace zxfoundation::memory::page_cache {
         u64 candidates[PAGE_CACHE_SLOTS]{};
         u32 count = 0U;
         {
-            const zxfoundation::sync::irq_lock_guard guard{g_lock};
+            const zxfoundation::sync::irq_lock_guard _{g_lock};
             if (!g_entries) return 0U;
             for (u32 i = 0U; i < PAGE_CACHE_SLOTS; ++i) {
                 const auto& entry = g_entries[i];

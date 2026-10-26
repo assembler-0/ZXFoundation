@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/psw.cxxm
+/// @file arch/s390x/cpu/psw.zcomponent/psw.cxx
 /// @brief z/Architecture PSW operations.
 
 module arch.s390x.cpu.psw;

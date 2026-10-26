@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/percpu_types.cxxm
+/// @file arch/s390x/cpu/percpu.zcomponent/percpu.cxxm
 /// @brief s390x per-CPU data block.
 
 export module arch.s390x.cpu.percpu;
@@ -26,6 +26,31 @@ namespace arch::s390x::cpu::percpu {
         nucleus   = 6,  ///< Program-call (PC) gate entry.
     };
 
+    /// @brief Read-only mirror of the authoritative lowcore current_domain
+    ///        record
+    struct attached_domain_snapshot {
+        u64     asce{0};        ///< ASCE attached to CR1 for DGP tracking.
+        u64     domain_ptr{0};  ///< VA of the attached domain struct (lowcore mirror).
+        u32     domain_id{0};   ///< Domain ID owning attached_asce, or nucleus for idle/kernel.
+        u8      dgp_state{0};   ///< Lifecycle snapshot admitted by the scheduler.
+        u8      _pad[3]{0};
+        u16     space_asn{0};   ///< Current PASN (space leg; != owner on a borrowed space).
+        u8      space_borrowed{0};
+        u8      _pad_space[5]{0};
+
+        auto publish(u64 asce_v, u64 domain_ptr_v, u32 id, u8 state) noexcept -> void {
+            asce = asce_v;
+            domain_ptr = domain_ptr_v;
+            domain_id = id;
+            dgp_state = state;
+        }
+
+        auto publish_space(u16 asn, u8 borrowed) noexcept -> void {
+            space_asn = asn;
+            space_borrowed = borrowed;
+        }
+    };
+
     /// @brief s390x per-CPU data block.  See file-level comment for placement rationale.
     struct alignas(processor::CACHE_LINE_SIZE) percpu_data {
         u64     self_phys{};           ///< Physical address of this percpu_data instance (used for cross-CPU MCS node addressing by qspinlock; NOT the lowcore's physical address).
@@ -34,7 +59,7 @@ namespace arch::s390x::cpu::percpu {
         u16     cpu_addr{};            ///< Hardware CPU address (from STAP instruction).
         u32     _pad0{};               ///< Explicit padding to align next u64.
 
-        u64     current_domain{};      ///< Virtual address of the current domain struct.
+        u8      _pad_domain[8]{};      ///< Former write-only current_domain mirror; see attached.
         u64     current_strand{};      ///< Virtual address of the currently executing strand.
         u64     kernel_stack{};        ///< Top of this CPU's kernel stack (virtual).
         u64     user_asce{};           ///< User ASCE (CR1 value for user address space).
@@ -74,10 +99,7 @@ namespace arch::s390x::cpu::percpu {
         u8      capacity{100};         ///< Scheduler capacity percentage, 100 when unknown.
         u8      _pad_drawer[2]{};
 
-        u64     attached_asce{0};      ///< ASCE currently attached to CR1 for DGP tracking.
-        u32     attached_domain_id{0}; ///< Domain ID owning attached_asce, or nucleus for idle/kernel.
-        u8      attached_dgp_state{0}; ///< DGP isolation_state snapshot admitted by the scheduler.
-        u8      _pad_asce[3]{};
+        attached_domain_snapshot attached{}; ///< §10.5 mirror (single writer: publish()).
 
         u64     watchdog_heartbeat{0}; ///< Monotonic counter bumped by scheduler_tick().
 
@@ -91,6 +113,13 @@ namespace arch::s390x::cpu::percpu {
         std::atomic<u32> deferred_pending{};
 
         u8      _pad_fixup[2]{};
+
+        u8      lockgraph_depth{0};
+        u8      lockgraph_recursion{0};
+        u8      _pad_lg[6]{};
+        const void* lockgraph_held_inst[8]{nullptr};
+        void*   lockgraph_held_map[8]{nullptr};
+        u64     pending_dead_strand{};
     };
 
     /// @brief self_phys must be first — qspinlock and early bringup code rely

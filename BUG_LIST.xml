@@ -3,7 +3,7 @@
             xsi:noNamespaceSchemaLocation="scripts/schemas/BUG_HISTORY.xsd">
 
     <Title>ZXFoundation bug history</Title>
-    <LastUpdated>2026-07-28</LastUpdated>
+    <LastUpdated>2026-10-10</LastUpdated>
 
     <BugList>
 
@@ -269,7 +269,7 @@
                 vm_region alloc_region double-constructed the slot, wiping the SCOMS id assigned by scoms_table::alloc
             </Description>
             <Behavior>
-                alloc_region() called ::new(static_cast<void*>(rgn)) vm_region{} after g_region_table.alloc() had already
+                alloc_region() called ::new((void*)rgn) vm_region{} after g_region_table.alloc() had already
                 default-constructed the slot and initialised ko.id via ko.initialize(slot, type). The placement-new
                 zero-initialised the storage, clearing ko.id back to ~0U. Capabilities issued against such a region
                 therefore failed lookup_kobject() (cap_issue returned generic::not_found) and every operation that
@@ -297,6 +297,698 @@
                 <Branch>26h2</Branch>
                 <Number>2033</Number>
             </FixedIn>
+        </Bug>
+
+        <Bug id="BUG-009">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>gate_find() conflates the packed nucleus-call number with a gate id</Description>
+            <Behavior>dgp/gate dispatch (dispatch.cxx:226) looks up gates by the packed nr instead of a pure gate id; wrong-slot resolution corrupts dispatch and can mask as gate_count corruption.</Behavior>
+            <Solution>R0: split gate-id domain from packed call numbers; R2: gate table replaced entirely by PC-ss ETE/LTE machinery.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: gate validation runs only for ops carrying a real meta.gate_id; the packed call number is never a gate slot id. R2 replaces the table with ETE/LTE machinery.</Notes>
+        </Bug>
+
+        <Bug id="BUG-010">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>Inverted exec condition on IPC-attached mappings in the fault path</Description>
+            <Behavior>arch/s390x fault handling (fault.cxx:456) tests the execute permission with inverted polarity for IPC-attached mappings; faulting-in ipc-shared pages livelocks or faults forever.</Behavior>
+            <Solution>R0: fix predicate; R2 accompanies the ipc-notify wiring.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: IPC-shared prot bits derive from the region prot (same predicate as the file path).</Notes>
+        </Bug>
+
+        <Bug id="BUG-011">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>vm_drain_phys_range walks the wrong ASCE</Description>
+            <Behavior>memory/vm/core.cxx:935-951 unmaps user pages through the kernel ASCE instead of the owning space's ASCE; cross-space drains never hit the intended page tables.</Behavior>
+            <Solution>R0: pass the target space's ASCE explicitly; assert ASCE identity in debug builds.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: the kernel-ASCE drain variant is deleted (zero callers); vm_space_drain_phys_range is the sole drain primitive and asserts the owning ASCE identity.</Notes>
+        </Bug>
+
+        <Bug id="BUG-012">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>User-registered signal handlers execute in supervisor state</Description>
+            <Behavior>dgp/signal/core.cxx:24-65 calls the registered user VA directly in kernel mode instead of arranging a user-mode frame; fundamental privilege-boundary break (also RC-16.3).</Behavior>
+            <Solution>R0: interim guard (refuse delivery); R2: full user-mode trampoline per ch.07 §7.5.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed (interim)</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 interim 2026-10-09: registered handlers are never invoked in supervisor state; delivery falls to the kind default. Full user-mode trampoline is R2 (RC-07.4, RC-16.3). REMAINDER (OBL-001): user-mode delivery trampoline owed at R2 (RC-07.4, RC-16.3); until then handlers are suppressed and defaults apply. Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-013">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>domain_create_txn double-release and strand_body leak</Description>
+            <Behavior>Transaction recorder and manual failure path both free the SCOMS slot (double-release); on other failure legs the primary strand_body leaks.</Behavior>
+            <Solution>R0/R1: transaction is the only owner of intermediates (ch.15 §15.2 rule 1); delete manual frees.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: the transaction is sole owner of intermediates; strand_body is recorded and freed on rollback; the manual slot release (double-release) is gone. REMAINDER (OBL-006): fault-injection coverage of the rollback at every recorded step owed at R2 (RC-15.3). Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-014">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>transaction (CRTP recorder) defaulted move ctor opens a double-rollback window</Description>
+            <Behavior>Moving an armed transaction leaves the moved-from object able to roll back recorded resources a second time.</Behavior>
+            <Solution>R1: transactions are non-movable (ch.15 rule 2).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: transaction is non-movable (move ctor/assign deleted).</Notes>
+        </Bug>
+
+        <Bug id="BUG-015">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>PMM free() marks the freed block as buddy-owned before linking it</Description>
+            <Behavior>free path sets ownership metadata before insertion into the buddy lists; an interrupt-window observer can see an owned-but-unlinked block.</Behavior>
+            <Solution>R0: link first, publish ownership last (compare-existing ordering rules).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: publish discipline enforced - desc==buddy iff linked in a buddy list; PCP/transitional frames carry owner none; merged non-head blocks cleared. Also closes the PCP cross-CPU absorb and stale-non-head windows.</Notes>
+        </Bug>
+
+        <Bug id="BUG-016">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>sd::build_group_ring aliases the same pool for &gt;4 CPUs</Description>
+            <Behavior>sched domain group-ring builder, more than 4 CPUs share one allocation pool; load-balance groups alias and corrupt each other.</Behavior>
+            <Solution>R0/R4: per-level pools; the sched_domain rings are rebuilt properly in R4.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed (interim)</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 stopgap 2026-10-09: one non-aliasing span group per (cpu, level) with a self-circular ring. Real hierarchy groups are the R4 rebuild. REMAINDER (OBL-002): real hierarchy group rings owed at R4 (RC-09.7). Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-017">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>cpudl (deadline global tree) has no lock</Description>
+            <Behavior>Deadline push/pull metadata is read and written without serialization; concurrent enqueue corrupts the tree.</Behavior>
+            <Solution>R0: guard with the rq lock discipline; R4: real DL push/pull revival replaces it.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: deadline_lock materialized (irq-safe qspinlock, taken internally by set_dl/clear_dl). Sharded locking and DL push/pull revival are R4. REMAINDER (OBL-003): per-CPU-sharded locking and DL push/pull revival owed at R4 (RC-09.4). Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-018">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>EC_HALT_BIT collides with EC_CALL_FUNCTION in soft-IPI bit constants</Description>
+            <Behavior>Two distinct deferred-work bits share one value; a halt signal can be misread as call-function work and vice versa.</Behavior>
+            <Solution>R0: renumber; RC-10.1 static_asserts uniqueness.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: the colliding EC_HALT_BIT is deleted; XOR/OR distinctness static_asserts added (RC-10.1).</Notes>
+        </Bug>
+
+        <Bug id="BUG-019">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>CPACF KMO wrapper executes kmf opcode</Description>
+            <Behavior>arch crypto glue (cpacf.cxxm:257) issues KMF instead of KMO; message-only invocations produce wrong/undefined results.</Behavior>
+            <Solution>R0: opcode swap fix; RC-16.2 table test (KMO≠KMF).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: the KMO wrapper is named kmo and issues kmo (was kmf). RC-16.2 table test lands at R7. REMAINDER (OBL-007): CPACF wrapper table test owed at R7 (RC-16.2). Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-020">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>CSS sal() executes rsch instead of schm/ssch-path semantics</Description>
+            <Behavior>arch/s390x/io/css (core.cxxm:118): the subchannel-alter wrapper issues rsch; callers intending state alteration resume the subchannel instead.</Behavior>
+            <Solution>R0: correct opcode mapping; unit-test the wrapper table.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: sal() issues SAL (was RSCH). RC-11.1 wrapper table test lands at R5. REMAINDER (OBL-008): CSS wrapper table test owed at R5 (RC-11.1). Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-021">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>STCKF gated on facility 34 instead of facility 25</Description>
+            <Behavior>Store-clock-fast enablement tests the wrong facility bit; STCKF is rejected on machines that have it or accepted where absent.</Behavior>
+            <Solution>R0: correct the facility bit; table-test against PoP list.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: STCKF is gated on facility 25 (store-clock-fast) with an STCK fallback; the old gate tested facility 34 (GEN_INST).</Notes>
+        </Bug>
+
+        <Bug id="BUG-022">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>Inverted PTF facility check</Description>
+            <Behavior>arch/s390x ptf wrapper (ptf.cxxm:82) inverts the facility-present test; perform-timing-facility-function is disabled on machines that support it.</Behavior>
+            <Solution>R0: fix predicate.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: facility predicate un-inverted; topology polling runs only when the facility is installed.</Notes>
+        </Bug>
+
+        <Bug id="BUG-023">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>NNPA parameter bounds checks inverted</Description>
+            <Behavior>Two guard conditions reject valid parameter blocks and accept out-of-range ones.</Behavior>
+            <Solution>R0: invert correctly; negative tests.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: both stickification guard pairs un-inverted (undersized operands rejected, valid ones proceed). REMAINDER (OBL-007): NNPA bounds negative tests owed at R7 (RC-16.2). Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-024">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>ECKD probe fallback masks FBA devices</Description>
+            <Behavior>When the ECKD-specific probe fails, the fallback path labels the device unusable even when it is a valid FBA device.</Behavior>
+            <Solution>R0/R5: probe order ECKD→FBA with distinct classification.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: a failed SENSE-ID means not-ECKD - the probe now fails and FBA/tape proceed (ch. 01 1.2.3).</Notes>
+        </Bug>
+
+        <Bug id="BUG-025">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>EX_TYPE_FIXUP fixup class may never be applied</Description>
+            <Behavior>The exception-table fixup path cannot classify entries of the FIXUP kind, so kernel uaccess faults of that class take no fixup and escalate.</Behavior>
+            <Solution>R0/R5: correct the exception-table decoder; uaccess negative tests (RC-14.3).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: EX_TYPE_FIXUP redirects frame->psw_addr to the fixup site (was percpu-only, an infinite fault loop). REMAINDER (OBL-005): pgm_fixup_addr consumer audit and RC-14.3 uaccess negative tests owed at R6. Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-026">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>RT/DL tick undercharges consumed budget</Description>
+            <Behavior>The tick charging path undercounts the elapsed time for RT and DL strands; over time the admission budgets drift loose.</Behavior>
+            <Solution>R4: ns time-base sweep (ch.09) makes the charge exact.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Open</Status>
+        </Bug>
+
+        <Bug id="BUG-027">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>Signal ack / pending_mask desynchronization</Description>
+            <Behavior>Acking a signal does not consistently clear the corresponding pending bit; spurious redelivery or lost wakeups possible.</Behavior>
+            <Solution>R0/R2: ack path and mask update under one lock discipline; suite test.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: signal_ack dequeues acknowledged entries and rebuilds pending_mask from the survivors (single-state-write rule, ch. 20.3 law 4).</Notes>
+        </Bug>
+
+        <Bug id="BUG-028">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>slub attach-authorities early return skips half the assignment</Description>
+            <Behavior>On a partial-failure branch the authority attachment returns early, leaving slabs with unassigned authorities.</Behavior>
+            <Solution>R0: complete both branches; fault-injection cover (RC-15.3).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: the authority attach loop completes every cache; the view-attach failure leg rolls the half-attached authority back.</Notes>
+        </Bug>
+
+        <Bug id="BUG-029">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>kmem_free_raw leaks on its failure path</Description>
+            <Behavior>The raw free helper drops the allocation silently on one early exit.</Behavior>
+            <Solution>R0: route through the transaction/RAII path; allocator leak test.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: kmem_free_raw traps on slab corruption (memory_error::corruption, code 12, added to the taxonomy) instead of silently leaking.</Notes>
+        </Bug>
+
+        <Bug id="BUG-030">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Low</Severity>
+            <Description>zx-discovery manifest parser typo: "standa\`rd" keyword</Description>
+            <Behavior>The canonical keyword contains a stray backtick; manifests that use the documented spelling fail to parse.</Behavior>
+            <Solution>Fix lexer table; conformance manifest test.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: zx-discovery keyword corrected (the stray-backtick spelling replaced by standard); the validator already accepted the documented spelling.</Notes>
+        </Bug>
+
+        <Bug id="BUG-031">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>High</Severity>
+            <Description>gate_count accounting corruptible by the BUG-009 confusion</Description>
+            <Behavior>Gate create/destroy accounting tracks the packed-number domain, so counts drift from actual gate population; eventual assertion or slot exhaustion.</Behavior>
+            <Solution>R0 together with BUG-009; R2 replaces the accounting with ETE/LTE table accounting.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: gate_count is maintained symmetrically at gate_create/gate_destroy - its only writers.</Notes>
+        </Bug>
+
+        <Bug id="BUG-032">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>Duplicate lifecycle state copies outside ko.state</Description>
+            <Behavior>Several subsystems keep parallel state fields beside the SCOMS lifecycle; they can disagree (domain/gate/vm paths).</Behavior>
+            <Solution>R1: ko.state is the only lifecycle truth (RC-04.1); strays deleted.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+        </Bug>
+
+        <Bug id="BUG-033">
+            <FoundDate>2026-09-21</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>last_error not populated on multiple failing syscall paths</Description>
+            <Behavior>Several handlers return ~0 without setting the per-strand (category, code) pair; user space cannot classify failures.</Behavior>
+            <Solution>R1/R2: every failing path sets last_error (RC-14.2); suite asserts categories.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+        </Bug>
+
+        <Bug id="BUG-034">
+            <FoundDate>2026-10-07</FoundDate>
+            <Severity>High</Severity>
+            <Description>unmap_page_dispatch lacks segment-root (DT=00) dispatch</Description>
+            <Behavior>arch/s390x/mmu/core.cxx:695-710 dispatches unmap on the ASCE DT for region-1/2/3 roots only; a DT=00 segment-root space falls through to invalid_address and is never unmapped (audit: MM report).</Behavior>
+            <Solution>R0: add the DT=00 segment-root case; debug-assert full DT coverage in the dispatch.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: unmap_page_dispatch handles DT=00 segment roots.</Notes>
+        </Bug>
+
+        <Bug id="BUG-035">
+            <FoundDate>2026-10-07</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>ZXFL stage1 stage2-load check is magic-only, not an integrity check</Description>
+            <Behavior>arch/s390x/init/zxfl/stage1/entry.c:54-58 validates the loaded stage2 with two magic-pattern comparisons; corruption preserving the patterns boots undetected, violating the ch. 01 §1.2 contract that stage1 must never fail silently (audit: ARCH report).</Behavior>
+            <Solution>R0: embed the stage2 checksum into stage1 at build time (zxsign precedent) and verify before jump; fallback floor is bounds + entry-PSW sanity.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed (interim)</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 floor 2026-10-09: load-integrity floor landed (mid-load read failure panics; empty loads and corrupt markers rejected outright). The build-time checksum embed is superseded by the R7 loader-digest program (ch. 01 1.6). REMAINDER (OBL-004): build-time stage2 checksum embed owed at R7 (ch. 01 1.6). Tracked: docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-036">
+            <FoundDate>2026-10-07</FoundDate>
+            <Severity>Low</Severity>
+            <Description>base::transaction has a dead trailing branch and a never-invoked mark_rolled_back()</Description>
+            <Behavior>zxfoundation/base/transaction.cxxm:41-58: the trailing if (m_rolled_back) {} branch is dead and mark_rolled_back() has zero callers — an unfinished commit-after-rollback reconciliation (audit: DGP report).</Behavior>
+            <Solution>R0 (with BUG-014): delete mark_rolled_back() and the dead branch; transactions become non-movable.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: mark_rolled_back() and the dead commit branch deleted.</Notes>
+        </Bug>
+
+        <Bug id="BUG-037">
+            <FoundDate>2026-10-07</FoundDate>
+            <Severity>High</Severity>
+            <Description>scheduler_cpu_attach and sched_init_ap diverge; attach never arms the AP tick timer</Description>
+            <Behavior>zxfoundation/sched/core.cxx:913-952 duplicates 846-903 almost line-for-line but omits timer setup; a CPU brought online through scheduler_cpu_attach runs with no periodic tick, so PELT/RCU never advance on it and BSP-driven grace periods cannot complete (audit: SMP report).</Behavior>
+            <Solution>R0: factor one attach path shared by both callers; the path arms the AP tick timer.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: one attach path - sched_init_ap delegates to scheduler_cpu_attach, which arms the AP tick timer. RESIDUAL (2026-10-10): tick-timer double-insert at hotplug re-online, found while auditing this fix, fixed same day (timer::init_ap heap reset - BUG-044 / OBL-014); RC-10.4 hotplug cycle test still owed (OBL-009).</Notes>
+        </Bug>
+
+        <Bug id="BUG-038">
+            <FoundDate>2026-10-07</FoundDate>
+            <Severity>Low</Severity>
+            <Description>domain_destroy enqueues a placeholder fault signal to the domain being destroyed</Description>
+            <Behavior>zxfoundation/dgp/domain.zcomponent/core.cxx:723-724 enqueues signal_kind::fault with data 0xDEADBEEF to the dying domain; it can never be delivered (teardown discards pending signals) and pollutes the audit trail (audit: DGP report).</Behavior>
+            <Solution>R0: delete the placeholder enqueue.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: the 0xDEADBEEF placeholder enqueue deleted.</Notes>
+        </Bug>
+
+        <Bug id="BUG-039">
+            <FoundDate>2026-10-07</FoundDate>
+            <Severity>Low</Severity>
+            <Description>printk facade module exports nothing</Description>
+            <Behavior>zxfoundation/sys/printk.zcomponent/interface.cxxm:2-4 uses plain import instead of export import; the facade exports an empty module and every consumer must import zxfoundation.sys.printk.core directly (audit: SYS report).</Behavior>
+            <Solution>R0: export import core/types/format from the facade.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4195</Number></FixedIn>
+            <Notes>R0 fix 2026-10-09: the printk facade re-exports core/types/format.</Notes>
+        </Bug>
+
+        <Bug id="BUG-040">
+            <FoundDate>2026-10-07</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>trap/sched assembly hardcodes C++ layout offsets</Description>
+            <Behavior>arch/s390x/trap/entry.S:9,125 and arch/s390x/sched/switch_to.S reference struct offsets (DOMAIN_FLAGS_OFF, ksp at 120, kstack_top at 112) as bare constants tied to C++ layouts only by comment (audit: ARCH report).</Behavior>
+            <Solution>R1 per RC-10.2: offsets generated from the C++ layout and asserted at build; filed for the ledger, out of R0's "no design changes" charter.</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Deferred (owner order 2026-10-10)</Status>
+        </Bug>
+
+        <!-- ===== 2026-10-10 audit pass: findings that never reached the ledger ===== -->
+
+        <Bug id="BUG-044">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>High</Severity>
+            <Description>Tick-timer double-insert at hotplug re-online (stale per-CPU timer heap + forced armed flag)</Description>
+            <Behavior>A stopped CPU cannot cancel its own timers (timer_cancel must run on the timer CPU), so the per-CPU timer heap survives offline with stale armed entries. scheduler_cpu_attach then forced t.armed=false and re-added the AP tick timer into a heap still holding it - defeating timer_add's armed guard (timer core.cxx:87) - producing a double entry, double fire and heap corruption on any offline/online cycle. Root enabler: timer::init_ap was a declared no-op that never reset the heap.</Behavior>
+            <Solution>Fixed 2026-10-10: timer::init_ap now resets the CPU heap and disarms every dropped timer; the armed-flag force in scheduler_cpu_attach is removed so timer_add's guard stands. Hotplug cycle test owed at R4 (RC-10.4, OBL-009).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed (fixed 2026-10-10)</Status>
+            <FixedIn><Branch>26h2</Branch><Number>4200</Number></FixedIn>
+            <Notes>Found while auditing the BUG-037 fix; never previously filed. Tracked: OBL-014 in docs/architecture/REALIZATION.md.</Notes>
+        </Bug>
+
+        <Bug id="BUG-045">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>Deferred MCCK work is a TODO stub with no real handler</Description>
+            <Behavior>arch/s390x/trap/ext.zcomponent/core.cxx:63-71 drains the deferred-MCCK bit into a TODO log line only; ch. 10.2 requires a real handler. The stub predates the R0 sweep and never appeared on ch. 18's R0 list.</Behavior>
+            <Solution>R4: real deferred-MCCK handler per ch. 10.2 (OBL-015).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Open</Status>
+            <Notes>Discovered in the 2026-10-10 audit pass over the kern_state defect lists.</Notes>
+        </Bug>
+
+        <Bug id="BUG-046">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>domain_init_nucleus asymmetry: uninitialized vm_space for the nucleus domain</Description>
+            <Behavior>domain_init_nucleus never runs vm_space_init and never creates the address-space object, so nucleus mem ops operate on an uninitialized vm_space; Domain-0 special-casing sprawls beyond the three exceptions ch. 04 4.9 allows (RC-04.6).</Behavior>
+            <Solution>R2: make the nucleus domain obey the model, or enumerate every exception in ch. 04 4.9 (OBL-016).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+            <Notes>Fixed 2026-10-24 (OBL-016): domain_init_nucleus runs the full vm_space_init before the CR1-derived ASCE. Pending capture.</Notes>
+            <Notes>Discovered in the 2026-10-10 audit pass (DGP report finding).</Notes>
+        </Bug>
+
+        <Bug id="BUG-047">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>Three idle-strand conventions coexist; idle-domain logic is dead code</Description>
+            <Behavior>The types doc says idle strands have owner==nullptr; idle_strand_create_impl sets owner=nucleus; the nucleus primary strand is flagged idle with a null body. domain_flags::idle is never set, so is_idle_domain is always false and the idle-domain branches in classed/admit are unreachable.</Behavior>
+            <Solution>R1: one idle convention; delete the dead branches (OBL-017).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <Notes>Discovered in the 2026-10-10 audit pass (SMP report finding).</Notes>
+        </Bug>
+
+        <Bug id="BUG-048">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>Low</Severity>
+            <Description>pmm reserve() misses PCP-cached frames (reserved ranges can contain live PCP frames)</Description>
+            <Behavior>pmm reserve() (core.cxx:668-753) carves reserved ranges out of buddy free lists only; frames cached in per-CPU PCP lists are invisible to it, so a range marked reserved may later be handed out from a PCP list.</Behavior>
+            <Solution>R3: frame-contract era - drain or account PCP in reserve ranges (OBL-018).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Open</Status>
+            <Notes>Found during the BUG-015 publish-discipline work (2026-10-09); filed 2026-10-10.</Notes>
+        </Bug>
+
+        <Bug id="BUG-049">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>scoms_table static finalizer is one-per-instantiation; duplicate tables clobber the reclaimer</Description>
+            <Behavior>scoms_table keeps one static s_instance per (T,N) instantiation, resolved by the static reclaimer callback (table.cxxm:54-60). Two tables of the same element type silently overwrite each other's reclaimer.</Behavior>
+            <Solution>R2: pass the table through the reclaimer closure, in the SCOMS m_handle ABI-bump window (OBL-019).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+            <Notes>Fixed 2026-10-24 (OBL-019): reclaimer closure carries the owning table; the s_instance singleton is deleted. Pending capture.</Notes>
+            <Notes>Discovered in the 2026-10-10 audit pass (SYS report finding).</Notes>
+        </Bug>
+
+        <Bug id="BUG-050">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>Strand-creation API duality and two-reaper teardown fragmentation</Description>
+            <Behavior>Two strand-creation APIs coexist (domain::strand_create vs strand_create_request/strand_spawn; the rich path requires stack_order==2), and teardown work is split between domain_destroy and the deferred reaper in schedule() with no single owner.</Behavior>
+            <Solution>R2: strand lifecycle unification per ch. 09 9.4; single teardown owner (OBL-020).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+            <Notes>Fixed 2026-10-24 (OBL-020): creation surface unified (bare mode + stack_order removed, Test 77 negatives); teardown single-owner doctrine landed (schedule() reclaims dead-strand stacks post-switch; domain teardown owns identity). Pending capture.</Notes>
+            <Notes>Discovered in the 2026-10-10 audit pass (DGP/SMP report findings).</Notes>
+        </Bug>
+
+        <Bug id="BUG-051">
+            <FoundDate>2026-10-10</FoundDate>
+            <Severity>Low</Severity>
+            <Description>Layering inversions: base imports sys, syschk imports drivers, generic base hardcodes s390x</Description>
+            <Behavior>base/cxxrtse imports sys.syschk/printk/zinit; syschk imports drivers.watchdog; the generic base layer hardcodes s390x endianness assumptions, MAX_CPUS and a DASD serial (audit: SYS report).</Behavior>
+            <Solution>R1 module hygiene: invert the dependencies or declare them architectural in ch. 00 0.7 (OBL-021).</Solution>
+            <AffectedBuilds><Range><From><Branch>26h2</Branch><Number>2034</Number></From></Range></AffectedBuilds>
+            <Status>Closed (interim; remainder OBL-028)</Status>
+            <Notes>Discovered in the 2026-10-10 audit pass.</Notes>
+        </Bug>
+
+        <!-- ===== 2026-10-24: CPU-timer performance regression (tests 76-79) ===== -->
+
+        <Bug id="BUG-052">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>EEVDF_DEFAULT_SLICE_NS held a TOD-tick value (40'960'000) in an _NS-named constant — every fair slice was 40.96 ms, not the §9.2-mandated 2.5 ms</Description>
+            <Behavior>fair.zcomponent/core.cxxm:27 defined the slice as "TOD ticks" (the 10 ms tick interval in TOD units) while every consumer (sched_slice, place_entity, cpu_timer_tick deadline math, cputimer_arm_ns) treated it as nanoseconds. Once CR0.53 enabled real SPT delivery, schedule() faithfully armed 40.96/n ms quanta — rotation slots became LONGER than the pre-CPU-timer 10 ms tick rotation, regressing the suite from ~8 s to ~18 s (T76 measured 41.2 ms/yield = exactly 3 slots of 40.96/3 ms; T78 identical per-try cost). Root cause of the 2026-10-24 16:34 capture.</Behavior>
+            <Solution>Constant corrected to 2'500'000 ns per ch. 9.2 (2026-10-24). Verification pending owner capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <Notes>Found by quantitative slot analysis of the owner's GCC capture; the constant's own comment said "in TOD ticks".</Notes>
+        </Bug>
+
+        <Bug id="BUG-053">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>High</Severity>
+            <Description>cpu_timer_tick re-armed SPT with raw nanoseconds and never recorded the armed TOD value</Description>
+            <Behavior>sched/core.cxx:756 called cputimer::spt(curr->se.slice) with se.slice in ns while SPT takes TOD units (4096/us), and g_cputimer_armed_tod was not updated — the next tick charged against the stale arm (4x overcharge per premature fire; a 2.5 ms slice fired every ~610 us). Residual of the same unit-boundary class as the vruntime fix; violated the §9.2 One Time Base law at the re-arm site.</Behavior>
+            <Solution>Re-arm through detail::cputimer_arm_ns (converts and records) (2026-10-24). Verification pending owner capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+        </Bug>
+
+        <Bug id="BUG-054">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>fair::tick charged a fixed slice of vruntime on every 10 ms periodic tick — double accounting once the CPU timer went live</Description>
+            <Behavior>fair.zcomponent/core.cxx fair::tick called update_curr with a fixed EEVDF_DEFAULT_SLICE_NS delta every periodic tick. This was the legacy stopgap from the era when SPT expiry was never delivered; with cpu_timer_tick charging measured elapsed, every quantum was billed twice (and in fixed, not measured, units), violating ch. 9.3 (SPT drives the fair quantum; the periodic tick drives accounting and balancing).</Behavior>
+            <Solution>fair::tick reduced to a deadline-expiry safety re-check (extend + need_resched), no charging (2026-10-24). Verification pending owner capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+        </Bug>
+
+        <Bug id="BUG-055">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>Low</Severity>
+            <Description>Far-future clock-comparator arm used 40'960'000 TOD (10 ms) where 10 seconds was intended</Description>
+            <Behavior>timer.zcomponent/core.cxx rearm_comparator and irq_handler_timing_alert armed the comparator at stck()+40'960'000 with the comment "~10 seconds"; the value is 10 ms in TOD units, so idle CPUs with empty timer heaps woke at 100 Hz. Same TOD/ns confusion family as BUG-052.</Behavior>
+            <Solution>Both sites corrected to 40'960'000'000 TOD (2026-10-24). Verification pending owner capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+        </Bug>
+
+        <Bug id="BUG-056">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>avg_vruntime accumulator leaked w × Δmin_vruntime per queue transit — newly placed strands starved for ~boot_time/queue_depth</Description>
+            <Behavior>fair.zcomponent avg_vruntime_add recorded w × (vruntime − min_vruntime@enqueue) while avg_vruntime_sub removed w × (vruntime − min_vruntime@dequeue); min_vruntime advances between the two snapshots (the running strand drags it), so every enqueue/dequeue transit left a permanent residual. Σ residuals ≈ weight × total queued-time = w × boot_time × queue_depth, drifting the computed average ahead of min_vruntime by ≈ T/n_queued. place_entity takes base = max(avg, min_vruntime), so every newly created strand was placed that far into the future. Measured (2026-10-24 capture, post-BUG-052 fix): T79 worker created at t=4.287 s did not run until t=5.765 s — 1.478 s ≈ T/3 with weight-sum 3×1024, exactly the predicted drift; T78's ~0.85 s worker-start matches T/4. join wake (17 µs) and sleep (22.1 ms for 20 ms) were healthy — the entire residual cost of tests 78/79 was this drift.</Behavior>
+            <Solution>Absolute weighted sum: accumulator holds Σ w_i × vruntime_i; add/sub cancel exactly because vruntime only changes while a strand is off the tree (2026-10-24). Verification pending owner capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <Notes>Diagnosed from the T79PROBE lines (exit wake_us=17, join iters=1 total_us=1478622, sleep total_us=22141). Confirmed by the 2026-10-24 close-out captures: GCC join 5 us (iters=0), LLVM 15.6 ms, T78/T79 milliseconds, 78/78 both toolchains.</Notes>
+        </Bug>
+
+        <Bug id="BUG-057">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>Fair rotation cadence sits above the armed slice — 3x on GCC, 9x+ on LLVM; scheduler-latency paths inflate on the LLVM build</Description>
+            <Behavior>Post-BUG-052..056 captures (2026-10-24, both toolchains, 78/78 PASS): GCC T76 = 7.5 ms/yield (model: ~2.5-5 ms), sleep exact (21.7 ms/20 ms), join 5 us. LLVM T76 = 67.5 ms/yield, sleep(20 ms) total 70 ms (= 7 ticks), join worker-start 15.5 ms (~6 slots). The inflation is non-uniform (boot-to-T75 only ~40% slower on LLVM) so host contention alone does not explain it; all scheduler-latency paths inflate together while correctness is unaffected (no lost wake, no starvation). Hypothesis: per-fire charge undercount on the LLVM build (deadline taking multiple SPT fires to expire) or wake-to-resume latency in the fair pick; needs one probe round with a per-fire charge histogram and pick-cadence counters on the LLVM nucleus.</Behavior>
+            <Solution>Probe round on the LLVM build: charge histogram in cpu_timer_tick (fires, elapsed_ns, armed) + schedule() pick cadence; fix whatever it exposes. Not a correctness blocker; R2 continues in parallel.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <Notes>Filed at the close of the 2026-10-24 performance arc (BUG-052..056 confirmed by the same captures). CLOSED same day: the calm-host LLVM capture passed 79/79 in 3.39 s with T76 = 834 ms (vs 6.75 s under load) and B057 probes showing elapsed == armed on every fire — fair cadence was host-side interrupt delivery latency under a loaded host, not a kernel defect. Charges exact on both toolchains.</Notes>
+        </Bug>
+
+        <Bug id="BUG-058">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>Suspected cross-CPU fair-tree race (steal vs enqueue) corrupting user .bss with rb-tree link stores during strand creation</Description>
+            <Behavior>CLOBBERPROBE forensics (GCC, 2026-10-24 17:45/17:51 boots): after t41's strand_create the .bss cluster is intact (child=3 dom=2 cap=valid); after t42's strand_create it is wiped — child_id/domain_id/admin_cap/gate_id zeroed and io_token overwritten with a pointer-shaped value, a ~72-byte mostly-zero+pointer pattern over [domain_id..io_token] exactly matching rb_link_node/rb_erase parent/null-child stores through a stale node pointer. Context: t41's worker (strand 256) is stolen to another CPU inside the same window (B057 lines from cp244/cp127 fire between the probes) while t42's create enqueues strand 257 into cpu0's fair tree — the two sides race on the shared tree. LLVM boots have not hit it; the window's width is compiler-scheduling-dependent, so the toolchain split is a hit-rate difference, not immunity. Test 46 (dom::destroy of child_id==0) is the visible casualty; domain_id/admin_cap zeroing means any later syscall would fail too.</Behavior>
+            <Solution>Bisect boot shipped with try_steal_strand_locked disabled: if t42-mid reads clean, the race is localized to the steal path's cross-CPU dequeue/migrate under the double rq lock; fix by re-auditing the lock/unlock and rb ownership discipline between enqueue_strand (cpu0) and try_steal (remote CPU), including the unlocked topology/snapshot reads. Verification: clean t42-mid with steal re-enabled after the fix.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Closed</Status>
+            <Notes>ROOT CAUSE (2026-10-24, kernel exonerated): the user-init worker trampolines set r15 = stack+4080 with no s390x ABI callee register-save headroom; the worker C prologue's stmg %r6,%r15,48(%r15) spills 80 bytes at r15+48..+120 — 96 bytes past the 4096-byte stack array into adjacent .bss. Register-for-register match with the corruption (r6/r8/r10 zeros landing on domain_id/admin_cap/child_id; saved r15 = 0x40E1B0 stamped into io_token). Latent in all pre-existing worker trampolines (t73/t74/t78/t79) — their spills landed in harmless neighbors until the t41/t42 stacks were placed next to the identity cluster. The GCC-vs-LLVM split was .bss layout luck. FIX: all six trampolines reserve the 160-byte ABI frame (aghi 4080 → 3920). The kernel-side B058 canary watch caught the event at exit-in; migration was exonerated by the zero-migration boot (earlier cp-attributed B057 lines were a global-counter print artifact).</Notes>
+        </Bug>
+
+        <Bug id="BUG-059">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>High</Severity>
+            <Description>shm import ABI dropped the portal id — imported portals were unreleasable from user space; every import leaked a portal (pinned frames, held AR, ASTE slot) toward the 16-per-domain cap</Description>
+            <Behavior>nc_shm_import returned only ar_num although portal_binding carries portal_id; no shm_unimport exists and nb_portal_destroy needs the id — user space could never destroy an imported binding. t66/t67 portals survived t69 "cleanup" on every boot, holding ar1/ar2 and pinning freed frames; later tests then bound onto leaked state (the T80 maze: fresh imports landed on occupied ranges/ARs, making failures nondeterministic in shape).</Behavior>
+            <Solution>ABI fixed 2026-10-24: import returns (portal_id &lt;&lt; 32) | ar_num (t66/t67 asserts updated); t69 now performs full teardown surface — portals destroyed before token release and page free. R2 ABI window per ch. 18. Verification pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+            <Notes>Found while diagnosing T80's retry-leg failure; the suite carried the leak since t66 landed.</Notes>
+        </Bug>
+
+        <Bug id="BUG-060">
+            <FoundDate>2026-10-24</FoundDate>
+            <Severity>High</Severity>
+            <Description>Dispatch target resolution read portal_destroy's a1 as a domain id — destroys of portals with id != 0 authorized against unrelated domains</Description>
+            <Behavior>target_domain_for_op lumped portal_destroy with ops whose a1 is a target domain id. Portal destroy's a1 is the PORTAL id: id 0 collided with the nucleus (authorize passed by accident — every historical destroy), and id 1 resolved to a dead child-domain slot and was denied (t69's second sequential destroy). Owner teardown of multiple portals was architecturally impossible.</Behavior>
+            <Solution>portal_destroy resolves the acted-upon domain through the portal's source_domain (2026-10-24). Third arg-semantic mismatch this arc (a3 entry-va, import return packing, a1 dual meaning) — pattern class: per-op argument schemas are implicit in scattered switch arms; a declared arg-schema table is the unification. Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+        </Bug>
+
+        <Bug id="BUG-061">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>percpu field inserted mid-struct shifted the qspinlock MCS node array — cross-CPU lock writes at stale offsets corrupted kernel stacks (found by the stress framework's first stolen-strand run)</Description>
+            <Behavior>pending_dead_strand (reaper handoff, OBL-020) was inserted before ec_bits "as an appended tail" — a false claim: every later field shifted 8 bytes, including qnodes[], whose cross-CPU addressing is percpu-base-relative. Single-CPU boots (the whole t1-t80 era) never exercised cross-CPU node writes; the stress framework's first cross-CPU stolen strand triggered remote qnode writes at stale offsets; cp161 died with ssp_check_fail in cpu_timer_tick (corrupted stack canary). dom_exec of the correctly disk-loaded bench ELF preceded it — the entire driver/VTOC/exec pipeline was verified working in the same capture.</Behavior>
+            <Solution>Field moved to the absolute tail of percpu_data with a layout law comment (2026-10-25). Rule recorded: percpu_data is an ABI struct — new fields go to the tail only, never mid-struct. Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+            <Notes>The stress framework's first multi-domain IPL found a latent SMP-corruption bug the 80-test suite could never reach.</Notes>
+        </Bug>
+
+        <Bug id="BUG-062">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>uaccess mvcos_copy never decremented the remaining length — every copy over 4 KiB walked both pointers through memory forever, overwriting all storage past the destination</Description>
+            <Behavior>uaccess.cxxm mvcos_copy: on CC=3 (PoP 10-73: effective length = min(true,4096); more remains) the loop advanced pointers by 4096 but assigned `len = chunk` — chunk being the unchanged length — so the loop never terminated: each iteration re-issued MVCOS with the full true length at advanced addresses, copying 4 KiB strides through arbitrary memory. First-ever >4 KiB kernel copy (dom_exec's 20 KiB image copy) triggered it; cpu0 never returned from copy_from_user, and the walking writer trampled shared kernel structures — the AP operation-exception storms, stack-canary fatals, and recursive faults of the whole stress bring-up were this single loop. All prior kernel copies (names, IPC payloads, futex words) were &lt;=4 KiB, which returns CC=0 on the first iteration.</Behavior>
+            <Solution>`len = chunk - MVCOS_MAX_CHUNK` per PoP 10-72 loop discipline (2026-10-25). Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+            <Notes>Found via PoP cross-check demanded by the owner after the chunked-copy probe pinned the monolithic 20 KiB copy; latent since the uaccess module landed.</Notes>
+        </Bug>
+
+        <Bug id="BUG-063">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>High</Severity>
+            <Description>Domain exit wedges the machine — after a non-primary domain's dom_exit, the scheduler never runs another strand (reproduced twice; orchestrator frozen post-selftest-exit)</Description>
+            <Behavior>The selftest domain (exec'd via dom_exec, child-owned cap) ran user code, printed, failed its DASD bind, and called nb_dom_exit — after which the whole system stopped scheduling: the orchestrator strand never resumed (no further console output, 158-line logs ending at the child's exit). The cap path is exonerated (child acquire SUCCEEDED after the owner fix); the wedge is in the exit/teardown path — dom_exit parking the caller's primary, teardown quiesce/reap, or the finish-task-switch handoff interacting with domain destruction. Isolated by retiring the exiting discriminator (bench domains park, never exit) so the stress chain proceeds; the teardown defect remains open for a dedicated fix round.</Behavior>
+            <Solution>Open: dedicated round on strand/domain exit teardown (park primary, quiesce, destroy, reap) under the stress framework once the storm runs green; the bench fleet parks instead of exiting so the framework is not blocked on it.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Open</Status>
+            <Notes>Second capture-confirmed milestone in the same boot: child-owned delegation cap validated (selftest acquire succeeded); bench fleet widened to 3 domains.</Notes>
+        </Bug>
+
+        <Bug id="BUG-064">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>High</Severity>
+            <Description>MVCOS fixup path retries a faulting copy forever — 33k identical region-first translation exceptions on one bad user pointer, no abort</Description>
+            <Behavior>A copy_from_user with a bad source pointer (svc_lookup handler arg mismatch — the caller passed a capability token where the name pointer belonged) faulted mid-MVCOS; the exception-table fixup consumer redirected and RE-EXECUTED the same faulting copy 33,096 times at the same VA (0x8000000001000201, the token as address) — the kernel never aborted the copy nor killed the domain. This is the EX_TYPE_UA_MVCOS_FROM consumer — the exact path OBL-005 flagged as never audited. The mvcos_copy loop's CC handling cannot make progress on a fixup bounce; the copy must abort with a residual/partial indicator instead.</Behavior>
+            <Solution>Open: audit EX_TYPE_UA_MVCOS_FROM/TO fixup consumers (OBL-005) — a faulting page must terminate the loop with the partial count, not bounce. Triggered by a user-side arg bug (svc_lookup takes a0=name; fixed in the orchestrator); the kernel-side non-abort remains regardless of caller correctness.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Open</Status>
+        </Bug>
+
+        <Bug id="BUG-065">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>High</Severity>
+            <Description>Reuse-form PC number packed LSI at EA bit 44 (form selector) and set_lftd hand-shifted the LFTD origin into the wrong bit window — cross-domain PCs faulted as 32-bit-form garbage walks</Description>
+            <Behavior>Two packing defects in the ASN-LX-reuse landing exposed by the first cross-domain PC storm: (a) gate_materialize wrote lsi at field bit 0 of the lx record — EA bit 44, the 20/32-bit form selector — so every PC took the 32-bit form and translated garbage (stack-full storms at the pcnum-as-address); (b) set_lftd packed (phys>>8)&lt;&lt;8 by hand, misplacing the 23-bit origin inside the designation word → PC-translation-spec/special-op 0x0013 even with correct numbers. The kernel's containment held throughout: faults classified, nullified, domain terminated by signal default, nucleus alive.</Behavior>
+            <Solution>Mint per PoP 5-35 (lx = lfi | lsi&lt;&lt;7; walk decode lfi=lx&amp;0x7F, lsi=(lx&gt;&gt;7)&amp;0x1F); set_lftd rewritten through the lib.bitfield DSL record (hand bit-shifts banned — standing rule); LFTD word verified numerically (2026-10-25). Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+            <Notes>2026-10-25 addendum: the LFTD fix alone was insufficient — the capture still faulted (stack-full at pcnum 0x8000, then special-op).  Root cause #3, the decisive one: the pc_number RECORD layout itself (lx@12-23, ex@24-31) never matched the canonical operand layout.  Hyperion's esa390.h PC_* masks (the authoritative reference implementation layout, cross-checked against its program_call walk in control.c:2996-3230): EX bits 0-7, LX/LSX bits 8-12(19), LFX2 bits 13-18, form selector bit 19, LFX1 bits 20-31 (canonicalized with >>1).  Mint, walk, and revoke all recomposed on those masks; classic layout (lx&lt;&lt;8|ex) matches zLinux PC-number convention.  Every decode site now reads the raw word.</Notes>
+        </Bug>
+
+        <Bug id="BUG-066">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>Linkage-stack header/trailer entries violated the PoP 5-12 LSHE/LSTE word layout — word 0 must be reserved, word 1 carries the section link, words 2-3 the descriptor</Description>
+            <Behavior>Our header_entry placed the backward link in words 0-1 (PoP reserves word 0 for the control program; the link lives in word 1) and the trailer had NO forward-address word — only an entry descriptor. Hercules' form_stack_entry FETCH_DW's word 1 of the trailer for the forward section header address, i.e. it read our descriptor bytes (entry type / section id) as the address — producing garbage forward addresses (the 0x3ffffff400-class TEIDs) and stack-full exception storms on every PC that needed the trailer/growth path. Self-domain gates (t70-73) never exhausted the initial section's free space, so the trailer was never consulted — first cross-domain storm walked straight into it.</Behavior>
+            <Solution>header_entry/trailer_entry rewritten to PoP word layout: reserved(4) + section_link V+address(4) + entry_descriptor(8); single-section forward link V=0 (last-section state); stack_init/stack_grow/forensics aligned; layouts composed through lib.bitfield named records (2026-10-25). Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+        </Bug>
+
+        <Bug id="BUG-067">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>Bootstrap-launched init domain never had its linkage stack seeded — CR15 was 0 (architecturally empty stack) on the primary strand for the entire life of the kernel</Description>
+            <Behavior>stack_init is called only by dom_exec; bootstrap set uregs + entered user mode directly with body->linkage_stack unseeded, so init's CR15 was 0 since boot. The cr15=0 stack-full capture proved it: the orchestrator's first cross-domain PC had no section to grow from, and the nullify/grow path built state on a zero base. t70-73 self-domain PCs "worked" only because small-LX walks never touched the unseeded machinery. Every domain primary launched by bootstrap was PC-incapable since R1.5.</Behavior>
+            <Solution>strandctx::seed_primary_linkage_stack exported and called by bootstrap before first user entry (2026-10-25); dom_exec children were already seeded. Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+        </Bug>
+
+        <Bug id="BUG-068">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>CR15 loaded only inside the ASCE-change branch of schedule() — per-strand linkage state went stale/zero across same-space dispatches</Description>
+            <Behavior>The linkage stack address is per-STRAND state (PoP 5-12), but schedule() only wrote CR15 inside the branch guarded by next_owner/asce-differs; the per-strand SAVE ran unconditionally after every switch. A same-ASCE round trip (caller → stolen worker → caller) returned the caller to user mode with CR15 still holding the last strand's value — or 0 on a first switch. Explains cr15=0 persisting after the BUG-067 seed (the seed ran, but a same-space switch zeroed it before the storm) and boot-to-boot variance.</Behavior>
+            <Solution>Unconditional per-strand CR15 load in the next_owner leg of schedule() (skipping unseeded strands), duplicate inner write removed (2026-10-25). Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+        </Bug>
+
+        <Bug id="BUG-069">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>Borrowed-space pgm path consumed a linkage stack entry on ANY fault — a plain fault during a PC unstacked the caller's state and restored a garbage PSW (specification exception at a user VA with a kernel PSW)</Description>
+            <Behavior>The borrowed-space check (cr1 != attached) ran state_entry_restore+unstack for every program check regardless of class. A fault inside a live PC region (e.g. a caller faulting while a callee's state entry sits stacked) unstacked the CALLEE's entry and restored ITS PSW into the caller's frame — the follow-on capture showed a specification exception at init's 0x4007c0 executed with PSW 0x07C5 (supervisory DAT-on) at a user address: an unstacked kernel PSW stuffed into a user frame. PoP 5-12: only PR/stack-operation exceptions (and PC-related translation classes) consume stacked state.</Behavior>
+            <Solution>Borrowed-space unstack restricted to stacked-state exception classes (PGM_STACK_OPERATION 0x0034, PGM_STACK_SPECIFICATION 0x0033, PC-translation-spec, PC/PR translation family) (2026-10-25). Pending capture.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+        </Bug>
+
+        <Bug id="BUG-070">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Medium</Severity>
+            <Description>nc_ipc_endpoint_create reads a0 as peer domain id — no capability parameter at all, contradicting every cap-addressed sibling and the nuclbase wrapper's (cap, peer) shape</Description>
+            <Behavior>The handler takes a0 = peer and derives the caller from current_domain; the nuclbase wrapper and bench passed (admin_cap, peer) — the cap's low bits became the peer id and endpoint_create failed at domain_find/authorize ("no endpoint" x3 in the storm capture). The old t64 suite passed because it called the raw op with the peer in a0 directly. Same per-op argument-schema class as BUG-060: the svc layer's implicit per-op arg meanings diverge between wrapper and handler.</Behavior>
+            <Solution>Bench fixed to pass peer in a0 (2026-10-25). The schema table (BUG-060 note) remains the unification: declare per-op argument roles once for wrapper, dispatcher, and handler.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+        </Bug>
+
+        <Bug id="BUG-071">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>High</Severity>
+            <Description>Steal-balancer scoring made cross-NUMA migration arithmetically unreachable — 48-point distance penalty vs ~1.1×load contribution required load≈74 runnable strands on one CPU before any steal</Description>
+            <Behavior>steal_source_score: load contributes load*(capacity+1024)/1024 ≈ 1.1×load while relation distance costs 16/level; same_numa_node (the tier EVERY same-drawer cpu pair falls into) costs 48 against BALANCE_MIN_SCORE=32. With the storm's 2-3 runnable strands on cpu0 the score was ≈ −45: 255 idle APs each correctly ran their pull balance every tick and correctly refused to steal — all guest work serialized on cpu0 for the entire suite (3.79ms/trip × 1500 = the 5.7s "stall", zero work off cpu0 in every capture).</Behavior>
+            <Solution>BALANCE_MIN_SCORE 32→8; distance penalty 16/level→8/level; load term ×8-scaled BEFORE the division — integer truncation at 1.1×load (2*1124/1024 == 2 in int math) was eating the entire fractional gain, so intermediate tunings still died below load 10. Final: same-NUMA steals at load 4+, SMT-tier at load 2 (2026-10-25). Pending capture: bench strands should spread across APs.</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Fixed (pending capture)</Status>
+        </Bug>
+
+        <Bug id="BUG-072">
+            <FoundDate>2026-10-25</FoundDate>
+            <Severity>Critical</Severity>
+            <Description>Cross-CPU PC-ss corruption unlocked by BUG-071 spread: supervisor-mode PSW at a user VA after first real steals — nondeterministic fault-or-stall</Description>
+            <Behavior>After the balancer fix made steals actually fire, the storm became a lottery: either an operation exception with SUPERVISOR PSW (mask 0x07A5..., DAT-on) executing at a USER VA inside the bench image (R0=0x5A5A — callee code ran), with garbage at the faulting instruction, or a silent stall. Never occurred while all work was serialized on cpu0 (every prior capture). The linkage-stack/CR15 discipline was never audited for strands migrating across CPUs mid-PC; the supervisor-bit corruption indicates a state-entry or restore path writing a kernel PSW mask into a user frame — a race or stale-CR15 class defect that serialized execution masked entirely.</Behavior>
+            <Solution>Open. PCPROBE instrumentation shipped (dispatch-time unseeded-strand dump with stale CR15 readback; pgm supervisor-PSW-at-user-VA dump with strand + CR15). One capture names the mechanism; the fix then targets the named organ. The §5.12 cross-CPU linkage-stack audit is the owed consolidation for this whole defect family (BUG-065..072).</Solution>
+            <AffectedBuilds><Range><From><Branch>unstable</Branch><Number>0</Number></From></Range></AffectedBuilds>
+            <Status>Open</Status>
+            <Notes>The family pattern: each fix unmasked the next latent defect that serialized execution had hidden. The audit — not another spot fix — is what closes it.</Notes>
         </Bug>
 
     </BugList>

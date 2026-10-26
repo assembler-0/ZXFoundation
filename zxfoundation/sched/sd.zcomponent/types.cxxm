@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/domain_tree_types.cxxm
+/// @file zxfoundation/sched/sd.zcomponent/types.cxxm
 /// @brief Hierarchical scheduling domain hierarchy definitions.
 
 export module zxfoundation.sched.sd.types;

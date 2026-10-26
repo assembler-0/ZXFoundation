@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/memory/vm.zcomponent/vm_types.cxxm
+/// @file zxfoundation/memory/vm.zcomponent/types.cxxm
 /// @brief Virtual Memory Engine — type definitions.
 
 export module zxfoundation.memory.vm.types;
@@ -71,8 +71,6 @@ namespace zxfoundation::memory::vm {
         cow       = 1U << 11,   ///< Copy-on-write mapping.
         file      = 1U << 12,   ///< File-backed mapping.
         ipc       = 1U << 13,   ///< IPC shared-memory mapping.
-        hugepage_1m = 1U << 14, ///< Request an EDAT-1 1 MiB mapping.
-        hugepage_2g = 1U << 15, ///< Request an EDAT-2 2 GiB mapping.
         shared_read = 1U << 17, ///< Shared read mappings use CoW on write.
     };
 
@@ -101,7 +99,6 @@ namespace zxfoundation::memory::vm {
     enum class vm_backing : u8 {
         anonymous     = 0,   ///< Demand-paged: allocated on fault.
         physical      = 1,   ///< Direct physical identity mapping.
-        portal_shared = 2,   ///< Shared through a portal.
         file          = 3,   ///< Backed by a file-node page provider.
         ipc_shared    = 4,   ///< Backed by an IPC shared-memory provider.
     };
@@ -289,10 +286,10 @@ namespace zxfoundation::memory::vm {
         auto set_dgp_access(dgp::memory_contract::memory_access v) noexcept -> void {
             if (auto* m = mo()) m->dgp_access = v;
         }
-        [[nodiscard]] auto dgp_rights() const noexcept ->  dgp::isolation::isolation_rights {
-            auto* m = mo(); return m ? m->dgp_rights :  dgp::isolation::isolation_rights::none;
+        [[nodiscard]] auto dgp_rights() const noexcept ->  ::zxfoundation::dgp::right_mask {
+            auto* m = mo(); return m ? m->dgp_rights :  ::zxfoundation::dgp::right::none;
         }
-        auto set_dgp_rights( dgp::isolation::isolation_rights v) noexcept -> void {
+        auto set_dgp_rights( ::zxfoundation::dgp::right_mask v) noexcept -> void {
             if (auto* m = mo()) m->dgp_rights = v;
         }
         [[nodiscard]] auto invalidate() const noexcept -> dgp::memory_contract::invalidation_scope {
@@ -329,13 +326,12 @@ namespace zxfoundation::memory::vm {
         scoms::kobject::bobject*                owner_object{nullptr};
         scoms::kobject::bobject*                address_space_object{nullptr};
         lib::rb_root_cached                     tree{};
-        sync::qspinlock::qspinlock              lock{};
+        sync::qspinlock::qspinlock<sync::lock_rank::vm_space>              lock{};
 
         u64                                     total_mapped{0};
         u64                                     total_committed{0};
         u64                                     total_resident{0};
 
-        u64                                     brk{0};
         u64                                     mmap_base{0};
         u64                                     dgp_generation{0};
         u64                                     mapping_generation{0};

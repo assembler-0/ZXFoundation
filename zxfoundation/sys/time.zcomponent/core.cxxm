@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file zxfoundation/sys/time.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/time.zcomponent/core.cxxm
 /// @brief High-performance industrial kernel time system for s390x.
 
 export module zxfoundation.sys.time.core;
@@ -35,6 +35,13 @@ namespace zxfoundation::sys::time {
             return duration(static_cast<u64>(val >> 9U));
         }
 
+        /// @brief Convert this duration to s390x TOD clock units (the inverse
+        /// of from_tod): TOD = (NS * 512) / 125 = (NS << 9) / 125.
+        [[nodiscard]] constexpr auto to_tod() const noexcept -> u64 {
+            const u128 val = static_cast<u128>(m_ns) << 9U;
+            return static_cast<u64>(val / 125U);
+        }
+
         static constexpr auto from_seconds(u64 s)      noexcept -> duration { return duration(s * 1'000'000'000U); }
         static constexpr auto from_milliseconds(u64 ms) noexcept -> duration { return duration(ms * 1'000'000U); }
         static constexpr auto from_microseconds(u64 us) noexcept -> duration { return duration(us * 1'000U); }
@@ -58,7 +65,7 @@ namespace zxfoundation::sys::time {
 
     /// @brief Initialize the global time system.
     /// @param[in] tod_boot  TOD clock value captured at kernel entry by ZXFL.
-    auto initialize(u64 tod_boot) noexcept -> void;
+    auto init(u64 tod_boot) noexcept -> void;
 
     /// @brief Retrieve the current monotonic time (time since boot).
     [[nodiscard]] auto monotonic_now() noexcept -> instant;
@@ -71,8 +78,8 @@ namespace zxfoundation::sys::time {
     [[nodiscard]] auto set_realtime(instant now) noexcept
         -> std::expected<void, lib::kernel_error>;
 
-    /// @brief Advance the wall-clock offset by one tick's worth of time.
-    /// @param[in]  tick_ns  Duration of one tick in nanoseconds (10,000,000).
+    /// @brief Account for a scheduler tick without changing wall-clock offset.
+    /// @param[in] tick_ns Scheduler tick duration retained for ABI compatibility.
     auto tick_advance_wall(u64 tick_ns) noexcept -> void;
 
     /// @brief Return the current monotonic tick counter.

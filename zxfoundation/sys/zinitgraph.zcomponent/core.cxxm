@@ -1,0 +1,98 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/zinitgraph.zcomponent/core.cxxm
+/// @brief zinitgraph core — dependency graph overlay, topological executor, profiler.
+
+export module zxfoundation.sys.zinitgraph.core;
+import zxfoundation.base.types;
+import zxfoundation.sys.zinit.core;
+import lib.error;
+import lib.list;
+import lib.stl;
+
+export {
+
+namespace zxfoundation::sys::zinitgraph {
+
+    /// @brief Runtime state of a graph node.
+    enum class node_state : u8 {
+        pending,    ///< Discovered but prerequisites not yet satisfied.
+        ready,      ///< All prerequisites satisfied; eligible to run.
+        running,    ///< Currently executing.
+        done,       ///< Completed (barrier node) or initializer succeeded.
+        failed,     ///< Initializer returned an error.
+        unreached,  ///< Topological run terminated before reaching this node.
+    };
+
+    struct zg_node;
+
+    /// @brief Directed edge between two nodes.
+    /// @note Edges are allocated from a static pool; no heap is involved.
+    struct zg_edge {
+        lib::list_node  src_link{};  ///< Hooked into src->out_edges.
+        lib::list_node  dst_link{};  ///< Hooked into dst->in_edges.
+        zg_node*        src{};       ///< Tail of the edge (runs first).
+        zg_node*        dst{};       ///< Head of the edge (runs second).
+    };
+
+    /// @brief One graph node, wraps a
+    ///
+    /// czinit descriptor with scheduling state.
+    struct zg_node {
+        lib::list_node          all{};        ///< Master list hook.
+        lib::list_node          queue{};      ///< Ready-queue hook.
+        lib::list_head          out_edges{};  ///< Edges whose src == this.
+        lib::list_head          in_edges{};   ///< Edges whose dst == this.
+        const zinit::zi_desc*   desc{};       ///< Owning descriptor, or null (barrier).
+        std::string_view        name{};       ///< Node name.
+        node_state              state{node_state::pending};
+        zinit::zi_class         cls{zinit::zi_class::early}; ///< Owning class (barriers carry their level).
+        zinit::zi_prio          prio{zinit::zi_prio::lowest};  ///< Ready-queue ordering key; 255-equivalent for barriers.
+        u32                     unsatisfied{};///< Number of unresolved inbound edges.
+        u32                     is_barrier{}; ///< Nonzero when this is a barrier node.
+        u64                     start_tod{};  ///< Raw STCKF at entry.
+        u64                     end_tod{};    ///< Raw STCKF at exit.
+        u64                     duration{};   ///< end_tod - start_tod (TOD units).
+        lib::kernel_error       err{};        ///< Captured failure, if any.
+    };
+
+    /// @brief Graph instance
+    struct zg_graph {
+        lib::list_head  nodes{};      ///< Master list of all nodes.
+        lib::list_head  ready{};      ///< Kahn queue of satisfied nodes.
+        u32             node_count{}; ///< Number of nodes materialized.
+        u32             edge_count{}; ///< Number of edges materialized.
+        u32             failed{};     ///< Count of failed initializers.
+        u32             unreached{};  ///< Count of nodes not executed.
+    };
+
+    /// @brief Query whether the graph overlay is enabled.
+    /// @return true unless the cmdline override zx.sys.init.initgraph=0 was
+    ///         parsed.  Default is enabled.
+    [[nodiscard]] auto enabled() noexcept -> bool;
+
+    /// @brief Register the zx.sys.init.initgraph cmdline parameter.
+    auto register_cmdline() noexcept -> void;
+
+    /// @brief Build a graph over the engine's descriptor table.
+    /// @param[out] g  Graph to populate; must be default-constructed.
+    auto build(zg_graph& g) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Execute the graph topologically, recording raw TOD per node.
+    /// @param[in,out] g  Graph previously populated by build().
+    /// @return Number of failed initializers (0 on a fully successful run).
+    [[nodiscard]] auto run(zg_graph& g) noexcept -> u32;
+
+    /// @brief Emit a Mermaid flowchart of the graph to the kernel log.
+    /// @param[in] g  Graph to render.
+    /// @note Barrier nodes and barrier-adjacent edges are omitted to keep
+    ///       the chart readable; only genuine dependency edges render.
+    auto print_mermaid(const zg_graph& g) noexcept -> void;
+
+    /// @brief Emit a per-node duration table to the kernel log.
+    /// @param[in] g  Graph whose nodes to profile.
+    /// @note Durations are reported in raw TOD units and in microseconds.
+    auto print_profile(const zg_graph& g) noexcept -> void;
+
+} // namespace zxfoundation::sys::zinitgraph
+
+} // end export

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/trap/ext.cxxm
+/// @file arch/s390x/trap/ext.zcomponent/core.cxxm
 /// @brief Centralized external-interruption dispatcher.
 
 export module arch.s390x.trap.ext.core;

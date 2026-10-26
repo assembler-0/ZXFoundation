@@ -1,7 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/features.cxxm
-/// @brief Centralized CPU facility registry — every facility bit the kernel
-///        cares about, cached from STFLE and queryable via has() / has_raw().
+/// @file arch/s390x/cpu/features.zcomponent/features.cxxm
+/// @brief CPU facility registry
 
 export module arch.s390x.cpu.features;
 import zxfoundation.base.types;
@@ -12,8 +11,7 @@ export {
 
 namespace arch::s390x::cpu::features {
 
-    /// @brief Named CPU facility identifiers — STFLE bit numbers per
-    ///        IBM z/Architecture PoP Appendix B (Figure 4-36).
+    /// @brief Named CPU facility identifiers
     enum class facility : u32 {
         n3                          = 0,   ///< N3 instructions installed.
         zarch_installed             = 1,   ///< z/Architecture architectural mode installed.
@@ -152,7 +150,7 @@ namespace arch::s390x::cpu::features {
 
     /// @brief Initialize the CPU features cache.
     /// @param[in] stfle_fac  Pointer to the STFLE doubleword array
-    auto init(std::optional<const u64*> stfle_fac) noexcept -> void;
+    auto init_list(std::optional<const u64*> stfle_fac) noexcept -> void;
 
     /// @brief Query whether a specific named facility is available.
     [[nodiscard]] auto has(facility f) noexcept -> bool;

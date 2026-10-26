@@ -162,7 +162,7 @@ function(zx_discover_nucleus SOURCES MODULE_SOURCES MANIFEST_LIST ROOT_DIR)
 
                 if(CURRENT_GROUP STREQUAL "modules")
                     set(TARGET_LIST "MODULES")
-                elseif(CURRENT_GROUP STREQUAL "standa`rd")
+                elseif(CURRENT_GROUP STREQUAL "standard")
                     set(TARGET_LIST "SOURCES")
                 else() # auto
                     if(FULL_PATH MATCHES "\\.cxxm$" OR FULL_PATH MATCHES "\\.ixx$")

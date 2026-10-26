@@ -1,2 +1,3 @@
+/// @file zxfoundation/smp/interface.cxxm
 export module zxfoundation.smp;
 export import zxfoundation.smp.csd;

@@ -1,0 +1,23 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/rwsem.zcomponent/types.cxxm
+/// @brief Sleepable reader/writer semaphore type declarations.
+
+export module zxfoundation.sync.rwsem.types;
+import zxfoundation.base.types;
+import zxfoundation.sync.turnstile.types;
+import zxfoundation.dgp.domain.types;
+
+export {
+
+namespace zxfoundation::sync::rwsem {
+
+    /// @brief A waiter owned by one blocked reader or writer.
+    struct waiter {
+        turnstile::waiter node{};
+        dgp::domain::strand* strand_ptr{nullptr};
+        bool writer{false};
+    };
+
+}
+
+}

@@ -19,9 +19,6 @@ export {
 
 namespace zxfoundation::dgp::domain {
 
-    /// @brief Initialize the strand SCOMS table.
-    auto strand_init() noexcept -> void;
-
     /// @brief Allocate a per-CPU idle strand from the SCOMS strand table.
     /// @param cpu  CPU this idle strand is pinned to.
     /// @return Pointer to the idle strand, or kernel_error.
@@ -39,6 +36,9 @@ namespace zxfoundation::dgp::domain {
     /// @param owner Domain that will own the strand.
     /// @param cpu   CPU affinity (0 for any, or specific CPU).
     /// @return Pointer to the created strand, or kernel_error.
+    /// @brief Resolve a strand by id within a domain (0 = primary strand).
+    [[nodiscard]] auto strand_find(domain& owner, u32 id) noexcept -> strand*;
+
     [[nodiscard]] auto strand_create(
         domain* owner, u16 cpu = 0
     ) noexcept -> std::expected<strand*, lib::kernel_error>;
@@ -47,6 +47,9 @@ namespace zxfoundation::dgp::domain {
     /// @param[in,out] s Strand whose stack and SCOMS identity should be released.
     /// @return Success or kernel_error when the strand is still runnable or invalid.
     [[nodiscard]] auto strand_destroy(strand& s) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Reclaim the kernel stack of an exited, parked strand (OBL-020).
+    auto release_dead_strand_stack(strand& s) noexcept -> void;
 
     /// @brief Create a new domain.
     /// @param[in] name  Human-readable name (pointer must remain valid for
@@ -80,15 +83,16 @@ namespace zxfoundation::dgp::domain {
     /// @tparam Fn  Callable of signature @c bool(domain&) noexcept.
     /// @param[in] fn  Visitor.  Return @c true to continue, @c false to stop.
     /// @return Number of domains visited.
+    /// §5.12 mid-PC detector — see core.cxx.  Called from every
+    /// interruption handler with the interrupted PSW's problem-state bit.
+    auto strand_note_interrupt_context(bool problem_state) noexcept -> void;
+
     template <typename Fn>
     auto domain_for_each(Fn&& fn) noexcept -> u32 {
         return g_domain_table.for_each(static_cast<Fn&&>(fn));
     }
 
     auto register_domain_cap_lookup() noexcept -> void;
-
-    /// @brief Initialize the domain subsystem.
-    auto domain_init() noexcept -> void;
 
     /// @brief Get the nucleus domain — the kernel's own domain identity.
     /// @return Pointer to the nucleus domain (slot 0).  Always non-null
@@ -97,10 +101,6 @@ namespace zxfoundation::dgp::domain {
 
     /// @brief Return the currently-running domain
     [[nodiscard]] auto current_domain_or_nucleus() noexcept -> domain*;
-
-    /// @brief Initialize the nucleus domain at slot 0.
-    [[nodiscard]] auto domain_init_nucleus() noexcept
-        -> std::expected<void, lib::kernel_error>;
 
 } // namespace zxfoundation::dgp::domain
 

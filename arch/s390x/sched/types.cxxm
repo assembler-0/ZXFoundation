@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/core.cxxm
+/// @file arch/s390x/sched/types.cxxm
 /// @brief Scheduler types
 
 export module arch.s390x.sched.types;
@@ -20,6 +20,6 @@ namespace arch::s390x::sched {
         alignas(8) u64 vector_regs[32][2]{}; // Vector registers v0-v31 (128-bit each)
     };
 
-} // namespace zxfoundation::sched
+} // namespace arch::s390x::sched
 
 } // end export

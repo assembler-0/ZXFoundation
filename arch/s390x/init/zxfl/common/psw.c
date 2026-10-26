@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/psw.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/psw.c
 /// @brief Bootloader-private PSW initialization.
-///
-///        This file is compiled ONLY into the stage-2 bootloader (zxfl_stage2).
-///        It must NOT be linked into the kernel.  The kernel has its own
-///        psw_install_new_psws() in arch/s390x/cpu/psw.c.
-///
-///        Isolation rationale:
-///          The bootloader runs in a completely different address space and
-///          execution context from the kernel.  Sharing kernel PSW setup code
-///          in the bootloader creates a hard coupling between two independent
-///          binaries and makes it impossible to evolve them independently.
-///          The bootloader's PSW setup is intentionally minimal: it only needs
-///          disabled-wait PSWs for the pre-DAT window.
 
 #include <arch/s390x/init/zxfl/psw.h>
 

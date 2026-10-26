@@ -390,8 +390,8 @@ namespace arch::s390x::cpu::nnpa {
             const usize e1_lim = Policy::e1_limit(E1, eps);
             const usize unit   = Policy::unit_bytes(esz);
 
-            if (stick.size() >= usize{E4} * E3 * e2_lim * e1_lim * unit) __builtin_trap();
-            if (generic.size() >= usize{E4} * E3 * E2 * E1 * esz) __builtin_trap();
+            if (stick.size() < usize{E4} * E3 * e2_lim * e1_lim * unit) __builtin_trap();
+            if (generic.size() < usize{E4} * E3 * E2 * E1 * esz) __builtin_trap();
 
             for (u32 e4x = 0; e4x < E4; ++e4x)
             for (u32 e3x = 0; e3x < E3; ++e3x)
@@ -417,8 +417,8 @@ namespace arch::s390x::cpu::nnpa {
             const usize e1_lim = Policy::e1_limit(E1, eps);
             const usize unit   = Policy::unit_bytes(esz);
 
-            if (generic.size() >= usize{E4} * E3 * E2 * E1 * esz) return;
-            if (stick.size() >= usize{E4} * E3 * e2_lim * e1_lim * unit) return;
+            if (generic.size() < usize{E4} * E3 * E2 * E1 * esz) return;
+            if (stick.size() < usize{E4} * E3 * e2_lim * e1_lim * unit) return;
 
             for (u32 e4x = 0; e4x < E4; ++e4x)
             for (u32 e3x = 0; e3x < E3; ++e3x)

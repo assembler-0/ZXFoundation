@@ -67,7 +67,7 @@ namespace zxfoundation::dgp::memory_contract {
         u8 storage_key{0};
         u8 numa_node{0};
         invalidation_scope invalidate{invalidation_scope::none};
-        dgp::isolation::isolation_rights required_rights{dgp::isolation::isolation_rights::none};
+        ::zxfoundation::dgp::right_mask required_rights{::zxfoundation::dgp::right::none};
         u64 generation{0};
         memory_access access{memory_access::none};
         memory_scope scope{memory_scope::private_domain};
@@ -122,11 +122,11 @@ namespace zxfoundation::dgp::memory_contract {
     [[nodiscard]] constexpr auto required_rights(
         memory_access access,
         memory_scope scope
-    ) noexcept -> dgp::isolation::isolation_rights {
-        dgp::isolation::isolation_rights rights = dgp::isolation::isolation_rights::map;
+    ) noexcept -> ::zxfoundation::dgp::right_mask {
+        ::zxfoundation::dgp::right_mask rights = ::zxfoundation::dgp::right::map;
         if (memory_access_has(access, memory_access::share)
             || scope == memory_scope::portal_shared) {
-            rights = rights | dgp::isolation::isolation_rights::share;
+            rights = rights | ::zxfoundation::dgp::right::share;
         }
         return rights;
     }
@@ -195,5 +195,5 @@ namespace zxfoundation::dgp::memory_contract {
     static_assert(sizeof(invalidation_scope) == sizeof(u8), "DGP invalidation scope must remain byte-sized");
 
 
-} // namespace zxfoundation::dgp
+} // namespace zxfoundation::dgp::memory_contract
 } // end export

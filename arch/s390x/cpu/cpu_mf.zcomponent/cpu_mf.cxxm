@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/cpu_mf_types.cxxm
+/// @file arch/s390x/cpu/cpu_mf.zcomponent/cpu_mf.cxxm
 /// @brief CPU Measurement Facility types and constants.
 
 export module arch.s390x.cpu.cpu_mf;

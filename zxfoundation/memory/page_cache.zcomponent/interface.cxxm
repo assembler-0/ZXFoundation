@@ -1,3 +1,4 @@
+/// @file zxfoundation/memory/page_cache.zcomponent/interface.cxxm
 export module zxfoundation.memory.page_cache;
 export import zxfoundation.memory.page_cache.types;
 export import zxfoundation.memory.page_cache.core;

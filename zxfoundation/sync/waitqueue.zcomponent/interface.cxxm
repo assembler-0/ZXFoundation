@@ -1,3 +1,4 @@
+/// @file zxfoundation/sync/waitqueue.zcomponent/interface.cxxm
 export module zxfoundation.sync.waitqueue;
 export import zxfoundation.sync.waitqueue.core;
 export import zxfoundation.sync.waitqueue.types;

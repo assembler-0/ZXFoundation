@@ -14,8 +14,12 @@ import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.base.transaction;
+import zxfoundation.sys.zinit.core;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace arch::s390x::mmu::detail {
 
@@ -23,6 +27,11 @@ namespace arch::s390x::mmu::detail {
 
     bool g_has_edat1{false};
     bool g_has_edat2{false};
+    bool g_has_iep{false};
+
+    [[nodiscard]] auto pte_make_gated(u64 phys, page_prot prot) noexcept -> u64 {
+        return g_has_iep ? pte_make(phys, prot) : (pte_make(phys, prot) & ~PTE_IEP);
+    }
 
     inline bool g_initialized{false};
 
@@ -230,7 +239,7 @@ namespace arch::s390x::mmu::detail {
         // Install the PTE.
         auto* final_pte_table = reinterpret_cast<u64*>(hhdm::phys_to_virt(walk));
         final_pte_table[virt_index_rt(dat_level::page, virt)] =
-            pte_make(phys, prot);
+            pte_make_gated(phys, prot);
 
         return {};
     }
@@ -404,7 +413,7 @@ namespace arch::s390x::mmu::detail {
         // IPTE: atomically invalidate + TLB flush.
         tlb_invalidate_pte(current, virt);
         // Re-install with new protection.
-        pte_table[pte_idx] = pte_make(frame, new_prot);
+        pte_table[pte_idx] = pte_make_gated(frame, new_prot);
         tlb_flush_local();
         return {};
     }
@@ -567,60 +576,8 @@ namespace arch::s390x::mmu::detail {
             r3_large_make(phys, prot);
         return {};
     }
-    /// @brief Maximum depth of recursive DAT table walk for pre-init validation.
-    inline constexpr u32 PREINIT_MAX_TABLES = 2048;
 
-    u64 g_preinit_table_phys[PREINIT_MAX_TABLES]{};
-    u32 g_preinit_table_count{0};
 
-    /// @brief Walk one DAT table level and recurse into child tables.
-    [[nodiscard]] auto validate_table_walk(
-        u64       table_phys,
-        dat_level lvl,
-        u64       hhdm_start,
-        u64       hhdm_end
-    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
-        if (table_phys < hhdm_start || table_phys >= hhdm_end) {
-            return ::std::unexpected(::lib::kernel_error::from_memory(
-                ::lib::memory_error::code::hhdm_init_failed));
-        }
-
-        if (g_preinit_table_count >= PREINIT_MAX_TABLES) {
-            return ::std::unexpected(::lib::kernel_error::from_memory(
-                ::lib::memory_error::code::out_of_memory));
-        }
-
-        const u32 this_idx = g_preinit_table_count++;
-        g_preinit_table_phys[this_idx] = table_phys;
-
-        const u64 table_virt = zxfoundation::memory::hhdm::phys_to_virt(table_phys);
-        const u32 entries = (lvl == dat_level::page) ? PAGE_ENTRIES : CRST_ENTRIES;
-        const auto* table = reinterpret_cast<const u64*>(table_virt);
-
-        for (u32 i = 0; i < entries; ++i) {
-            const u64 entry = table[i];
-            if (rste_is_invalid(entry))
-                continue;
-
-            if (lvl == dat_level::page)
-                continue;
-
-            if (lvl == dat_level::region_3 && r3_is_large(entry))
-                continue;
-
-            if (lvl == dat_level::segment && seg_is_large(entry))
-                continue;
-
-            const u64 child_phys = rste_origin(entry);
-            const dat_level child_lvl = next_level(lvl);
-
-            auto result = validate_table_walk(child_phys, child_lvl, hhdm_start, hhdm_end);
-            if (!result)
-                return result;
-        }
-
-        return {};
-    }
 
 } // namespace arch::s390x::mmu::detail
 
@@ -628,14 +585,20 @@ namespace arch::s390x::mmu {
 
     /// @brief Initialize the MMU engine.  Must be called after PMM init
     ///        and arch::s390x::cpu::features::init().
-    auto init() noexcept -> void {
+    auto zi_mmu_init(const zxfoundation::sys::zinit::zi_desc&) noexcept
+        -> zxfoundation::sys::zinit::zi_result
+    {
         using namespace detail;
         namespace features = arch::s390x::cpu::features;
-        if (g_initialized) return;
+        if (g_initialized) return {};
         g_has_edat1 = features::has(features::facility::edat1);
         g_has_edat2 = features::has(features::facility::edat2);
+        g_has_iep = features::has(features::facility::instruction_exec_protection);
         g_initialized = true;
+        return {};
     }
+    __zinit_dep__(mm, p30, zi_mmu_init, fatal, "zi_pmm_init")
+
 
     /// @brief Query EDAT-1 (1 MiB large page) availability.
     [[nodiscard]] auto has_edat1() noexcept -> bool {
@@ -695,37 +658,16 @@ namespace arch::s390x::mmu {
             const dat_table<dat_level::region_3> root{root_phys};
             return unmap_page(root, virt);
         }
-        (void)root_phys; (void)virt; // DT was not r1/r2/r3
+        if (dt == ASCE_TYPE_SEG) {
+            const dat_table<dat_level::segment> root{root_phys};
+            return unmap_page(root, virt);
+        }
+        (void)root_phys; (void)virt; // DT was not r1/r2/r3/segment
         return ::std::unexpected(::lib::kernel_error::from_memory(
             ::lib::memory_error::code::invalid_address));
     }
 
-    /// @brief Advance the cursor after a successful mapping.
-    auto mmu_transaction::advance(u64 bytes) noexcept -> void {
-        range_cursor_ += bytes;
-    }
 
-    /// @brief Commit the transaction and flush TLB.
-    auto mmu_transaction::commit_and_flush() noexcept -> void {
-        if (range_cursor_ > range_start_)
-            tlb_flush_asce(asce_val_);
-        this->commit();
-    }
 
-    /// @brief Rollback: unmap all successfully-mapped entries, then flush.
-    auto mmu_transaction::on_rollback() const noexcept -> void {
-        u64 va = range_start_;
-        while (va < range_cursor_) {
-            auto r = detail::unmap_at_impl(
-                root_phys_, root_level_, va);
-            if (r) {
-                va += *r;
-            } else {
-                va += PAGE_SIZE_4K;
-            }
-        }
-        if (range_cursor_ > range_start_)
-            tlb_flush_asce(asce_val_);
-    }
 
 } // namespace arch::s390x::mmu

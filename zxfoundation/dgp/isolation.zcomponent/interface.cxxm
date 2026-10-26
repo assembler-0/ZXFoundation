@@ -1,3 +1,4 @@
+/// @file zxfoundation/dgp/isolation.zcomponent/interface.cxxm
 export module zxfoundation.dgp.isolation;
 export import zxfoundation.dgp.isolation.types;
 export import zxfoundation.dgp.isolation.core;

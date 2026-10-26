@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/policy_types.cxxm
+/// @file zxfoundation/sched/policy.cxxm
 /// @brief Scheduler policy records shared by classed scheduling backends.
 
 export module zxfoundation.sched.policy;
@@ -28,7 +28,6 @@ namespace zxfoundation::sched {
     /// @brief Real-time queueing behavior requested by a strand policy.
     enum class rt_mode : u8 {
         fifo = 0,        ///< Run until block, yield, or higher-priority preemption.
-        round_robin = 1, ///< Run with a bounded class slice among equal priorities.
     };
 
     /// @brief Quality of topology evidence used for placement decisions.

@@ -33,7 +33,7 @@ namespace zxfoundation::dgp::cap::detail {
     struct capability_slot {
         scoms::kobject::bobject* target{nullptr};
         cap_type        type{cap_type::none};
-        cap_rights      rights{cap_rights::none};
+        ::zxfoundation::dgp::right_mask      rights{::zxfoundation::dgp::right::none};
         u32             owner_domain{~0U};
         u32             target_generation{0};
         u16             generation{1};
@@ -41,7 +41,7 @@ namespace zxfoundation::dgp::cap::detail {
     };
 
     no_export capability_slot* s_capabilities{nullptr};
-    no_export sync::qspinlock::qspinlock s_capability_lock{};
+    no_export sync::qspinlock::qspinlock<sync::lock_rank::cap_table> s_capability_lock{};
 
     /// @brief Callback table indexed by cap_type.
     no_export lookup_fn s_lookup_table[LOOKUP_TABLE_SIZE]{};
@@ -78,11 +78,10 @@ namespace zxfoundation::dgp::cap::detail {
     }
 
     /// @brief Validate that the token's type has sufficient rights for an operation.
-    [[nodiscard]] no_export auto check_rights(cap_token token, cap_rights needed) noexcept
+    [[nodiscard]] no_export auto check_rights(cap_token token, ::zxfoundation::dgp::right_mask needed) noexcept
         -> std::expected<void, lib::kernel_error>
     {
-        if (needed != cap_rights::none &&
-            (token.rights() & needed) != needed) {
+        if (!::zxfoundation::dgp::token_covers(token.rights(), needed)) {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
@@ -97,14 +96,15 @@ namespace zxfoundation::dgp::cap::detail {
         }
         auto& slot = s_capabilities[token.object_id()];
         if (!slot.active || slot.generation != token.generation() ||
-            slot.type != token.type() || slot.rights != token.rights()) {
+            slot.type != token.type() ||
+            slot.rights != ::zxfoundation::dgp::carried_rights(token.rights())) {
             return nullptr;
         }
         return &slot;
     }
 
     [[nodiscard]] no_export auto issue_locked(
-        cap_type type, u16 obj_id, cap_rights rights, u32 owner_domain
+        cap_type type, u16 obj_id, ::zxfoundation::dgp::right_mask rights, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error> {
         if (!ensure_capabilities_locked()) return std::unexpected(
             lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
@@ -133,19 +133,21 @@ namespace zxfoundation::dgp::cap::detail {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::not_found));
         }
+
+        const auto carried = ::zxfoundation::dgp::carried_rights(rights);
         slot.target = target;
         slot.type = type;
-        slot.rights = rights;
+        slot.rights = carried;
         slot.owner_domain = owner_domain;
         slot.target_generation = generation;
         slot.active = true;
 
         return cap_token::make(
-            type, static_cast<u16>(slot_id), slot.generation, rights);
+            type, static_cast<u16>(slot_id), slot.generation, carried);
     }
 
     [[nodiscard]] no_export auto validate_slot(
-        cap_token token, cap_rights needed, u32 owner_domain, bool check_owner,
+        cap_token token, ::zxfoundation::dgp::right_mask needed, u32 owner_domain, bool check_owner,
         scoms::kobject::bobject*& target
     ) noexcept -> std::expected<void, lib::kernel_error> {
         auto* slot = slot_for(token);
@@ -158,7 +160,7 @@ namespace zxfoundation::dgp::cap::detail {
         }
         if (check_owner && slot->owner_domain != owner_domain) {
             return std::unexpected(
-                lib::kernel_error::from_memory(lib::memory_error::capability_invalid));
+                lib::kernel_error::from_generic(lib::generic_error::denied));
         }
         auto rights_result = check_rights(token, needed);
         if (!rights_result) return std::unexpected(rights_result.error());
@@ -171,16 +173,16 @@ namespace zxfoundation::dgp::cap::detail {
 namespace zxfoundation::dgp::cap {
 
     [[nodiscard]] auto cap_issue(
-        cap_type type, u16 obj_id, cap_rights rights, u32 owner_domain
+        cap_type type, u16 obj_id, ::zxfoundation::dgp::right_mask rights, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         return detail::issue_locked(type, obj_id, rights, owner_domain);
     }
 
     [[nodiscard]] auto cap_duplicate(
-        cap_token source, cap_rights rights, u32 owner_domain
+        cap_token source, ::zxfoundation::dgp::right_mask rights, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* target = nullptr;
         auto valid = detail::validate_slot(
             source, rights, owner_domain, true, target);
@@ -191,9 +193,9 @@ namespace zxfoundation::dgp::cap {
     }
 
     [[nodiscard]] auto cap_acquire(
-        cap_token source, cap_rights rights, u32 owner_domain
+        cap_token source, ::zxfoundation::dgp::right_mask rights, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* target = nullptr;
         auto valid = detail::validate_slot(
             source, rights, owner_domain, true, target);
@@ -204,19 +206,19 @@ namespace zxfoundation::dgp::cap {
     }
 
     [[nodiscard]] auto cap_duplicate_for(
-        cap_token source, cap_rights rights, u32 source_domain,
+        cap_token source, ::zxfoundation::dgp::right_mask rights, u32 source_domain,
         u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* target = nullptr;
         auto valid = detail::validate_slot(
             source, rights, source_domain, true, target);
         if (!valid) return std::unexpected(valid.error());
         auto* slot = detail::slot_for(source);
         if (owner_domain != source_domain
-            && (slot->rights & cap_rights::delegate) != cap_rights::delegate) {
-            return std::unexpected(lib::kernel_error::from_memory(
-                lib::memory_error::capability_invalid));
+            && (slot->rights & ::zxfoundation::dgp::right::delegate) != ::zxfoundation::dgp::right::delegate) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::denied));
         }
         return detail::issue_locked(
             slot->type, static_cast<u16>(target->id), rights, owner_domain);
@@ -230,7 +232,7 @@ namespace zxfoundation::dgp::cap {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         auto* slot = detail::slot_for(token);
         if (!slot) {
             return std::unexpected(
@@ -246,7 +248,7 @@ namespace zxfoundation::dgp::cap {
     }
 
     [[nodiscard]] auto cap_validate_generic(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<void, lib::kernel_error> {
 
         if (!token) {
@@ -254,23 +256,23 @@ namespace zxfoundation::dgp::cap {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* target = nullptr;
         return detail::validate_slot(token, needed, 0, false, target);
     }
 
     [[nodiscard]] auto cap_validate_generic_for(
-        cap_token token, cap_rights needed, u32 owner_domain
+        cap_token token, ::zxfoundation::dgp::right_mask needed, u32 owner_domain
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* target = nullptr;
         return detail::validate_slot(token, needed, owner_domain, true, target);
     }
 
     [[nodiscard]] auto cap_resolve(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<scoms::kobject::bobject*, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* target = nullptr;
         auto result = detail::validate_slot(token, needed, 0, false, target);
         if (!result) return std::unexpected(result.error());
@@ -298,7 +300,7 @@ namespace zxfoundation::dgp::cap {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         auto* slot = detail::slot_for(token);
         if (!slot) {
             return std::unexpected(
@@ -315,7 +317,7 @@ namespace zxfoundation::dgp::cap {
     [[nodiscard]] auto cap_revoke_for_domain(
         u32 domain_id
     ) noexcept -> std::expected<u32, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         if (!detail::s_capabilities) return 0U;
         u32 revoked = 0;
         for (u32 i = 1; i < detail::MAX_CAPABILITIES; ++i) {
@@ -339,7 +341,7 @@ namespace zxfoundation::dgp::cap {
     [[nodiscard]] auto cap_revoke_target(
         scoms::kobject::bobject& target
     ) noexcept -> std::expected<u32, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         u32 revoked = 0;
         for (u32 i = 1; i < detail::MAX_CAPABILITIES; ++i) {
             auto& slot = detail::s_capabilities[i];
@@ -355,9 +357,9 @@ namespace zxfoundation::dgp::cap {
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::dgp::domain::domain>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::dgp::domain::domain*, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* ko = nullptr;
         auto result = detail::validate_slot(token, needed, 0, false, ko);
         if (!result) return std::unexpected(result.error());
@@ -370,10 +372,10 @@ namespace zxfoundation::dgp::cap {
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::dgp::gate::gate_desc>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::dgp::gate::gate_desc*, lib::kernel_error> {
 
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* ko = nullptr;
         auto result = detail::validate_slot(token, needed, 0, false, ko);
         if (!result) return std::unexpected(result.error());
@@ -386,10 +388,10 @@ namespace zxfoundation::dgp::cap {
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::dgp::portal::portal_desc>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::dgp::portal::portal_desc*, lib::kernel_error> {
 
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* ko = nullptr;
         auto result = detail::validate_slot(token, needed, 0, false, ko);
         if (!result) return std::unexpected(result.error());
@@ -402,10 +404,10 @@ namespace zxfoundation::dgp::cap {
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::memory::objects::memory_object>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::memory::objects::memory_object*, lib::kernel_error> {
 
-        const sync::irq_lock_guard guard{detail::s_capability_lock};
+        const sync::irq_lock_guard _{detail::s_capability_lock};
         scoms::kobject::bobject* ko = nullptr;
         auto result = detail::validate_slot(token, needed, 0, false, ko);
         if (!result) return std::unexpected(result.error());
@@ -415,8 +417,8 @@ namespace zxfoundation::dgp::cap {
         }
         auto* object = reinterpret_cast<zxfoundation::memory::objects::memory_object*>(ko);
         if (object->ko.type != zxfoundation::scoms::kobject::kobject_type::grant) {
-            return std::unexpected(lib::kernel_error::from_memory(
-                lib::memory_error::capability_invalid));
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
         }
         return object;
     }

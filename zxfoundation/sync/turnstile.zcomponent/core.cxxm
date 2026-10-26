@@ -1,0 +1,61 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/turnstile.zcomponent/core.cxxm
+/// @brief Shared ordered waiter substrate for sleepable synchronization.
+
+export module zxfoundation.sync.turnstile.core;
+import zxfoundation.sync.turnstile.types;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.base.types;
+import arch.s390x.cpu.irq;
+import lib.list;
+import lib.stl;
+
+export {
+
+namespace zxfoundation::sync::turnstile {
+
+    /// @brief Ordered waiter queue used by mutexes, semaphores, and waiters.
+    class turnstile {
+        qspinlock::qspinlock<lock_rank::turnstile> m_lock{};
+        lib::list_head m_waiters{};
+
+    public:
+        constexpr turnstile() noexcept = default;
+        turnstile(const turnstile&) = delete;
+        turnstile(turnstile&&) = delete;
+        auto operator=(const turnstile&) = delete;
+        auto operator=(turnstile&&) = delete;
+
+        /// @brief Acquire the queue lock while saving interrupt state.
+        auto lock_irqsave() noexcept -> ::irqflags;
+        /// @brief Release the queue lock and restore interrupt state.
+        auto unlock_irqrestore(::irqflags flags) noexcept -> void;
+
+        /// @brief Insert a waiter in priority order.  Queue lock is required.
+        auto enqueue_locked(waiter& w) noexcept -> bool;
+        /// @brief Cancel a queued waiter.  Queue lock is required.
+        auto cancel_locked(waiter& w) noexcept -> bool;
+        /// @brief Grant the highest-priority waiter.  Queue lock is required.
+        [[nodiscard]] auto grant_locked() noexcept -> waiter*;
+        /// @brief Return the first queued waiter while queue lock is held.
+        [[nodiscard]] auto first_locked() noexcept -> waiter*;
+        /// @brief Return the successor of a queued waiter while locked.
+        [[nodiscard]] auto next_locked(waiter& w) noexcept -> waiter*;
+        /// @brief Remove and grant a specific queued waiter while locked.
+        auto grant_specific_locked(waiter& w) noexcept -> bool;
+        /// @brief Return whether the queue has waiters.  Queue lock is required.
+        [[nodiscard]] auto empty_locked() const noexcept -> bool;
+
+        /// @brief Enqueue a waiter using the queue's IRQ-safe lock.
+        auto enqueue(waiter& w) noexcept -> bool;
+        /// @brief Cancel a waiter using the queue's IRQ-safe lock.
+        auto cancel(waiter& w) noexcept -> bool;
+        /// @brief Grant and wake one waiter, invoking its callback outside the lock.
+        [[nodiscard]] auto wake_one() noexcept -> bool;
+        /// @brief Number of currently queued waiters.
+        [[nodiscard]] auto count() const noexcept -> u32;
+    };
+
+}
+
+}

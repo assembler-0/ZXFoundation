@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/syschk_core.cxxm
+/// @file zxfoundation/sys/syschk.zcomponent/core.cxx
 /// @brief Last-resort global system teardown (system check).
 
 module zxfoundation.sys.syschk.core;
@@ -8,6 +8,7 @@ import zxfoundation.sys.printk.core;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.sys.printk.types;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.lib.stacktrace.core;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
@@ -17,11 +18,15 @@ import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.init.zxfl.protocol;
-import drivers.watchdog.core;
 import lib.error;
 import lib.cstring;
 import lib.format;
 import lib.stl;
+import drivers.watchdog.core;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
+
 
 namespace zxfoundation::sys::syschk::detail {
 
@@ -44,10 +49,6 @@ namespace zxfoundation::sys::syschk::detail {
 
 namespace zxfoundation::sys::syschk {
 
-    /// @brief Initialize the system-check subsystem.
-    /// @param[in] proto  The ZXFL boot protocol.
-    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {}
-
     /// @brief Record a kernel error. Conditionally halt.
     /// @param[in] err      The @c lib::kernel_error that triggered this check.
     ///                     Its @c category and @c code are stored verbatim in the
@@ -58,7 +59,7 @@ namespace zxfoundation::sys::syschk {
     /// @param[in] msg      Human-readable reason string.  Truncated to
     ///                     @c ZX_CRASH_MSG_LEN - 1 bytes.
     /// @param[in] location Source location of the call site.
-    auto system_check(
+    [[gnu::noinline]] auto system_check(
         lib::kernel_error    err,
         syschk_severity      sev,
         std::string_view     msg,
@@ -89,7 +90,6 @@ namespace zxfoundation::sys::syschk {
         rec->psw_mask = current_psw.get<"mask">().underlying();
         rec->psw_addr = current_psw.get<"address">();
 
-        // Write the message — strncpy guarantees NUL termination.
         lib::string_copy(rec->msg, msg);
 
         printk::printk(detail::to_log_level(sev),
@@ -120,5 +120,11 @@ namespace zxfoundation::sys::syschk {
         arch::s390x::cpu::psw::disabled_wait();
         __builtin_unreachable();
     }
+
+    /// @brief initialize the system check infrastructure
+    auto zi_syschk_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {
+        return {};
+    }
+    __zinit__(early, p40, zi_syschk_init, fatal);
 
 } // namespace zxfoundation::sys::syschk

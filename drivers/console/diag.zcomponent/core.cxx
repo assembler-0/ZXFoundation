@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file diag.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file drivers/console/diag.zcomponent/core.cxx
 /// @brief idiomatic C++23 DIAG 8 hypervisor console driver.
 
 module drivers.console.diag.core;
@@ -7,15 +7,20 @@ import zxfoundation.base.types;
 import zxfoundation.sys.printk.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sched.context.core;
+import zxfoundation.sys.zinit.core;
+import zxfoundation.sys.printk.core;
 import arch.s390x.cpu.diag;
 import arch.s390x.cpu.irq;
 import lib.charconv;
 import lib.stl;
 
+#define __zxmacro_want_zinit
+#include macro_extensions
+
 namespace drivers::console::diag::detail {
 
-    /// @brief Encapsulates a Hercules-compatible DIAG 8 message.
-    class hercules_message {
+    /// @brief Encapsulates a z/VM DIAG 8 message.
+    class diag_message {
     public:
         static constexpr usize MAX_CAPACITY = 256;
         static constexpr usize PREFIX_SIZE  = 9;   // "MSGNOH * " = 9 bytes
@@ -35,7 +40,7 @@ namespace drivers::console::diag::detail {
 
     public:
         /// @brief Constructs a message with the MSGNOH prefix.
-        constexpr hercules_message() noexcept {
+        constexpr diag_message() noexcept {
             m_data[0] = static_cast<char>(EBCDIC_M);   // M
             m_data[1] = static_cast<char>(EBCDIC_S);   // S
             m_data[2] = static_cast<char>(EBCDIC_G);   // G
@@ -51,12 +56,12 @@ namespace drivers::console::diag::detail {
         /// @param s The ASCII input string.
         auto transcribe(std::string_view s) noexcept -> void {
             constexpr usize payload_limit = MAX_CAPACITY - PREFIX_SIZE;
-            const usize payload_len   = std::min(s.size(), payload_limit);
+            const usize payload_len = std::min(s.size(), payload_limit);
 
-            for (usize i = 0; i < payload_len; ++i) {
-                const u8 ebcdic_byte = lib::charconv::ascii_to_ebcdic(static_cast<u8>(s[i]));
-                m_data[PREFIX_SIZE + i] = static_cast<char>(ebcdic_byte);
-            }
+            lib::charconv::ascii_to_ebcdic(
+                std::span{s.data(), payload_len},
+                std::span<char>{&m_data[PREFIX_SIZE], payload_len}
+            );
 
             m_total_len = PREFIX_SIZE + payload_len;
         }
@@ -68,7 +73,7 @@ namespace drivers::console::diag::detail {
     };
 
     /// @brief Hardware-level DIAG emission lock.
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock g_diag_lock;
+    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::diag> g_diag_lock;
 
 } // namespace detail
 
@@ -81,11 +86,11 @@ namespace drivers::console::diag {
         detail::g_diag_lock.lock();
 
         std::string_view remaining = s;
-        constexpr usize payload_limit = detail::hercules_message::MAX_CAPACITY - detail::hercules_message::PREFIX_SIZE;
+        constexpr usize payload_limit = detail::diag_message::MAX_CAPACITY - detail::diag_message::PREFIX_SIZE;
 
         while (!remaining.empty()) {
             const usize chunk_len = std::min(remaining.size(), payload_limit);
-            detail::hercules_message msg;
+            detail::diag_message msg;
             msg.transcribe(remaining.substr(0, chunk_len));
             msg.transmit();
             remaining = remaining.substr(chunk_len);
@@ -94,5 +99,14 @@ namespace drivers::console::diag {
         detail::g_diag_lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
     }
+
+
+    using zxfoundation::sys::zinit::zi_desc;
+    using zxfoundation::sys::zinit::zi_result;
+
+    auto zi_printk_diag_backend(const zi_desc&) noexcept -> zi_result {
+        return zxfoundation::sys::printk::register_backend(drivers::console::diag::get_backend());
+    }
+    __zinit_dep__(early, p30, zi_printk_diag_backend, fatal, "zi_printk_init")
 
 } // namespace drivers::console::diag

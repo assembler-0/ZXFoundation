@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/deadline.cxxm
+/// @file zxfoundation/sched/deadline.zcomponent/core.cxxm
 /// @brief Conservative earliest-deadline scheduler backend with DGP admission.
 
 export module zxfoundation.sched.deadline.core;

@@ -1,0 +1,56 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/lockgraph.zcomponent/core.cxxm
+/// @brief Lockgraph runtime validator interface
+
+export module zxfoundation.sync.lockgraph.core;
+import zxfoundation.base.types;
+import zxfoundation.sync.lockrank;
+import zxfoundation.sync.lockgraph.types;
+
+export {
+
+namespace zxfoundation::sync::lockgraph {
+
+    /// @brief Initialize the validator at boot (enabled unless compiled
+    ///        out with ZX_NO_LOCKGRAPH or disabled by the boot switch).
+    auto init() noexcept -> void;
+
+    /// @brief Boot switch (zx.debug.lockgraph=0) — runtime gate for
+    ///        profiling runs (§20.4).
+    auto set_enabled(bool on) noexcept -> void;
+
+    /// @brief Register zx.debug.lockgraph on the boot parameter plane.
+    auto register_cmdline() noexcept -> void;
+
+    /// @brief True when validation is active on this boot.
+    [[nodiscard]] auto enabled() noexcept -> bool;
+
+    /// @brief Record an acquisition: held-chain append, context marking,
+    ///        dependency edges, bounded cycle checks.
+    /// @param[in] map          The lock's dependency record.
+    /// @param[in] inst         Lock instance identity (address).
+    /// @param[in] held_irq_off True when the lock is held with IRQs
+    ///        disabled (the canon default); false for unguarded
+    ///        hand-rolled locks (the unsafe class).
+    auto acquire(lockdep_map& map, const void* inst, bool held_irq_off = true) noexcept -> void;
+
+    /// @brief Record a release: held-chain pop.
+    /// @param[in] inst  Lock instance identity (address).
+    auto release(const void* inst) noexcept -> void;
+
+    /// @brief §17.5 counters: violations by class, chain-depth histogram.
+    struct lockgraph_counters {
+        u32 rank_cycles{0};        ///< Rank-level dependency cycles refused.
+        u32 irq_inversions{0};     ///< hardirq/process dual-context inversions.
+        u32 instance_cycles{0};    ///< Same-rank instance-order cycles refused.
+        u32 chain_overflows{0};    ///< Held-chain depth > MAX_HELD_CHAIN.
+        u32 reports{0};            ///< Violations reported to system_check.
+        u32 suppressed{0};         ///< Rate-limited reports suppressed.
+        u32 depth_histogram[9]{};  ///< Chain depth at acquire (8+ bucketed).
+    };
+
+    [[nodiscard]] auto counters() noexcept -> const lockgraph_counters&;
+
+} // namespace zxfoundation::sync::lockgraph
+
+} // end export

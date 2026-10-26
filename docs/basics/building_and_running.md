@@ -16,8 +16,13 @@ Throughout its development ZXFoundation utilize CMake as its main build system o
 | Hercules       | n/a                        | No       | Needed for emulation                  |
 | Hercules Tools | n/a                        | No       | Needed for 3390 disk creation         |
 | Doxygen        | n/a                        | No       | Needed for documentation              |
+| Git (with LFS) | n/a                        | No       | Needed for automatic dependency fetch |
 
 ---
+
+## Fetching the submodules
+
+ZXFoundation includes some submodules such as deps/zxlibc and deps/zxlibstdc++. You would want to fetch, update all submodules. Additionally, deps/zxlibstdc++ requires Git LFS support for its binary objects.
 
 ## Building: The Normal way
 

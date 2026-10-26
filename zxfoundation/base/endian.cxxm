@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file endian.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/base/endian.cxxm
 /// @brief Endianness detection and constants
 
 export module zxfoundation.base.endian;
@@ -15,6 +15,6 @@ namespace zxfoundation::base {
         native = __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ ? little : big
     };
 
-} // namespace lib
+} // namespace zxfoundation::base
 
 } // end export

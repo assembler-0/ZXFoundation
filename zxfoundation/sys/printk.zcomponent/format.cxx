@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/printk.cxxm
+/// @file zxfoundation/sys/printk.zcomponent/format.cxx
 /// @brief Kernel logging framework.
 
 module zxfoundation.sys.printk.format;

@@ -1,2 +1,3 @@
+/// @file zxfoundation/sched/cbs.zcomponent/interface.cxxm
 export module zxfoundation.sched.cbs;
 export import zxfoundation.sched.cbs.core;

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/deadline.cxx
+/// @file zxfoundation/sched/deadline.zcomponent/core.cxx
 /// @brief Conservative earliest-deadline scheduler backend with DGP admission.
 
 module zxfoundation.sched.deadline.core;
@@ -31,9 +31,9 @@ namespace zxfoundation::sched::deadline::detail {
 
     [[nodiscard]] auto has_deadline_authority(const domain& d) noexcept -> bool {
         if (d.rt_capability_token != 0U && d.rt_capability_token == d.admin_token) return true;
-        return zxfoundation::dgp::isolation::has_all_rights(
+        return zxfoundation::dgp::has_all_rights(
             d.granted_rights,
-            zxfoundation::dgp::isolation::isolation_rights::sched);
+            ::zxfoundation::dgp::right::sched);
     }
 
     [[nodiscard]] auto reserve_domain_runtime(
@@ -74,7 +74,7 @@ namespace zxfoundation::sched::deadline {
         strand& s,
         const sched_policy& policy
     ) noexcept -> std::expected<sched_admission_result, lib::kernel_error> {
-        if (!is_active_domain(owner) || is_idle_domain(owner)
+        if (!is_active_domain(owner)
             || policy.class_id != sched_class_id::deadline) {
             return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }

@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file cmdline.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/base/cmdline.zcomponent/core.cxx
 /// @brief Kernel command-line parameter registry and parser.
 
 module zxfoundation.base.cmdline.core;

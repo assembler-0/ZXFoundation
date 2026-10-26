@@ -6,8 +6,11 @@
 #include <arch/s390x/cpu/irq_frame.h>
 
 #define STRAND_OWNER        24   ///< strand::owner (void* — back-pointer to domain)
-#define STRAND_KSTACK_TOP   112  ///< strand::kstack_top (verified by static_assert)
-#define STRAND_KSP          120  ///< strand::ksp        (verified by static_assert)
+#define STRAND_KSTACK_TOP   112  ///< strand::kstack_top 
+#define STRAND_KSP          120  ///< strand::ksp        
+#define STRAND_IRQ_NESTING     128  ///< strand::irq_nesting     
+#define STRAND_NUCLEUS_NESTING 132  ///< strand::nucleus_nesting 
+#define STRAND_IRQ_CLASS       136  ///< strand::irq_class       
 #define SF_GPRS             48
 
 #define FRAME_ARS           0
@@ -42,6 +45,14 @@ __switch_to_asm:
 
     stg     %r15, STRAND_KSP(%r2)           // save prev's ksp (strand.ksp)
 
+    lg      %r4, LC_PERCPU_PTR(0)
+    l       %r5, PCP_IRQ_NESTING(%r4)
+    st      %r5, STRAND_IRQ_NESTING(%r2)
+    l       %r5, PCP_NUCLEUS_NESTING(%r4)
+    st      %r5, STRAND_NUCLEUS_NESTING(%r2)
+    llc     %r5, PCP_IRQ_CLASS(%r4)
+    stc     %r5, STRAND_IRQ_CLASS(%r2)
+
     lg      %r4, STRAND_OWNER(%r3)
     stg     %r4, LC_CURRENT_DOMAIN(0)
 
@@ -49,6 +60,14 @@ __switch_to_asm:
     stg     %r5, LC_KERNEL_STACK(0)
 
     lg      %r15, STRAND_KSP(%r3)
+
+    lg      %r4, LC_PERCPU_PTR(0)
+    l       %r5, STRAND_IRQ_NESTING(%r3)
+    st      %r5, PCP_IRQ_NESTING(%r4)
+    l       %r5, STRAND_NUCLEUS_NESTING(%r3)
+    st      %r5, PCP_NUCLEUS_NESTING(%r4)
+    llc     %r5, STRAND_IRQ_CLASS(%r3)
+    stc     %r5, PCP_IRQ_CLASS(%r4)
 
     lg      %r2, STRAND_OWNER(%r2)          // return prev's domain for teardown
 

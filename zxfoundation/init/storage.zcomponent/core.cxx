@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/init/bootstrap.cxxm
+/// @file zxfoundation/init/storage.zcomponent/core.cxx
 /// @brief sys/bootstrapd — first schedulable kernel domain.
 
 module zxfoundation.init.storage.core;
@@ -23,4 +23,4 @@ namespace zxfoundation::init::storage {
         return detail::kernel_protocol;
     }
 
-} // namespace zxfoundation::init::bootstrap
+} // namespace zxfoundation::init::storage

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/admit.cxxm
+/// @file zxfoundation/sched/admit.zcomponent/core.cxxm
 /// @brief DGP scheduler admission gate.
 
 export module zxfoundation.sched.admit.core;

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/io/core.cxxm
+/// @file arch/s390x/io/css.zcomponent/core.cxxm
 /// @brief Channel Subsystem core
 
 export module arch.s390x.io.css.core;
@@ -121,7 +121,7 @@ namespace arch::s390x::io::css {
         limit.insert<33, 63>(address_limit);
         register u64 r1 asm("1") = limit.raw();
         __asm__ volatile(
-            "rsch\n"
+            "sal\n"
             __asm_capture_cc()
             : __asm_cc_out(cc)
             : "r" (r1)

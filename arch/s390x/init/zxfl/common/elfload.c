@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/elfload.c
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/elfload.c
 
 #include <arch/s390x/init/zxfl/elfload.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
@@ -30,10 +30,6 @@ static void zxfl_bzero(uint64_t addr, uint64_t size) {
 #define ZXVL_RECS_PER_TRACK     12U
 
 /// @brief Translate a byte offset within a multi-extent dataset to CCHHR.
-///
-///        Iterates over the extent list in order, subtracting the size of
-///        each extent until the target offset falls within the current extent.
-///        This correctly handles datasets that span multiple DSCB1/DSCB3 extents.
 static int offset_to_cchhr(const dasd_dataset_t *ds,
                             uint64_t byte_offset,
                             uint16_t *out_cyl, uint16_t *out_head,

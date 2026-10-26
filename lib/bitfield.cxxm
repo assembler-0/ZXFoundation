@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file bitfield.cxxm
+/// @file lib/bitfield.cxxm
 /// @brief C++26 unified field descriptor
 
 export module lib.bitfield;

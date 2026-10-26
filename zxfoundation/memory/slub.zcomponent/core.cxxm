@@ -12,12 +12,6 @@ export {
 
 namespace zxfoundation::memory::slub {
 
-    /// @brief Initialise the SLUB allocator.
-    auto slub_init() noexcept -> void;
-
-    /// @brief Attach memory_object authorities to all live kmem_caches.
-    auto slub_attach_authorities() noexcept -> void;
-
     /// @brief Create a new slab cache.
     /// @param[in]  name         ASCII name for diagnostics.
     /// @param[in]  object_size  sizeof(T) for the object type.

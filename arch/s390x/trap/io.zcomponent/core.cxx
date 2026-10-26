@@ -1,9 +1,12 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file io.cxxm
+/// @file arch/s390x/trap/io.zcomponent/core.cxx
 /// @brief Centralized io dispatch.
 
 module arch.s390x.trap.io.core;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.psw;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.domain.core;
 import arch.s390x.io.css.subchannel;
 import arch.s390x.cpu.irq;
 import zxfoundation.sys.irq.core;
@@ -14,6 +17,10 @@ namespace arch::s390x::trap::io {
 
     /// @brief Centralized io dispatcher.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
+        // §5.12: record whether the hardware was inside a stacking PC
+        // (PASN switched to a callee) when this interruption arrived.
+        zxfoundation::dgp::domain::strand_note_interrupt_context(
+            (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0);
         const auto* lc = cpu::lowcore::get_current();
         const u16 sch_no       = lc->get<R"(io_interruption_code\sid\sch_no)">();
         const u32 io_int_parm  = lc->get<R"(io_interruption_code\interruption_parameter)">();

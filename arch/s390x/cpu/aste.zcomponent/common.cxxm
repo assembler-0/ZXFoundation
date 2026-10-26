@@ -1,3 +1,4 @@
+/// @file arch/s390x/cpu/aste.zcomponent/common.cxxm
 export module arch.s390x.cpu.aste:common;
 export import lib.stl;
 export import lib.error;

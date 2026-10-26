@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/scoms/scoms_table.cxxm
+/// @file zxfoundation/scoms/table.cxxm
 /// @brief SCOMS — scoms_table<T, N>: unified, generation-counted,
 ///        reference-counted kernel object table.
 
@@ -46,23 +46,23 @@ namespace zxfoundation::scoms {
         u32*    m_generation_blocks[BLOCK_COUNT]{};
         u32     m_free_head{0};
         atomic<u32> m_count{0};
-        sync::qspinlock::qspinlock m_table_lock{};
+        sync::qspinlock::qspinlock<sync::lock_rank::scoms_table> m_table_lock{};
         bool    m_initialized{false};
 
         /// @brief The kobject::kobject_type that this table manages.
         kobject::kobject_type m_type{kobject::kobject_type::none};
-        inline static scoms_table* s_instance{nullptr};
 
-        static auto reclaim_object(kobject::bobject& header) noexcept -> void {
-            if (!s_instance) __builtin_trap();
+        static auto reclaim_object(kobject::bobject& header, void* ctx) noexcept -> void {
+            auto* table = static_cast<scoms_table*>(ctx);
+            if (!table) __builtin_trap();
             auto& object = *reinterpret_cast<T*>(&header);
-            s_instance->reclaim_retired(object);
+            table->reclaim_retired(object);
         }
 
         auto reclaim_retired(T& object) noexcept -> void {
             const u32 id = object.ko.id;
             if (id >= N) __builtin_trap();
-            const sync::irq_lock_guard guard{m_table_lock};
+            const sync::irq_lock_guard _{m_table_lock};
             if (object_ptr(id) != nullptr) __builtin_trap();
             object_core::complete_reclaim(object.ko);
             object.ko.id = kobject::KOBJECT_ID_INVALID;
@@ -119,7 +119,6 @@ namespace zxfoundation::scoms {
         /// @brief Initialize the table.
         /// @param type  The kobject::kobject_type for objects in this table.
         auto init(kobject::kobject_type type) noexcept -> void {
-            s_instance = this;
             install_bobject_finalizer(object_core::finalize_last_put);
             m_type = type;
 
@@ -144,7 +143,7 @@ namespace zxfoundation::scoms {
                 return std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::uninitialized));
 
-            const sync::irq_lock_guard guard{m_table_lock};
+            const sync::irq_lock_guard _{m_table_lock};
 
             if (m_free_head == ~0U)
                 return std::unexpected(
@@ -183,7 +182,7 @@ namespace zxfoundation::scoms {
                 m_slot_blocks[slot / BLOCK_SIZE][slot % BLOCK_SIZE] = nullptr;
                 return std::unexpected(metadata_result.error());
             }
-            auto reclaimer_result = object_core::set_reclaimer(obj.ko, reclaim_object);
+            auto reclaimer_result = object_core::set_reclaimer(obj.ko, reclaim_object, this);
             if (!reclaimer_result) {
                 discard_value object_core::unregister_object(obj.ko);
                 next_ptr(slot) = m_free_head;
@@ -212,12 +211,12 @@ namespace zxfoundation::scoms {
                 return std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
 
-            const sync::irq_lock_guard guard{m_table_lock};
+            const sync::irq_lock_guard _{m_table_lock};
 
             if (object_ptr(id) != nullptr)
                 return std::unexpected(
-                    lib::kernel_error::from_locking(
-                        lib::locking_error::already_locked));
+                    lib::kernel_error::from_generic(
+                        lib::generic_error::slot_busy));
 
             if (m_free_head == ~0U)
                 return std::unexpected(
@@ -231,8 +230,8 @@ namespace zxfoundation::scoms {
                     prev = next_ptr(prev);
                 if (prev == ~0U) {
                     return std::unexpected(
-                        lib::kernel_error::from_locking(
-                            lib::locking_error::already_locked));
+                        lib::kernel_error::from_generic(
+                            lib::generic_error::slot_busy));
                 }
                 next_ptr(prev) = next_ptr(id);
             }
@@ -265,7 +264,7 @@ namespace zxfoundation::scoms {
                 m_slot_blocks[id / BLOCK_SIZE][id % BLOCK_SIZE] = nullptr;
                 return std::unexpected(metadata_result.error());
             }
-            auto reclaimer_result = object_core::set_reclaimer(obj.ko, reclaim_object);
+            auto reclaimer_result = object_core::set_reclaimer(obj.ko, reclaim_object, this);
             if (!reclaimer_result) {
                 discard_value object_core::unregister_object(obj.ko);
                 next_ptr(id) = m_free_head;
@@ -311,10 +310,27 @@ namespace zxfoundation::scoms {
         [[nodiscard]] auto acquire_ref(u32 id) noexcept
             -> kobject::robject<T, State>
         {
-            const sync::irq_lock_guard guard{m_table_lock};
+            const sync::irq_lock_guard _{m_table_lock};
             T* p = object_ptr(id);
             if (!p) return {};
             if (p->ko.state != State) return {};
+            return kobject::robject<T, State>{p};
+        }
+
+        /// @brief Look up a slot and acquire a reference only for a generation.
+        /// @param[in] id Slot index to inspect.
+        /// @param[in] generation Generation captured by a protected lookup.
+        /// @return A typed reference when both identity and generation match.
+        template <lifecycle_state State = lifecycle_state::active>
+        [[nodiscard]] auto acquire_ref_by_gen(u32 id, u32 generation) noexcept
+            -> kobject::robject<T, State>
+        {
+            const sync::irq_lock_guard _{m_table_lock};
+            if (id >= N) return {};
+            T* p = object_ptr(id);
+            if (!p || p->ko.id == kobject::KOBJECT_ID_INVALID
+                || p->ko.generation != generation
+                || p->ko.state != State) return {};
             return kobject::robject<T, State>{p};
         }
 
@@ -330,7 +346,7 @@ namespace zxfoundation::scoms {
 
             T* retired = nullptr;
             {
-                const sync::irq_lock_guard guard{m_table_lock};
+                const sync::irq_lock_guard _{m_table_lock};
                 auto* obj_ptr = object_ptr(id);
                 if (!obj_ptr) return std::unexpected(
                     lib::kernel_error::from_generic(lib::generic_error::not_found));

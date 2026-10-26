@@ -30,4 +30,6 @@ include(zx-discovery)         # zx-discovery DSL interpreter
 include(source)        		  # Core kernel sources
 include(zxfoundation-compile) # Full kernel compilation
 include(run)       		      # Run targets (mostly post-build targets)
+add_subdirectory(user/zxf)
 add_subdirectory(user/init)   # Tester only, this is a kernel, remember?
+add_subdirectory(user/tests)  # Test suites — one binary per subsystem, VTOC-packed.

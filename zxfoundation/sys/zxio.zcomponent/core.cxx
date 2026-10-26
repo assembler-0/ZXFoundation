@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file io.cxxm
+/// @file zxfoundation/sys/zxio.zcomponent/core.cxx
 /// @brief Capability-bound CSS I/O, DMA authority, and completion delivery.
 
 module zxfoundation.sys.zxio.core;
@@ -27,6 +27,7 @@ import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import zxfoundation.base.typestate;
 import zxfoundation.base.transaction;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.io.types;
 import arch.s390x.io.css;
 import arch.s390x.cpu.skey;
@@ -36,6 +37,9 @@ import lib.format;
 import lib.bitfield;
 import lib.structure;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::sys::zxio::detail {
 
@@ -65,15 +69,15 @@ namespace zxfoundation::sys::zxio::detail {
     }
 
     [[nodiscard]] no_export auto binding_for_owner(
-        cap_token token, cap_rights rights, u32 owner_domain
+        cap_token token, u32 owner_domain
     ) noexcept -> std::expected<io_binding*, lib::kernel_error> {
         if (!token || token.type() != cap_type::io_device) {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        auto owner = cap_validate_generic_for(token, rights, owner_domain);
+        auto owner = cap_validate_generic_for(token, ::zxfoundation::dgp::right::none, owner_domain);
         if (!owner) return std::unexpected(owner.error());
-        auto resolved = cap_resolve(token, rights);
+        auto resolved = cap_resolve(token, ::zxfoundation::dgp::right::none);
         if (!resolved) return std::unexpected(resolved.error());
         auto* binding = reinterpret_cast<io_binding*>(*resolved);
         if (binding->owner_domain != owner_domain ||
@@ -148,6 +152,9 @@ namespace zxfoundation::sys::zxio::detail {
                 binding.dma_base + CCW_STAGE_OFFSET)),
             request.ccw_count);
 
+        const u64 chain_span = static_cast<u64>(request.ccw_count)
+            * sizeof(ccw1);
+
         for (u16 i = 0U; i < request.ccw_count; ++i) {
             const auto ccw  = source[i];
             const u8 flags  = static_cast<u8>(ccw.get<"flags">());
@@ -156,10 +163,26 @@ namespace zxfoundation::sys::zxio::detail {
             const u32 daddr = ccw.get<"data_addr">();
 
             if ((flags & ~CCW_USER_FLAGS) != 0U ||
-                (flags & (CCW_FLAG_IDA | CCW_FLAG_MIDA)) != 0U ||
-                cmd == ccw_commands::tic) {
+                (flags & (CCW_FLAG_IDA | CCW_FLAG_MIDA)) != 0U) {
                 return std::unexpected(lib::kernel_error::from_memory(
                     lib::memory_error::capability_invalid));
+            }
+
+            if (cmd == ccw_commands::tic) {
+                if (count != 0U ||
+                    daddr < request.ccw_offset ||
+                    static_cast<u64>(daddr) - request.ccw_offset >= chain_span) {
+                    return std::unexpected(lib::kernel_error::from_memory(
+                        lib::memory_error::capability_invalid));
+                }
+                auto out = staged[i];
+                out.set<"cmd_code">(cmd);
+                out.set<"flags">(ccw.get<"flags">());
+                out.set<"count">(0U);
+                out.set<"data_addr">(static_cast<u32>(
+                    binding.dma_base + CCW_STAGE_OFFSET
+                    + (daddr - request.ccw_offset)));
+                continue;
             }
 
             const bool transfers_data = count != 0U &&
@@ -189,7 +212,7 @@ namespace zxfoundation::sys::zxio::detail {
     [[nodiscard]] no_export auto enqueue_completion(
         io_binding& binding, const irb& status
     ) noexcept -> bool {
-        const sync::irq_lock_guard guard{binding.ko.lock};
+        const sync::irq_lock_guard _{binding.ko.lock};
         if (binding.ko.state != lifecycle_state::active ||
             binding.pending_request_id == 0U ||
             (binding.op_state != io_substate::pending &&
@@ -213,8 +236,9 @@ namespace zxfoundation::sys::zxio::detail {
             (binding.completion_tail + 1U) % IO_COMPLETION_DEPTH;
         ++binding.completion_count;
         binding.pending_request_id = 0U;
-        if (!binding.teardown_started) {
-            binding.op_state = status.get<"scsw">().has_device_error() || status.get<"scsw">().has_sch_error()
+        if (binding.op_state != io_substate::revoking) {
+            const bool uc = status.get<R"(scsw\dev_status\unit_check)">() != 0U;
+            binding.op_state = uc || status.get<"scsw">().has_sch_error()
                 ? io_substate::error : io_substate::bound;
         }
         return true;
@@ -239,7 +263,7 @@ namespace zxfoundation::sys::zxio::detail {
     [[nodiscard]] no_export auto fence_binding_io(io_binding& binding) noexcept
         -> std::expected<void, lib::kernel_error> {
         {
-            const sync::irq_lock_guard guard{binding.ko.lock};
+            const sync::irq_lock_guard _{binding.ko.lock};
             if (binding.pending_request_id == 0U) return {};
         }
 
@@ -327,19 +351,21 @@ namespace zxfoundation::sys::zxio {
 
     using namespace dgp::cap;
 
-    auto init() noexcept -> void {
+    auto zi_zxio_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {
         using namespace detail;
-        if (g_initialized) return;
+        if (g_initialized) return {};
         g_io_table.init(scoms::kobject::kobject_type::io_binding);
         auto sink_result = css::install_completion_sink(css_completion_sink);
-        if (!sink_result) __builtin_trap();
+        if (!sink_result) return std::unexpected(sink_result.error());
         discard_value register_lookup(cap_type::io_device,
             [](u16 obj_id) noexcept -> scoms::kobject::bobject* {
                 auto* binding = binding_find(static_cast<u32>(obj_id));
                 return binding ? &binding->ko : nullptr;
             });
         g_initialized = true;
+        return {};
     }
+    __zinit_dep__(io, p20, zi_zxio_init, fatal, "zi_ccw_probe")
 
     [[nodiscard]] auto bind(
         u16 dev_no, u32 domain_id, cap_token& out_token
@@ -398,13 +424,13 @@ namespace zxfoundation::sys::zxio {
             .numa_node = domain->numa_node,
             .dgp_scope = dgp::memory_contract::memory_scope::private_domain,
             .dgp_access = dgp::memory_contract::memory_access::read | dgp::memory_contract::memory_access::write,
-            .dgp_rights =  dgp::isolation::isolation_rights::map,
+            .dgp_rights =  ::zxfoundation::dgp::right::map,
             .invalidate = dgp::memory_contract::invalidation_scope::address_space,
             .mapping_generation = 1U,
         };
         auto storage = zxfoundation::memory::objects::memory_object_create(
             scoms::kobject::kobject_type::storage, domain_id, &binding.ko,
-            binding.dma_base, binding.dma_size,  dgp::isolation::isolation_rights::map, policy);
+            binding.dma_base, binding.dma_size,  ::zxfoundation::dgp::right::map, policy);
         if (!storage) return std::unexpected(storage.error());
         binding.dma_storage = zxfoundation::memory::objects::memory_object_ref_of(**storage);
         txn.take_storage(binding.dma_storage);
@@ -412,7 +438,7 @@ namespace zxfoundation::sys::zxio {
         auto extent = zxfoundation::memory::objects::memory_object_create(
             scoms::kobject::kobject_type::memory_extent, domain_id, &(*storage)->ko,
             binding.dma_base + DRIVER_DMA_OFFSET, DRIVER_DMA_BYTES,
-             dgp::isolation::isolation_rights::map, policy);
+             ::zxfoundation::dgp::right::map, policy);
         if (!extent) return std::unexpected(extent.error());
         binding.dma_extent = zxfoundation::memory::objects::memory_object_ref_of(**extent);
         txn.take_extent(binding.dma_extent);
@@ -439,7 +465,7 @@ namespace zxfoundation::sys::zxio {
 
         auto token = cap_issue(cap_type::io_device,
             static_cast<u16>(binding.ko.id),
-            cap_rights::read | cap_rights::write | cap_rights::exec | cap_rights::destroy,
+            ::zxfoundation::dgp::right::bind | ::zxfoundation::dgp::right::submit | ::zxfoundation::dgp::right::observe | ::zxfoundation::dgp::right::reset,
             domain_id);
         if (!token) return std::unexpected(token.error());
         out_token = *token;
@@ -453,7 +479,7 @@ namespace zxfoundation::sys::zxio {
         cap_token token, u32 owner_domain
     ) noexcept -> std::expected<void, lib::kernel_error> {
         using namespace detail;
-        auto binding_result = binding_for_owner(token, cap_rights::destroy, owner_domain);
+        auto binding_result = binding_for_owner(token, owner_domain);
         if (!binding_result) return std::unexpected(binding_result.error());
         auto* binding = *binding_result;
         const u16 dev_no = binding->dev_no;
@@ -463,16 +489,11 @@ namespace zxfoundation::sys::zxio {
         io_substate prior_state{};
 
         {
-            const sync::irq_lock_guard guard{binding->ko.lock};
-            if (binding->teardown_started) {
-                if (binding->op_state != io_substate::revoking) {
-                    return std::unexpected(lib::kernel_error::from_driver(
-                        lib::driver_error::busy));
-                }
+            const sync::irq_lock_guard _{binding->ko.lock};
+            if (binding->op_state == io_substate::revoking) {
                 resume_teardown = true;
             } else {
                 prior_state = binding->op_state;
-                binding->teardown_started = true;
                 binding->op_state = io_substate::revoking;
             }
         }
@@ -480,8 +501,7 @@ namespace zxfoundation::sys::zxio {
         if (!resume_teardown) {
             auto retire = zxfoundation::memory::objects::memory_extent_retire(binding->dma_extent);
             if (!retire) {
-                const sync::irq_lock_guard guard{binding->ko.lock};
-                binding->teardown_started = false;
+                const sync::irq_lock_guard _{binding->ko.lock};
                 binding->op_state = prior_state;
                 return std::unexpected(retire.error());
             }
@@ -516,12 +536,11 @@ namespace zxfoundation::sys::zxio {
     [[nodiscard]] auto dma_extent(
         cap_token token, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error> {
-        auto binding_result = detail::binding_for_owner(
-            token, cap_rights::read, owner_domain);
+        auto binding_result = detail::binding_for_owner(token, owner_domain);
         if (!binding_result) return std::unexpected(binding_result.error());
         {
-            const sync::irq_lock_guard guard{(*binding_result)->ko.lock};
-            if ((*binding_result)->teardown_started) {
+            const sync::irq_lock_guard _{(*binding_result)->ko.lock};
+            if ((*binding_result)->op_state == io_substate::revoking) {
                 return std::unexpected(lib::kernel_error::from_driver(
                     lib::driver_error::busy));
             }
@@ -536,14 +555,13 @@ namespace zxfoundation::sys::zxio {
                 lib::memory_error::capability_invalid));
         }
         return cap_issue(cap_type::memory_extent, static_cast<u16>((*extent)->ko.id),
-            cap_rights::read | cap_rights::write | cap_rights::map, owner_domain);
+            ::zxfoundation::dgp::right::read | ::zxfoundation::dgp::right::write | ::zxfoundation::dgp::right::map, owner_domain);
     }
 
     [[nodiscard]] auto submit(
         cap_token token, u32 owner_domain, const io_request& request
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        auto binding_result = detail::binding_for_owner(
-            token, cap_rights::exec, owner_domain);
+        auto binding_result = detail::binding_for_owner(token, owner_domain);
         if (!binding_result) return std::unexpected(binding_result.error());
         auto* binding = *binding_result;
         auto authority = detail::validate_dma_authority(*binding);
@@ -551,10 +569,8 @@ namespace zxfoundation::sys::zxio {
 
         arch::s390x::io::orb kernel_orb{};
         {
-            // Serializing staging and SSCH against unbind closes the interval
-            // where a teardown could clear the subchannel before it is started.
             const sync::irq_lock_guard _{binding->ko.lock};
-            if (binding->teardown_started || binding->op_state != io_substate::bound) {
+            if (binding->op_state != io_substate::bound) {
                 return std::unexpected(lib::kernel_error::from_driver(
                     lib::driver_error::busy));
             }
@@ -581,11 +597,10 @@ namespace zxfoundation::sys::zxio {
     [[nodiscard]] auto completion_dequeue(
         cap_token token, u32 owner_domain
     ) noexcept -> std::expected<io_completion, lib::kernel_error> {
-        auto binding_result = detail::binding_for_owner(
-            token, cap_rights::read, owner_domain);
+        auto binding_result = detail::binding_for_owner(token, owner_domain);
         if (!binding_result) return std::unexpected(binding_result.error());
         auto* binding = *binding_result;
-        const sync::irq_lock_guard guard{binding->ko.lock};
+        const sync::irq_lock_guard _{binding->ko.lock};
         if (binding->completion_count == 0U) {
             return std::unexpected(lib::kernel_error::from_driver(
                 lib::driver_error::not_ready));
@@ -597,22 +612,12 @@ namespace zxfoundation::sys::zxio {
         return result;
     }
 
-    [[nodiscard]] auto irq_bind(
-        cap_token token, u32 owner_domain, u32 retired_gate_id
-    ) noexcept -> std::expected<void, lib::kernel_error> {
-        discard_value token;
-        discard_value owner_domain;
-        discard_value retired_gate_id;
-        return std::unexpected(lib::kernel_error::from_generic(
-            lib::generic_error::not_supported));
-    }
-
     auto destroy_for_domain(u32 domain_id) noexcept -> void {
         for (u32 id = 0U; id < MAX_IO_BINDINGS; ++id) {
             auto* binding = binding_find(id);
             if (!binding || binding->owner_domain != domain_id) continue;
             auto token = cap_issue(cap_type::io_device, static_cast<u16>(id),
-                cap_rights::destroy, domain_id);
+                ::zxfoundation::dgp::right::reset, domain_id);
             if (token) discard_value unbind(*token, domain_id);
         }
     }

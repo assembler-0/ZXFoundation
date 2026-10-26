@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/service.cxxm
+/// @file zxfoundation/sys/service.zcomponent/core.cxxm
 /// @brief Service registry — lightweight name-to-capability directory for
 ///        the DGP kernel's service discovery model.
 
@@ -29,14 +29,13 @@ namespace zxfoundation::sys::service {
         scoms::kobject::bobject  ko{};
         char            name[SERVICE_NAME_MAX_LEN]{};
         dgp::cap::cap_token  token{};
+        u64             port{0};   ///< Service-defined payload (e.g. a gate
+                                   ///< entry VA) — returned by lookup.
         memory::objects::memory_object_ref authority{};
 
         service_entry() noexcept = default;
     };
     assert_offset(service_entry, ko, 0);
-
-    /// @brief Initialize the service registry.
-    auto init() noexcept -> void;
 
     /// @brief Remove service entries owned by a domain entering teardown.
     auto destroy_for_domain(u32 domain_id) noexcept -> void;
@@ -51,18 +50,17 @@ namespace zxfoundation::sys::service {
     [[nodiscard]] auto register_service(
         std::string_view name,
         dgp::cap::cap_token   token,
+        u64                port,
         u32              owner_id
     ) noexcept -> std::expected<u32, lib::kernel_error>;
 
     /// @brief Look up a service by name.
     /// @param[in]  name  NUL-terminated service name.
     /// @return  Capability token on success, kernel_error if not found.
-    /// @note  The returned token is a new capability acquired from the
-    ///        registry entry.
     [[nodiscard]] auto lookup_service(
         std::string_view name,
         u32              caller_id
-    ) noexcept -> std::expected<dgp::cap::cap_token, lib::kernel_error>;
+    ) noexcept -> std::expected<u64, lib::kernel_error>;
 
     /// @brief Unregister a service.
     /// @param[in]  service_id  The service ID returned by register_service.

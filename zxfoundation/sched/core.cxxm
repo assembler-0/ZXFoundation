@@ -46,8 +46,6 @@ namespace zxfoundation::sched {
     /// @brief Create and optionally enqueue a secondary strand for a DGP domain.
     /// @param[in] request Executor-style creation request selecting one of
     ///            three strand kinds (kernel-thread, user-process, bare).
-    ///            See @c zxfoundation::dgp::domain::strand_create_request
-    ///            for the full duality documentation.
     /// @return Pointer to the created strand, or kernel_error if validation,
     ///         allocation, or admission fails.
     [[nodiscard]] auto strand_spawn(
@@ -85,18 +83,19 @@ namespace zxfoundation::sched {
 
     [[nodiscard]] auto sched_active() noexcept -> bool;
 
-    auto sched_init() noexcept -> void;
     auto sched_init_ap(u16 cpu_id) noexcept -> void;
 
     [[noreturn]] auto idle_enter() noexcept -> void;
 
-    /// @brief Notify the scheduler that a CPU has come online.
-    [[nodiscard]] auto cpu_up(u16 cpu_id) noexcept -> ::std::expected<void, ::lib::kernel_error>;
+    /// @brief Attach scheduler run-queue resources for a manager-online CPU.
+    /// @param[in] cpu_id Logical CPU ID being attached.
+    [[nodiscard]] auto scheduler_cpu_attach(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
 
-    /// @brief Notify the scheduler that a CPU is going offline.
-    /// @param[in] cpu_id Logical CPU ID going offline.
-    /// @return Success or kernel_error.
-    [[nodiscard]] auto cpu_down(u16 cpu_id) noexcept -> ::std::expected<void, ::lib::kernel_error>;
+    /// @brief Detach scheduler run-queue resources during manager-offline.
+    /// @param[in] cpu_id Logical CPU ID being detached.
+    [[nodiscard]] auto scheduler_cpu_detach(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
 
 } // namespace zxfoundation::sched
 

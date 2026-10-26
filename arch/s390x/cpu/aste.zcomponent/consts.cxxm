@@ -1,10 +1,11 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/aste_types.cxxm
+/// @file arch/s390x/cpu/aste.zcomponent/consts.cxxm
 /// @brief z/Architecture ASTE/ALE/ALT value types and constants.
-/// @note Purely value-level declarations shared by the arch.s390x.cpu.aste
 
 export module arch.s390x.cpu.aste.consts;
 import zxfoundation.base.types;
+import lib.bitfield;
+import lib.structure;
 
 export {
 
@@ -14,7 +15,6 @@ namespace arch::s390x::cpu::aste {
     constexpr u32 MAX_ASTE_ENTRIES = 256;
 
     /// @brief Maximum ALE entries in one domain's dispatchable-unit list.
-    /// AR0 always selects primary space, leaving AR1-AR15 for portal ALETs.
     constexpr u32 MAX_ALE_ENTRIES = 16;
 
     /// @brief ALETs 0–2 are architecturally reserved (primary, secondary, home).
@@ -39,14 +39,23 @@ namespace arch::s390x::cpu::aste {
         return static_cast<u8>((alet & ALET_ALESN_MASK) >> 16);
     }
 
-    /// @brief Per-domain hardware ART state.  CR2 selects @c duct_phys while
-    /// AR-mode ALETs address @c ale_table_phys through DUALD at byte 16.
+    /// @brief Per-domain hardware ART state.
     struct art_context {
         u64 duct_phys{0};
         u64 ale_table_phys{0};
         u8  ale_sequence[MAX_ALE_ENTRIES]{};
         u8  _pad[8]{};
     };
+
+    /// @brief ALET — access-list-entry token
+    using alet = lib::record<u32, lib::msb0_t,
+        lib::rz<"format_bits",  lib::bits<0, 6>>,
+        lib::rw<"primary_list", lib::bits<7, 7>>,
+        lib::rw<"alesn",        lib::bits<8, 15>, u8>,
+        lib::rw<"alen",         lib::bits<16, 31>, u16>
+    >;
+
+    static_assert(sizeof(alet) == 4);
 
 } // namespace arch::s390x::cpu::aste
 

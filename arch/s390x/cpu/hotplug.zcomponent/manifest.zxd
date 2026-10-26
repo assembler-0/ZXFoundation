@@ -1,4 +1,0 @@
-!files : !compile_group -> [auto] {
-    hotplug.cxxm
-    hotplug.cxx
-}

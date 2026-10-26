@@ -1,0 +1,110 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/lockrank.zcomponent/types.cxxm
+/// @brief Typed lock ranks
+
+export module zxfoundation.sync.lockrank.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::sync {
+
+    /// @brief Lock class ranks
+    enum class lock_rank : u8 {
+        svc_table = 0,      ///< nucleus_call_table registration.
+        cap_table,          ///< Capability table (issue/release/validate).
+        policy_table,       ///< Policy server table.
+        ipc_table,          ///< IPC endpoint table.
+        page_cache,         ///< Page-cache table.
+        scoms_table,        ///< Object table slots (alloc/free/find).
+        scoms_meta,         ///< Object metadata table.
+        idalloc,            ///< ID allocator bitmap.
+        css_table,          ///< Subchannel table.
+        aste_table,         ///< ART/ASTE table.
+        irq_desc,           ///< IRQ descriptor state.
+        smp_doorbell,       ///< SMP transition / doorbell state.
+
+        rq,                 ///< Run-queue data.
+        rq_context,         ///< ASCE/CR1 switch serialization.
+        cpudl,              ///< Deadline cpumask.
+
+        vm_space,           ///< vm_space region tree.
+        rmap_stripe,        ///< Reverse-map stripes.
+        pmm_zone,           ///< Per-node buddy zone locks.
+        slub_cache,         ///< Slab cache table.
+        slub_node,          ///< Per-node slab lists.
+
+        scoms_kobject,      ///< Per-object lifecycle lock.
+
+        portal_ar,          ///< Portal AR mask allocation.
+        skey,               ///< Storage-key table.
+
+        rtmutex_pi,         ///< rtmutex PI state (m_pi_lock).
+        turnstile,          ///< Turnstile wait queue.
+        seqlock_writer,     ///< Seqlock writer serialization.
+
+        printk,             ///< printk state.
+        printk_flush,       ///< printk flush serialization (under printk).
+        cxxrt,              ///< C++ runtime (atexit guard).
+        diag,               ///< Diag console.
+        tx_fallback,        ///< txspinlock qspinlock fallback (RC-10.5 dies).
+        mutex_internal,     ///< Sleepable-mutex internal spin state.
+        gate_defer,         ///< Per-domain deferred-gate request FIFO.
+
+        count_              ///< Number of ranks (also the lockgraph node count).
+    };
+
+    /// @brief Rank order sanity: the hierarchy is the declaration order.
+    ///        Descent from rank R is legal exactly for ranks > R.
+    [[nodiscard]] constexpr auto descends_from(lock_rank inner, lock_rank outer) noexcept -> bool {
+        return static_cast<u8>(inner) > static_cast<u8>(outer);
+    }
+
+    /// @brief Same-rank nesting (instance ordering is the lockgraph's job).
+    [[nodiscard]] constexpr auto same_rank(lock_rank a, lock_rank b) noexcept -> bool {
+        return a == b;
+    }
+
+    /// @brief ASCII name of a rank (lockgraph dumps, ORDER.md cross-check).
+    [[nodiscard]] constexpr auto lock_rank_name(lock_rank r) noexcept -> const char* {
+        switch (r) {
+            case lock_rank::svc_table:      return "svc_table";
+            case lock_rank::cap_table:      return "cap_table";
+            case lock_rank::policy_table:   return "policy_table";
+            case lock_rank::ipc_table:      return "ipc_table";
+            case lock_rank::page_cache:     return "page_cache";
+            case lock_rank::scoms_table:    return "scoms_table";
+            case lock_rank::scoms_meta:     return "scoms_meta";
+            case lock_rank::idalloc:        return "idalloc";
+            case lock_rank::css_table:      return "css_table";
+            case lock_rank::aste_table:     return "aste_table";
+            case lock_rank::irq_desc:       return "irq_desc";
+            case lock_rank::smp_doorbell:   return "smp_doorbell";
+            case lock_rank::rq:             return "rq";
+            case lock_rank::rq_context:     return "rq_context";
+            case lock_rank::cpudl:          return "cpudl";
+            case lock_rank::vm_space:       return "vm_space";
+            case lock_rank::rmap_stripe:    return "rmap_stripe";
+            case lock_rank::pmm_zone:       return "pmm_zone";
+            case lock_rank::slub_cache:     return "slub_cache";
+            case lock_rank::slub_node:      return "slub_node";
+            case lock_rank::scoms_kobject:  return "scoms_kobject";
+            case lock_rank::portal_ar:      return "portal_ar";
+            case lock_rank::skey:           return "skey";
+            case lock_rank::rtmutex_pi:     return "rtmutex_pi";
+            case lock_rank::turnstile:      return "turnstile";
+            case lock_rank::seqlock_writer: return "seqlock_writer";
+            case lock_rank::printk:         return "printk";
+            case lock_rank::printk_flush:   return "printk_flush";
+            case lock_rank::cxxrt:          return "cxxrt";
+            case lock_rank::diag:           return "diag";
+            case lock_rank::tx_fallback:    return "tx_fallback";
+            case lock_rank::mutex_internal: return "mutex_internal";
+            case lock_rank::gate_defer:     return "gate_defer";
+            default:                        return "invalid";
+        }
+    }
+
+} // namespace zxfoundation::sync
+
+} // end export

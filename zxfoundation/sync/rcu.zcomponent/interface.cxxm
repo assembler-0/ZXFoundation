@@ -1,3 +1,4 @@
+/// @file zxfoundation/sync/rcu.zcomponent/interface.cxxm
 export module zxfoundation.sync.rcu;
 export import zxfoundation.sync.rcu.core;
 export import zxfoundation.sync.rcu.types;

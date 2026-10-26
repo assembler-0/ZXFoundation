@@ -17,6 +17,8 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.sync.lockable;
 import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.zinit.core;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.scoms.kobject.types;
 import arch.s390x.cpu.lowcore;
@@ -24,10 +26,12 @@ import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
-import zxfoundation.sys.syschk.core;
 import lib.error;
 import lib.align;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::memory::slub::detail {
 
@@ -36,7 +40,7 @@ namespace zxfoundation::memory::slub::detail {
     /// @brief Dynamically allocated pool of kmem_cache objects
     static kmem_cache* g_cache_table_ptr{nullptr};
     static u32         g_cache_count{0};
-    alignas(4) static sync::qspinlock::qspinlock g_cache_table_lock{};
+    alignas(4) static sync::qspinlock::qspinlock<sync::lock_rank::slub_cache> g_cache_table_lock{};
     static bool        g_initialized{false};
 
     [[nodiscard]] inline auto encode_fp(
@@ -240,7 +244,7 @@ namespace zxfoundation::memory::slub::detail {
         auto* sh = cs.slab;
         if (!sh) return;
         auto& node = node_state(cache, sh->node_id);
-        const sync::irq_lock_guard guard{node.list_lock};
+        const sync::irq_lock_guard _{node.list_lock};
         if (cs.freelist) {
             void* tail = cs.freelist;
             while (void* next = get_fp(cache, tail)) tail = next;
@@ -287,7 +291,7 @@ namespace zxfoundation::memory::slub::detail {
                 sh->cpu_partial_next = nullptr;
                 cs.partial_count -= sh->objects - sh->inuse.load(memory_order::relaxed);
                 auto& node = node_state(cache, sh->node_id);
-                const sync::irq_lock_guard node_guard{node.list_lock};
+                const sync::irq_lock_guard _{node.list_lock};
                 activate_slab(cache, cs, sh);
                 // Retry fast path inline.
                 void* obj = cs.freelist;
@@ -322,7 +326,7 @@ namespace zxfoundation::memory::slub::detail {
             if (node_id == numa::NUMA_NODE_ANY) break;
             inspected_nodes |= static_cast<u16>(1U << node_id);
             auto& node = node_state(cache, node_id);
-            const sync::irq_lock_guard guard{node.list_lock};
+            const sync::irq_lock_guard _{node.list_lock};
 
             if (node.partial) {
                 slab_header* sh = node.partial;
@@ -392,7 +396,7 @@ namespace zxfoundation::memory::slub::detail {
         discard_value cache.live_objects.fetch_sub(1, memory_order::relaxed);
 
         auto& node = node_state(cache, sh->node_id);
-        const sync::irq_lock_guard guard{node.list_lock};
+        const sync::irq_lock_guard _{node.list_lock};
 
         set_fp(cache, obj, sh->freelist);
         sh->freelist = obj;
@@ -415,13 +419,13 @@ namespace zxfoundation::memory::slub::detail {
 
 namespace zxfoundation::memory::slub {
 
-    /// @brief Initialise the SLUB allocator.
-    /// Must be called before any kmem_cache_create().
-    /// Allocates the cache table from PMM (PMM must be initialized).
-    auto slub_init() noexcept -> void {
+    /// @brief Initialize the SLUB allocator.
+    auto zi_slub_init(const sys::zinit::zi_desc&) noexcept
+        -> sys::zinit::zi_result
+    {
         using namespace detail;
 
-        if (g_initialized) return;
+        if (g_initialized) return {};
 
         constexpr u64 table_bytes = static_cast<u64>(sizeof(kmem_cache) * SLUB_MAX_CACHES);
         constexpr u32 total_pages = static_cast<u32>(
@@ -431,16 +435,14 @@ namespace zxfoundation::memory::slub {
             ++order;
         }
         if (order > MAX_ORDER) [[unlikely]] {
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
-                "slub: cache table too large for a single PMM allocation");
+            return std::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         }
 
         auto folio_r = pmm::alloc(order, zone::normal, purpose::slab, page_init::zeroed);
         if (!folio_r) [[unlikely]] {
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
-                "slub: cannot allocate cache table from PMM");
+            return std::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         }
 
         g_cache_table_ptr = reinterpret_cast<kmem_cache*>(
@@ -448,14 +450,16 @@ namespace zxfoundation::memory::slub {
 
         g_cache_count = 0;
         g_initialized = true;
+        return {};
     }
+    __zinit_dep__(mm, p40, zi_slub_init, fatal, "zi_mmu_init")
 
     /// @brief Attach memory_object authorities to all live kmem_caches.
-    auto slub_attach_authorities() noexcept -> void {
+    auto zi_slub_attach_authorities(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         using namespace detail;
         using namespace objects;
-        if (!g_initialized) return;
-        const sync::irq_lock_guard guard{g_cache_table_lock};
+        if (!g_initialized) return {};
+        const sync::irq_lock_guard _{g_cache_table_lock};
         for (u32 i = 0; i < g_cache_count; ++i) {
             kmem_cache& slot = g_cache_table_ptr[i];
             if (slot.authority) continue;
@@ -463,10 +467,16 @@ namespace zxfoundation::memory::slub {
                 scoms::kobject::kobject_type::kmem_cache, 0, nullptr, 0, 0);
             if (!mo_result) continue;
             slot.authority = memory_object_ref_of(**mo_result);
-            discard_value memory_object_attach_view(
+            auto view_result = memory_object_attach_view(
                 slot.authority, memory_view_kind::kmem_cache, &slot);
+            if (!view_result) {
+                discard_value memory_object_destroy((*mo_result)->ko.id);
+                slot.authority = {};
+            }
         }
+        return {};
     }
+    __zinit_dep__(mm, p99, zi_slub_attach_authorities, fatal, "zi_slub_init")
 
     /// @brief Create a new slab cache.
     /// @param[in]  name         ASCII name for diagnostics.
@@ -513,7 +523,7 @@ namespace zxfoundation::memory::slub {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::code::invalid_arg));
 
-        const sync::irq_lock_guard guard{g_cache_table_lock};
+        const sync::irq_lock_guard _{g_cache_table_lock};
         if (g_cache_count >= SLUB_MAX_CACHES)
             return std::unexpected(
                 lib::kernel_error::from_memory(lib::memory_error::code::out_of_memory));
@@ -568,7 +578,7 @@ namespace zxfoundation::memory::slub {
                 sh->frozen = 0U;
                 sh->cpu_partial_next = nullptr;
                 auto& node = node_state(*cache, sh->node_id);
-                const sync::irq_lock_guard nl{node.list_lock};
+                const sync::irq_lock_guard _{node.list_lock};
                 if (sh->inuse.load(memory_order::acquire) < sh->objects)
                     node_add_partial(*cache, sh);
                 sh = nx;
@@ -582,7 +592,7 @@ namespace zxfoundation::memory::slub {
 
         for (u8 node_id = 0U; node_id < numa::MAX_NUMA_NODES; ++node_id) {
             auto& node = node_state(*cache, node_id);
-            const sync::irq_lock_guard guard{node.list_lock};
+            const sync::irq_lock_guard _{node.list_lock};
             slab_header* sh = node.partial;
             while (sh) {
                 slab_header* nx = sh->next;
@@ -607,7 +617,7 @@ namespace zxfoundation::memory::slub {
         u32 freed = 0;
         for (u8 node_id = 0U; node_id < numa::MAX_NUMA_NODES; ++node_id) {
             auto& node = node_state(*cache, node_id);
-            const sync::irq_lock_guard guard{node.list_lock};
+            const sync::irq_lock_guard _{node.list_lock};
             slab_header* sh = node.partial;
             while (sh) {
                 slab_header* nx = sh->next;
@@ -705,6 +715,7 @@ namespace zxfoundation::memory::slub {
     }
 
     /// @brief Free a slab-allocated object without knowing its cache.
+    /// @param[in] ptr  Object pointer previously returned by kmem_alloc.
     auto kmem_free_raw(void* ptr) noexcept -> void {
         using namespace detail;
         if (!ptr) [[unlikely]] return;
@@ -724,11 +735,19 @@ namespace zxfoundation::memory::slub {
             const auto address = reinterpret_cast<u64>(ptr);
             if (address < begin || address >= end ||
                 ((address - begin) % sh->cache->size) != 0U) {
-                return;
+                zxfoundation::sys::syschk::syschk_fatal(
+                    lib::kernel_error::from_memory(lib::memory_error::corruption),
+                    "slub: kmem_free_raw ptr={:#x} violates slab layout (begin={:#x} end={:#x} size={})",
+                    address, begin, end, sh->cache->size);
             }
             kmem_free(*sh->cache, ptr);
             return;
         }
+
+        zxfoundation::sys::syschk::syschk_fatal(
+            lib::kernel_error::from_memory(lib::memory_error::corruption),
+            "slub: kmem_free_raw ptr={:#x} — no slab header claims the object",
+            reinterpret_cast<u64>(ptr));
     }
 } // namespace zxfoundation::memory::slub
 

@@ -1,3 +1,4 @@
+/// @file fs/exec/elf.zcomponent/interface.cxxm
 export module fs.exec.elf;
 export import fs.exec.elf.types;
 export import fs.exec.elf.core;

@@ -50,12 +50,15 @@ import zxfoundation.sys.irq.consts;
 import zxfoundation.sched.context.core;
 import zxfoundation.sched.admit.core;
 import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.rcu.core;
 import zxfoundation.sched.rt.core;
 import zxfoundation.smp.csd.core;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.ctlreg;
 import arch.s390x.cpu.aste;
+import arch.s390x.cpu.pcss.core;
 import arch.s390x.cpu.ar;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.cpumask;
@@ -64,6 +67,7 @@ import arch.s390x.cpu.irq;
 import arch.s390x.cpu.psw;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.cputimer;
+import drivers.watchdog.core;
 import lib.error;
 import lib.format;
 import lib.rbtree;
@@ -71,8 +75,10 @@ import lib.list;
 import lib.softirq.core;
 import lib.cpumask;
 import lib.container_of;
-import drivers.watchdog.core;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::sched::detail {
 
@@ -81,6 +87,18 @@ namespace zxfoundation::sched::detail {
 
     no_export std::array<run_queue, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_rqs{};
     no_export bool g_sched_initialized{false};
+    no_export std::array<u64, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cputimer_armed_tod{};
+
+    [[nodiscard]] auto pcp_cpu_id() noexcept -> u16 {
+        return arch::s390x::cpu::percpu::this_cpu().cpu_id;
+    }
+
+    /// Arm SPT with @p ns (nanoseconds) and remember the armed value.
+    auto cputimer_arm_ns(u64 ns) noexcept -> void {
+        const u64 tod = (ns << 9U) / 125ULL;
+        arch::s390x::cpu::cputimer::spt(tod);
+        detail::g_cputimer_armed_tod[pcp_cpu_id()] = tod;
+    }
     no_export sys::timer::kernel_timer g_bsp_tick_timer{};
     no_export std::array<sys::timer::kernel_timer, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_ap_tick_timers{};
 
@@ -108,13 +126,12 @@ namespace zxfoundation::sched::detail {
 
     auto record_asce_attachment(domain& d) noexcept -> void {
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
-        pcp.attached_asce = d.asce.val;
-        pcp.attached_domain_id = d.ko.id;
-        pcp.attached_dgp_state = static_cast<u8>(d.ko.state);
+        pcp.attached.publish(d.asce.val, reinterpret_cast<u64>(&d), d.ko.id,
+            static_cast<u8>(d.ko.state));
         auto& rq = detail::g_rqs[pcp.cpu_id];
-        rq.balance_attached_asce.store(pcp.attached_asce, std::memory_order::release);
-        rq.balance_attached_domain_id.store(pcp.attached_domain_id, std::memory_order::release);
-        rq.balance_attached_dgp_state.store(pcp.attached_dgp_state, std::memory_order::release);
+        rq.balance_attached_asce.store(pcp.attached.asce, std::memory_order::release);
+        rq.balance_attached_domain_id.store(pcp.attached.domain_id, std::memory_order::release);
+        rq.balance_attached_dgp_state.store(pcp.attached.dgp_state, std::memory_order::release);
     }
 
     /// @brief Hierarchical work stealing walking the @c sched_domain tree.
@@ -190,11 +207,12 @@ namespace zxfoundation::sched::detail {
 
         run_queue& first  = (local_rq.cpu_id < busiest->cpu_id) ? local_rq : *busiest;
         run_queue& second = (local_rq.cpu_id < busiest->cpu_id) ? *busiest : local_rq;
-        second.lock.lock();
+        if (&first != &local_rq) first.lock.lock();
+        if (&second != &local_rq) second.lock.lock();
 
         if (!cpumask::cpu_online(busiest->cpu_id) || busiest->nr_running <= 1) {
-            first.lock.unlock();
-            if (&second != &first) second.lock.unlock();
+            if (&second != &local_rq) second.lock.unlock();
+            if (&first != &local_rq) first.lock.unlock();
             return nullptr;
         }
 
@@ -219,8 +237,8 @@ namespace zxfoundation::sched::detail {
 
         zxfoundation::sched::rq_snapshot::publish(local_rq);
         zxfoundation::sched::rq_snapshot::publish(*busiest);
-        first.lock.unlock();
-        if (&second != &first) second.lock.unlock();
+        if (&second != &local_rq) second.lock.unlock();
+        if (&first != &local_rq) first.lock.unlock();
         return stolen;
     }
 
@@ -267,6 +285,15 @@ namespace zxfoundation::sched {
 
     auto enqueue_strand(strand* s) noexcept -> void {
         auto* d = static_cast<domain*>(s->owner);
+        // §5.12 BUG-063: only a teardown state refuses enqueue.  A destroy
+        // in progress can wake parked workers (gate drain, futex/waitqueue
+        // wakes) after claiming the domain; enqueueing them races the
+        // destroy loop's kfree.
+        if (d
+            && (d->ko.state == zxfoundation::base::lifecycle_state::dying
+                || d->ko.state == zxfoundation::base::lifecycle_state::destroyed)) {
+            return;
+        }
         auto& rq = cpu_rq(s->cpu);
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         detail::validate_scheduler_irq_context(d ? d->ko.id : 0U);
@@ -329,59 +356,16 @@ namespace zxfoundation::sched {
     }
 
     /// @brief Create and optionally enqueue a secondary strand for a DGP domain.
-    /// @param[in] request Executor-style creation request selecting one of three
-    ///            strand kinds:
-    ///            - **Kernel-thread**: @c entry != nullptr, @c uregs == nullptr.
-    ///              The strand's first @c __switch_to_asm dispatches via
-    ///              @c ret_from_fork to @c domain_trampoline, which invokes
-    ///              @c entry(@c arg) on the kernel stack and then tail-calls
-    ///              @c sched_strand_trampoline_exit (the @c do_exit analog).
-    ///            - **User-process**: @c entry == nullptr, @c uregs != nullptr
-    ///              with @c psw_addr != 0. The strand's first
-    ///              @c __switch_to_asm dispatches via @c ret_from_fork to
-    ///              @c ret_to_user, which LPSWEs into user mode at
-    ///              @c uregs->psw_addr with @c uregs->psw_mask.  The AR/VR/FPC
-    ///              state from @c uregs is pre-staged in the strand's save
-    ///              area so @c __switch_to_asm itself restores them onto the
-    ///              CPU before control reaches @c ret_from_fork.
-    ///            - **Bare (idle)**: @c entry == nullptr AND @c uregs == nullptr.
-    ///              The strand is allocated but no first-switch frame is
-    ///              written. @c request.enqueue MUST be false (a bare strand
-    ///              with no entry must not be admitted to a run queue —
-    ///              scheduling it would LPSWE into garbage).  Useful for
-    ///              SCOMS bookkeeping paths that need a strand object but
-    ///              have no runnable work yet.
-    /// @return Pointer to the created strand, or @c kernel_error if validation,
-    ///         allocation, or admission fails.
-    ///
-    /// @warning The kernel-thread and user-process modes are mutually exclusive:
-    ///          @c entry != nullptr AND @c uregs != nullptr is rejected with
-    ///          @c invalid_arg.  The bare mode requires @c enqueue == false.
-    ///
-    /// @details The kthread vs user split mirrors Linux @c copy_thread:
-    ///          - Kernel-thread: @c entry(arg) runs on the new strand's kernel
-    ///            stack and tail-calls @c sched_strand_trampoline_exit on return.
-    ///          - User-process: the new strand's first context switch LPSWEs
-    ///            into user mode at @c uregs->psw_addr with @c uregs->psw_mask.
+    /// @param[in] request Executor-style creation request
+    /// @return Pointer to the created strand, or @c kernel_error
     [[nodiscard]] auto strand_spawn(
         const zxfoundation::dgp::domain::strand_create_request& request
     ) noexcept -> std::expected<zxfoundation::dgp::domain::strand*, lib::kernel_error> {
-        if (request.stack_order != 2U) {
-            return std::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
-
         const bool kthread_mode = (request.entry != nullptr);
         const bool user_mode    = (request.uregs != nullptr);
 
-        // Mutual-exclusion: entry and uregs cannot both be set.
-        if (kthread_mode && user_mode) {
-            return std::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-        }
-        // Bare mode (neither set) requires enqueue=false — a strand with no
-        // first-switch frame must never be admitted to a run queue.
-        if (!kthread_mode && !user_mode && request.enqueue) {
+        // Exactly one first-switch frame source (§9.4).
+        if (kthread_mode == user_mode) {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
@@ -405,12 +389,11 @@ namespace zxfoundation::sched {
         if (kthread_mode) {
             zxfoundation::sched::strandctx::setup_strand_context_kernel_thread(
                 s, request.entry, request.arg);
-        } else if (user_mode) {
+        } else {
             // User-process first-switch: uregs already populated by the caller.
             zxfoundation::sched::strandctx::setup_strand_context_user(
                 s, request.uregs, owner);
         }
-        // else: bare mode — no first-switch frame written.
 
         if (request.enqueue) {
             enqueue_strand(s);
@@ -439,8 +422,8 @@ namespace zxfoundation::sched {
             auto* node = *it++;
             auto* body = lib::container_of<zxfoundation::dgp::domain::strand_body,
                 lib::list_node, &zxfoundation::dgp::domain::strand_body::strand_list>(node);
-            auto* strand_ptr = reinterpret_cast<strand*>(
-                reinterpret_cast<u8*>(body) - __builtin_offsetof(strand, body));
+
+            auto* strand_ptr = body->self;
             if (strand_ptr->substate == sched_substate::running) {
                 return std::unexpected(lib::kernel_error::from_driver(
                     lib::driver_error::busy));
@@ -480,6 +463,11 @@ namespace zxfoundation::sched {
                         enqueue_result.error(),
                         "sched: scheduler class requeue denied");
                 }
+            } else if (prev != rq.idle_strand
+                && prev->on_rq
+                && prev->substate != sched_substate::running
+                && prev->substate != sched_substate::runnable) {
+                classed::dequeue(rq, *prev);
             }
         }
 
@@ -520,13 +508,36 @@ namespace zxfoundation::sched {
             next_owner = static_cast<domain*>(next->owner);
         }
 
+        if (prev && prev->body && prev != rq.idle_strand) {
+            u64 cr15_out = 0;
+            arch::s390x::cpu::ctlreg::crread<15, 15>(cr15_out);
+            arch::s390x::cpu::pcss::stack_save(
+                prev->body->linkage_stack, cr15_out);
+        }
+
+        if (next != rq.idle_strand && next && next->body) {
+            arch::s390x::cpu::ctlreg::crwrite<15, 15>(
+                arch::s390x::cpu::pcss::stack_load(
+                    next->body->linkage_stack));
+        }
+
         if (next == prev) {
             if (next != rq.idle_strand) {
+                if (next->on_rq) {
+                    classed::dequeue(rq, *next);
+                }
                 next->substate = sched_substate::running;
             }
             rq_snapshot::publish(rq);
             rq.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
+            if (next_owner) {
+                if (!(next->body != nullptr && next->body->in_pc != 0U)) {
+                    if (!(next->body != nullptr && next->body->in_pc != 0U)) {
+                        zxfoundation::dgp::signal::signal_deliver_all(*next_owner);
+                    }
+                }
+            }
             return;
         }
 
@@ -547,10 +558,12 @@ namespace zxfoundation::sched {
             }
             const u64 calibrated_slice = fair::sched_slice(next->se, rq.nr_running);
             next->se.slice = calibrated_slice;
-            arch::s390x::cpu::cputimer::spt(calibrated_slice);
+            detail::cputimer_arm_ns(calibrated_slice);
         } else {
             arch::s390x::cpu::cputimer::spt(
                 zxfoundation::sys::timer::TICK_INTERVAL_TOD);
+            detail::g_cputimer_armed_tod[detail::pcp_cpu_id()] =
+                zxfoundation::sys::timer::TICK_INTERVAL_TOD;
         }
 
         rq.curr = next;
@@ -560,7 +573,11 @@ namespace zxfoundation::sched {
         rq.context_lock.lock();
 
         auto* prev_owner = prev ? static_cast<domain*>(prev->owner) : nullptr;
-        if (next_owner
+        const bool next_in_pc = (next != nullptr && next->body != nullptr
+                                 && next->body->in_pc != 0U);
+        if (next_in_pc) {
+            arch::s390x::cpu::ctlreg::crwrite<1, 1>(next->body->pc_cr1);
+        } else if (next_owner
             && next_owner->asce.val != 0
             && (!prev_owner || next_owner->asce.val != prev_owner->asce.val)) {
             detail::validate_scheduler_irq_context(next_owner->ko.id);
@@ -572,17 +589,72 @@ namespace zxfoundation::sched {
         }
         if (next_owner) {
             arch::s390x::cpu::aste::art_context_load(next_owner->art);
+
+            {
+                auto* nucleus = zxfoundation::dgp::domain::domain_nucleus();
+                arch::s390x::cpu::ctlreg::crwrite<13, 13>(
+                    nucleus ? nucleus->asce.val : 0ULL);
+            }
+            const u64 recomputed =
+                arch::s390x::cpu::aste::aste_origin(next_owner->pc_asn) & 0x7FFFFFC0ULL;
+            const u64 recorded = next_owner->pc_tables.aste_phys & 0x7FFFFFC0ULL;
+            const u64 pasteo = (recorded != 0ULL) ? recorded : recomputed;
+            arch::s390x::cpu::ctlreg::crwrite<5, 5>(
+                next_in_pc ? next->body->pc_cr5 : pasteo);
+            u64 cr14 = 0;
+            arch::s390x::cpu::ctlreg::crread<14, 14>(cr14);
+            arch::s390x::cpu::ctlreg::crwrite<14, 14>(
+                (cr14 | 0x0008'0000ULL) |
+                (arch::s390x::cpu::aste::aft_origin() & 0x7FFFFULL));
+            if (next_in_pc) {
+                arch::s390x::cpu::ctlreg::crwrite<4, 4>(next->body->pc_cr4);
+                arch::s390x::cpu::ctlreg::crwrite<3, 3>(next->body->pc_cr3);
+            } else {
+                arch::s390x::cpu::ctlreg::crwrite<4, 4>(
+                    static_cast<u64>(next_owner->pc_asn));
+                {
+                    u64 cr3 = 0;
+                    arch::s390x::cpu::ctlreg::crread<3, 3>(cr3);
+                    arch::s390x::cpu::ctlreg::crwrite<3, 3>(
+                        (cr3 & 0xFFFF'FFFF'FFFF'0000ULL)
+                            | static_cast<u64>(next_owner->pc_asn));
+                }
+            }
         }
 
         rq.context_lock.unlock();
 
+        if (next != rq.idle_strand && next->ksp == next->kstack_top) {
+            zxfoundation::sys::syschk::syschk_fatal(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error),
+                "sched: frameless switch-in id={} owner={} ksp={:#x} ktop={:#x} sub={} onrq={} body={:#x}",
+                next->ko.id,
+                next->owner ? static_cast<domain*>(next->owner)->ko.id : 0U,
+                next->ksp, next->kstack_top,
+                static_cast<u32>(next->substate), next->on_rq,
+                reinterpret_cast<u64>(next->body));
+        }
+
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         pcp.current_strand = reinterpret_cast<u64>(next);
+
+        if (prev && ((prev->flags
+                & zxfoundation::dgp::domain::strand_flags::dead)
+                != zxfoundation::dgp::domain::strand_flags::none)) {
+            pcp.pending_dead_strand = reinterpret_cast<u64>(prev);
+        }
 
         auto* switched_from_owner = __switch_to_asm(prev, next);
 
         arch::s390x::cpu::irq::irq_restore(flags);
 
+        if (const u64 pending = pcp.pending_dead_strand; pending != 0U) {
+            pcp.pending_dead_strand = 0U;
+            zxfoundation::dgp::domain::release_dead_strand_stack(
+                *reinterpret_cast<strand*>(pending));
+        }
+
+        zxfoundation::sync::rcu::quiescent_state();
         softirq::raise_balance_local(softirq::balance_kind::periodic);
 
         if (next_owner) {
@@ -590,8 +662,7 @@ namespace zxfoundation::sched {
         }
 
         if (switched_from_owner &&
-            switched_from_owner->ko.state == lifecycle_state::dying &&
-            (switched_from_owner->flags & domain_flags::idle) == domain_flags::none) {
+            switched_from_owner->ko.state == lifecycle_state::dying) {
             zxfoundation::dgp::gate::destroy_for_domain(switched_from_owner->ko.id);
             zxfoundation::dgp::portal::destroy_for_domain(switched_from_owner->ko.id);
             detail::domain_reap(*switched_from_owner);
@@ -603,6 +674,9 @@ namespace zxfoundation::sched {
         auto* current = reinterpret_cast<strand*>(pcp.current_strand);
         if (current) {
             current->on_rq = false;
+            current->substate = sched_substate::blocked;
+            current->flags = current->flags
+                | zxfoundation::dgp::domain::strand_flags::dead;
             discard_value zxfoundation::scoms::kobject::mark_destroyed(current);
             if (auto* owner = static_cast<domain*>(current->owner)) {
                 owner->flags = owner->flags | domain_flags::need_resched;
@@ -624,17 +698,27 @@ namespace zxfoundation::sched {
         auto* curr = rq.curr;
         if (!curr || curr == rq.idle_strand) {
             arch::s390x::cpu::cputimer::spt(zxfoundation::sys::timer::TICK_INTERVAL_TOD);
+            detail::g_cputimer_armed_tod[detail::pcp_cpu_id()] =
+                zxfoundation::sys::timer::TICK_INTERVAL_TOD;
             drivers::watchdog::heartbeat_bump();
             return;
         }
 
-        const u64 remaining = arch::s390x::cpu::cputimer::stpt();
-        const u64 elapsed = zxfoundation::sys::timer::TICK_INTERVAL_TOD - remaining;
+        const u64 armed = detail::g_cputimer_armed_tod[detail::pcp_cpu_id()];
+        u64 remaining = arch::s390x::cpu::cputimer::stpt();
+        u64 elapsed_tod;
+        if (remaining > armed) {
+            // expired and wrapped negative; charge the full arm
+            elapsed_tod = armed;
+        } else {
+            elapsed_tod = armed - remaining;
+        }
+        const u64 elapsed_ns = (elapsed_tod * 125ULL) >> 9U;
 
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         rq.lock.lock();
 
-        const u64 weighted_delta = (elapsed * 1024) / curr->se.weight;
+        const u64 weighted_delta = (elapsed_ns * 1024) / curr->se.weight;
         curr->se.vruntime += weighted_delta;
 
         if (curr->se.vruntime > rq.min_vruntime)
@@ -663,7 +747,7 @@ namespace zxfoundation::sched {
             curr->se.slice = fair::sched_slice(curr->se, rq.nr_running);
         }
 
-        arch::s390x::cpu::cputimer::spt(curr->se.slice);
+        detail::cputimer_arm_ns(curr->se.slice);
         arch::s390x::cpu::irq::irq_restore(flags);
         drivers::watchdog::heartbeat_bump();
     }
@@ -697,6 +781,7 @@ namespace zxfoundation::sched {
             rq_snapshot::publish(rq);
             rq.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
+            zxfoundation::sync::rcu::tick();
             softirq::raise_balance_local(softirq::balance_kind::nohz_idle);
             drivers::watchdog::heartbeat_bump();
             return;
@@ -725,6 +810,7 @@ namespace zxfoundation::sched {
         rq.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
 
+        zxfoundation::sync::rcu::tick();
         softirq::raise_balance_local(softirq::balance_kind::periodic);
         drivers::watchdog::heartbeat_bump();
     }
@@ -752,7 +838,7 @@ namespace zxfoundation::sched {
         return detail::g_sched_initialized;
     }
 
-    auto sched_init() noexcept -> void {
+    auto zi_sched_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         using namespace detail;
 
         topology::topology_init();
@@ -764,7 +850,7 @@ namespace zxfoundation::sched {
         auto* idle_s = idle::init_idle_strand(0);
         if (!idle_s) {
             zxfoundation::sys::printk::perr("sched: cannot create idle strand");
-            return;
+            return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         }
 
         auto& rq = g_rqs[0];
@@ -776,7 +862,8 @@ namespace zxfoundation::sched {
         lc.set<"current_domain"> (nucleus ? reinterpret_cast<u64>(nucleus) : 0U);
         lc.set<"kernel_stack">   (idle_s->kstack_top);
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
-        pcp.current_domain = lc.get<"current_domain">();
+        pcp.attached.publish(0U, lc.get<"current_domain">(), nucleus ? nucleus->ko.id : 0U,
+            nucleus ? static_cast<u8>(nucleus->ko.state) : 0U);
         pcp.current_strand = reinterpret_cast<u64>(rq.curr);
         pcp.kernel_stack = idle_s->kstack_top;
 
@@ -807,10 +894,6 @@ namespace zxfoundation::sched {
         rq_snapshot::publish(rq);
 
         arch::s390x::cpu::ar::purge_alb();
-        zxfoundation::smp::csd::enable_cpu(0U);
-        arch::s390x::cpu::cpumask::cpu_set_online(0U);
-        topology::refresh_cpu_record(0U, 0U, true);
-        topology::topology_online_cpu(0U);
         g_sched_initialized = true;
 
         {
@@ -831,18 +914,44 @@ namespace zxfoundation::sched {
 
         zxfoundation::sys::printk::pinfo("sched: idle strand id={} on cpu 0, scheduler ready",
               idle_s->ko.id);
+        return {};
     }
+    __zinit__(sched, p00, zi_sched_init, fatal)
 
     auto sched_init_ap(u16 cpu_id) noexcept -> void {
-        using namespace detail;
-
-        auto* idle_s = idle::init_idle_strand(cpu_id);
-        if (!idle_s) {
+        auto result = scheduler_cpu_attach(cpu_id);
+        if (!result) {
             zxfoundation::sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::out_of_memory),
-                "sched: cannot create idle strand for cpu {}",
+                result.error(),
+                "sched: cannot attach cpu {}",
                 cpu_id);
         }
+    }
+
+    [[noreturn]] auto idle_enter() noexcept -> void {
+        while (true) {
+            schedule();
+            arch::s390x::cpu::psw::enabled_wait();
+        }
+    }
+
+    /// @brief Notify the scheduler that a CPU has come online.
+    /// @param[in] cpu_id  Logical CPU ID to attach.
+    [[nodiscard]] auto scheduler_cpu_attach(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error> {
+        using namespace detail;
+
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
+            return ::std::unexpected(::lib::kernel_error::from_arch(
+                ::lib::arch_error::invalid_cpu_id));
+
+        if (g_rqs[cpu_id].idle_strand != nullptr)
+            return {};
+
+        auto* idle_s = idle::init_idle_strand(cpu_id);
+        if (!idle_s)
+            return ::std::unexpected(::lib::kernel_error::from_memory(
+                ::lib::memory_error::out_of_memory));
 
         auto& rq = g_rqs[cpu_id];
 
@@ -851,7 +960,8 @@ namespace zxfoundation::sched {
         lc.set<"current_domain"> (nucleus ? reinterpret_cast<u64>(nucleus) : 0U);
         lc.set<"kernel_stack">   (idle_s->kstack_top);
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
-        pcp.current_domain = lc.get<"current_domain">();
+        pcp.attached.publish(0U, lc.get<"current_domain">(), nucleus ? nucleus->ko.id : 0U,
+            nucleus ? static_cast<u8>(nucleus->ko.state) : 0U);
         pcp.current_strand = 0;
         pcp.kernel_stack = idle_s->kstack_top;
 
@@ -880,44 +990,6 @@ namespace zxfoundation::sched {
         }
 
         {
-            const auto ap_flags = arch::s390x::cpu::irq::irq_save_disable();
-            rq.lock.lock();
-            rq.idle_strand = idle_s;
-            rq.curr = rq.idle_strand;
-            rq.online.store(1, std::memory_order::release);
-            rq_snapshot::publish(rq);
-            rq.lock.unlock();
-            arch::s390x::cpu::irq::irq_restore(ap_flags);
-        }
-        arch::s390x::cpu::ar::purge_alb();
-        zxfoundation::smp::csd::enable_cpu(cpu_id);
-        arch::s390x::cpu::cpumask::cpu_set_online(cpu_id);
-        topology::refresh_cpu_record(cpu_id, 0U, true);
-        topology::topology_online_cpu(cpu_id);
-    }
-
-    [[noreturn]] auto idle_enter() noexcept -> void {
-        while (true) {
-            schedule();
-            arch::s390x::cpu::psw::enabled_wait();
-        }
-    }
-
-    /// @brief Notify the scheduler that a CPU has come online.
-    [[nodiscard]] auto cpu_up(u16 cpu_id) noexcept -> ::std::expected<void, ::lib::kernel_error> {
-        using namespace detail;
-
-        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
-            return ::std::unexpected(::lib::kernel_error::from_arch(
-                ::lib::arch_error::invalid_cpu_id));
-
-        auto* idle_s = idle::init_idle_strand(cpu_id);
-        if (!idle_s)
-            return ::std::unexpected(::lib::kernel_error::from_memory(
-                ::lib::memory_error::out_of_memory));
-
-        auto& rq = g_rqs[cpu_id];
-        {
             const auto flags = arch::s390x::cpu::irq::irq_save_disable();
             rq.lock.lock();
             rq.idle_strand = idle_s;
@@ -928,27 +1000,15 @@ namespace zxfoundation::sched {
             arch::s390x::cpu::irq::irq_restore(flags);
         }
 
-        cpupri::init();
-        cpudl::init();
-        rt::bw::bw_init(rq.rt_bw, cpu_id);
-        {
-            const auto* rec = topology::record_for(cpu_id);
-            const u8 node = (rec && rec->numa_node < zxfoundation::memory::numa::MAX_NUMA_NODES) ? rec->numa_node : 0xFFU;
-            sd::tree_build(cpu_id, rec, topology::node_mask_of(node), rq.sd_tree);
-        }
-
         arch::s390x::cpu::ar::purge_alb();
-        zxfoundation::smp::csd::enable_cpu(cpu_id);
-        arch::s390x::cpu::cpumask::cpu_set_online(cpu_id);
-        topology::refresh_cpu_record(cpu_id, 0U, true);
-        topology::topology_online_cpu(cpu_id);
         return {};
     }
 
     /// @brief Notify the scheduler that a CPU is going offline.
     /// @param[in] cpu_id Logical CPU ID going offline.
     /// @return Success or kernel_error.
-    [[nodiscard]] auto cpu_down(u16 cpu_id) noexcept -> ::std::expected<void, ::lib::kernel_error> {
+    [[nodiscard]] auto scheduler_cpu_detach(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error> {
         using namespace detail;
 
         if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS)
@@ -958,26 +1018,68 @@ namespace zxfoundation::sched {
         auto& rq = g_rqs[cpu_id];
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         validate_scheduler_irq_context();
-        rq.lock.lock();
+
+        u16 dest_cpu = static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS);
+        for (u16 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
+            if (i != cpu_id && arch::s390x::cpu::cpumask::cpu_online(i)) {
+                dest_cpu = i;
+                break;
+            }
+        }
+        if (dest_cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
+            arch::s390x::cpu::irq::irq_restore(flags);
+            return std::unexpected(::lib::kernel_error::from_arch(
+                ::lib::arch_error::cpu_not_available));
+        }
+
+        auto& dest_rq = g_rqs[dest_cpu];
+        run_queue* first = &rq;
+        run_queue* second = &dest_rq;
+        if (dest_cpu < cpu_id) {
+            first = &dest_rq;
+            second = &rq;
+        }
+        first->lock.lock();
+        second->lock.lock();
 
         strand* old_idle = rq.idle_strand;
 
         for (strand& s : fair::iter(rq)) {
             classed::dequeue(rq, s);
-            u16 dest_cpu = 0;
-            for (u16 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
-                if (i != cpu_id && arch::s390x::cpu::cpumask::cpu_online(i)) {
-                    dest_cpu = i;
-                    break;
-                }
-            }
             s.cpu = dest_cpu;
             s.on_rq = false;
             s.substate = sched_substate::runnable;
-            auto& dest_rq = g_rqs[dest_cpu];
-            discard_value classed::enqueue(dest_rq, s);
+                auto enqueue_result = classed::enqueue(dest_rq, s);
+                if (!enqueue_result) [[unlikely]] {
+                    sys::syschk::syschk_fatal(
+                        enqueue_result.error(),
+                        "sched: fair strand migration during CPU detach failed");
+                }
         }
 
+        auto migrate_list = [&](lib::list_head& queue) noexcept -> void {
+            auto* node = queue.sentinel.next;
+            while (node != &queue.sentinel) {
+                auto* next = node->next;
+                auto* s = lib::container_of<strand, lib::list_node,
+                    &strand::sched_link>(node);
+                classed::dequeue(rq, *s);
+                s->cpu = dest_cpu;
+                s->on_rq = false;
+                s->substate = sched_substate::runnable;
+                auto enqueue_result = classed::enqueue(dest_rq, *s);
+                if (!enqueue_result) [[unlikely]] {
+                    sys::syschk::syschk_fatal(
+                        enqueue_result.error(),
+                        "sched: class strand migration during CPU detach failed");
+                }
+                node = next;
+            }
+        };
+        migrate_list(rq.rt_queue);
+        migrate_list(rq.deadline_queue);
+
+        rq_snapshot::publish(dest_rq);
         cpupri::pri_set(cpu_id, cpupri::pri_top(cpu_id), cpupri::CPUPRI_INVALID);
         cpudl::clear_dl(cpu_id);
 
@@ -986,11 +1088,9 @@ namespace zxfoundation::sched {
         rq.online.store(0, std::memory_order::release);
         rq_snapshot::publish(rq);
 
-        rq.lock.unlock();
+        second->lock.unlock();
+        first->lock.unlock();
         arch::s390x::cpu::irq::irq_restore(flags);
-
-        arch::s390x::cpu::cpumask::cpu_clear_online(cpu_id);
-        topology::topology_offline_cpu(cpu_id);
 
         if (old_idle) {
             discard_value idle::deinit_idle_strand(*old_idle);

@@ -1,3 +1,4 @@
+/// @file zxfoundation/memory/interface.cxxm
 export module zxfoundation.memory;
 export import zxfoundation.memory.hhdm;
 export import zxfoundation.memory.objects;

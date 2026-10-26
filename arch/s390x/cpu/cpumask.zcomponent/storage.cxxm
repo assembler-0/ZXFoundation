@@ -1,3 +1,4 @@
+/// @file arch/s390x/cpu/cpumask.zcomponent/storage.cxxm
 export module arch.s390x.cpu.cpumask:storage;
 export import lib.cpumask;
 

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file pgm.cxxm
+/// @file arch/s390x/trap/pgm.zcomponent/core.cxxm
 /// @brief Centralized pgm dispatch.
 
 export module arch.s390x.trap.pgm.core;

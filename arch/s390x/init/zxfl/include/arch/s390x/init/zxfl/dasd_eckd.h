@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/dasd_eckd.h
-//
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/dasd_eckd.h
 /// @brief ECKD (Extended Count Key Data) DASD driver for ZXFL.
-///
-///        ECKD is the native format for IBM 3390 DASD.  Unlike FBA, ECKD
-///        exposes the physical geometry (cylinder/head/record) directly.
-///        This driver wraps the raw dasd_io CCW engine with geometry-aware
-///        LBA translation and device probing via Sense ID / Read Device
-///        Characteristics.
 
 #ifndef ZXFOUNDATION_ZXFL_DASD_ECKD_H
 #define ZXFOUNDATION_ZXFL_DASD_ECKD_H
@@ -56,11 +49,6 @@ typedef struct {
 } dasd_eckd_geo_t;
 
 /// @brief Probe an ECKD device and populate geometry.
-///
-///        Issues Sense ID and Read Device Characteristics to determine
-///        the device type, model, and geometry.  Falls back to 3390
-///        defaults if RDC fails.
-///
 /// @param schid    Subchannel ID
 /// @param out_geo  Output geometry structure
 /// @return 0 on success, -1 if the device is not an ECKD device or I/O fails
@@ -78,7 +66,6 @@ void dasd_eckd_geo_from_lba(const dasd_eckd_geo_t *geo, uint32_t lba,
                              uint8_t  *out_rec);
 
 /// @brief Read a single block from an ECKD device by LBA.
-///
 /// @param schid    Subchannel ID
 /// @param geo      Device geometry
 /// @param lba      Linear block address
@@ -89,10 +76,6 @@ int dasd_eckd_read_block(uint32_t schid, const dasd_eckd_geo_t *geo,
                          uint32_t lba, void *buf, uint32_t len);
 
 /// @brief Read a contiguous range of blocks from an ECKD device.
-///
-///        Reads [lba_start, lba_start + count) into buf.  Each block is
-///        geo->block_size bytes.  The caller must ensure buf is large enough.
-///
 /// @param schid      Subchannel ID
 /// @param geo        Device geometry
 /// @param lba_start  First LBA to read

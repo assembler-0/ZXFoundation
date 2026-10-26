@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/irq.zcomponent/irqdesc.cxxm
+/// @file zxfoundation/sys/irq.zcomponent/consts.cxxm
 /// @brief Generic IRQ descriptor table
 
 export module zxfoundation.sys.irq.consts;
@@ -16,8 +16,6 @@ namespace zxfoundation::sys::irq {
     constexpr u16 IRQ_BASE_MCCK = 0x0300;   ///< Machine-check vectors.
 
     constexpr u32 IRQF_SHARED   = 1U << 0;  ///< Allow multiple registrations.
-    constexpr u32 IRQF_DISABLED = 1U << 1;  ///< Handler runs with IRQs off.
-    constexpr u32 IRQF_NOAUTOEN = 1U << 2;  ///< Don't auto-enable CR0 subclass.
     constexpr u32 IRQF_FAST     = 1U << 3;  ///< Hot path -- bypass descriptor lock.
 
     /// @brief External-interrupt sub-offsets within the @c IRQ_BASE_EXT range.

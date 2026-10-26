@@ -5,14 +5,14 @@
     core.cxx
     dispatch.cxxm
     dispatch.cxx
-    nc_dom.cxxm
-    nc_sgn.cxxm
-    nc_cap.cxxm
-    nc_gate.cxxm
-    nc_io.cxxm
-    nc_mem.cxxm
-    nc_portal.cxxm
-    nc_sys.cxxm
+    svc_dom.cxxm
+    svc_sgn.cxxm
+    svc_cap.cxxm
+    svc_gate.cxxm
+    svc_io.cxxm
+    svc_mem.cxxm
+    svc_portal.cxxm
+    svc_sys.cxxm
     registration.cxxm !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) !compiler_id:gcc(-Wno-pedantic ) ]
     registration.cxx !compile_options -> [ !compiler_id:clang(-Wno-c99-extensions) !compiler_id:gcc(-Wno-pedantic ) ]
 }

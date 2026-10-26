@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/cpu/stfle.h
-//
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/stfle.h
 /// @brief Expanded STFLE (Store Facility List Extended) API.
+
 #ifndef ZXFOUNDATION_ZXFL_STFLE_H
 #define ZXFOUNDATION_ZXFL_STFLE_H
 
 #include <zxfoundation/types.h>
 
 /// @brief Maximum doublewords to request from STFLE.
-///        256 facilities = 4 dwords was the old limit.
-///        Current z/Architecture supports up to 2048 facilities = 32 dwords.
 #define STFLE_MAX_DWORDS    32U
 
 #define STFLE_BIT_ZARCH         2U      ///< z/Architecture installed
@@ -35,20 +33,12 @@
 #define STFLE_BIT_MISC_INST_EX3 61U     ///< Miscellaneous-instruction-extensions 3
 
 /// @brief Detect CPU facilities using STFLE.
-///
-///        Stores up to @p max_dwords doublewords into @p fac_list.
-///        If STFLE is not available (CC=3), stores zero and returns 0.
-///
 /// @param fac_list   Output buffer; must hold at least @p max_dwords uint64_t.
 /// @param max_dwords Maximum doublewords to request (capped at STFLE_MAX_DWORDS).
 /// @return Actual number of doublewords stored, or 0 if STFLE unavailable.
 uint32_t stfle_detect(uint64_t *fac_list, uint32_t max_dwords);
 
 /// @brief Test whether a specific facility bit is set.
-///
-///        Uses big-endian bit numbering: bit 0 is the MSB of fac_list[0].
-///        This matches the z/Architecture PoP facility bit numbering.
-///
 /// @param fac_list  Facility list filled by stfle_detect().
 /// @param bit       Facility bit number (0-based, per PoP Appendix B).
 /// @return true if the facility is present, false otherwise.

@@ -1,3 +1,4 @@
+/// @file zxfoundation/sched/topology.zcomponent/interface.cxxm
 export module zxfoundation.sched.topology;
 export import zxfoundation.sched.topology.core;
 export import zxfoundation.sched.topology.types;

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/context.cxxmhardirq
+/// @file zxfoundation/sched/context.zcomponent/core.cxx
 /// @brief Execution context classification for z/Architecture.
 
 module zxfoundation.sched.context.core;

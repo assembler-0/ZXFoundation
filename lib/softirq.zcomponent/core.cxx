@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file lib/softirq.cxxm
+/// @file lib/softirq.zcomponent/core.cxx
 /// @brief Generic softirq framework
 
 module lib.softirq.core;

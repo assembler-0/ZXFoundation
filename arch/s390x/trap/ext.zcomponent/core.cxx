@@ -1,14 +1,16 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/trap/ext.cxxm
+/// @file arch/s390x/trap/ext.zcomponent/core.cxx
 /// @brief Centralized external-interruption dispatcher.
 
 module arch.s390x.trap.ext.core;
 import arch.s390x.cpu.percpu;
+import zxfoundation.dgp.domain.core;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
 import arch.s390x.cpu.cputimer;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.cpumask;
+import arch.s390x.cpu.smp.core;
 import arch.s390x.cpu.psw;
 import zxfoundation.sys.irq.consts;
 import zxfoundation.sys.irq.core;
@@ -38,6 +40,10 @@ namespace arch::s390x::trap::ext {
     /// @brief Centralized external-interruption dispatcher.
     /// @param[in,out] frame  Saved interrupt frame from entry.S.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
+        // §5.12: record whether the hardware was inside a stacking PC
+        // (PASN switched to a callee) when this interruption arrived.
+        zxfoundation::dgp::domain::strand_note_interrupt_context(
+            (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0);
         auto* lc = cpu::lowcore::get_current();
         const u16 ext_code = lc->get<"external_interruption_code">();
 
@@ -60,13 +66,12 @@ namespace arch::s390x::trap::ext {
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_MCCK_PENDING_BIT)) {
-            // TODO:
-            // The actual deferred-MCCK handler is currently inline in the
-            // MCCK dispatcher; until that chapter
-            // is wired we simply acknowledge the bit was set so the trap
-            // path stays self-consistent.
+            // The deferred-MCCK handler stays inline in the MCCK
+            // dispatcher; the ch. 10.2 handler lands at R4 (OBL-015,
+            // BUG-045). The bit is acknowledged here so the trap path
+            // stays self-consistent.
             zxfoundation::sys::printk::pverbose(
-                "ext: deferred MCCK work armed on cpu={}\n",
+                "ext: deferred MCCK work armed on cpu={} (TODO!)\n",
                 arch::s390x::cpu::percpu::this_cpu().cpu_id);
         }
 
@@ -83,8 +88,7 @@ namespace arch::s390x::trap::ext {
                 arch::s390x::cpu::percpu::this_cpu().cpu_id;
             zxfoundation::sys::printk::pnotice(
                 "ext: stop-cpu deferred work on cpu={} — halting\n", cpu_id);
-            arch::s390x::cpu::cpumask::cpu_clear_online(cpu_id);
-            zxfoundation::sched::topology::topology_offline_cpu(cpu_id);
+            arch::s390x::cpu::smp::request_stop_current();
             arch::s390x::cpu::psw::disabled_wait();
         }
     }

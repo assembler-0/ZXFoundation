@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/classed.cxx
+/// @file zxfoundation/sched/classed.zcomponent/core.cxx
 /// @brief Strict-priority scheduler class dispatch surface.
 
 module zxfoundation.sched.classed.core;
@@ -72,22 +72,11 @@ namespace zxfoundation::sched::classed {
 
         switch (policy.class_id) {
             case sched_class_id::idle:
-                if (!is_idle_domain(owner) || policy.user_visible) {
-                    return std::unexpected(
-                        lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-                }
-                return result;
+                return std::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
             case sched_class_id::fair:
-                if (is_idle_domain(owner)) {
-                    return std::unexpected(
-                        lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-                }
                 return result;
             case sched_class_id::rt:
-                if (is_idle_domain(owner)) {
-                    return std::unexpected(
-                        lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-                }
                 if (policy.rt_priority == 0U || policy.runtime_ns == 0U || policy.period_ns == 0U
                     || policy.runtime_ns > policy.period_ns) {
                     return std::unexpected(
@@ -97,10 +86,6 @@ namespace zxfoundation::sched::classed {
                 result.admitted_period_ns = policy.period_ns;
                 return result;
             case sched_class_id::deadline:
-                if (is_idle_domain(owner)) {
-                    return std::unexpected(
-                        lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
-                }
                 if (policy.runtime_ns == 0U || policy.deadline_ns == 0U || policy.period_ns == 0U
                     || policy.runtime_ns > policy.deadline_ns || policy.deadline_ns > policy.period_ns) {
                     return std::unexpected(

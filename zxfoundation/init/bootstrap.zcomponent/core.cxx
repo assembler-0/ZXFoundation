@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/init/bootstrap.cxxm
+/// @file zxfoundation/init/bootstrap.zcomponent/core.cxx
 /// @brief sys/bootstrapd — first schedulable kernel domain.
 
 module zxfoundation.init.bootstrap.core;
@@ -85,7 +85,7 @@ namespace zxfoundation::init::bootstrap {
             }
             auto* d = *dom_r;
 
-            d->granted_rights = zxfoundation::dgp::isolation::isolation_rights::all;
+            d->granted_rights = ::zxfoundation::dgp::right::all;
             d->primary_strand.cpu = 0;
 
             auto entry_r = fs::exec::elf::load(
@@ -109,7 +109,7 @@ namespace zxfoundation::init::bootstrap {
                 auto admin_r = zxfoundation::dgp::cap::cap_issue(
                     zxfoundation::dgp::cap::cap_type::domain,
                     static_cast<u16>(d->ko.id),
-                    zxfoundation::dgp::cap::cap_rights::all,
+                    ::zxfoundation::dgp::right::all,
                     d->ko.id);
                 if (!admin_r) {
                     perr("bootstrap: failed to issue init admin capability");
@@ -123,6 +123,22 @@ namespace zxfoundation::init::bootstrap {
                       d->admin_token, d->ko.id, static_cast<u32>(d->ko.generation));
             }
 
+            // §9.4/§5.12: every strand that can execute a PROGRAM CALL
+            // needs a seeded linkage stack — CR15=0 is an architecturally
+            // EMPTY stack; the first PC then faults stack-full with no
+            // section to grow from.  (dom_exec seeds its children; the
+            // bootstrap-launched init was the one unseeded primary.)
+            {
+                auto stack_result = zxfoundation::sched::strandctx::
+                    seed_primary_linkage_stack(d);
+                if (!stack_result) [[unlikely]] {
+                    perr("bootstrap: linkage stack seed failed: {}",
+                         stack_result.error());
+                    discard_value zxfoundation::scoms::kobject::mark_dying(d);
+                    zxfoundation::sched::schedule();
+                    return;
+                }
+            }
             zxfoundation::sched::strandctx::setup_primary_strand_context_user(d);
             zxfoundation::sched::enqueue_domain(d);
 

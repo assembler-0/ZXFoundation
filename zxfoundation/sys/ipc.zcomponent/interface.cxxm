@@ -1,3 +1,4 @@
+/// @file zxfoundation/sys/ipc.zcomponent/interface.cxxm
 export module zxfoundation.sys.ipc;
 export import zxfoundation.sys.ipc.core;
 export import zxfoundation.sys.ipc.types;

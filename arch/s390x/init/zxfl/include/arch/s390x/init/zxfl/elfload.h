@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/elfload.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/elfload.h
 
 #ifndef ZXFOUNDATION_ZXFL_ELFLOAD_H
 #define ZXFOUNDATION_ZXFL_ELFLOAD_H
@@ -9,17 +9,6 @@
 #include <arch/s390x/init/zxfl/zxfl.h>
 
 /// @brief Load an ELF64 kernel from a multi-extent DASD dataset.
-///
-///        Reads PT_LOAD segments from the dataset described by @p ds,
-///        placing each segment at its p_paddr (physical address from ELF).
-///        BSS (p_memsz > p_filesz) is zeroed with MVCL.
-///        Multi-extent datasets are fully supported via offset_to_cchhr.
-///
-///        Special segments are discovered by p_flags fingerprint:
-///          ZXVL_PFLAGS_HS   — handshake stub (p_paddr stored as load_base)
-///          ZXVL_PFLAGS_LOCK — structural lock (p_paddr → proto->lock_phys)
-///          ZXVL_PFLAGS_CKSUM — checksum table (p_paddr → proto->cksum_table)
-///
 /// @param schid         Subchannel ID of the IPL device
 /// @param ds            Full extent list of the nucleus dataset
 /// @param proto         Boot protocol; lock_phys and cksum_table are populated

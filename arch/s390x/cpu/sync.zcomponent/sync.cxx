@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/processor.cxxm
+/// @file arch/s390x/cpu/sync.zcomponent/sync.cxx
 /// @brief cpu synchronization
 
 module arch.s390x.cpu.sync;
@@ -20,6 +20,7 @@ namespace arch::s390x::cpu::sync {
 
     /// @brief Serialization Sync (CPU serialization).
     auto ssync() noexcept -> void {
+        // TODO: ALTERNATIVE
         __asm__ volatile("bcr 15,0" ::: "memory");
     }
 
@@ -28,4 +29,4 @@ namespace arch::s390x::cpu::sync {
         std::atomic_thread_fence(std::memory_order_seq_cst);;
     }
 
-} // namespace arch::s390x::cpu::processor
+} // namespace arch::s390x::cpu::sync

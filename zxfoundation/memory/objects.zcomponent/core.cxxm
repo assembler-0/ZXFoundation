@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/memory/memory_objects.zcomponent/core.cxxm
+/// @file zxfoundation/memory/objects.zcomponent/core.cxxm
 /// @brief Unified SCOMS-backed memory object hierarchy — core interface.
 
 export module zxfoundation.memory.objects.core;
@@ -26,8 +26,6 @@ namespace zxfoundation::memory::objects {
         kmem_cache        = 2,
         policy_server     = 3,
         service_entry     = 4,
-        device_binding    = 5,
-        dataset_extent    = 6,
     };
 
     struct memory_object;
@@ -51,7 +49,7 @@ namespace zxfoundation::memory::objects {
         u8 numa_node{0};
         dgp::memory_contract::memory_scope dgp_scope{dgp::memory_contract::memory_scope::private_domain};
         dgp::memory_contract::memory_access dgp_access{dgp::memory_contract::memory_access::none};
-         dgp::isolation::isolation_rights dgp_rights{ dgp::isolation::isolation_rights::none};
+         ::zxfoundation::dgp::right_mask dgp_rights{ ::zxfoundation::dgp::right::none};
         dgp::memory_contract::invalidation_scope invalidate{dgp::memory_contract::invalidation_scope::none};
         u64 dgp_generation{0};
         u64 mapping_generation{0};
@@ -64,8 +62,6 @@ namespace zxfoundation::memory::objects {
         void* kmem_cache;             ///< @c kmem_cache — @c slub::kmem_cache*.
         void* policy_server;          ///< @c policy_server — @c policy::policy_server*.
         void* service_entry;          ///< @c service_entry — @c sys::service::service_entry*.
-        void* device_binding;         ///< @c device_binding — reserved.
-        void* dataset_extent;         ///< @c dataset_extent — reserved.
     };
 
     /// @brief single authority representation for any memory-bearing
@@ -81,13 +77,13 @@ namespace zxfoundation::memory::objects {
         u8 _pad_related[3]{};
         u32 related_id{scoms::kobject::KOBJECT_ID_INVALID};
         u32 related_generation{0};
-         dgp::isolation::isolation_rights authority_rights{ dgp::isolation::isolation_rights::none};
+         ::zxfoundation::dgp::right_mask authority_rights{ ::zxfoundation::dgp::right::none};
         u8  storage_key{0};
         u32 storage_key_generation{0};
         u8  numa_node{0};
         dgp::memory_contract::memory_scope     dgp_scope{dgp::memory_contract::memory_scope::private_domain};
         dgp::memory_contract::memory_access    dgp_access{dgp::memory_contract::memory_access::none};
-         dgp::isolation::isolation_rights dgp_rights{ dgp::isolation::isolation_rights::none};
+         ::zxfoundation::dgp::right_mask dgp_rights{ ::zxfoundation::dgp::right::none};
         dgp::memory_contract::invalidation_scope invalidate{dgp::memory_contract::invalidation_scope::none};
         u64 dgp_generation{0};
         u64 mapping_generation{0};
@@ -101,8 +97,6 @@ namespace zxfoundation::memory::objects {
     };
 
     static_assert(__builtin_offsetof(memory_object, ko) == 0);
-
-    auto memory_objects_init() noexcept -> void;
 
     [[nodiscard]] auto memory_object_ref_of(
         const memory_object& object
@@ -123,7 +117,7 @@ namespace zxfoundation::memory::objects {
         scoms::kobject::bobject* parent = nullptr,
         u64 range_start = 0,
         u64 range_length = 0,
-         dgp::isolation::isolation_rights authority_rights =  dgp::isolation::isolation_rights::none,
+         ::zxfoundation::dgp::right_mask authority_rights =  ::zxfoundation::dgp::right::none,
         memory_object_policy policy = {}
     ) noexcept -> std::expected<memory_object*, lib::kernel_error>;
 
@@ -146,7 +140,7 @@ namespace zxfoundation::memory::objects {
 
     [[nodiscard]] auto memory_object_delegate(
         memory_object_ref source, u32 caller_domain,
-        u32 owner_domain,  dgp::isolation::isolation_rights authority_rights
+        u32 owner_domain,  ::zxfoundation::dgp::right_mask authority_rights
     ) noexcept -> std::expected<memory_object_ref, lib::kernel_error>;
 
     /// @brief Recover the policy published by one authority object.

@@ -1,9 +1,11 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/locking/seqlock.cxxm
+/// @file zxfoundation/sync/seqlock.cxxm
 /// @brief Sequence lock for read-heavy, write-rare shared data.
 
 export module zxfoundation.sync.seqlock;
 import zxfoundation.base.types;
+import zxfoundation.sync.qspinlock.core;
+import arch.s390x.cpu.irq;
 import arch.s390x.cpu.sync;
 import lib.stl;
 
@@ -16,6 +18,7 @@ namespace zxfoundation::sync {
     class seqlock {
         mutable std::atomic<u64> m_seq{0};
         T                        m_val{};
+        qspinlock::qspinlock<lock_rank::seqlock_writer>     m_writer{};
 
     public:
         constexpr seqlock() noexcept = default;
@@ -31,23 +34,39 @@ namespace zxfoundation::sync {
         /// @brief Write a new value.
         /// @note  Readers are never blocked; they retry transparently.
         auto write(const T& val) noexcept -> void {
+            const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+            m_writer.lock();
             const u64 seq = m_seq.load(std::memory_order::relaxed);
             m_seq.store(seq + 1U, std::memory_order::release);  // odd: write in progress
-            m_val = val;
+            T copy = val;
+            __atomic_store(&m_val, &copy, static_cast<int>(std::memory_order::release));
             m_seq.store(seq + 2U, std::memory_order::release);  // even: write complete
+            m_writer.unlock();
+            arch::s390x::cpu::irq::irq_restore(flags);
+        }
+
+        /// @brief Begin an explicit read-side sequence.
+        [[nodiscard]] auto read_begin() const noexcept -> u64 {
+            for (;;) {
+                const u64 seq = m_seq.load(std::memory_order::acquire);
+                if ((seq & 1U) == 0U) return seq;
+                arch::s390x::cpu::sync::cpu_relax();
+            }
+        }
+
+        /// @brief Test whether a read-side sequence was invalidated.
+        [[nodiscard]] auto read_retry(const u64 seq) const noexcept -> bool {
+            arch::s390x::cpu::sync::barrier();
+            return m_seq.load(std::memory_order::acquire) != seq;
         }
 
         /// @brief Read the current value. Lock-free; retries on torn read.
         [[nodiscard]] auto read() const noexcept -> T {
             while (true) {
-                const u64 s1 = m_seq.load(std::memory_order::acquire);
-                if (s1 & 1U) [[unlikely]] {
-                    arch::s390x::cpu::sync::cpu_relax();
-                    continue;
-                }
-                const T v  = m_val;
-                const u64 s2 = m_seq.load(std::memory_order::acquire);
-                if (s1 == s2) [[likely]] return v;
+                const u64 s1 = read_begin();
+                T v{};
+                __atomic_load(&m_val, &v, static_cast<int>(std::memory_order::acquire));
+                if (!read_retry(s1)) [[likely]] return v;
                 arch::s390x::cpu::sync::cpu_relax();
             }
         }

@@ -1,5 +1,6 @@
+/// @file zxfoundation/dgp/gate.zcomponent/interface.cxxm
 export module zxfoundation.dgp.gate;
 export import zxfoundation.dgp.gate.types;
 export import zxfoundation.dgp.gate.core;
-export import zxfoundation.dgp.gate.dispatch;
+export import zxfoundation.dgp.svc;
 export import zxfoundation.dgp.gate.registration;

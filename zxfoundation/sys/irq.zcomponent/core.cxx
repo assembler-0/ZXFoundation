@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/irq.zcomponent/irqdesc.cxxm
+/// @file zxfoundation/sys/irq.zcomponent/core.cxx
 /// @brief Generic IRQ descriptor table
 
 module zxfoundation.sys.irq.core;
@@ -16,8 +16,12 @@ import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.irq;
+import zxfoundation.sys.zinit.core;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::sys::irq::detail {
 
@@ -48,28 +52,24 @@ namespace zxfoundation::sys::irq {
 
         handler_fn h = nullptr;
         void*      d = nullptr;
-        u32        flags_to_check = 0U;
 
         irq_desc* desc = g_irq_table.find_raw(irq);
         if (desc) [[likely]] {
             if (desc->flags & IRQF_FAST) {
                 h = desc->handler;
                 d = desc->data;
-                flags_to_check = desc->flags;
                 discard_value desc->count.fetch_add(1,
                     std::memory_order::relaxed);
             } else {
-                const sync::irq_lock_guard guard{desc->lock};
+                const sync::irq_lock_guard _{desc->lock};
                 h = desc->handler;
                 d = desc->data;
-                flags_to_check = desc->flags;
                 discard_value desc->count.fetch_add(1,
                     std::memory_order::relaxed);
             }
         }
 
         if (h) [[likely]] h(irq, frame, d);
-        discard_value flags_to_check;
 
         pcp.irq_nesting -= raise;
     }
@@ -117,7 +117,7 @@ namespace zxfoundation::sys::irq {
             >(embryo_ref).activate();
         }
 
-        const sync::irq_lock_guard desc_guard{d->lock};
+        const sync::irq_lock_guard _{d->lock};
 
         if (d->registered() && !(flags & IRQF_SHARED))
             return std::unexpected(
@@ -140,7 +140,7 @@ namespace zxfoundation::sys::irq {
         if (!d) return;
 
         {
-            const sync::irq_lock_guard desc_guard{d->lock};
+            const sync::irq_lock_guard _{d->lock};
             d->handler = nullptr;
             d->data    = nullptr;
             d->flags   = 0;
@@ -151,12 +151,14 @@ namespace zxfoundation::sys::irq {
 
     /// @brief Initialize the IRQ subsystem with the SCOMS scoms_table.
     /// @note Idempotent — safe to invoke from `main` after `printk::init()`.
-    auto init() noexcept -> void {
+    auto zi_irq_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {
         using namespace detail;
-        if (g_initialized) return;
+        if (g_initialized) return {};
         g_irq_table.init(scoms::kobject::kobject_type::irq_desc);
         g_initialized = true;
+        return {};
     }
+    __zinit__(core, p30, zi_irq_init, fatal)
 
     /// @brief Set one deferred-work bit on the calling CPU's
     ///        @c percpu::s390x_percpu_data::deferred_pending field.

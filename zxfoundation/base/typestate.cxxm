@@ -10,10 +10,7 @@ export {
 
 namespace zxfoundation::base {
 
-    /// @brief Unified lifecycle states for ALL typestate-tracked resources.
-    ///
-    /// Every SCOMS-managed object, every folio, and every slab cache
-    /// uses exactly these states. No subsystem may define its own.
+    /// @brief Unified lifecycle states for typestate-tracked resources.
     enum class lifecycle_state : u8 {
         embryo     = 0, ///< Allocated, fields being populated. Not usable yet.
         sealed     = 1, ///< Resources bound (storage key, ASCE), not yet active.
@@ -22,47 +19,6 @@ namespace zxfoundation::base {
         dying      = 4, ///< Teardown in progress. No new operations.
         destroyed  = 5, ///< Fully torn down, awaiting reclamation.
     };
-
-    /// @brief Backward-compatible aliases for subsystems still using
-    ///        the old naming convention during migration.
-    ///
-    /// These will be removed once all subsystems are migrated.
-    /// DO NOT use in new code.
-    inline constexpr lifecycle_state lifecycle_fresh = lifecycle_state::embryo;
-    inline constexpr lifecycle_state lifecycle_ready = lifecycle_state::active;
-
-    /// @brief Zero-overhead typestate carrier.
-    /// @tparam State  Current lifecycle state.
-    template <lifecycle_state State = lifecycle_state::embryo>
-    class typestate {
-    public:
-        static constexpr lifecycle_state state = State;
-
-        typestate()  noexcept = default;
-        ~typestate() noexcept = default;
-
-        typestate(const typestate&)                    = delete;
-        auto operator=(const typestate&)               = delete;
-        typestate(typestate&&)                 noexcept = default;
-        auto operator=(typestate&&) noexcept -> typestate& = default;
-    };
-
-    /// @brief Compile-time query: is this typestate-carrying type in state S?
-    template <lifecycle_state Query, lifecycle_state Actual>
-    [[nodiscard]] constexpr auto is_state(
-        [[maybe_unused]] const typestate<Actual>&
-    ) noexcept -> bool {
-        return Query == Actual;
-    }
-
-    /// @brief Concept: T is in exactly state S.
-    template <typename T, lifecycle_state S>
-    concept in_state = (T::state == S);
-
-    /// @brief Concept: T is in state S or later.
-    template <typename T, lifecycle_state S>
-    concept state_at_least =
-        (static_cast<u8>(T::state) >= static_cast<u8>(S));
 
     /// @brief Return the ASCII name of a lifecycle_state value.
     [[nodiscard]] constexpr auto lifecycle_state_name(lifecycle_state s) noexcept -> std::string_view

@@ -1,0 +1,4 @@
+/// @file zxfoundation/sync/rwsem.zcomponent/interface.cxxm
+export module zxfoundation.sync.rwsem;
+export import zxfoundation.sync.rwsem.types;
+export import zxfoundation.sync.rwsem.core;

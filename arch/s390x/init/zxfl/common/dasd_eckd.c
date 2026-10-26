@@ -1,11 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/dasd_eckd.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/dasd_eckd.c
 /// @brief ECKD (Extended Count Key Data) DASD driver for ZXFL.
-///
-///        Probes the device via Sense ID (0xE4) and Read Device
-///        Characteristics (0x64), then provides LBA-to-CCHHR translation
-///        and block-level read operations on top of the raw CCW engine.
 
 #include <arch/s390x/init/zxfl/dasd_eckd.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
@@ -34,15 +29,7 @@ int dasd_eckd_probe(uint32_t schid, dasd_eckd_geo_t *out_geo) {
     if (dasd_sync_io(schid, &sense_id_ccw) < 0) {
         dasd_sense(schid);
         if (dasd_sync_io(schid, &sense_id_ccw) < 0) {
-            out_geo->dev_type     = ECKD_DEV_TYPE_3390;
-            out_geo->dev_model    = 0x03U;
-            out_geo->cyls         = 3339U;
-            out_geo->heads        = ECKD_3390_HEADS;
-            out_geo->recs_per_trk = ECKD_3390_RECS_PER_TRK;
-            out_geo->block_size   = DASD_BLOCK_SIZE;
-            out_geo->total_blocks = (uint32_t)3339U * ECKD_3390_HEADS
-                                    * ECKD_3390_RECS_PER_TRK;
-            return 0;
+            return -1;
         }
     }
 

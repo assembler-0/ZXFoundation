@@ -1,0 +1,6 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/zinitgraph.zcomponent/interface.cxxm
+/// @brief zinitgraph module facade.
+
+export module zxfoundation.sys.zinitgraph;
+export import zxfoundation.sys.zinitgraph.core;

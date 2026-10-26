@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/uaccess.cxxm
+/// @file arch/s390x/cpu/uaccess.zcomponent/uaccess.cxxm
 /// @brief z/Architecture user-space access
 
 export module arch.s390x.cpu.uaccess;
@@ -67,7 +67,7 @@ namespace arch::s390x::cpu::uaccess {
             if (cc == 3) {
                 d += MVCOS_MAX_CHUNK;
                 s += MVCOS_MAX_CHUNK;
-                len = chunk;
+                len = chunk - MVCOS_MAX_CHUNK;
                 continue;
             }
             return -1;

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/timer.cxxm
+/// @file zxfoundation/sys/timer.zcomponent/core.cxxm
 /// @brief Generic kernel timer subsystem — per-CPU min-heap with clock comparator arming.
 
 export module zxfoundation.sys.timer.core;
@@ -25,8 +25,10 @@ namespace zxfoundation::sys::timer {
             (static_cast<u128>(tod) * 1000ULL) / 4096ULL);
     }
 
-    /// @brief Initialize the timer subsystem on an application processor.
-    constexpr auto init_ap(u16 cpu_id) noexcept -> void { discard_value cpu_id; }
+    /// @brief Reset a CPU's timer heap at attach (cold bring-up or hotplug
+    ///        re-online).
+    /// @param[in] cpu_id  Logical CPU whose heap to reset.
+    auto init_ap(u16 cpu_id) noexcept -> void;
 
     /// @brief Add a timer to the current CPU's heap and arm the clock comparator.
     [[nodiscard]] auto timer_add(kernel_timer& t) noexcept
@@ -38,9 +40,6 @@ namespace zxfoundation::sys::timer {
 
     /// @brief Clock comparator interrupt handler.
     auto timer_interrupt() noexcept -> void;
-
-    /// @brief Initialize the timer subsystem on the BSP (CPU 0).
-    auto init() noexcept -> void;
 
 } // namespace zxfoundation::sys::timer
 

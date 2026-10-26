@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/cpupri.cxx
+/// @file zxfoundation/sched/cpupri.zcomponent/core.cxx
 /// @brief Per-system CPU priority index used by the RT scheduler.
 
 module zxfoundation.sched.cpupri.core;

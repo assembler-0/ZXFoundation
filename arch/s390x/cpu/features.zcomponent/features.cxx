@@ -1,25 +1,28 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/features.cxxm
-/// @brief Centralized CPU facility registry — every facility bit the kernel
-///        cares about, cached from STFLE and queryable via has() / has_raw().
+/// @file arch/s390x/cpu/features.zcomponent/features.cxx
+/// @brief CPU facility registry
 
 module arch.s390x.cpu.features;
 import arch.s390x.cpu.ctlreg;
 import zxfoundation.base.types;
+import zxfoundation.sys.zinit.core;
 import lib.cstring;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace arch::s390x::cpu::features {
 
     /// Internal facility list cache — same size as the STFLE maximum.
     no_export std::array<u64, STFLE_MAX_DWORDS> g_fac_list{};
 
-    auto init(std::optional<const u64*> stfle_fac) noexcept -> void {
+    auto init_list(std::optional<const u64*> stfle_fac) noexcept -> void {
         if (!stfle_fac) discard_value detect<STFLE_MAX_DWORDS>(g_fac_list);
         else
             lib::memcpy(
-                g_fac_list.data(),              // Destination pointer
-                stfle_fac.value(),              // Source pointer
+                g_fac_list.data(),
+                stfle_fac.value(),
                 STFLE_MAX_DWORDS * 8            // Total bytes (DWORDS * 8 bytes each)
             );
     }
@@ -43,6 +46,11 @@ namespace arch::s390x::cpu::features {
         cr0.set<"afp_register_control">(true);
         cr0.set<"secondary_space_control">(true);
         cr0.set<"clock_comparator_ssm">(true);
+        cr0.set<"cpu_timer_ssm">(true);
+        if (has(facility::asn_lx_reuse))
+            cr0.set<"asn_lx_reuse_ctl">(true);
+        if (has(facility::instruction_exec_protection))
+            cr0.set<"inst_exec_prot_enablement_ctl">(true);
         if (has(facility::vector))
             cr0.set<"vector_enablement_control">(true);
         if (has(facility::transactional_exec))
@@ -72,5 +80,15 @@ namespace arch::s390x::cpu::features {
         cr14.set<"warning_subclass_mask">(true);
         ctlreg::crwrite<14, 14>(cr14);
     }
+
+    auto zi_cpu_features_init(const zxfoundation::sys::zinit::zi_desc&) noexcept
+        -> zxfoundation::sys::zinit::zi_result
+    {
+        init_list(std::nullopt);
+        enable_hardware_facilities();
+        return {};
+    }
+    __zinit__(early, p60, zi_cpu_features_init, fatal)
+
 
 } // namespace arch::s390x::cpu::features

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/idle.cxx
+/// @file zxfoundation/sched/idle.zcomponent/core.cxx
 /// @brief Idle scheduling class and idle strand initialization.
 
 module zxfoundation.sched.idle.core;

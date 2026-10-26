@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file rwonce.cxxm
+/// @file lib/rwonce.cxxm
 /// @brief C++26 Read-Write Once (Volatile Single-Access) Primitives
 
 export module lib.rwonce;

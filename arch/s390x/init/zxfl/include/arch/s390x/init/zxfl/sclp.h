@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/cpu/sclp.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/sclp.h
 
 #ifndef ZXFOUNDATION_S390X_SCLP_H
 #define ZXFOUNDATION_S390X_SCLP_H

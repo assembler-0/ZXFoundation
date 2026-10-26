@@ -1,3 +1,4 @@
+/// @file zxfoundation/memory/rmap.zcomponent/interface.cxxm
 export module zxfoundation.memory.rmap;
 export import zxfoundation.memory.rmap.types;
 export import zxfoundation.memory.rmap.core;

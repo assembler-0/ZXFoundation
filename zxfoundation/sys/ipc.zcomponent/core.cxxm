@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file ipc.cxxm
+/// @file zxfoundation/sys/ipc.zcomponent/core.cxxm
 /// @brief Bounded endpoint/message object management and grant transfer.
 
 export module zxfoundation.sys.ipc.core;
@@ -16,7 +16,11 @@ export {
 
 namespace zxfoundation::sys::ipc {
 
-    auto ipc_init() noexcept -> void;
+    /// §7.4 ipc_receive flags.
+    enum class receive_mode : u32 {
+        poll  = 0,
+        block = 1,
+    };
 
     [[nodiscard]] auto endpoint_create(
         dgp::domain::domain& owner, u32 peer_domain
@@ -36,14 +40,30 @@ namespace zxfoundation::sys::ipc {
         dgp::domain::domain& caller, u32 endpoint_id,
         const u8* payload, u32 length,
         const dgp::cap::cap_token* capabilities, u32 capability_count,
-        const memory::objects::memory_object_ref* grants, u32 grant_count
+        const memory::objects::memory_object_ref* grants, u32 grant_count,
+        u64 correlation = 0
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     [[nodiscard]] auto message_receive(
         dgp::domain::domain& caller, u32 endpoint_id,
         u8* payload, u32 payload_capacity, u32& out_length,
         dgp::cap::cap_token* capabilities, u32& capability_count,
-        memory::objects::memory_object_ref* grants, u32& grant_count
+        memory::objects::memory_object_ref* grants, u32& grant_count,
+        u64& out_correlation,
+        receive_mode mode = receive_mode::poll
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// §7.4 rendezvous: the peer replies to an in-flight ipc_call.
+    [[nodiscard]] auto message_reply(
+        dgp::domain::domain& caller, u32 endpoint_id,
+        u64 correlation, u64 status
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// §7.4 rendezvous: park the calling strand until its ipc_call is
+    /// replied, or timeout_ns elapses (0 = wait forever).
+    [[nodiscard]] auto message_call_wait(
+        dgp::domain::domain& caller, u32 endpoint_id, u64 correlation,
+        u64 timeout_ns, u64& out_status
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     [[nodiscard]] auto shm_export(

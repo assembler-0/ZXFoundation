@@ -1,3 +1,4 @@
+/// @file zxfoundation/dgp/interface.cxxm
 export module zxfoundation.dgp;
 export import zxfoundation.dgp.authorize;
 export import zxfoundation.dgp.cap;

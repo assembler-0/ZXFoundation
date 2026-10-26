@@ -1,5 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// zxfoundation/sys/ebcdic.c - ASCII/EBCDIC conversion
+/// @file arch/s390x/init/zxfl/common/ebcdic.c
+/// @brief ASCII/EBCDIC conversion
 
 #include <arch/s390x/init/zxfl/ebcdic.h>
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/cpu/lowcore.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/cpu/lowcore.h
 
 #pragma once
 

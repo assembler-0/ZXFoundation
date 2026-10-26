@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/io/css.cxxm
+/// @file arch/s390x/io/css.zcomponent/subchannel.cxxm
 /// @brief Channel Subsystem core — privileged I/O instruction wrappers and
 ///        subchannel table management (PoP Chapter 14).
 
@@ -51,9 +51,6 @@ namespace arch::s390x::io::css {
         auto operator=(const subchannel_entry&)              = delete;
         auto operator=(subchannel_entry&&)                   = delete;
     };
-
-    /// @brief Probe all subchannels, enable valid ones, and populate the table.
-    auto init() noexcept -> void;
 
     /// @brief Start I/O on a subchannel.
     /// @param sch_index Index into the subchannel table.

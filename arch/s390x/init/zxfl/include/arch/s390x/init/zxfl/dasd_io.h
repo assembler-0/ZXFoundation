@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/dasd_io.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/dasd_io.h
 
 #ifndef ZXFOUNDATION_ZXFL_DASD_IO_H
 #define ZXFOUNDATION_ZXFL_DASD_IO_H
@@ -59,31 +59,16 @@ typedef struct __attribute__((packed)) {
 #define DASD_BLOCK_SIZE         4096U   ///< Fixed-block record size used by ZXFL
 
 /// @brief Execute a synchronous SSCH/TSCH I/O operation.
-///
-///        Spins on TSCH (CC=1 = status not yet available) until the
-///        operation completes.  The bootloader runs with interrupts
-///        disabled, so polling is the only option.
-///
 /// @param schid  Subchannel identifier (loaded from lowcore 0xB8 at IPL)
 /// @param ccw    Pointer to the first CCW in the channel program
 /// @return 0 on success, -1 on channel/device error
 int dasd_sync_io(uint32_t schid, ccw1_t *ccw);
 
 /// @brief Issue a Basic Sense (0x04) to clear a unit-check condition.
-///
-///        A 3390 in unit-check state rejects all subsequent commands with
-///        CMDREJ until sense data is collected.  We discard the sense bytes;
-///        we only need the side-effect of clearing the condition.
-///
 /// @param schid  Subchannel identifier
 void dasd_sense(uint32_t schid);
 
 /// @brief Read a single DASD record (key+data or data-only).
-///
-///        Builds a 4-CCW SEEK/SEARCH/TIC/READ chain and executes it
-///        synchronously.  Static storage is used for the CCW chain and
-///        seek/search arguments to avoid stack pressure.
-///
 /// @param schid    Subchannel ID
 /// @param cyl      Cylinder number
 /// @param head     Head number
@@ -97,10 +82,6 @@ int dasd_read_record(uint32_t schid,
                      uint8_t rd_cmd, void *buf, uint32_t len);
 
 /// @brief Read a DASD record and advance the position to the next record.
-///
-///        Wraps dasd_read_record and increments (cyl, head, rec) after a
-///        successful read, handling track and cylinder wrap-around.
-///
 /// @param schid    Subchannel ID
 /// @param cyl      In/out: cylinder number
 /// @param head     In/out: head number

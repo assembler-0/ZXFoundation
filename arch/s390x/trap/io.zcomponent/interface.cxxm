@@ -1,2 +1,3 @@
+/// @file arch/s390x/trap/io.zcomponent/interface.cxxm
 export module arch.s390x.trap.io;
 export import arch.s390x.trap.io.core;

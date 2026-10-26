@@ -1,25 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/dasd_tape.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/dasd_tape.c
 /// @brief CCW-based sequential tape driver for ZXFL.
-///
-///        3480/3490/3590 share the same CCW command set.  The key difference
-///        is max block size: 3480/3490 cap at 65535 bytes; 3590 supports up
-///        to 256 KB.  We cap at 32768 bytes (TAPE_MAX_BLOCK_DEFAULT) which
-///        is safe for all three and fits in a single CCW count field.
-///
-///        Tape mark detection: when READ FORWARD hits a tape mark, the
-///        channel subsystem posts IRB device status with Unit Exception (UE)
-///        set and Channel End + Device End set, but NO Channel Check or
-///        Device Check.  We inspect the IRB status word directly after TSCH
-///        to distinguish EOF from a real error.
-///
-///        Why we spin on TSCH instead of using interrupts: the bootloader
-///        runs with all maskable interrupts disabled (SSM 0x00 in entry.S).
-///        Enabling I/O interrupts here would require installing an I/O new
-///        PSW and a handler, which is more complexity than the tape path
-///        warrants.  Tape rewind on a 3590 takes ~10 seconds worst-case;
-///        the spin is acceptable in a bootloader context.
 
 #include <arch/s390x/init/zxfl/dasd_tape.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
@@ -29,10 +10,6 @@
 #define TAPE_SENSE_ID_LEN       8U
 #define TAPE_MAX_BLOCK_DEFAULT  32768U
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 static inline uint32_t tape_cda(const void *p) {
     uintptr_t addr = (uintptr_t)p;
     if (addr > 0x7FFFFFFFUL) __builtin_trap();
@@ -40,8 +17,6 @@ static inline uint32_t tape_cda(const void *p) {
 }
 
 /// @brief Execute a single-CCW tape command synchronously.
-///        Returns the raw IRB status word (irb[2]) so callers can inspect
-///        Unit Exception without a second TSCH.
 static int tape_exec_ccw(uint32_t schid, uint8_t cmd, uint8_t flags,
                          void *buf, uint16_t len, uint32_t *out_status) {
     static ccw1_t ccw __attribute__((aligned(8)));

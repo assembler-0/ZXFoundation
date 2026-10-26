@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file extable.hxx
+/// @file zxfoundation/base/preprocessor/extable.hxx
 /// @brief Exception table support
 /// @note requires __zxmacro_want_extable=1
 

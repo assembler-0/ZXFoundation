@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file base.hxx
+/// @file zxfoundation/base/preprocessor/base.hxx
 /// @brief base macros included in every TU
 
 #pragma once

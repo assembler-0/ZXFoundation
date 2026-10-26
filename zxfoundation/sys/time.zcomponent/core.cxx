@@ -1,15 +1,21 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file zxfoundation/sys/time.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sys/time.zcomponent/core.cxx
 /// @brief High-performance industrial kernel time system for s390x.
 
 module zxfoundation.sys.time.core;
 import zxfoundation.base.types;
 import zxfoundation.sync.seqlock;
+import zxfoundation.init.storage.core;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.clock;
 import arch.s390x.cpu.irq;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
+
 
 namespace zxfoundation::sys::time::detail {
 
@@ -28,10 +34,18 @@ namespace zxfoundation::sys::time {
 
     /// @brief Initialize the global time system.
     /// @param[in] tod_boot  TOD clock value captured at kernel entry by ZXFL.
-    auto initialize(const u64 tod_boot) noexcept -> void {
+    auto init(const u64 tod_boot) noexcept -> void {
         detail::g_boot_tod = tod_boot;
         detail::g_wall_offset.write(0ULL);   // no IRQ disable needed before EXT is armed
     }
+
+    auto zi_time_init(const zinit::zi_desc&) noexcept
+        -> zinit::zi_result
+    {
+        init(init::storage::get_protocol().tod_boot);
+        return {};
+    }
+    __zinit__(early, p90, zi_time_init, fatal)
 
     /// @brief Retrieve the current monotonic time (time since boot).
     [[nodiscard]] auto monotonic_now() noexcept -> instant {
@@ -65,13 +79,13 @@ namespace zxfoundation::sys::time {
         return {};
     }
 
-    /// @brief Advance the wall-clock offset by one tick's worth of time.
-    /// @param[in]  tick_ns  Duration of one tick in nanoseconds (10,000,000).
+    /// @brief Account for a scheduler tick.
+    /// @param[in] tick_ns Scheduler tick duration, retained for call-site ABI
+    ///        compatibility; TOD already accounts for elapsed wall time.
     auto tick_advance_wall(u64 tick_ns) noexcept -> void {
+        discard_value tick_ns;
         discard_value detail::g_tick.fetch_add(
             1U, std::memory_order::relaxed);
-        const u64 old_offset = detail::g_wall_offset.read();
-        detail::g_wall_offset.write(old_offset + tick_ns);
     }
 
     /// @brief Return the current monotonic tick counter.

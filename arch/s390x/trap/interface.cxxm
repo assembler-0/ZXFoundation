@@ -1,3 +1,4 @@
+/// @file arch/s390x/trap/interface.cxxm
 export module arch.s390x.trap;
 export import arch.s390x.trap.ext;
 export import arch.s390x.trap.io;

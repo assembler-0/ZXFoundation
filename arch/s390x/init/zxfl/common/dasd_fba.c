@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/dasd_fba.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/dasd_fba.c
 /// @brief FBA (Fixed Block Architecture) DASD driver for ZXFL.
+
 #include <arch/s390x/init/zxfl/dasd_fba.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/string.h>

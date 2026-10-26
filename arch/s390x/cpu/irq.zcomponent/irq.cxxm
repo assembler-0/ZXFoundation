@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/irq_frame.cxxm
+/// @file arch/s390x/cpu/irq.zcomponent/irq.cxxm
 /// @brief z/Architecture interrupt/trap frame layout.
 
 export module arch.s390x.cpu.irq;

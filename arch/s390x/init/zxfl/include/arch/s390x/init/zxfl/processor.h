@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/cpu/processor.h
-//
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/processor.h
 /// @brief s390x CPU control primitives
 
 #pragma once

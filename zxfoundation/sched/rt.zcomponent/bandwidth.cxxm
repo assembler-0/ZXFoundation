@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/rt_bandwidth.cxxm
+/// @file zxfoundation/sched/rt.zcomponent/bandwidth.cxxm
 /// @brief Global RT bandwidth controller — sched_rt_period_us + per-CPU runtime
 ///        enforcement.
 
@@ -50,6 +50,6 @@ namespace zxfoundation::sched::rt::bw {
     /// @return True when the CPU is now throttled.
     auto bw_charge(rt_bandwidth& bw, u64 consumed_ns) noexcept -> bool;
 
-} // namespace zxfoundation::sched::rt_bw
+} // namespace zxfoundation::sched::rt::bw
 
 } // end export

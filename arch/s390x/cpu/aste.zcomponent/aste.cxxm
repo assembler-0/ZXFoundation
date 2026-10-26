@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/aste_types.cxxm
+/// @file arch/s390x/cpu/aste.zcomponent/aste.cxxm
 /// @brief z/Architecture ASTE/ALE/ALT type definitions
 
 export module arch.s390x.cpu.aste;
@@ -13,68 +13,119 @@ export {
 
 namespace arch::s390x::cpu::aste {
 
-    /// @brief ASN Second Table Entry — 64 bytes, 64-byte aligned.
-    struct [[gnu::packed]] alignas(64) aste {
-        u64 words[8]{};
-
-        /// @brief Test the I-bit (invalid) in word 0.
-        [[nodiscard]] auto is_invalid() const noexcept -> bool;
-
-        /// @brief Set or clear the I-bit (invalid) in word 0.
-        auto set_invalid(bool inv) noexcept -> void;
-
-        /// @brief Return the target address space ASCE (word 1).
-        [[nodiscard]] auto asce() const noexcept -> u64;
-
-        /// @brief Set the target address space ASCE (word 1).
-        auto set_asce(u64 val) noexcept -> void;
-
-        /// @brief Return the Access-List Designation (word 2).
-        [[nodiscard]] auto ald() const noexcept -> u64;
-
-        /// @brief Set the Access-List Designation (word 2).
-        auto set_ald(u64 val) noexcept -> void;
-
-        /// @brief Return the Authorization Index (AX) from word 0 bits 32–47.
-        [[nodiscard]] auto authorization_index() const noexcept -> u16;
-
-        /// @brief Set the Authorization Index (AX) in word 0 bits 32–47.
-        auto set_authorization_index(u16 ax) noexcept -> void;
-
-        /// @brief Return the raw 32-bit Linkage-Table Designation (bytes 24-27).
-        [[nodiscard]] auto ltd_raw() const noexcept -> u32;
-
-        /// @brief Set the raw 32-bit Linkage-Table Designation (bytes 24-27).
-        auto set_ltd_raw(u32 ltd) noexcept -> void;
-
-        /// @brief Test the subsystem-linkage control bit (V, LTD bit 0).
-        /// Must be 1 for PC/PT instructions to proceed.
-        [[nodiscard]] auto ltd_valid() const noexcept -> bool;
-
-        /// @brief Set or clear the V bit in the LTD.
-        auto set_ltd_valid(bool v) noexcept -> void;
-
-        /// @brief Return the linkage-table origin as a 31-bit real address.
-        /// LTD bits 1-24 with 7 zeros appended on the right.
-        [[nodiscard]] auto ltd_origin() const noexcept -> u64;
-
-        /// @brief Set the linkage-table origin from a 128-byte-aligned real address.
-        /// @pre @p addr must be 128-byte aligned (low 7 bits zero).
-        auto set_ltd_origin(u64 addr) noexcept -> void;
-
-        /// @brief Return the linkage-table length (LTL, LTD bits 25-31, 7 bits).
-        /// Actual table length = (LTL + 1) × 128 bytes.
-        [[nodiscard]] auto ltd_length() const noexcept -> u8;
-
-        /// @brief Set the linkage-table length (LTL).
-        auto set_ltd_length(u8 ltl) noexcept -> void;
-
-        /// @brief Zero all words.
-        auto clear() noexcept -> void;
+    /// @brief ASTE accessors over the DSL layout
+    template<class T>
+    struct aste_ext {
+        [[nodiscard]] auto is_invalid(this const T& self) noexcept -> bool {
+            return self.template get<R"(word0\asx_invalid)">();
+        }
+        auto set_invalid(this T& self, bool inv) noexcept -> void {
+            self.template set<R"(word0\asx_invalid)">(inv);
+        }
+        [[nodiscard]] auto asce(this const T& self) noexcept -> u64 {
+            return self.template get<"asce">();
+        }
+        auto set_asce(this T& self, u64 val) noexcept -> void {
+            self.template set<"asce">(val);
+        }
+        [[nodiscard]] auto ald(this const T& self) noexcept -> u64 {
+            return self.template get<"ald">().underlying();
+        }
+        auto set_ald(this T& self, u64 val) noexcept -> void {
+            self.template set<"ald">(lib::record<u32, lib::msb0_t,
+                lib::rw<"alo", lib::bits<0, 25>, u32>,
+                lib::rw<"all", lib::bits<26, 31>, u8>>{static_cast<u32>(val)});
+        }
+        [[nodiscard]] auto astesn(this const T& self) noexcept -> u32 {
+            return self.template get<"astesn">();
+        }
+        auto set_astesn(this T& self, u32 val) noexcept -> void {
+            self.template set<"astesn">(val);
+        }
+        auto clear(this T& self) noexcept -> void {
+            for (usize off = 0; off < 64; off += 8)
+                self.template raw_write<u64>(off, 0);
+        }
+        [[nodiscard]] auto authorization_index(this const T& self) noexcept -> u16 {
+            return self.template get<R"(word0\ax)">();
+        }
+        auto set_authorization_index(this T& self, u16 ax) noexcept -> void {
+            self.template set<R"(word0\ax)">(ax);
+        }
+        [[nodiscard]] auto ltd_raw(this const T& self) noexcept -> u32 {
+            return static_cast<u32>(self.template get<"ltd">().underlying());
+        }
+        auto set_ltd_raw(this T& self, u32 ltd) noexcept -> void {
+            self.template set<"ltd">(lib::record<u32, lib::msb0_t,
+                lib::rw<"v",   lib::bits<0, 0>>,
+                lib::rw<"lto", lib::bits<1, 24>, u32>,
+                lib::rw<"ltl", lib::bits<25, 31>, u8>>{ltd});
+        }
+        [[nodiscard]] auto ltd_valid(this const T& self) noexcept -> bool {
+            return self.template get<R"(ltd\v)">();
+        }
+        auto set_ltd_valid(this T& self, bool v) noexcept -> void {
+            self.template set<R"(ltd\v)">(v);
+        }
+        [[nodiscard]] auto ltd_origin(this const T& self) noexcept -> u64 {
+            return static_cast<u64>(self.template get<R"(ltd\lto)">()) << 7U;
+        }
+        auto set_ltd_origin(this T& self, u64 addr) noexcept -> void {
+            self.template set<R"(ltd\lto)">(static_cast<u32>(addr >> 7U));
+        }
+        [[nodiscard]] auto ltd_length(this const T& self) noexcept -> u8 {
+            return self.template get<R"(ltd\ltl)">();
+        }
+        auto set_ltd_length(this T& self, u8 ltl) noexcept -> void {
+            self.template set<R"(ltd\ltl)">(ltl);
+        }
+        /// @brief Write the designation word in linkage-first-table form
+        ///        (ASN-and-LX-reuse, PoP 5-36): V bit 0, LFT origin bits 1-23
+        ///        with eight zeros appended, LFTL bits 24-31 in 256-byte units.
+        /// @param lft_phys  Origin of the linkage-first table (page aligned).
+        /// @param lftl      Length code: (LFTL+1) * 256 B (15 = one 4 KiB page).
+        auto set_lftd(this T& self, u64 lft_phys, u8 lftl) noexcept -> void {
+            // Fields are set through the DSL record — hand-packed shifts
+            // put the origin in the wrong bit window (special-op 0x0013
+            // on every PC; PoP 5-36 LFTD layout).
+            lib::record<u32, lib::msb0_t,
+                lib::rw<"v",    lib::bits<0, 0>>,
+                lib::rw<"lfto", lib::bits<1, 23>, u32>,
+                lib::rw<"lftl", lib::bits<24, 31>, u8>> packed{};
+            packed.set<"v">(true);
+            packed.set<"lfto">(static_cast<u32>(lft_phys >> 8U));
+            packed.set<"lftl">(lftl);
+            self.template set<"ltd">(packed);
+        }
     };
 
+    /// @brief ASN Second Table Entry
+    using aste = lib::structure<64, 64, lib::endian::big,
+        lib::extensions<aste_ext>,
+        lib::rw<"word0", lib::bytes<0, 7>, lib::record<u64, lib::msb0_t,
+            lib::rw<"asx_invalid", lib::bits<0, 0>>,
+            lib::rw<"ato",         lib::bits<1, 29>, u32>,
+            lib::rw<"base_space",  lib::bits<31, 31>>,
+            lib::rw<"ax",          lib::bits<32, 47>, u16>,
+            lib::rw<"atl",         lib::bits<48, 60>, u16>,
+            lib::rw<"cr",          lib::bits<62, 62>>,
+            lib::rw<"aa",          lib::bits<63, 63>>
+        >>,
+        lib::rw<"asce", lib::bytes<8, 15>, u64>,
+        lib::rw<"ald",  lib::bytes<16, 19>, lib::record<u32, lib::msb0_t,
+            lib::rw<"alo", lib::bits<0, 25>, u32>,
+            lib::rw<"all", lib::bits<26, 31>, u8>
+        >>,
+        lib::rw<"astesn", lib::bytes<20, 23>, u32>,
+        lib::rw<"ltd",  lib::bytes<24, 27>, lib::record<u32, lib::msb0_t,
+            lib::rw<"v",   lib::bits<0, 0>>,
+            lib::rw<"lto", lib::bits<1, 24>, u32>,
+            lib::rw<"ltl", lib::bits<25, 31>, u8>
+        >>,
+        lib::rw<"astein", lib::bytes<28, 31>, u32>
+    >;
+
     static_assert(sizeof(aste) == 64, "ASTE must be exactly 64 bytes (PoP §3.8.4)");
-    static_assert(alignof(aste) == 64, "ASTE must be 64-byte aligned");
 
     /// @brief Access List Entry — 16 bytes.
     struct [[gnu::packed]] ale {
@@ -110,11 +161,7 @@ namespace arch::s390x::cpu::aste {
 
     static_assert(sizeof(ale) == 16, "ALE must be exactly 16 bytes (PoP §3.8.3)");
 
-    /// @brief Initialize the ASTE/ALE subsystem.
-    auto aste_subsystem_init() noexcept -> void;
-
-    /// @brief Allocate the DUCT and dispatchable-unit access list for one
-    /// domain.  The caller owns @p context for the domain lifetime.
+    /// @brief Allocate the DUCT and dispatchable-unit access list for one domain.
     [[nodiscard]] auto art_context_init(art_context& context) noexcept
         -> ::std::expected<void, ::lib::kernel_error>;
 
@@ -135,7 +182,6 @@ namespace arch::s390x::cpu::aste {
     ) noexcept -> ::std::expected<u32, ::lib::kernel_error>;
 
     /// @brief Free an ASTE slot, marking it as invalid.
-    ///
     /// @param aste_index  The ASTE slot index to release.
     /// @return Success, or an error if the index is invalid.
     [[nodiscard]] auto aste_free(
@@ -157,6 +203,12 @@ namespace arch::s390x::cpu::aste {
         art_context& context,
         u32 alet
     ) noexcept -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief The ASN-first-table origin field value for CR14 (phys >> 12).
+    [[nodiscard]] auto aft_origin() noexcept -> u64;
+
+    /// @brief Return the real (physical) origin of the ASTE slot.
+    [[nodiscard]] auto aste_origin(u32 index) noexcept -> u64;
 
     /// @brief Return a pointer to the ASTE at the given index.
     /// @param index  The ASTE slot index (0 to MAX_ASTE_ENTRIES-1).

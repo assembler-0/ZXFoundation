@@ -9,6 +9,7 @@ import zxfoundation.base.typestate;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.memory.vm.types;
 import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.waitqueue.types;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.signal.types;
 import zxfoundation.dgp.sync_contract;
@@ -20,6 +21,7 @@ import zxfoundation.sched.nohz.core;
 import zxfoundation.sched.cbs.core;
 import arch.s390x.cpu.aste.consts;
 import arch.s390x.mmu.types;
+import arch.s390x.cpu.pcss.types;
 import arch.s390x.sched.types;
 import lib.error;
 import lib.rbtree;
@@ -47,22 +49,19 @@ namespace zxfoundation::dgp::domain {
         u32 owner_domain{0xFFFF'FFFFU}; ///< Owning domain identifier.
         strand_entry_fn entry{nullptr}; ///< Kernel entry fn (kthread mode);
                                         /// null + non-null @c uregs selects user mode.
-                                        /// null + null @c uregs selects bare mode.
         void* arg{nullptr};             ///< Opaque argument passed to @c entry (kthread mode only).
         arch::s390x::sched::user_regs* uregs{nullptr};      ///< User register snapshot (user mode only).
-                                        /// Required when @c entry is null
-                                        /// and the strand is to be runnable.
+                                        /// Required when @c entry is null.
                                         /// Must have @c psw_addr != 0.
         u16 cpu{0};                     ///< Initial CPU affinity; zero is the deterministic bootstrap CPU.
-        u32 stack_order{2U};            ///< Kernel stack allocation order; currently constrained to the domain stack order.
         bool enqueue{true};             ///< True when the scheduler should admit the strand immediately.
-                                        /// Must be false in bare mode.
     };
 
     /// @brief Per-strand flags (bitfield, stored in strand::flags).
     enum class strand_flags : u8 {
         none = 0,
-        idle = 1U << 0,   ///< Idle strand (per-CPU, owner is nullptr).
+        idle = 1U << 0,   ///< Idle strand (per-CPU, owner is the nucleus domain).
+        dead  = 1U << 1,  ///< Exited strand parked in the scheduler trampoline
     };
 
     [[nodiscard]] constexpr auto operator|(strand_flags a, strand_flags b) noexcept -> strand_flags {
@@ -99,6 +98,10 @@ namespace zxfoundation::dgp::domain {
         strand_body*                    body{nullptr};  ///< allocated cold-fields body.
         u64                             kstack_top{0};  ///< Virtual kernel stack top (offset 112).
         u64                             ksp{0};         ///< Current kernel stack pointer (offset 120).
+        u32                             irq_nesting{0};
+        u32                             nucleus_nesting{0};
+        u8                              irq_class{0};
+        u8                              _pad_nest[3]{};
 
         lib::list_node                  sched_link{};
 
@@ -125,16 +128,66 @@ namespace zxfoundation::dgp::domain {
     static_assert(__builtin_offsetof(strand, ksp) == 120,
         "strand::ksp must be at offset 120 — __switch_to_asm depends on this");
 
+    static_assert(__builtin_offsetof(strand, irq_nesting) == 128,
+        "strand::irq_nesting must be at offset 128 — __switch_to_asm depends on this");
+
+    static_assert(__builtin_offsetof(strand, nucleus_nesting) == 132,
+        "strand::nucleus_nesting must be at offset 132 — __switch_to_asm depends on this");
+
+    static_assert(__builtin_offsetof(strand, irq_class) == 136,
+        "strand::irq_class must be at offset 136 — __switch_to_asm depends on this");
+
 
     /// @brief Cold-field body for a strand
     struct strand_body {
+        strand*         self{nullptr};             ///< Owning strand.  The body is a separate heap allocation — there is NO pointer arithmetic from body back to strand; every body→strand hop must go through this field.
         u64             kstack_base{0};           ///< Base VA of the kernel stack.
+        arch::s390x::cpu::pcss::stack linkage_stack{};
+        ///< Linkage stack + saved CR15 (§5.12: one stack per dispatchable
+        ///< unit; the dispatch path saves/restores via stack_save/stack_load).
+        u64             gate_defer_entry{0};      ///< Parked gate_defer: state entry to synthesize the return from.
+        u8              signal_return_kind{0};    ///< signal_kind staged for delivery (0 = none).
+        u64             signal_handler_va{0};     ///< User handler VA.
+        u64             signal_payload{0};        ///< Signal data (second handler arg).
+        u64             signal_user_ctx{0};       ///< Handler's registered context pointer.
+        u64             signal_saved_psw_mask{0}; ///< Interrupted PSW mask.
+        u64             signal_saved_psw_addr{0}; ///< Interrupted PSW address.
+        u64             signal_saved_gprs[16]{};  ///< Interrupted GPRs.
+        u32             signal_saved_ars[16]{};   ///< Interrupted access registers.
+        u32             signal_saved_fpc{0};      ///< Interrupted FPC.
+        u32             _pad_sigfpc{0};
+        u64             signal_saved_vrs[32][2]{}; ///< Interrupted v0-v31 (128-bit each).
+        zxfoundation::sync::waitqueue::wait_head exit_wait{};
+        u64             exit_code{0};
+        u8              exited{0};
+        u8              _pad_exit[7]{};
         lib::list_node  strand_list{};            ///< Link into domain's strand list.
 
         u64             rt_runtime_used_ns{0};     /// Runtime consumed during current RT period.
         u64             rt_period_start_ns{0};     /// RT accounting period start.
         u64             deadline_runtime_used_ns{0}; /// Runtime consumed during current deadline period.
         u64             absolute_deadline_ns{0};   /// Conservative absolute deadline key.
+
+        /// @brief §5.12: set while the hardware is inside a user→user
+        ///        stacking PC started by this strand (the PC switched
+        ///        PASN to the callee).  The saved user context is then
+        ///        NOT the owner's own state — signal delivery must not
+        ///        build frames from it until this clears.
+        u8              in_pc{0};
+        u8              _pad_inpc[7]{};
+
+        /// @brief §5.12 BUG-072: the borrowed space at the in_pc instant.
+        ///        CR1/CR3/CR4/CR5 exactly as the callee's PC left them,
+        ///        captured when in_pc is noted.  While in_pc is set the
+        ///        dispatch path must restore these instead of publishing
+        ///        the owner's space: the trap return lpswes the callee's
+        ///        PSW, and owner CRs under a callee PSW resumed a
+        ///        franken-context (callee AR-mode/entry key against the
+        ///        owner's pages — protection 0x0004 then 0x3A death).
+        u64             pc_cr1{0};
+        u64             pc_cr3{0};
+        u64             pc_cr4{0};
+        u64             pc_cr5{0};
 
         /// @brief PELT averaging state
         sched::sched_avg  pelt_avg{};
@@ -148,6 +201,9 @@ namespace zxfoundation::dgp::domain {
         sched::sched_class_id saved_class{zxfoundation::sched::sched_class_id::fair};
         u8              saved_prio{0};
         u8              _pad_pi[1]{};
+
+        /// @brief Last nucleus-call failure
+        lib::kernel_error last_error{};
 
         arch::s390x::sched::user_regs       uregs{};                   ///< User-mode register save area.
 
@@ -187,7 +243,6 @@ namespace zxfoundation::dgp::domain {
     /// @brief Per-domain flags (bitfield).
     enum class domain_flags : u32 {
         none         = 0,
-        idle         = 1U << 1,   ///< Idle domain (per-CPU).
         need_resched = 1U << 2,   ///< Reschedule requested.
         nucleus      = 1U << 3,   ///< The kernel itself — immortal, never destroyed.
     };
@@ -217,6 +272,28 @@ namespace zxfoundation::dgp::domain {
         return a;
     }
 
+    /// @brief Deferred gate request
+    struct deferred_request {
+        strand*            caller{nullptr};
+        u64                entry_va{0};        ///< Caller state entry (base) the reply is written into.
+        u64                arg_regs[5]{};
+        std::atomic<bool>  done{false};         ///< Completion flag (embedded — never a raw stack pointer).
+        u64                enqueued_mono_ns{0}; ///< Defer timestamp — S10.5 deferred-work billing base (OBL-034).
+    };
+
+    constexpr u32 DEFER_QUEUE_DEPTH = 8U;      ///< §7.6 defer-table quota.
+
+    /// @brief Per-domain deferred-gate FIFO.
+    struct defer_queue {
+        sync::qspinlock::qspinlock<sync::lock_rank::gate_defer> lock{};
+        sync::waitqueue::wait_head          completion{};  ///< Caller waits here for the resume.
+        sync::waitqueue::wait_head          work{};        ///< Worker blocks here until a request lands.
+        deferred_request                    requests[DEFER_QUEUE_DEPTH]{};
+        u32                                 head{0};
+        u32                                 tail{0};
+        u32                                 count{0};
+    };
+
     /// @brief The domain struct — the central entity of the DGP kernel.
     struct domain {
         scoms::kobject::bobject                                         ko{};
@@ -237,10 +314,13 @@ namespace zxfoundation::dgp::domain {
         u16                                                             portal_ar_mask{0};
         u16                                                             _pad_art{0};
 
+        u32                                                             pc_asn{0};
+        arch::s390x::cpu::pcss::domain_tables                           pc_tables{};
+
         u32                                                             gate_count{0};
         u32                                                             portal_count{0};
 
-        zxfoundation::dgp::isolation::isolation_rights                  granted_rights{zxfoundation::dgp::isolation::isolation_rights::none};
+        ::zxfoundation::dgp::right_mask                  granted_rights{::zxfoundation::dgp::right::none};
         u8                                                              numa_node{0};
         std::atomic<u16>                                                revocation_epoch{0};
         u32                                                             storage_key_generation{0};
@@ -265,6 +345,8 @@ namespace zxfoundation::dgp::domain {
         zxfoundation::sched::sched_mask                                 allowed_cpus{};
         zxfoundation::sched::sched_mask                                 allowed_numa_nodes{};
 
+        defer_queue                                                     gate_defer{};
+
         domain() noexcept = default;
         domain(const domain&)            = delete;
         auto operator=(const domain&)    = delete;
@@ -275,12 +357,11 @@ namespace zxfoundation::dgp::domain {
     static_assert(__builtin_offsetof(domain, ko) == 0,
         "domain::ko must be at offset 0 — kobject layout constraint");
 
+    static_assert(__builtin_offsetof(domain, flags) == 32,
+        "domain.flags offset must match DOMAIN_FLAGS_OFF=32 in entry.S CHECK_PREEMPT");
+
     static_assert(__builtin_offsetof(domain, primary_strand) == 48,
         "domain::primary_strand must be at offset 48");
-
-    [[nodiscard]] auto is_idle_domain(const domain& d) noexcept -> bool {
-        return (d.flags & domain_flags::idle) != domain_flags::none;
-    }
 
     [[nodiscard]] auto is_active_domain(const domain& d) noexcept -> bool {
         return d.ko.state == zxfoundation::base::lifecycle_state::active;

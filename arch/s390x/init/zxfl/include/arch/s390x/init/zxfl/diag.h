@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/diag.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/diag.h
 
 #ifndef ZXFOUNDATION_ZXFL_DIAG_H
 #define ZXFOUNDATION_ZXFL_DIAG_H
@@ -7,12 +7,10 @@
 #include <zxfoundation/types.h>
 
 /// @brief Initialize the DIAG 8 console.
-///        No-op — DIAG 8 is always available in ESA/390 and z/Arch mode.
 /// @return 0 (always succeeds)
 int diag_setup(void);
 
 /// @brief Write a single ASCII character to the DIAG 8 console.
-///        Buffers characters until a newline, then flushes the line.
 /// @param c ASCII character
 void diag_putc(char c);
 
@@ -27,7 +25,6 @@ int diag_write(const char *buf, size_t len);
 void diag_flush_all(void);
 
 /// @brief Write a NUL-terminated ASCII string to the DIAG 8 console.
-///        Convenience wrapper used throughout the bootloader.
 /// @param msg NUL-terminated ASCII string
 static inline void print(const char *msg) {
     while (*msg) {

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/head64.S
+/// @file arch/s390x/init/head64.S
 
 #include <arch/s390x/init/zxfl/zxvl.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
 #include <arch/s390x/cpu/lowcore.h>
 #include <arch/s390x/init/zxfl/psw.h>
+
+#define KERNEL_BOOT_STACK_SIZE 0x4000
 
     .section .text.handshake, "ax"
     .globl __zxfl_handshake_stub
@@ -39,10 +41,10 @@ __zx_start_kernel64:
 .Lbss_done:
 
     lgr     %r2, %r11
-    lg      %r15, ZXFL_OFFSET_KERNEL_STACK_TOP(%r2) // kernel_stack_top from boot protocol
+    larl    %r15, __kernel_boot_stack_top
     aghi    %r15, -160                     // 160-byte register save area
 
-    // Enable AFP (bit 45) and Vector (bit 46) in CR0 before entering C++
+    // Enable AFP (bit 45) and Vector (bit 46) for BSP before entering C++
     stctg   %c0, %c0, 0(%r15)
     lg      %r1, 0(%r15)
     iilf    %r0, 0x00060000
@@ -67,36 +69,13 @@ __zx_start_kernel64:
 .Ldisabled_wait_psw:
     .quad   PSW_MASK_DISABLED_WAIT, 0x0000000000000000
 
-    .section .text.ap_entry, "ax", @progbits
-    .globl ap_entry
-ap_entry:
-    lg      %r15, LC_RESTART_STACK(0)
-    aghi    %r15, -160
-
-    lctlg   %c0, %c0, LC_AP_CR0(0)
-    lctlg   %c1, %c1, LC_KERNEL_ASCE(0)
-    lctlg   %c13, %c13, LC_AP_CR13(0)
-
-    lpswe   LC_RETURN_PSW(0)
-
-    .globl ap_dat_on
-ap_dat_on:
-    lg      %r15, LC_KERNEL_STACK(0)
-    aghi    %r15, -160
-
-    sgr     %r0, %r0
-    stg     %r0, 0(%r15)
-    stg     %r0, 112(%r15)
-
-    brasl   %r14, ap_startup
-
-.Lap_halt:
-    larl    %r1, .Lap_disabled_wait
-    lpswe   0(%r1)
-    j       .Lap_halt
-
-    .align 8
-.Lap_disabled_wait:
-    .quad   PSW_MASK_DISABLED_WAIT, 0x0000000000DEAD07
+    // BSP boot stack: kernel-owned, in .bss, zeroed by the entry path above.
+    .section .bss.boot_stack, "aw", @nobits
+    .align 16
+    .globl __kernel_boot_stack
+__kernel_boot_stack:
+    .skip   KERNEL_BOOT_STACK_SIZE
+    .globl __kernel_boot_stack_top
+__kernel_boot_stack_top:
 
     .section .note.GNU-stack, "", @progbits

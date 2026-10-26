@@ -1,2 +1,3 @@
+/// @file zxfoundation/sched/strandctx.zcomponent/interface.cxxm
 export module zxfoundation.sched.strandctx;
 export import zxfoundation.sched.strandctx.core;

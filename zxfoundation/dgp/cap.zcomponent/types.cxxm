@@ -1,9 +1,9 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/dgp/cap.zcomponent/types.cxxm
-/// @brief Capability system type definitions — opaque resource tokens for
-///        the DGP kernel's capability-based authorization model.
+/// @brief Capability system type definitions
 
 export module zxfoundation.dgp.cap.types;
+export import zxfoundation.dgp.rights.types;
 import zxfoundation.base.types;
 
 export {
@@ -11,7 +11,8 @@ export {
 namespace zxfoundation::dgp::cap {
 
     /// @brief Discriminator for the kind of resource a capability token refers to.
-    enum class cap_type : u16 {
+    /// @note  Packed into the token's low 8 bits — values must stay < 256.
+    enum class cap_type : u8 {
         none       = 0,   ///< Invalid / null capability.
         domain     = 1,   ///< Reference to a domain.
         gate       = 2,   ///< Reference to a gate.
@@ -19,7 +20,6 @@ namespace zxfoundation::dgp::cap {
         io_device  = 5,   ///< Reference to an I/O device binding.
         memory     = 6,   ///< Reference to a memory grant authority.
         service    = 7,   ///< Reference to a service registry entry.
-        admin      = 8,   ///< Administrative authority (domain mgmt, etc.).
         memory_extent = 9, ///< Exact physical range authorized for mapping.
     };
 
@@ -33,39 +33,12 @@ namespace zxfoundation::dgp::cap {
             case cap_type::io_device: return "io_device";
             case cap_type::memory:    return "memory";
             case cap_type::service:   return "service";
-            case cap_type::admin:     return "admin";
             case cap_type::memory_extent: return "memory_extent";
             default:                  return "unknown";
         }
     }
 
-    /// @brief Standard access rights usable with any capability type.
-    enum class cap_rights : u16 {
-        none     = 0,
-        read     = 1U << 0,    ///< Read / view the resource.
-        write    = 1U << 1,    ///< Write / modify the resource.
-        exec     = 1U << 2,    ///< Execute / invoke the resource.
-        destroy  = 1U << 3,    ///< Destroy the resource.
-        delegate = 1U << 4,    ///< Delegate this capability to another domain.
-        admin    = 1U << 5,    ///< Administrative operations (domain create/destroy).
-        map      = 1U << 6,    ///< Map physical memory into address space.
-        all      = 0xFFFFU,    ///< All rights.
-    };
-
-    [[nodiscard]] constexpr auto operator|(cap_rights a, cap_rights b) noexcept -> cap_rights {
-        return static_cast<cap_rights>(static_cast<u16>(a) | static_cast<u16>(b));
-    }
-
-    [[nodiscard]] constexpr auto operator&(cap_rights a, cap_rights b) noexcept -> cap_rights {
-        return static_cast<cap_rights>(static_cast<u16>(a) & static_cast<u16>(b));
-    }
-
-    [[nodiscard]] constexpr auto operator~(cap_rights r) noexcept -> cap_rights {
-        return static_cast<cap_rights>(~static_cast<u16>(r));
-    }
-
     /// @brief Opaque 64-bit capability token.
-    /// @note  Tokens are value types (copyable, movable).
     struct cap_token {
         u64 raw{0};   ///< Raw 64-bit encoding.
 
@@ -76,49 +49,50 @@ namespace zxfoundation::dgp::cap {
         /// @param[in] type     Resource type discriminator.
         /// @param[in] obj_id   Nucleus capability-slot index.
         /// @param[in] gen      Object generation counter.
-        /// @param[in] rights   Delegated rights mask.
+        /// @param[in] rights   Delegated rights mask (must be tokenizable).
         static constexpr auto make(
             cap_type   type,
             u16        obj_id,
             u16        gen,
-            cap_rights rights
+            right_mask rights
         ) noexcept -> cap_token {
             return cap_token(
-                (static_cast<u64>(rights)  << 48) |
-                (static_cast<u64>(gen)     << 32) |
-                (static_cast<u64>(obj_id)  << 16) |
-                static_cast<u64>(type)
+                ((static_cast<u64>(static_cast<u32>(rights)) & 0x00FF'FFFFULL) << 40) |
+                ((static_cast<u64>(gen)     & 0xFFFFULL) << 24) |
+                ((static_cast<u64>(obj_id)  & 0xFFFFULL) << 8)  |
+                (static_cast<u64>(type)     & 0xFFULL)
             );
         }
 
         /// @brief Extract the type field.
         [[nodiscard]] constexpr auto type() const noexcept -> cap_type {
-            return static_cast<cap_type>(raw & 0xFFFFU);
+            return static_cast<cap_type>(raw & 0xFFULL);
         }
 
         /// @brief Extract the object ID field.
         [[nodiscard]] constexpr auto object_id() const noexcept -> u16 {
-            return static_cast<u16>((raw >> 16) & 0xFFFFU);
+            return static_cast<u16>((raw >> 8) & 0xFFFFULL);
         }
 
         /// @brief Extract the generation field.
         [[nodiscard]] constexpr auto generation() const noexcept -> u16 {
-            return static_cast<u16>((raw >> 32) & 0xFFFFU);
+            return static_cast<u16>((raw >> 24) & 0xFFFFULL);
         }
 
         /// @brief Extract the rights mask.
-        [[nodiscard]] constexpr auto rights() const noexcept -> cap_rights {
-            return static_cast<cap_rights>((raw >> 48) & 0xFFFFU);
+        [[nodiscard]] constexpr auto rights() const noexcept -> right_mask {
+            return static_cast<right_mask>(static_cast<u32>((raw >> 40) & 0x00FF'FFFFULL));
         }
 
         /// @brief Check whether a specific right is present.
-        [[nodiscard]] constexpr auto has_right(cap_rights r) const noexcept -> bool {
-            return (static_cast<u16>(rights()) & static_cast<u16>(r)) != 0;
+        [[nodiscard]] constexpr auto has_right(right r) const noexcept -> bool {
+            return (static_cast<u32>(rights()) & static_cast<u32>(r)) != 0;
         }
 
-        /// @brief Derive a new token with a subset of the rights.
+        /// @brief Derive a new token with a subset of the rights (attenuation).
         /// @param[in] subset  Rights to retain in the derived token.
-        [[nodiscard]] constexpr auto derive(cap_rights subset) const noexcept -> cap_token {
+        /// @note  Monotonic: the derived mask is always ⊆ the parent mask.
+        [[nodiscard]] constexpr auto derive(right_mask subset) const noexcept -> cap_token {
             return make(type(), object_id(), generation(),
                         rights() & subset);
         }
@@ -143,6 +117,15 @@ namespace zxfoundation::dgp::cap {
 
     /// @brief Sentinel value indicating an error from capability operations.
     inline constexpr u64 CAP_ERROR_SENTINEL = ~0ULL;
+
+    static_assert(cap_token::make(cap_type::domain, 0xFFFFU, 0xFFFFU,
+                                  right::admin).rights() == right::admin,
+        "token rights field must round-trip the full tokenizable mask");
+    static_assert(cap_token::make(cap_type::domain, 0xFFFFU, 0xFFFFU,
+                                  right::admin).object_id() == 0xFFFFU
+        && cap_token::make(cap_type::domain, 0xFFFFU, 0xFFFFU,
+                           right::admin).generation() == 0xFFFFU,
+        "token id/gen fields must round-trip");
 
 } // namespace zxfoundation::dgp::cap
 

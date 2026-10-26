@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// crypto/sha256.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/sha256.c
 /// @brief Freestanding SHA-256 (FIPS 180-4).
 
 #include <arch/s390x/init/zxfl/sha256.h>

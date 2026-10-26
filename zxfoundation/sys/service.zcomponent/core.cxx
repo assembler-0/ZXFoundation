@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/service.cxxm
+/// @file zxfoundation/sys/service.zcomponent/core.cxx
 /// @brief Service registry — lightweight name-to-capability directory for
 ///        the DGP kernel's service discovery model.
 
@@ -17,9 +17,14 @@ import zxfoundation.dgp.cap.core;
 import zxfoundation.dgp.domain.core;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
+import zxfoundation.sys.zinit.core;
+import zxfoundation.sys.printk.core;
 import lib.error;
 import lib.cstring;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::sys::service::detail {
 
@@ -32,27 +37,20 @@ namespace zxfoundation::sys::service {
 
     using namespace dgp::cap;
 
-    auto init() noexcept -> void {
+    auto zi_service_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {
         using namespace detail;
-        if (g_service_initialized) return;
-
+        if (g_service_initialized) return {};
         g_service_table.init(scoms::kobject::kobject_type::service_entry);
         register_service_cap_lookup();
-
-        {
-            auto d0_token = cap_issue(
-                cap_type::domain, 0, cap_rights::read | cap_rights::write, 0);
-            if (!d0_token) return;
-            discard_value register_service("zx.console", *d0_token, 0);
-            discard_value cap_release(*d0_token);
-        }
-
         g_service_initialized = true;
+        return {};
     }
+    __zinit__(dgp, p30, zi_service_init, fatal)
 
     [[nodiscard]] auto register_service(
         std::string_view name,
         cap_token        token,
+        u64              port,
         u32              owner_id
     ) noexcept -> std::expected<u32, lib::kernel_error> {
         using namespace detail;
@@ -67,14 +65,14 @@ namespace zxfoundation::sys::service {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        auto token_result = cap_validate_generic_for(token, cap_rights::none, owner_id);
+        auto token_result = cap_validate_generic_for(token, ::zxfoundation::dgp::right::none, owner_id);
         if (!token_result) return std::unexpected(token_result.error());
 
         for (u32 i = 0; i < MAX_SERVICES; ++i) {
             auto* existing = g_service_table.find_raw(i);
             if (existing && std::string_view(existing->name) == name) {
                 return std::unexpected(
-                    lib::kernel_error::from_generic(lib::generic_error::internal_error));
+                    lib::kernel_error::from_generic(lib::generic_error::name_in_use));
             }
         }
 
@@ -94,6 +92,7 @@ namespace zxfoundation::sys::service {
             return std::unexpected(owner_result.error());
         }
         lib::string_copy(entry.name, name);
+        entry.port = port;
         auto stored_token = cap_duplicate(token, token.rights(), owner_id);
         if (!stored_token) {
             discard_value g_service_table.release(entry.ko.id);
@@ -125,7 +124,7 @@ namespace zxfoundation::sys::service {
     [[nodiscard]] auto lookup_service(
         std::string_view name,
         u32              caller_id
-    ) noexcept -> std::expected<cap_token, lib::kernel_error> {
+    ) noexcept -> std::expected<u64, lib::kernel_error> {
         using namespace detail;
 
         if (name.empty()) {
@@ -136,24 +135,11 @@ namespace zxfoundation::sys::service {
         for (u32 i = 0; i < MAX_SERVICES; ++i) {
             auto* entry = g_service_table.find_raw(i);
             if (entry && std::string_view(entry->name) == name) {
-                auto* authority = memory::objects::memory_object_resolve_id(
-                    entry->authority.id);
-                if (!authority) {
-                    return std::unexpected(lib::kernel_error::from_generic(
-                        lib::generic_error::not_found));
-                }
-                auto cap_result = cap_duplicate_for(
-                    entry->token, entry->token.rights(), authority->owner_domain,
-                    caller_id);
-                if (!cap_result) {
-                    return std::unexpected(cap_result.error());
-                }
-                return *cap_result;
+                return entry->port;
             }
         }
-
-        return std::unexpected(
-            lib::kernel_error::from_generic(lib::generic_error::not_found));
+        return std::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::not_found));
     }
 
     [[nodiscard]] auto unregister_service(
@@ -175,7 +161,7 @@ namespace zxfoundation::sys::service {
         }
         if (mo->owner_domain != caller_id && caller_id != 0) {
             return std::unexpected(
-                lib::kernel_error::from_generic(lib::generic_error::internal_error));
+                lib::kernel_error::from_generic(lib::generic_error::denied));
         }
 
         char name_copy[SERVICE_NAME_MAX_LEN]{};
@@ -232,7 +218,7 @@ namespace zxfoundation::dgp::cap {
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::sys::service::service_entry>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::sys::service::service_entry*, lib::kernel_error> {
 
         if (!token) {
@@ -244,7 +230,7 @@ namespace zxfoundation::dgp::cap {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        if ((token.rights() & needed) == cap_rights::none && needed != cap_rights::none) {
+        if ((token.rights() & needed) == ::zxfoundation::dgp::right::none && needed != ::zxfoundation::dgp::right::none) {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/cpudl.cxxm
+/// @file zxfoundation/sched/cpudl.zcomponent/core.cxxm
 /// @brief Per-system per-CPU earliest-deadline index
 
 export module zxfoundation.sched.cpudl.core;
@@ -23,9 +23,6 @@ namespace zxfoundation::sched::cpudl {
     /// @param[in] cpu Logical CPU.
     auto clear_dl(u16 cpu) noexcept -> void;
 
-    /// @brief Return the CPU id with the earliest currently-set deadline, or
-    ///        @c CONFIG_ZX_MAX_CPUS when none set.
-    [[nodiscard]] auto first_cpu() noexcept -> u16;
 
     /// @brief Return the latest @c set deadline among all CPUs
     /// @note O(N) walk — ran once per push, results cached by the caller.

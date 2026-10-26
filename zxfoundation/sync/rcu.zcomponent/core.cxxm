@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/rcu/rcu.cxxm
+/// @file zxfoundation/sync/rcu.zcomponent/core.cxxm
 /// @brief Read-Copy-Update — non-preemptive SMP implementation.
 
 export module zxfoundation.sync.rcu.core;
@@ -10,8 +10,6 @@ import lib.stl;
 export {
 
 namespace zxfoundation::sync::rcu {
-
-    auto init() noexcept -> void;
 
     /// @brief Enter an RCU read-side critical section.
     auto read_lock() noexcept -> void;
@@ -57,6 +55,10 @@ namespace zxfoundation::sync::rcu {
     /// @brief Per-CPU RCU tick: report QS, manage GPs, drain callbacks.
     auto tick() noexcept -> void;
 
-} // namespace zxfoundation::rcu
+    /// @brief Report a scheduler quiescent state for the current CPU.
+    /// @note No report is made while inside an RCU read-side section.
+    auto quiescent_state() noexcept -> void;
+
+} // namespace zxfoundation::sync::rcu
 
 } // end export

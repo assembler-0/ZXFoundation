@@ -1,8 +1,10 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/locking/qspinlock.cxxm
+/// @file zxfoundation/sync/qspinlock.zcomponent/core.cxxm
 /// @brief Queued spinlock (MCS-based) for z/Architecture.
 
 export module zxfoundation.sync.qspinlock.core;
+export import zxfoundation.sync.lockrank;
+export import zxfoundation.sync.lockgraph.types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.irq;
 import lib.stl;
@@ -13,6 +15,8 @@ namespace zxfoundation::sync::qspinlock {
 
     /// @brief Queued spinlock — SMP-safe, cache-line-efficient.
     /// @note Aligned to 4 bytes minimum for CS instruction operand alignment.
+    /// @tparam Rank  This lock class's position in the lock hierarchy
+    template <zxfoundation::sync::lock_rank Rank>
     class alignas(4) qspinlock {
 
         /// @brief Atomically transition the lock word from PENDING|LOCKED to LOCKED.
@@ -27,6 +31,21 @@ namespace zxfoundation::sync::qspinlock {
         auto lock_slow() noexcept -> void;
 
     public:
+        /// @brief This lock class's rank (uniform rank access for the
+        ///        typestate chain and the lockgraph).
+        static constexpr zxfoundation::sync::lock_rank rank = Rank;
+
+#if !defined(ZX_NO_LOCKGRAPH)
+        /// @brief Debug-only class dependency record
+        ///        one per lock class, zero per-instance layout cost.
+        [[nodiscard]] static auto class_depmap() noexcept
+            -> zxfoundation::sync::lockgraph::lockdep_map& {
+            static zxfoundation::sync::lockgraph::lockdep_map map{
+                zxfoundation::sync::lock_rank_name(Rank), Rank, 0, {}};
+            return map;
+        }
+#endif
+
         constexpr qspinlock() noexcept = default;
 
         /// @brief Acquire the lock (blocking, SMP-safe).

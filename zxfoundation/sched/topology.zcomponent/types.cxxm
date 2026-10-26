@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/topology_types.cxxm
+/// @file zxfoundation/sched/topology.zcomponent/types.cxxm
 /// @brief Scheduler CPU topology and DGP placement policy records.
 
 export module zxfoundation.sched.topology.types;

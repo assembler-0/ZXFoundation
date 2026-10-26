@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/scoms/scoms_types.cxxm
+/// @file zxfoundation/scoms/kobject.zcomponent/base.cxxm
 /// @brief SCOMS — Scalable Object Management System — core types.
 
 export module zxfoundation.scoms.kobject.base;
@@ -20,7 +20,7 @@ namespace zxfoundation::scoms::kobject {
         u8                                   _pad0[2]{};
         kref                                 ref{};
         u32                                  generation{0};
-        sync::qspinlock::qspinlock           lock{};
+        sync::qspinlock::qspinlock<sync::lock_rank::scoms_kobject> lock{};
         u32                                  object_flags{0};
 
         bobject() noexcept = default;
@@ -57,6 +57,6 @@ namespace zxfoundation::scoms::kobject {
     /// @brief Install the SCOMS metadata finalizer used after the last put.
     auto install_bobject_finalizer(bobject_finalizer_fn finalizer) noexcept -> void;
 
-} // namespace zxfoundation::scoms
+} // namespace zxfoundation::scoms::kobject
 
 } // end export

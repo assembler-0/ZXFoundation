@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/rt.cxx
+/// @file zxfoundation/sched/rt.zcomponent/core.cxx
 /// @brief Fixed-priority real-time scheduler backend with DGP admission gates.
 
 module zxfoundation.sched.rt.core;
@@ -31,9 +31,9 @@ namespace zxfoundation::sched::rt::detail {
 
     [[nodiscard]] auto has_rt_authority(const domain& d) noexcept -> bool {
         if (d.rt_capability_token != 0U && d.rt_capability_token == d.admin_token) return true;
-        return zxfoundation::dgp::isolation::has_all_rights(
+        return zxfoundation::dgp::has_all_rights(
             d.granted_rights,
-            zxfoundation::dgp::isolation::isolation_rights::sched);
+            ::zxfoundation::dgp::right::sched);
     }
 
     [[nodiscard]] auto policy_matches_domain_masks(
@@ -93,7 +93,7 @@ namespace zxfoundation::sched::rt {
         strand& s,
         const sched_policy& policy
     ) noexcept -> std::expected<sched_admission_result, lib::kernel_error> {
-        if (!is_active_domain(owner) || is_idle_domain(owner)) {
+        if (!is_active_domain(owner)) {
             return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         if (policy.class_id != sched_class_id::rt || !detail::policy_matches_domain_masks(owner, policy)) {
@@ -145,6 +145,8 @@ namespace zxfoundation::sched::rt {
         run_queue& rq,
         strand& s
     ) noexcept -> std::expected<void, lib::kernel_error> {
+        // Idempotent: never re-link a strand already on the queue (§09.2).
+        if (s.on_rq) return {};
         if (s.sched_policy.class_id != sched_class_id::rt
             || s.sched_admission.class_id != sched_class_id::rt
             || s.sched_admission.admitted_runtime_ns == 0U) {

@@ -15,6 +15,13 @@
     lg      \reg, LC_PERCPU_PTR(0)
     icm     \reg, 15, PCP_IRQ_NESTING(\reg)
     jnz     1f
+    .ifnc \stack_lc, LC_MCCK_STACK
+    tm      (\old_psw_lc + 1)(0), 0x01
+    jz      4f
+    lg      \reg, LC_KERNEL_STACK(0)
+    j       3f
+4:
+    .endif
     lg      \reg, \stack_lc(0)
     .ifnc \stack_lc, LC_MCCK_STACK
     ltgr    \reg, \reg
@@ -38,11 +45,11 @@
     // that RESTORE_FRAME gives back the correct register contents.
     lg      \reg, LC_SCRATCH0(0)
     stg     \reg, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
-    lg      %r0, LC_PERCPU_PTR(0)
-    asi     PCP_IRQ_NESTING(%r0), 1
+    lg      %r14, LC_PERCPU_PTR(0)
+    asi     PCP_IRQ_NESTING(%r14), 1
     la      %r2, IRQ_FRAME_BIAS(%r15)
     lhi     \reg, \irq_class_val
-    stc     \reg, PCP_IRQ_CLASS(%r0)
+    stc     \reg, PCP_IRQ_CLASS(%r14)
 .endm
 
 .macro RESTORE_FRAME
@@ -53,9 +60,9 @@
     mvc     LC_PSW_TEMP(16, 0), (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(%r15)
     // r0-r14 haven't been reloaded from the frame yet (that happens below),
     // so %r0 is free scratch here too.
-    lg      %r0, LC_PERCPU_PTR(0)
-    asi     PCP_IRQ_NESTING(%r0), -1
-    mvi     PCP_IRQ_CLASS(%r0), 0
+    lg      %r14, LC_PERCPU_PTR(0)
+    asi     PCP_IRQ_NESTING(%r14), -1
+    mvi     PCP_IRQ_CLASS(%r14), 0
     lmg     %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm
@@ -86,11 +93,11 @@
     lgr     %r15, \reg
     lg      \reg, LC_SCRATCH0(0)
     stg     \reg, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS + 8)(%r15)
-    lg      %r0, LC_PERCPU_PTR(0)
-    asi     PCP_NUCLEUS_NESTING(%r0), 1
+    lg      %r14, LC_PERCPU_PTR(0)
+    asi     PCP_NUCLEUS_NESTING(%r14), 1
     la      %r2, IRQ_FRAME_BIAS(%r15)
     lhi     \reg, \irq_class_val
-    stc     \reg, PCP_IRQ_CLASS(%r0)
+    stc     \reg, PCP_IRQ_CLASS(%r14)
 .endm
 
 .macro RESTORE_NUCLEUS_FRAME
@@ -99,9 +106,9 @@
     lfpc    (IRQ_FRAME_BIAS + IRQ_FRAME_FPC)(%r15)
     lam     %a0, %a15, (IRQ_FRAME_BIAS + IRQ_FRAME_ARS)(%r15)
     mvc     LC_PSW_TEMP(16, 0), (IRQ_FRAME_BIAS + IRQ_FRAME_PSW_MASK)(%r15)
-    lg      %r0, LC_PERCPU_PTR(0)
-    asi     PCP_NUCLEUS_NESTING(%r0), -1
-    mvi     PCP_IRQ_CLASS(%r0), 0
+    lg      %r14, LC_PERCPU_PTR(0)
+    asi     PCP_NUCLEUS_NESTING(%r14), -1
+    mvi     PCP_IRQ_CLASS(%r14), 0
     lmg     %r0, %r15, (IRQ_FRAME_BIAS + IRQ_FRAME_GPRS)(%r15)
     lpswe   LC_PSW_TEMP(0)
 .endm

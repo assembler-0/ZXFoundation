@@ -1,3 +1,4 @@
+/// @file zxfoundation/scoms/interface.cxxm
 export module zxfoundation.scoms;
 export import zxfoundation.scoms.metadata;
 export import zxfoundation.scoms.kobject;

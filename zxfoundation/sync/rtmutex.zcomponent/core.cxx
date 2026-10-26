@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/locking/rtmutex.cxxm
+/// @file zxfoundation/sync/rtmutex.zcomponent/core.cxx
 /// @brief Real-time mutex with multi-link priority inheritance.
 
 module zxfoundation.sync.rtmutex.core;
@@ -62,10 +62,10 @@ namespace zxfoundation::sync::detail {
         const auto* od = static_cast<const domain*>(owner.owner);
         if (!wd || !od) return true;
         if (wd == od) return true;
-        using zxfoundation::dgp::isolation::isolation_rights;
-        using zxfoundation::dgp::isolation::has_all_rights;
-        return has_all_rights(od->granted_rights, dgp::isolation::isolation_rights::delegate)
-            && has_all_rights(wd->granted_rights, dgp::isolation::isolation_rights::enter);
+        using ::zxfoundation::dgp::right_mask;
+        using zxfoundation::dgp::has_all_rights;
+        return has_all_rights(od->granted_rights, ::zxfoundation::dgp::right::delegate)
+            && has_all_rights(wd->granted_rights, ::zxfoundation::dgp::right::call);
     }
 
     /// @brief Highest effective RT priority among the waiters of @c m.
@@ -114,28 +114,35 @@ namespace zxfoundation::sync::rtmutex {
         zxfoundation::sched::context::assert_can_sleep();
         const irqflags flags = arch::s390x::cpu::irq::irq_save_disable();
 
-        u32 expected = 0U;
-        if (m_lock_word.compare_exchange_strong(
-                expected, 1U, memory_order::acquire, memory_order::relaxed)) {
-            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
-            m_owner = reinterpret_cast<strand*>(pcp.current_strand);
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* self = reinterpret_cast<strand*>(pcp.current_strand);
+        m_pi_lock.lock();
+        if (m_owner == nullptr) {
+            m_owner = self;
+            m_lock_word.store(1U, memory_order::release);
+            m_pi_lock.unlock();
             arch::s390x::cpu::irq::irq_restore(flags);
             return;
-                }
+        }
+        m_pi_lock.unlock();
 
         slow_lock(flags);
     }
 
     /// @brief Non-blocking attempt.
     [[nodiscard]] auto rtmutex::try_lock() noexcept -> bool {
-        u32 expected = 0U;
-        if (m_lock_word.compare_exchange_strong(
-                expected, 1U, memory_order::acquire, memory_order::relaxed)) {
-            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
-            m_owner = reinterpret_cast<strand*>(pcp.current_strand);
-            return true;
-                }
-        return false;
+        const irqflags flags = arch::s390x::cpu::irq::irq_save_disable();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* self = reinterpret_cast<strand*>(pcp.current_strand);
+        m_pi_lock.lock();
+        const bool acquired = (m_owner == nullptr);
+        if (acquired) {
+            m_owner = self;
+            m_lock_word.store(1U, memory_order::release);
+        }
+        m_pi_lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(flags);
+        return acquired;
     }
 
     /// @brief Release the mutex.
@@ -150,7 +157,15 @@ namespace zxfoundation::sync::rtmutex {
 
         {
             strand* old_owner = nullptr;
-            sync::irq_lock_guard pi_guard(m_pi_lock);
+            sync::irq_lock_guard _(m_pi_lock);
+
+            auto* current = reinterpret_cast<strand*>(
+                arch::s390x::cpu::percpu::this_cpu().current_strand);
+            if (m_owner != current) [[unlikely]] {
+                // Unlocking from a non-owner would detach another strand's
+                // PI links and can permanently strand every waiter.
+                __builtin_trap();
+            }
 
             if (!m_waiters.empty()) {
                 lib::list_node* node = *m_waiters.begin();
@@ -194,7 +209,7 @@ namespace zxfoundation::sync::rtmutex {
                 if (held_lock != this) held_lock->m_pi_lock.unlock();
             }
 
-            m_lock_word.store(0U, memory_order::release);
+            m_lock_word.store(new_owner ? 1U : 0U, memory_order::release);
         }
 
         if (new_owner) {
@@ -224,19 +239,17 @@ namespace zxfoundation::sync::rtmutex {
 
         for (;;) {
             {
-                sync::irq_lock_guard pi_guard(m_pi_lock);
+                sync::irq_lock_guard _(m_pi_lock);
 
-                u32 expected = 0U;
-                if (m_lock_word.compare_exchange_strong(
-                        expected, 1U, memory_order::acquire, memory_order::relaxed)) {
+                if (m_owner == nullptr) {
                     m_owner = self;
+                    m_lock_word.store(1U, memory_order::release);
                     arch::s390x::cpu::irq::irq_restore(flags);
                     return;
                 }
 
                 if (m_owner == self) {
-                    arch::s390x::cpu::irq::irq_restore(flags);
-                    return;
+                    __builtin_trap();
                 }
 
                 if (self->body->blocked_on != this) {
@@ -290,7 +303,7 @@ namespace zxfoundation::sync::rtmutex {
             self->substate = sched_substate::blocked;
             zxfoundation::sched::schedule();
 
-            sync::irq_lock_guard pi_guard(m_pi_lock);
+            sync::irq_lock_guard _(m_pi_lock);
             if (m_owner == self) {
                 arch::s390x::cpu::irq::irq_restore(flags);
                 return;

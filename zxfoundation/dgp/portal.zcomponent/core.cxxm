@@ -31,6 +31,17 @@ namespace zxfoundation::dgp::portal {
         zxfoundation::memory::vm::vm_region* backing
     ) noexcept -> std::expected<u32, lib::kernel_error>;
 
+    /// @brief Outcome of portal fault resolution (RC-06.2/06.4).
+    enum class fault_outcome : u8 { resolved, revoked, stale };
+
+    /// @brief Resolve an AR-mode fault through a live portal (§6.3).
+    /// @param[in] accessor_domain  Faulting (holding) domain id.
+    /// @return Disposition plus the live portal id (0 when stale).
+    [[nodiscard]] auto resolve_fault(
+        u32 accessor_domain, u8 ar_num, u32 alet,
+        u64 fault_va, bool is_write
+    ) noexcept -> std::pair<fault_outcome, u32>;
+
     [[nodiscard]] auto portal_find(u32 id) noexcept -> portal_desc*;
 
     /// @brief Destroy the portal identified by @p id.
@@ -44,9 +55,6 @@ namespace zxfoundation::dgp::portal {
     auto destroy_for_domain(u32 domain_id) noexcept -> void;
 
     auto register_portal_cap_lookup() noexcept -> void;
-
-    /// @brief Initialize the portal subsystem.
-    auto init() noexcept -> void;
 
     /// @brief Return the number of currently active portals in the system.
     [[nodiscard]] auto portal_count() noexcept -> u32;

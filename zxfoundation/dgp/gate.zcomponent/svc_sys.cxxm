@@ -1,0 +1,536 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/svc_sys.cxxm
+/// @brief System namespace dispatch handler.
+
+export module zxfoundation.dgp.gate.registration:svc_sys;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.svc;
+import zxfoundation.base.types;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sched.core;
+import zxfoundation.sched.policy;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sys.ipc.core;
+import zxfoundation.sys.ipc.types;
+import zxfoundation.sys.service.core;
+import zxfoundation.sys.time.core;
+import zxfoundation.sync.waitqueue.core;
+import zxfoundation.sync.waitqueue.types;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.timer.types;
+import arch.s390x.cpu.clock;
+import zxfoundation.dgp.policy;
+import zxfoundation.dgp.policy.types;
+import zxfoundation.memory.objects;
+import zxfoundation.dgp.cap.types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.uaccess;
+import lib.error;
+import lib.stl;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::dgp::domain::domain_flags;
+
+namespace zxfoundation::dgp::gate::svc_sys::detail {
+    [[nodiscard]] auto current_domain() noexcept -> domain::domain * {
+        auto *lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain::domain *>(lc->get<"current_domain">());
+    }
+
+    auto copy_from_user(void *dst, u64 src, u64 len, domain::domain *d) noexcept -> i32 {
+        return arch::s390x::cpu::uaccess::copy_from_user(
+            dst, src, len, d->root_phys);
+    }
+
+    auto copy_to_user(u64 dst, const void *src, u64 len, domain::domain *d) noexcept -> i32 {
+        return arch::s390x::cpu::uaccess::copy_to_user(dst, src, len, d->root_phys);
+    }
+
+    auto nc_time_yield(u64, u64, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (d) {
+            d->flags = d->flags | domain_flags::need_resched;
+        }
+
+        auto &pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto *self = reinterpret_cast<zxfoundation::dgp::domain::strand *>(pcp.current_strand);
+        if (self && self->on_rq && !zxfoundation::dgp::domain::is_idle_strand(*self)) {
+            zxfoundation::sched::dequeue_strand(self);
+            self->substate = zxfoundation::sched::sched_substate::runnable;
+            zxfoundation::sched::enqueue_strand(self);
+        }
+
+        if (self && self->body) {
+            self->se.vruntime += self->se.slice + self->se.slice;
+        }
+        zxfoundation::sched::schedule();
+        return 0;
+    }
+
+    auto nc_time_deadline(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u64 ns_from_now = a0;
+        if (ns_from_now == 0) {
+            zxfoundation::sys::printk::perr("time_deadline: zero deadline");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        const auto mono = zxfoundation::sys::time::monotonic_now();
+        const u64 deadline_ns = mono.nanoseconds_since_epoch() + ns_from_now;
+
+        return deadline_ns;
+    }
+
+    auto nc_time_sleep(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        const u64 ns = a0;
+        if (ns == 0U) return 0;
+
+        auto &pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto *self = reinterpret_cast<zxfoundation::dgp::domain::strand *>(pcp.current_strand);
+        if (!self) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        zxfoundation::sync::waitqueue::wait_head wq{};
+        zxfoundation::sync::waitqueue::wait_entry entry{};
+        entry.node.context = self;
+        entry.node.wake_fn = [](void *opaque) noexcept -> void {
+            auto *s = static_cast<zxfoundation::dgp::domain::strand *>(opaque);
+            if (!s) return;
+            auto *owner = static_cast<zxfoundation::dgp::domain::domain *>(s->owner);
+            if (s->substate != zxfoundation::sched::sched_substate::blocked) {
+                if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+                return;
+            }
+            s->substate = zxfoundation::sched::sched_substate::runnable;
+            zxfoundation::sched::enqueue_strand(s);
+            if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+        };
+
+        struct timeout_ctx {
+            zxfoundation::sync::waitqueue::wait_head *wq;
+            bool fired;
+        };
+        timeout_ctx ctx{&wq, false};
+        zxfoundation::sys::timer::kernel_timer timeout{};
+        timeout.callback = [](void *data) noexcept -> void {
+            auto *c = static_cast<timeout_ctx *>(data);
+            c->fired = true;
+            zxfoundation::sync::waitqueue::wake_up(*c->wq);
+        };
+        timeout.data = &ctx;
+        timeout.deadline_tod = arch::s390x::cpu::clock::stck()
+                               + zxfoundation::sys::time::duration{ns}.to_tod();
+        const auto armed = zxfoundation::sys::timer::timer_add(timeout);
+        if (!armed) return svc::fail(armed.error());
+
+        for (;;) {
+            self->substate = zxfoundation::sched::sched_substate::blocked;
+            if (zxfoundation::sync::waitqueue::prepare_to_wait_event(
+                wq, entry, zxfoundation::sync::waitqueue::wait_flags::none,
+                [&ctx]() noexcept -> bool { return ctx.fired; }))
+                break;
+            zxfoundation::sched::schedule();
+        }
+        self->substate = zxfoundation::sched::sched_substate::running;
+        if (!ctx.fired)
+            discard_value zxfoundation::sys::timer::timer_cancel(timeout);
+        zxfoundation::sync::waitqueue::finish_wait(wq, entry);
+        return 0;
+    }
+
+    auto nc_time_now(u64, u64, u64, u64, u64) noexcept -> u64 {
+        return zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
+    }
+
+    auto nc_console_write(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        const u64 user_buf = a0;
+        const u64 user_len = a1;
+
+        if (user_len == 0 || user_len > 256) {
+            zxfoundation::sys::printk::perr("console_write: bad len={}", user_len);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto *d = current_domain();
+        if (!d) [[unlikely]] {
+            zxfoundation::sys::printk::perr("console_write: no current domain");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        }
+
+        char kbuf[256]{};
+        if (copy_from_user(kbuf, user_buf, user_len, d) != 0) {
+            zxfoundation::sys::printk::perr(
+                "console_write: copy_from_user failed buf={:#x} len={} root={:#x}",
+                user_buf, user_len, d->root_phys);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        zxfoundation::sys::printk::pinfo("console_write: {}",
+                                         std::string_view{kbuf, static_cast<usize>(user_len)});
+
+        return 0;
+    }
+
+    auto nc_service_register(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::service;
+
+        auto *d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const zxfoundation::dgp::cap::cap_token token{a0};
+        const u64 name_user_ptr = a1;
+
+        if (name_user_ptr == 0) {
+            zxfoundation::sys::printk::perr("register_service: null name");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        char name_buf[64]{};
+        if (copy_from_user(name_buf, name_user_ptr, 63, d) != 0) {
+            zxfoundation::sys::printk::perr("register_service: copy_from_user failed");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        name_buf[63] = '\0';
+
+        auto result = register_service(name_buf, token, a2, d->ko.id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("register_service: failed for \"{}\"", name_buf);
+            return svc::fail(result.error());
+        }
+
+        return static_cast<u64>(*result);
+    }
+
+    auto nc_service_lookup(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::service;
+
+        auto *d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u64 name_user_ptr = a0;
+
+        if (name_user_ptr == 0) {
+            zxfoundation::sys::printk::perr("lookup_service: null name");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        char name_buf[64]{};
+        if (copy_from_user(name_buf, name_user_ptr, 63, d) != 0) {
+            zxfoundation::sys::printk::perr("lookup_service: copy_from_user failed");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        name_buf[63] = '\0';
+
+        auto result = lookup_service(name_buf, d->ko.id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("lookup_service: \"{}\" not found", name_buf);
+            return svc::fail(result.error());
+        }
+
+        return *result;
+    }
+
+    auto nc_service_unregister(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::sys::service;
+
+        auto *d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const auto service_id = static_cast<u32>(a0);
+
+        auto result = unregister_service(service_id, d->ko.id);
+        if (!result) {
+            zxfoundation::sys::printk::perr("unregister_service: id={} failed", service_id);
+            return svc::fail(result.error());
+        }
+
+        return 0;
+    }
+
+    auto nc_ipc_endpoint_create(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto result = zxfoundation::sys::ipc::endpoint_create(*d, static_cast<u32>(a0));
+        return result ? static_cast<u64>(*result) : svc::fail(result.error());
+    }
+
+    auto nc_ipc_endpoint_destroy(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto result = zxfoundation::sys::ipc::endpoint_destroy(*d, static_cast<u32>(a0));
+        return result ? 0U : svc::fail(result.error());
+    }
+
+    auto nc_ipc_send(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d || !a1) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        zxfoundation::sys::ipc::user_message_request request{};
+        if (copy_from_user(&request, a1, sizeof(request), d) != 0 ||
+            request.length > zxfoundation::sys::ipc::IPC_MESSAGE_BYTES ||
+            request.capability_count > zxfoundation::sys::ipc::IPC_MESSAGE_CAPS ||
+            request.grant_count > zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS)
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        u8 payload[zxfoundation::sys::ipc::IPC_MESSAGE_BYTES]{};
+        zxfoundation::dgp::cap::cap_token caps[zxfoundation::sys::ipc::IPC_MESSAGE_CAPS]{};
+        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS]{};
+        if (request.length && (!request.payload ||
+                               copy_from_user(payload, request.payload, request.length, d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        if (request.capability_count && (!request.capabilities ||
+                                         copy_from_user(caps, request.capabilities,
+                                                        request.capability_count * sizeof(caps[0]), d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        if (request.grant_count && (!request.grants ||
+                                    copy_from_user(grants, request.grants,
+                                                   request.grant_count * sizeof(grants[0]), d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        auto result = zxfoundation::sys::ipc::message_send(*d, static_cast<u32>(a0), payload, request.length,
+                                                           caps, request.capability_count, grants, request.grant_count);
+        return result ? 0U : svc::fail(result.error());
+    }
+
+    auto nc_ipc_receive(u64 a0, u64 a1, u64 a2, u64 a3, u64) noexcept -> u64 {
+        // a3 = flags per §7.4: bit0 POLL, bit1 BLOCK.
+        const bool block_mode = (a3 & 0x2ULL) != 0ULL;
+        auto *d = current_domain();
+        if (!d || !a1) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        u8 payload[zxfoundation::sys::ipc::IPC_MESSAGE_BYTES]{};
+        zxfoundation::dgp::cap::cap_token caps[zxfoundation::sys::ipc::IPC_MESSAGE_CAPS]{};
+        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS]{};
+        u32 length = zxfoundation::sys::ipc::IPC_MESSAGE_BYTES;
+        u32 cap_count = 0;
+        u32 grant_count = 0;
+        u64 correlation = 0;
+        zxfoundation::sys::ipc::user_message_result requested{};
+        if (!a2) {
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::unknown));
+        }
+        if (copy_from_user(&requested, a2, sizeof(requested), d) != 0)
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        cap_count = requested.capability_count;
+        grant_count = requested.grant_count;
+        if (cap_count > zxfoundation::sys::ipc::IPC_MESSAGE_CAPS ||
+            grant_count > zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS)
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        auto result = zxfoundation::sys::ipc::message_receive(*d, static_cast<u32>(a0), payload,
+                                                              zxfoundation::sys::ipc::IPC_MESSAGE_BYTES, length, caps,
+                                                              cap_count, grants, grant_count,
+                                                              correlation,
+                                                              block_mode
+                                                                  ? zxfoundation::sys::ipc::receive_mode::block
+                                                                  : zxfoundation::sys::ipc::receive_mode::poll);
+        if (!result) return svc::fail(result.error());
+        if (copy_to_user(a1, payload, length, d) != 0)
+            return svc::fail(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        if (cap_count && (!requested.capabilities || copy_to_user(
+                              requested.capabilities, caps,
+                              cap_count * sizeof(caps[0]), d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        if (grant_count && (!requested.grants || copy_to_user(
+                                requested.grants, grants,
+                                grant_count * sizeof(grants[0]), d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        requested.payload = a1;
+        requested.length = length;
+        requested.capability_count = static_cast<u16>(cap_count);
+        requested.grant_count = static_cast<u16>(grant_count);
+        if (copy_to_user(a2, &requested, sizeof(requested), d) != 0)
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        return (correlation << 32) | static_cast<u64>(length);
+    }
+
+    auto nc_ipc_reply(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto result = zxfoundation::sys::ipc::message_reply(*d,
+                                                            static_cast<u32>(a0), a1, a2);
+        return result ? 0U : svc::fail(result.error());
+    }
+
+    auto nc_ipc_call(u64 a0, u64 a1, u64 a2, u64 a3, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d || !a1) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        const u64 correlation = a2;
+        if (correlation == 0ULL) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+
+        zxfoundation::sys::ipc::user_message_request request{};
+        if (copy_from_user(&request, a1, sizeof(request), d) != 0 ||
+            request.length > zxfoundation::sys::ipc::IPC_MESSAGE_BYTES ||
+            request.capability_count > zxfoundation::sys::ipc::IPC_MESSAGE_CAPS ||
+            request.grant_count > zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS)
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        u8 payload[zxfoundation::sys::ipc::IPC_MESSAGE_BYTES]{};
+        zxfoundation::dgp::cap::cap_token caps[zxfoundation::sys::ipc::IPC_MESSAGE_CAPS]{};
+        zxfoundation::memory::objects::memory_object_ref grants[zxfoundation::sys::ipc::IPC_MESSAGE_GRANTS]{};
+        if (request.length && (!request.payload ||
+                               copy_from_user(payload, request.payload, request.length, d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        if (request.capability_count && (!request.capabilities ||
+                                         copy_from_user(caps, request.capabilities,
+                                                        request.capability_count * sizeof(caps[0]), d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        if (request.grant_count && (!request.grants ||
+                                    copy_from_user(grants, request.grants,
+                                                   request.grant_count * sizeof(grants[0]), d) != 0))
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+
+        auto sent = zxfoundation::sys::ipc::message_send(*d, static_cast<u32>(a0),
+                                                         payload, request.length, caps, request.capability_count,
+                                                         grants, request.grant_count, correlation);
+        if (!sent) return svc::fail(sent.error());
+
+        u64 status = 0;
+        auto done = zxfoundation::sys::ipc::message_call_wait(*d,
+                                                              static_cast<u32>(a0), correlation, a3, status);
+        if (!done) return svc::fail(done.error());
+        return status;
+    }
+
+    /// RC-07.5: restore the context saved at signal-trampoline delivery.
+    /// handle() performs the actual frame restore from the strand body.
+    /// @param a0  Optional AR number (1-15) whose restored ALET the handler
+    ///            replaces — the recovery-routine stacked-state edit (§6.3:
+    ///            a fault handler that rebinds a revoked portal must fix the
+    ///            interrupted context's AR or the architectural retry uses
+    ///            the dead ALET).  0 keeps every AR as interrupted.
+    /// @param a1  Replacement ALET for @p a0.
+    auto nc_signal_return(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        if (a0 != 0U) {
+            if (a0 > 15U)
+                return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+            auto *self = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
+                pcp.current_strand);
+            if (self && self->body && self->body->signal_saved_psw_addr != 0ULL) {
+                self->body->signal_saved_ars[a0] = static_cast<u32>(a1);
+            }
+        }
+        return 0xFFFF'FFFF'FFFF'FFF1ULL; // marker: handle() restores
+    }
+
+    auto nc_shm_export(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto result = zxfoundation::sys::ipc::shm_export(*d, a0, a1, static_cast<u32>(a2));
+        return result ? result->raw : svc::fail(result.error());
+    }
+
+    auto nc_shm_import(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto result = zxfoundation::sys::ipc::shm_import(*d,
+                                                         zxfoundation::dgp::cap::cap_token{a0}, a1, a2);
+        // The portal id is part of the return: user space needs it to
+        // DESTROY the binding (BUG-059 — an unreleasable resource).
+        return result
+            ? (static_cast<u64>(result->portal_id) << 32U)
+                | static_cast<u64>(result->ar_num)
+            : svc::fail(result.error());
+    }
+
+    auto nc_shm_map(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        return nc_shm_import(a0, a1, a2, 0, 0);
+    }
+
+    auto nc_policy_register(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto result = zxfoundation::dgp::policy::register_server(
+            *d,
+            static_cast<zxfoundation::dgp::policy::server_kind>(a0),
+            static_cast<u32>(a1));
+        return result ? static_cast<u64>(*result) : svc::fail(result.error());
+    }
+
+    auto nc_policy_unregister(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto *d = current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto result = zxfoundation::dgp::policy::unregister_server(
+            *d,
+            static_cast<zxfoundation::dgp::policy::server_kind>(a0));
+        return result ? 0U : svc::fail(result.error());
+    }
+
+    auto nc_last_error(u64, u64, u64, u64, u64) noexcept -> u64 {
+        auto *s = reinterpret_cast<zxfoundation::dgp::domain::strand *>(
+            arch::s390x::cpu::percpu::this_cpu().current_strand);
+        if (!s || !s->body) [[unlikely]] {
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        }
+        const auto err = s->body->last_error;
+        return (static_cast<u64>(err.category) << 32) | err.code;
+    }
+} // namespace zxfoundation::dgp::gate::svc_sys::detail
+
+export {
+
+namespace zxfoundation::dgp::gate::svc_sys {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::dgp::gate::sys_op;
+
+        switch (static_cast<sys_op>(op)) {
+            case sys_op::time_yield:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_time_yield(a0, a1, a2, a3, a4);
+            case sys_op::time_deadline:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_time_deadline(a0, a1, a2, a3, a4);
+            case sys_op::time_sleep:
+                return detail::nc_time_sleep(a0, a1, a2, a3, a4);
+            case sys_op::time_now:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_time_now(a0, a1, a2, a3, a4);
+            case sys_op::console_write:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_console_write(a0, a1, a2, a3, a4);
+            case sys_op::register_service:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_service_register(a0, a1, a2, a3, a4);
+            case sys_op::lookup_service:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_service_lookup(a0, a1, a2, a3, a4);
+            case sys_op::unregister_service:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_service_unregister(a0, a1, a2, a3, a4);
+            case sys_op::ipc_endpoint_create:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_ipc_endpoint_create(a0, a1, a2, a3, a4);
+            case sys_op::ipc_endpoint_destroy:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_ipc_endpoint_destroy(a0, a1, a2, a3, a4);
+            case sys_op::ipc_send:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_ipc_send(a0, a1, a2, a3, a4);
+            case sys_op::ipc_receive:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_ipc_receive(a0, a1, a2, a3, a4);
+            case sys_op::ipc_reply:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_ipc_reply(a0, a1, a2, a3, a4);
+            case sys_op::ipc_call:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_ipc_call(a0, a1, a2, a3, a4);
+            case sys_op::signal_return:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_signal_return(a0, a1, a2, a3, a4);
+            case sys_op::shm_export:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_shm_export(a0, a1, a2, a3, a4);
+            case sys_op::shm_import:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_shm_import(a0, a1, a2, a3, a4);
+            case sys_op::shm_map:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_shm_map(a0, a1, a2, a3, a4);
+            case sys_op::policy_register:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_policy_register(a0, a1, a2, a3, a4);
+            case sys_op::policy_unregister:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_policy_unregister(a0, a1, a2, a3, a4);
+            case sys_op::last_error:
+                return zxfoundation::dgp::gate::svc_sys::detail::nc_last_error(a0, a1, a2, a3, a4);
+            default:
+                zxfoundation::sys::printk::perr("svc_sys::dispatch: unknown op {}", op);
+                return svc::fail(lib::kernel_error::from_generic(lib::generic_error::unknown));
+        }
+    }
+
+    template<sys_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
+    }
+
+} // namespace zxfoundation::dgp::gate::svc_sys
+
+} // end export

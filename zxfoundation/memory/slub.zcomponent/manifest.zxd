@@ -4,5 +4,6 @@
     core.cxxm
     core.cxx
     kmalloc.cxxm
+    kmalloc.cxx
     typed.cxxm
 }

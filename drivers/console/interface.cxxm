@@ -1,2 +1,3 @@
+/// @file drivers/console/interface.cxxm
 export module drivers.console;
 export import drivers.console.diag;

@@ -1,3 +1,4 @@
+/// @file zxfoundation/sched/rt.zcomponent/interface.cxxm
 export module zxfoundation.sched.rt;
 export import zxfoundation.sched.rt.core;
 export import zxfoundation.sched.rt.bandwidth;

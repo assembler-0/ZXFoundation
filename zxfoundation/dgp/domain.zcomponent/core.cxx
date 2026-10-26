@@ -37,12 +37,17 @@ import zxfoundation.sys.ipc.core;
 import zxfoundation.sys.service.core;
 import zxfoundation.sched.policy;
 import zxfoundation.sched.core;
+import zxfoundation.sched.strandctx.core;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.mmu.core;
 import arch.s390x.mmu.types;
 import arch.s390x.mmu.consts;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.aste;
+import arch.s390x.cpu.pcss.core;
+import arch.s390x.cpu.types;
 import lib.error;
 import lib.list;
 import lib.format;
@@ -50,13 +55,17 @@ import lib.cstring;
 import lib.container_of;
 import lib.stl;
 
+#define __zxmacro_want_zinit
+#include macro_extensions
+
 namespace zxfoundation::dgp::domain::detail {
 
     /// @brief The global domain table — SCOMS scoms_table.
     declscope(C) scoms::scoms_table<domain, MAX_DOMAINS> g_domain_table;
 
-    /// @brief Kernel stack size per domain: 4 pages = 16 KiB.
-    no_export constexpr u32 DOMAIN_KERNEL_STACK_SIZE  = 4 * 4096;
+    /// @brief Kernel stack size per domain.
+    no_export constexpr u32 DOMAIN_KERNEL_STACK_SIZE =
+        arch::s390x::cpu::processor::STACK_SIZE;
 
     /// @brief Buddy order for kernel stack allocation: 2^2 = 4 pages.
     no_export constexpr u32 DOMAIN_KERNEL_STACK_ORDER = 2;
@@ -79,7 +88,7 @@ namespace zxfoundation::dgp::domain::detail {
 
     [[nodiscard]] auto claim_domain_destroy(domain& d) noexcept
         -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{d.ko.lock};
+        const sync::irq_lock_guard _{d.ko.lock};
         if (d.ko.state != base::lifecycle_state::active
             || d.teardown_phase != dgp::sync_contract::teardown_phase::none
             || !d.ko.transition(base::lifecycle_state::dying)) {
@@ -93,7 +102,7 @@ namespace zxfoundation::dgp::domain::detail {
         dgp::sync_contract::teardown_phase expected,
         dgp::sync_contract::teardown_phase requested
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{d.ko.lock};
+        const sync::irq_lock_guard _{d.ko.lock};
         return dgp::sync_contract::advance_teardown_phase(
             d.teardown_phase, expected, requested);
     }
@@ -144,14 +153,19 @@ namespace zxfoundation::dgp::domain::detail {
         s.substate = sched::sched_substate::idle;
         s.cpu   = cpu;
         s.on_rq = false;
+        s.flags = strand_flags::none;
+        s.sched_policy = sched::sched_policy{};
+        s.sched_admission = {};
 
         // Allocate strand body (cold fields: uregs, strand_list, kstack_base, rt/dl accounting).
-        const auto body_result = memory::kmalloc::kmalloc_t<strand_body>();
+        auto* const body_result = memory::kmalloc::kmalloc_t<strand_body>();
         if (!body_result) {
             discard_value g_strand_table.release(s.ko.id);
             return std::unexpected(
                 lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
         }
+        ::new(static_cast<void*>(body_result)) strand_body{};
+        body_result->self = &s;
         s.body = body_result;
 
         // Allocate kernel stack.
@@ -171,6 +185,18 @@ namespace zxfoundation::dgp::domain::detail {
         s.body->kstack_base = stack_virt;
         s.kstack_top  = stack_virt + DOMAIN_KERNEL_STACK_SIZE;
         s.ksp         = s.kstack_top;
+
+        auto linkage_result = arch::s390x::cpu::pcss::stack_init(
+            s.body->linkage_stack);
+        if (!linkage_result) {
+            pmm::folio_active stack_folio{
+                stack_phys, DOMAIN_KERNEL_STACK_ORDER,
+                pmm::purpose::stack, pmm::zone::dma31};
+            pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
+            memory::kmalloc::kfree_t(s.body);
+            discard_value g_strand_table.release(s.ko.id);
+            return std::unexpected(linkage_result.error());
+        }
 
         discard_value static_cast<
             scoms::kobject::robject<strand, base::lifecycle_state::embryo>&&
@@ -212,6 +238,8 @@ namespace zxfoundation::dgp::domain::detail {
                 pmm::purpose::stack, pmm::zone::dma31};
             pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
         }
+
+        arch::s390x::cpu::pcss::stack_release(s.body->linkage_stack);
 
         memory::kmalloc::kfree_t(s.body);
 
@@ -317,6 +345,7 @@ namespace zxfoundation::dgp::domain::detail {
         u64  m_stack_phys{0};
         zxfoundation::dgp::isolation::isolation_domain_state m_dgp_state{};
         domain* m_raw_domain{nullptr};
+        strand_body* m_body{nullptr};
 
         bool m_has_slot{false};
         bool m_has_skey{false};
@@ -331,6 +360,20 @@ namespace zxfoundation::dgp::domain::detail {
             namespace pmm  = zxfoundation::memory::pmm;
             namespace mmu  = arch::s390x::mmu;
 
+            if (m_has_address_space) {
+                discard_value zxfoundation::memory::objects::memory_object_destroy(
+                    m_address_space_id);
+            }
+
+            if (m_body != nullptr) {
+                memory::kmalloc::kfree_t<strand_body>(m_body);
+                m_body = nullptr;
+            }
+
+            if (m_has_art && m_raw_domain) {
+                arch::s390x::cpu::aste::art_context_destroy(m_raw_domain->art);
+            }
+
             if (m_has_stack && m_stack_phys != 0) {
                 pmm::folio_active stack_folio{
                     m_stack_phys, DOMAIN_KERNEL_STACK_ORDER,
@@ -341,10 +384,6 @@ namespace zxfoundation::dgp::domain::detail {
             if (m_has_root && m_root_phys != 0) {
                 mmu::dat_table<mmu::dat_level::region_1> root_tbl{m_root_phys};
                 mmu::table_free<mmu::dat_level::region_1>(root_tbl);
-            }
-
-            if (m_has_art && m_raw_domain) {
-                arch::s390x::cpu::aste::art_context_destroy(m_raw_domain->art);
             }
 
             if (m_has_skey) {
@@ -358,10 +397,6 @@ namespace zxfoundation::dgp::domain::detail {
                 );
             }
 
-            if (m_has_address_space) {
-                discard_value zxfoundation::memory::objects::memory_object_destroy(
-                    m_address_space_id);
-            }
             if (m_has_slot) {
                 discard_value detail::g_domain_table.release(m_slot);
             }
@@ -455,14 +490,29 @@ namespace zxfoundation::dgp::domain::detail {
 
                 sealed_ref->asce = asce;
 
-                auto body_result = memory::kmalloc::kmalloc_t<strand_body>();
+                auto pste_idx = arch::s390x::cpu::aste::aste_alloc(asce.val, 0U);
+                if (!pste_idx) return std::unexpected(pste_idx.error());
+                auto* pste = arch::s390x::cpu::aste::aste_find(*pste_idx);
+                if (!pste) return std::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::internal_error));
+                auto tables_result = arch::s390x::cpu::pcss::tables_init(*pste, d->pc_tables);
+                if (!tables_result) return std::unexpected(tables_result.error());
+                d->pc_tables.aste_phys = arch::s390x::cpu::aste::aste_origin(*pste_idx);
+                d->pc_asn = *pste_idx;
+
+                auto* const body_result = memory::kmalloc::kmalloc_t<strand_body>();
                 if (!body_result) {
-                    discard_value detail::g_domain_table.release(m_slot);
                     return std::unexpected(
                         lib::kernel_error::from_memory(lib::memory_error::out_of_memory));
                 }
+                ::new(static_cast<void*>(body_result)) strand_body{};
+                m_body = body_result;
                 sealed_ref->primary_strand.body = body_result;
+                body_result->self = &sealed_ref->primary_strand;
                 sealed_ref->primary_strand.body->kstack_base  = hhdm::phys_to_virt(m_stack_phys);
+                auto stack_result = arch::s390x::cpu::pcss::stack_init(
+                    sealed_ref->primary_strand.body->linkage_stack);
+                if (!stack_result) return std::unexpected(stack_result.error());
                 sealed_ref->primary_strand.kstack_top   = sealed_ref->primary_strand.body->kstack_base + DOMAIN_KERNEL_STACK_SIZE;
                 sealed_ref->primary_strand.ksp          = sealed_ref->primary_strand.kstack_top;
                 sealed_ref->primary_strand.on_rq        = false;
@@ -472,6 +522,8 @@ namespace zxfoundation::dgp::domain::detail {
                 sealed_ref->portal_count = 0;
 
                 ::new(static_cast<void*>(&sealed_ref->strands)) lib::list_head{};
+                ::new(static_cast<void*>(&sealed_ref->gate_defer))
+                    zxfoundation::dgp::domain::defer_queue{};
                 zxfoundation::memory::vm::vm_space_init(sealed_ref->vm_space);
                 sealed_ref->vm_space.owner_domain = sealed_ref->ko.id;
                 sealed_ref->vm_space.owner_object = &sealed_ref->ko;
@@ -489,7 +541,7 @@ namespace zxfoundation::dgp::domain::detail {
                     *g_nucleus.ptr, *active_ref,
                     zxfoundation::dgp::operation_kind::address_space_create,
                     zxfoundation::dgp::authorization_metadata{
-                        .requested_rights = zxfoundation::dgp::isolation::isolation_rights::lifecycle,
+                        .requested_rights = ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy ),
                     });
                 if (!as_auth) return std::unexpected(as_auth.error());
                 auto as_object_result = zxfoundation::memory::objects::memory_object_create(
@@ -498,18 +550,16 @@ namespace zxfoundation::dgp::domain::detail {
                     &active_ref->ko,
                     0,
                     0,
-                    zxfoundation::dgp::isolation::isolation_rights::map);
+                    ::zxfoundation::dgp::right::map);
                 if (!as_object_result)
                     return std::unexpected(as_object_result.error());
-                if (!as_auth->consume()) {
-                    discard_value zxfoundation::memory::objects::memory_object_destroy(
-                        (*as_object_result)->ko.id);
-                    return std::unexpected(lib::kernel_error::from_generic(
-                        lib::generic_error::invalid_arg));
-                }
                 active_ref->vm_space.address_space_object = &(*as_object_result)->ko;
                 m_address_space_id = (*as_object_result)->ko.id;
                 m_has_address_space = true;
+                if (!as_auth->consume()) {
+                    return std::unexpected(lib::kernel_error::from_generic(
+                        lib::generic_error::invalid_arg));
+                }
                 active_ref->vm_space.storage_key = active_ref->storage_key;
                 active_ref->vm_space.storage_key_generation =
                     active_ref->storage_key_generation;
@@ -519,13 +569,11 @@ namespace zxfoundation::dgp::domain::detail {
             }
 
             commit();
-            m_has_address_space = false;
-            m_has_art = false;
             return m_raw_domain;
         }
     };
 
-} // namespace zxfoundation::dgp::domain
+} // namespace zxfoundation::dgp::domain::detail
 
 namespace zxfoundation::dgp::domain {
 
@@ -533,9 +581,7 @@ namespace zxfoundation::dgp::domain {
 
     /// @brief Initialize the strand SCOMS table.
     auto strand_init() noexcept -> void {
-                g_strand_table.init(scoms::kobject::kobject_type::strand);
-        sys::printk::pinfo("domain: strand SCOMS table initialized ({} slots)",
-            lib::format::dec{static_cast<u64>(MAX_SECONDARY_STRAND_IDS)});
+        g_strand_table.init(scoms::kobject::kobject_type::strand);
     }
 
     /// @brief Allocate a per-CPU idle strand from the SCOMS strand table.
@@ -552,17 +598,24 @@ namespace zxfoundation::dgp::domain {
     /// @return Success or kernel_error.
     [[nodiscard]] auto idle_strand_destroy(strand& s) noexcept
         -> std::expected<void, lib::kernel_error> {
-                return idle_strand_destroy_impl(s);
+        return idle_strand_destroy_impl(s);
     }
 
     /// @brief Create a secondary strand within a domain.
     /// @param owner Domain that will own the strand.
     /// @param cpu   CPU affinity (0 for any, or specific CPU).
     /// @return Pointer to the created strand, or kernel_error.
+    [[nodiscard]] auto strand_find(domain& owner, u32 id) noexcept -> strand* {
+        if (id == 0U) return &owner.primary_strand;
+        auto* s = detail::g_strand_table.find_raw(id);
+        if (!s || s->owner != &owner) return nullptr;
+        return s;
+    }
+
     [[nodiscard]] auto strand_create(
         domain* owner, u16 cpu
     ) noexcept -> std::expected<strand*, lib::kernel_error> {
-                if (!owner) return std::unexpected(
+        if (!owner) return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         return strand_create_impl(owner, cpu);
     }
@@ -606,6 +659,25 @@ namespace zxfoundation::dgp::domain {
         }
 
         return result;
+    }
+
+    /// @brief Reclaim the kernel stack of an exited, parked strand.
+    /// @param[in] s  Strand flagged dead and switched away for the last time.
+    auto release_dead_strand_stack(strand& s) noexcept -> void {
+        namespace pmm  = zxfoundation::memory::pmm;
+        namespace hhdm = zxfoundation::memory::hhdm;
+
+        if (s.ko.id == scoms::kobject::KOBJECT_ID_INVALID) return;
+        if ((s.flags & strand_flags::dead) == strand_flags::none) return;
+        if (s.substate != sched::sched_substate::blocked) return;
+        if (!s.body || s.body->kstack_base == 0U) return;
+        const u64 stack_phys = hhdm::virt_to_phys(s.body->kstack_base);
+        pmm::folio_active stack_folio{
+            stack_phys, DOMAIN_KERNEL_STACK_ORDER,
+            pmm::purpose::stack, pmm::zone::dma31};
+        pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
+        s.body->kstack_base = 0U;
+        sys::printk::pverbose("strand: stack reclaimed id={}", s.ko.id);
     }
 
     /// @brief Destroy a domain and release all its resources.
@@ -715,10 +787,6 @@ namespace zxfoundation::dgp::domain {
 
         arch::s390x::cpu::aste::art_context_destroy(d->art);
 
-        // Signal storage key revocation to the domain before teardown.
-        zxfoundation::dgp::signal::signal_enqueue(
-            *d, zxfoundation::dgp::signal::signal_kind::fault, 0xDEADBEEF);
-
         // Free kernel stack.
         if (d->primary_strand.kstack_top != 0) {
             const u64 stack_phys = hhdm::virt_to_phys(d->primary_strand.kstack_top - DOMAIN_KERNEL_STACK_SIZE);
@@ -731,29 +799,28 @@ namespace zxfoundation::dgp::domain {
             memory::kmalloc::kfree_t(d->primary_strand.body);
             d->primary_strand.body = nullptr;
         }
+        discard_value scoms::object_core::detach(d->primary_strand.ko);
+        discard_value g_strand_table.release(d->primary_strand.ko.id);
 
-        // Free root page table.
         if (d->root_phys != 0) {
             mmu::dat_table<mmu::dat_level::region_1> root_tbl{d->root_phys};
             mmu::table_free<mmu::dat_level::region_1>(root_tbl);
         }
 
-        // Free secondary strands (kernel stacks + slab objects + bodies).
         while (!d->strands.empty()) {
-            auto* node = d->strands.pop_front();
-            auto* s = lib::container_of<strand_body, lib::list_node, &strand_body::strand_list>(node);
-            auto* strand_ptr = reinterpret_cast<strand*>(
-                reinterpret_cast<u8*>(s) - __builtin_offsetof(strand, body));
-            if (s->kstack_base != 0) {
-                const u64 stack_phys = hhdm::virt_to_phys(s->kstack_base);
-                pmm::folio_active stack_folio{
-                    stack_phys, DOMAIN_KERNEL_STACK_ORDER,
-                    pmm::purpose::stack, pmm::zone::dma31};
-                pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
-            }
-            discard_value scoms::object_core::detach(strand_ptr->ko);
-            memory::kmalloc::kfree_t(s);
-            discard_value g_strand_table.release(strand_ptr->ko.id);
+                auto* node = d->strands.pop_front();
+                auto* s = lib::container_of<strand_body, lib::list_node, &strand_body::strand_list>(node);
+                auto* strand_ptr = s->self;
+                if (s->kstack_base != 0) {
+                    const u64 stack_phys = hhdm::virt_to_phys(s->kstack_base);
+                    pmm::folio_active stack_folio{
+                        stack_phys, DOMAIN_KERNEL_STACK_ORDER,
+                        pmm::purpose::stack, pmm::zone::dma31};
+                    pmm::free(static_cast<pmm::folio_active&&>(stack_folio));
+                }
+                discard_value scoms::object_core::detach(strand_ptr->ko);
+                memory::kmalloc::kfree_t(s);
+                discard_value g_strand_table.release(strand_ptr->ko.id);
         }
 
         auto isolation_destroy_result = zxfoundation::dgp::isolation::destroy_domain(
@@ -823,7 +890,7 @@ namespace zxfoundation::dgp::domain {
 
     /// @brief Return the current number of live domains.
     [[nodiscard]] auto domain_count() noexcept -> u32 {
-                return detail::g_domain_table.count();
+        return detail::g_domain_table.count();
     }
 
     auto register_domain_cap_lookup() noexcept -> void {
@@ -833,17 +900,6 @@ namespace zxfoundation::dgp::domain {
                 auto* d = domain_find(static_cast<domain_id>(obj_id));
                 return d ? &d->ko : nullptr;
             });
-    }
-
-    /// @brief Initialize the domain subsystem.
-    auto domain_init() noexcept -> void {
-        
-        detail::g_domain_table.init(scoms::kobject::kobject_type::domain);
-
-        register_domain_cap_lookup();
-
-        sys::printk::pinfo("domain: subsystem initialized, max_domains={}\n",
-                           MAX_DOMAINS);
     }
 
     /// @brief Get the nucleus domain — the kernel's own domain identity.
@@ -872,8 +928,6 @@ namespace zxfoundation::dgp::domain {
 
         auto slot_r = detail::g_domain_table.alloc_at(0);
         if (!slot_r) {
-            sys::printk::pcrit("domain: nucleus slot 0 already occupied — "
-                              "boot-order violation\n");
             return std::unexpected(slot_r.error());
         }
 
@@ -894,7 +948,7 @@ namespace zxfoundation::dgp::domain {
         d->revocation_epoch.store(0U, std::memory_order::relaxed);
         d->teardown_phase            = zxfoundation::dgp::sync_contract::teardown_phase::none;
         d->numa_node                = 0U;
-        d->granted_rights           = zxfoundation::dgp::isolation::isolation_rights::all;
+        d->granted_rights           = ::zxfoundation::dgp::right::all;
 
         u64 cr1{0};
         arch::s390x::cpu::ctlreg::crread<1U, 1U>(cr1);
@@ -906,10 +960,23 @@ namespace zxfoundation::dgp::domain {
 
         d->asce = arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1>{cr1};
         d->root_phys = cr1 & mmu::ASCE_ORIGIN_MASK;
+        zxfoundation::memory::vm::vm_space_init(d->vm_space);
         d->vm_space.asce_val = d->asce.raw();
         auto art_result = arch::s390x::cpu::aste::art_context_init(d->art);
         if (!art_result) return std::unexpected(art_result.error());
+        {
+            auto pste_idx = arch::s390x::cpu::aste::aste_alloc(d->asce.val, 0U);
+            if (!pste_idx) return std::unexpected(pste_idx.error());
+            auto* pste = arch::s390x::cpu::aste::aste_find(*pste_idx);
+            if (!pste) return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::internal_error));
+            auto tables_result = arch::s390x::cpu::pcss::tables_init(*pste, d->pc_tables);
+            if (!tables_result) return std::unexpected(tables_result.error());
+            d->pc_asn = *pste_idx;
+            d->pc_tables.aste_phys = arch::s390x::cpu::aste::aste_origin(*pste_idx);
+        }
 
+        ::new(static_cast<void*>(&d->gate_defer)) zxfoundation::dgp::domain::defer_queue{};
         d->primary_strand.kstack_top = 0U;
         d->primary_strand.ksp        = 0U;
         d->primary_strand.on_rq      = false;
@@ -935,6 +1002,36 @@ namespace zxfoundation::dgp::domain {
         }
 
         return {};
+    }
+
+    /// @brief Initialize the domain subsystem.
+    auto zi_domain_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
+        detail::g_domain_table.init(scoms::kobject::kobject_type::domain);
+        register_domain_cap_lookup();
+        strand_init();
+        return domain_init_nucleus();
+    }
+    __zinit__(dgp, p00, zi_domain_init, fatal)
+
+    auto strand_note_interrupt_context(bool problem_state) noexcept -> void {
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* s = reinterpret_cast<strand*>(pcp.current_strand);
+        if (s == nullptr || s->body == nullptr || s->owner == nullptr) {
+            return;
+        }
+        u64 pasn = 0;
+        arch::s390x::cpu::ctlreg::crread<4, 4>(pasn);
+        const auto* owner = static_cast<const domain*>(s->owner);
+        const u16 owner_asn = static_cast<u16>(owner->pc_asn);
+        const bool mid_pc = (problem_state && owner_asn != 0U
+                             && static_cast<u16>(pasn & 0xFFFFULL) != owner_asn);
+        s->body->in_pc = mid_pc ? 1U : 0U;
+        if (mid_pc) {
+            arch::s390x::cpu::ctlreg::crread<1, 1>(s->body->pc_cr1);
+            arch::s390x::cpu::ctlreg::crread<3, 3>(s->body->pc_cr3);
+            arch::s390x::cpu::ctlreg::crread<4, 4>(s->body->pc_cr4);
+            arch::s390x::cpu::ctlreg::crread<5, 5>(s->body->pc_cr5);
+        }
     }
 
 } // namespace zxfoundation::dgp::domain

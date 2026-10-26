@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lib/ring_buffer.cxxm
 /// @brief Atomic-based lockless ring buffer (SPSC/MPMC capable).
 

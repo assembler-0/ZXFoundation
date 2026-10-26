@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/aste.cxxm
+/// @file arch/s390x/cpu/aste.zcomponent/aste.cxx
 /// @brief ASTE/ALE table manager
 
 module arch.s390x.cpu.aste;
@@ -13,8 +13,12 @@ import zxfoundation.memory.hhdm;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import arch.s390x.cpu.irq;
+import zxfoundation.sys.zinit.core;
 import lib.stl;
 import :common;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 using zxfoundation::memory::pmm::alloc;
 using zxfoundation::memory::pmm::zone;
@@ -28,9 +32,10 @@ namespace arch::s390x::cpu::aste {
 
     /// @brief Physical address of the ASTE table (MAX_ASTE_ENTRIES × 64 bytes).
     no_export u64 g_aste_table_phys{0};
+    u64 g_aft_phys{0};
 
     /// @brief Lock protecting all ASTE/ALE table mutations.
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock g_aste_lock{};
+    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::aste_table> g_aste_lock{};
 
     /// @brief Per-slot occupancy for the ASTE table (true = occupied).
     no_export std::array<bool, MAX_ASTE_ENTRIES> g_aste_used{};
@@ -86,121 +91,7 @@ namespace arch::s390x::cpu::aste {
         return next == 0U ? 1U : next;
     }
 
-} // namespace _internal
-
-
-/// @name struct aste
-/// @{
-namespace arch::s390x::cpu::aste {
-
-    /// @brief Test the I-bit (invalid) in word 0.
-    [[nodiscard]] auto aste::is_invalid() const noexcept -> bool {
-        return (words[0] & (1ULL << 63)) != 0;
-    }
-
-    /// @brief Set or clear the I-bit (invalid) in word 0.
-    auto aste::set_invalid(bool inv) noexcept -> void {
-        constexpr u64 i_mask = 1ULL << 63;
-        if (inv)
-            words[0] |= i_mask;
-        else
-            words[0] &= ~i_mask;
-    }
-
-    /// @brief Return the target address space ASCE (word 1).
-    [[nodiscard]] auto aste::asce() const noexcept -> u64 {
-        return words[1];
-    }
-
-    /// @brief Set the target address space ASCE (word 1).
-    auto aste::set_asce(u64 val) noexcept -> void {
-        words[1] = val;
-    }
-
-    /// @brief Return the Access-List Designation (word 2).
-    [[nodiscard]] auto aste::ald() const noexcept -> u64 {
-        return words[2] >> 32;
-    }
-
-    /// @brief Set the Access-List Designation (word 2).
-    auto aste::set_ald(u64 val) noexcept -> void {
-        words[2] = (words[2] & 0xFFFF'FFFFULL)
-                 | ((val & 0xFFFF'FFFFULL) << 32);
-    }
-
-    /// @brief Return the Authorization Index (AX) from word 0 bits 32–47.
-    [[nodiscard]] auto aste::authorization_index() const noexcept -> u16 {
-        return static_cast<u16>((words[0] >> 16) & 0xFFFFU);
-    }
-
-    /// @brief Set the Authorization Index (AX) in word 0 bits 32–47.
-    auto aste::set_authorization_index(u16 ax) noexcept -> void {
-        words[0] = (words[0] & ~(0xFFFFULL << 16))
-                  | (static_cast<u64>(ax) << 16);
-    }
-
-    /// @brief Return the raw 32-bit Linkage-Table Designation (bytes 24-27).
-    [[nodiscard]] auto aste::ltd_raw() const noexcept -> u32 {
-        return static_cast<u32>(words[3] & 0xFFFFFFFFU);
-    }
-
-    /// @brief Set the raw 32-bit Linkage-Table Designation (bytes 24-27).
-    auto aste::set_ltd_raw(u32 ltd) noexcept -> void {
-        words[3] = (words[3] & ~0xFFFFFFFFULL)
-                  | (static_cast<u64>(ltd) << 0);
-    }
-
-    /// @brief Test the subsystem-linkage control bit (V, LTD bit 0).
-    /// Must be 1 for PC/PT instructions to proceed.
-    [[nodiscard]] auto aste::ltd_valid() const noexcept -> bool {
-        return (ltd_raw() >> 31) & 1U;
-    }
-
-    /// @brief Set or clear the V bit in the LTD.
-    auto aste::set_ltd_valid(bool v) noexcept -> void {
-        u32 ltd = ltd_raw();
-        if (v)
-            ltd |= (1U << 31);
-        else
-            ltd &= ~(1U << 31);
-        set_ltd_raw(ltd);
-    }
-
-    /// @brief Return the linkage-table origin as a 31-bit real address.
-    /// LTD bits 1-24 with 7 zeros appended on the right.
-    [[nodiscard]] auto aste::ltd_origin() const noexcept -> u64 {
-        return static_cast<u64>(ltd_raw() & 0x7FFFFF80U);
-    }
-
-    /// @brief Set the linkage-table origin from a 128-byte-aligned real address.
-    /// @pre @p addr must be 128-byte aligned (low 7 bits zero).
-    auto aste::set_ltd_origin(u64 addr) noexcept -> void {
-        u32 ltd = ltd_raw();
-        // Preserve V (bit 31) and LTL (bits 0-6)
-        ltd = (ltd & 0x8000007FU) | (static_cast<u32>(addr) & 0x7FFFFF80U);
-        set_ltd_raw(ltd);
-    }
-
-    /// @brief Return the linkage-table length (LTL, LTD bits 25-31, 7 bits).
-    /// Actual table length = (LTL + 1) × 128 bytes.
-    [[nodiscard]] auto aste::ltd_length() const noexcept -> u8 {
-        return static_cast<u8>(ltd_raw() & 0x7FU);
-    }
-
-    /// @brief Set the linkage-table length (LTL).
-    auto aste::set_ltd_length(u8 ltl) noexcept -> void {
-        u32 ltd = ltd_raw();
-        ltd = (ltd & ~0x7FU) | (static_cast<u32>(ltl) & 0x7FU);
-        set_ltd_raw(ltd);
-    }
-
-    /// @brief Zero all words.
-    auto aste::clear() noexcept -> void {
-       ::std::fill_n(words, sizeof(words) / sizeof(words[0]), u64{0});
-    }
-
-}
-/// @}
+} // namespace arch::s390x::cpu::aste
 
 /// @name struct ale
 /// @{
@@ -267,7 +158,7 @@ namespace arch::s390x::cpu::aste {
 namespace arch::s390x::cpu::aste {
 
     /// @brief Initialize the ASTE/ALE subsystem.
-    auto aste_subsystem_init() noexcept -> void {
+    auto zi_aste_init(const zxfoundation::sys::zinit::zi_desc&) noexcept -> zxfoundation::sys::zinit::zi_result {
 
         constexpr u64 aste_table_size = MAX_ASTE_ENTRIES * sizeof(aste);
         constexpr u32 aste_pages = pages_for(aste_table_size);
@@ -276,9 +167,14 @@ namespace arch::s390x::cpu::aste {
         auto aste_result = alloc(aste_order, zone::dma31,
                                  purpose::page_table, page_init::zeroed);
         if (!aste_result) {
-            return;
+            return std::unexpected(aste_result.error());
         }
         g_aste_table_phys = aste_result.value().phys_base;
+        auto aft = alloc(0U, zone::dma31, purpose::page_table, page_init::zeroed);
+        if (!aft) return ::std::unexpected(aft.error());
+        g_aft_phys = aft.value().phys_base;
+        *reinterpret_cast<u32*>(phys_to_virt(g_aft_phys)) =
+            static_cast<u32>(g_aste_table_phys & 0x7FFFFFC0ULL);
 
         for (u32 i = 0; i < MAX_ASTE_ENTRIES; ++i) {
             aste_at(i)->set_invalid(true);
@@ -286,7 +182,9 @@ namespace arch::s390x::cpu::aste {
         }
 
         g_initialized = true;
+        return {};
     }
+    __zinit__(core, p60, zi_aste_init, fatal)
 
     [[nodiscard]] auto art_context_init(art_context& context) noexcept
         -> ::std::expected<void, ::lib::kernel_error> {
@@ -314,8 +212,7 @@ namespace arch::s390x::cpu::aste {
         context.ale_table_phys = ales->phys_base;
         auto* duct_words = reinterpret_cast<u32*>(phys_to_virt(context.duct_phys));
         auto* entries = reinterpret_cast<ale*>(phys_to_virt(context.ale_table_phys));
-        // DUALD is the 32-bit ALD at byte 16: ALO is the table origin in
-        // 128-byte units and ALL admits entries 0 through 15.
+        duct_words[0] = static_cast<u32>(g_aste_table_phys & 0x7FFF'FFC0ULL);
         duct_words[4] = static_cast<u32>(context.ale_table_phys & 0x7FFF'FF80ULL) | 1U;
         for (u32 i = 0; i < MAX_ALE_ENTRIES; ++i) {
             entries[i].clear();
@@ -357,7 +254,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
 
-        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_aste_lock};
 
         const u32 idx = find_free_aste();
         if (idx >= MAX_ASTE_ENTRIES)
@@ -368,7 +265,7 @@ namespace arch::s390x::cpu::aste {
         entry->clear();
         entry->set_asce(target_asce);
         entry->set_authorization_index(auth_index);
-        entry->words[2] = 1U; // ASTESN; matched by every ALE targeting this ASTE.
+        entry->set_astesn(1U); // matched by every ALE targeting this ASTE.
         // Entry is valid (I-bit cleared by clear()).
 
         g_aste_used[idx] = true;
@@ -392,7 +289,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
 
-        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_aste_lock};
 
         if (!g_aste_used[aste_index])
             return ::std::unexpected(
@@ -421,7 +318,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
 
-        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_aste_lock};
 
         if (!g_aste_used[aste_index])
             return ::std::unexpected(
@@ -446,7 +343,6 @@ namespace arch::s390x::cpu::aste {
     }
 
     /// @brief Invalidate an ALE and purge the ALB.
-    ///
     /// @param alet  The ALET value (ALE slot index) to destroy.
     /// @return Success, or an error if the ALET is invalid.
     [[nodiscard]] auto ale_destroy(
@@ -467,7 +363,7 @@ namespace arch::s390x::cpu::aste {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
 
-        const zxfoundation::sync::irq_lock_guard guard{g_aste_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_aste_lock};
 
         auto* entry = ale_at(context, ale_idx);
         if (entry->is_invalid() || entry->sequence() != alet_alesn(alet))
@@ -482,6 +378,15 @@ namespace arch::s390x::cpu::aste {
 
         return {};
     }
+
+    [[nodiscard]] auto aft_origin() noexcept -> u64 {
+        return g_aft_phys >> 12U;
+    }
+
+    [[nodiscard]] auto aste_origin(u32 index) noexcept -> u64 {
+        return g_aste_table_phys + static_cast<u64>(index) * 64U;
+    }
+
 
     /// @brief Return a pointer to the ASTE at the given index.
     /// @param index  The ASTE slot index (0 to MAX_ASTE_ENTRIES-1).

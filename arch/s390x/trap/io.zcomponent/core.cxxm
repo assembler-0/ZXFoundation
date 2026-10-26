@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file io.cxxm
+/// @file arch/s390x/trap/io.zcomponent/core.cxxm
 /// @brief Centralized io dispatch.
 
 export module arch.s390x.trap.io.core;

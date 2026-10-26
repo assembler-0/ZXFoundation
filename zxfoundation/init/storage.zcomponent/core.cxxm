@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/init/storage.cxxm
+/// @file zxfoundation/init/storage.zcomponent/core.cxxm
 /// @brief init storage
 
 export module zxfoundation.init.storage.core;
@@ -15,6 +15,6 @@ namespace zxfoundation::init::storage {
     /// @brief Get kernel boot protocol
     auto get_protocol() noexcept -> const arch::s390x::init::zxfl::protocol&;
 
-} // namespace zxfoundation::init::bootstrap
+} // namespace zxfoundation::init::storage
 
 } // end export

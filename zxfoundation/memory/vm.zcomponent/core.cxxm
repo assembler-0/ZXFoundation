@@ -4,7 +4,9 @@
 
 export module zxfoundation.memory.vm.core;
 import zxfoundation.base.types;
+import zxfoundation.base.typestate;
 import zxfoundation.memory.vm.types;
+import zxfoundation.scoms.kobject.ref;
 import zxfoundation.memory.objects;
 import lib.error;
 import lib.stl;
@@ -31,8 +33,23 @@ namespace zxfoundation::memory::vm {
     /// @brief Return a page charge obtained from @ref vm_space_try_charge_commit.
     auto vm_space_uncharge_commit(vm_space& space, u64 pages) noexcept -> void;
 
-    /// @brief RCU-protected lookup: find the vm_region containing VA.
-    /// @return Pointer to the region, or nullptr if no region contains va.
+    using vm_region_ref = scoms::kobject::robject<vm_region, base::lifecycle_state::active>;
+
+    /// @brief Find a region while the caller holds @c space.lock.
+    /// @warning The returned pointer is valid only until the lock is released.
+    [[nodiscard]] auto vm_find_locked(const vm_space& space, u64 va) noexcept -> vm_region*;
+
+    /// @brief Find a region and retain its SCOMS lifetime reference.
+    /// @return A generation-checked active reference, or an empty reference.
+    [[nodiscard]] auto vm_find_ref(const vm_space& space, u64 va) noexcept -> vm_region_ref;
+
+    /// @brief Find a grant-backed region and retain its SCOMS lifetime reference.
+    [[nodiscard]] auto vm_find_grant_mapping_ref(
+        vm_space& space, objects::memory_object_ref grant
+    ) noexcept -> vm_region_ref;
+
+    /// @brief Compatibility lookup for callers that immediately consume a pointer.
+    /// @warning Callers must hold @c space.lock for the entire pointer lifetime.
     [[nodiscard]] auto vm_find(const vm_space& space, u64 va) noexcept -> vm_region*;
 
     /// @brief Find one live mapping view that consumes @p grant.
@@ -58,14 +75,6 @@ namespace zxfoundation::memory::vm {
     /// @return Number of physical frames freed (not slots dropped).
     [[nodiscard]] auto vm_space_drain_phys_range(
         vm_space& space, u64 phys_start, u64 phys_end
-    ) noexcept -> u32;
-
-    /// @brief Drain resident mappings whose phys lies in @c [phys_start,phys_end]
-    /// @param[in] phys_start Inclusive start of physical range.
-    /// @param[in] phys_end   Exclusive end of physical range.
-    /// @return Number of physical frames freed.
-    [[nodiscard]] auto vm_drain_phys_range(
-        u64 phys_start, u64 phys_end
     ) noexcept -> u32;
 
     /// @param[in,out] space Address space whose tree is locked by the caller.
@@ -142,9 +151,6 @@ namespace zxfoundation::memory::vm {
     /// @brief Look up a vm_region by SCOMS ID.
     /// @return Raw pointer, or nullptr if not found.
     [[nodiscard]] auto vm_region_find_by_id(u32 id) noexcept -> vm_region*;
-
-    /// @brief Initialize the VME subsystem (create SCOMS table for vm_region).
-    auto vm_init() noexcept -> void;
 
 } // namespace zxfoundation::memory::vm
 

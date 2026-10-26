@@ -1,24 +1,29 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/css/subchannel.cxxm
+/// @file arch/s390x/io/css.zcomponent/subchannel.cxx
 /// @brief Channel Subsystem wrapers
 
 module arch.s390x.io.css.subchannel;
 import arch.s390x.io.css.core;
 import arch.s390x.io.types;
+import arch.s390x.cpu.irq;
+import arch.s390x.cpu.processor;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.sync;
+import arch.s390x.io.ccw.core;
 import zxfoundation.base.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import zxfoundation.sys.printk.core;
 import zxfoundation.sync.waitqueue.core;
-import arch.s390x.cpu.irq;
-import arch.s390x.cpu.processor;
-import arch.s390x.cpu.ctlreg;
-import arch.s390x.cpu.sync;
+import zxfoundation.sys.zinit.core;
 import lib.error;
 import lib.format;
 import lib.bit;
 import lib.fixed_string;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace arch::s390x::io::css::detail {
 
@@ -29,7 +34,7 @@ namespace arch::s390x::io::css::detail {
     no_export std::array<subchannel_entry, MAX_SCH_ENTRIES> g_subchannel_table{};
 
     /// @brief Protects the global subchannel table.
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock g_css_lock;
+    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::css_table> g_css_lock;
 
     /// @brief Number of subchannels actually probed and registered.
     no_export u32 g_sch_count = 0;
@@ -44,7 +49,9 @@ namespace arch::s390x::io::css::detail {
 namespace arch::s390x::io::css {
 
     /// @brief Probe all subchannels, enable valid ones, and populate the table.
-    auto init() noexcept -> void {
+    auto zi_css_init(const zxfoundation::sys::zinit::zi_desc&) noexcept
+        -> zxfoundation::sys::zinit::zi_result
+    {
         using namespace zxfoundation::sys::printk;
 
         pverbose("css: starting subchannel probe (cssid=0, ssid=0)");
@@ -126,7 +133,11 @@ namespace arch::s390x::io::css {
 
         pinfo("css: probe complete, {} subchannel(s) registered",
               ::lib::format::dec{static_cast<u64>(found)});
+
+        ccw::probe_devices();
+        return {};
     }
+    __zinit__(io, p00, zi_css_init, fatal)
 
     /// @brief Start I/O on a subchannel.
     /// @param sch_index Index into the subchannel table.
@@ -146,7 +157,7 @@ namespace arch::s390x::io::css {
 
         auto& entry = detail::g_subchannel_table[sch_index];
         {
-            const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+            const zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
             if (entry.binding_id == ~0U || orb_ref.get<"interruption_parameter">() != entry.binding_id) {
                 return ::std::unexpected(
                     ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
@@ -168,7 +179,7 @@ namespace arch::s390x::io::css {
         }
 
         {
-            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+            zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
             if (entry.state == subchannel_state::active &&
                 entry.active_binding_id == entry.binding_id) {
                 entry.state = subchannel_state::idle;
@@ -197,7 +208,7 @@ namespace arch::s390x::io::css {
     ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
         if (!sink) return ::std::unexpected(
             ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
-        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        const zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
         if (detail::g_completion_sink && detail::g_completion_sink != sink) {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
@@ -215,7 +226,7 @@ namespace arch::s390x::io::css {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::invalid_arg));
         }
-        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        const zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
         auto& entry = detail::g_subchannel_table[sch_index];
         if (entry.binding_id != ~0U) {
             return ::std::unexpected(
@@ -235,7 +246,7 @@ namespace arch::s390x::io::css {
             return ::std::unexpected(
                 ::lib::kernel_error::from_generic(::lib::generic_error::out_of_range));
         }
-        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        const zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
         auto& entry = detail::g_subchannel_table[sch_index];
         if (entry.binding_id != binding_id ||
             entry.binding_generation != binding_generation) {
@@ -255,7 +266,7 @@ namespace arch::s390x::io::css {
     /// @brief Return the hardware-available logical path mask for a binding.
     [[nodiscard]] auto available_lpm(u32 sch_index) noexcept -> u8 {
         if (sch_index >= detail::g_sch_count) return 0U;
-        const zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        const zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
         return detail::g_subchannel_table[sch_index].available_lpm;
     }
 
@@ -318,7 +329,7 @@ namespace arch::s390x::io::css {
 
         const int cc = hsch(entry.schid);
         if (cc == 0) {
-            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+            zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
             entry.state = subchannel_state::halting;
             return {};
         }
@@ -353,7 +364,7 @@ namespace arch::s390x::io::css {
 
         const int cc = csch(entry.schid);
         if (cc == 0) {
-            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+            zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
             entry.state = subchannel_state::halting;
             return {};
         }
@@ -401,7 +412,7 @@ namespace arch::s390x::io::css {
         u32 binding_generation = 0U;
         irb completed_status{};
         {
-            zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+            zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
             entry.last_irb = status;
             if (cc == 0) {
                 const auto status_ctl = status.get<R"(scsw\control)">();
@@ -457,7 +468,7 @@ namespace arch::s390x::io::css {
                 ::lib::kernel_error::from_generic(::lib::generic_error::uninitialized));
         }
 
-        zxfoundation::sync::irq_lock_guard guard(detail::g_css_lock);
+        zxfoundation::sync::irq_lock_guard _(detail::g_css_lock);
 
         for (u32 i = 0; i < detail::g_sch_count; ++i) {
             const auto& s = detail::g_subchannel_table[i].sense;

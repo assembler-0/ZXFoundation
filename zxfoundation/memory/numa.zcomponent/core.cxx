@@ -7,8 +7,13 @@ import zxfoundation.memory.numa.types;
 import arch.s390x.init.zxfl.protocol;
 import zxfoundation.base.config;
 import zxfoundation.base.types;
+import zxfoundation.init.storage.core;
+import zxfoundation.sys.zinit.core;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::memory::numa::detail {
 
@@ -281,14 +286,12 @@ namespace zxfoundation::memory::numa::detail {
 namespace zxfoundation::memory::numa {
 
     /// @brief Initialize immutable NUMA topology from the ZXFL boot protocol.
-    /// @param[in] protocol Loader-supplied boot protocol containing memory and CPU topology evidence.
     /// @return Success when at least the deterministic bootstrap fallback node exists.
-    /// @note The current implementation consumes ZXFL records only; later boot-topology hardening may replace the evidence with direct STSI/SCLP records.
-    /// @warning This function must run before AP release and before node-owned allocator state is initialized.
-    auto init(
-        const arch::s390x::init::zxfl::protocol& protocol
+    auto zi_numa_init(
+        const sys::zinit::zi_desc&
     ) noexcept -> std::expected<void, lib::kernel_error> {
         detail::reset_state();
+        const auto& protocol = zxfoundation::init::storage::get_protocol();
 
         if (protocol.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
             || protocol.cpu_count > zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) {
@@ -318,6 +321,7 @@ namespace zxfoundation::memory::numa {
         ++detail::g_generation;
         return {};
     }
+    __zinit_dep__(mm, p10, zi_numa_init, warn, "zi_hhdm_contract")
 
     /// @brief Report whether NUMA topology has been initialized.
     /// @return true after `init()` has completed successfully.

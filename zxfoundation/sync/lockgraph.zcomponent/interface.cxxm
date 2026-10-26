@@ -1,0 +1,7 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/lockgraph.zcomponent/interface.cxxm
+/// @brief Lockgraph umbrella module.
+
+export module zxfoundation.sync.lockgraph;
+export import zxfoundation.sync.lockgraph.types;
+export import zxfoundation.sync.lockgraph.core;

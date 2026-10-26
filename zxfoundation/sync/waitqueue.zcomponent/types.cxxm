@@ -1,11 +1,11 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sync/waitqueue_types.cxxm
-/// @brief Wait queue type definitions — intrusive sleeping wait primitives.
+/// @file zxfoundation/sync/waitqueue.zcomponent/types.cxxm
+/// @brief Wait queue type definitions
 
 export module zxfoundation.sync.waitqueue.types;
 import zxfoundation.base.types;
-import zxfoundation.sync.qspinlock.core;
-import lib.list;
+export import zxfoundation.sync.turnstile;
+import lib.stl;
 
 export {
 
@@ -46,13 +46,12 @@ namespace zxfoundation::sync::waitqueue {
         interrupted = 2,   ///< Wait was interrupted.
     };
 
-    /// @brief Intrusive wait queue entry — embedded in the waiter's stack frame.
+    /// @brief Intrusive wait record — embedded in the waiter's stack frame.
     struct wait_entry {
-        lib::list_node link{};                           ///< Intrusive list linkage.
-        wait_flags     flags{wait_flags::none};          ///< Per-waiter behavioural flags.
-        wait_result    result{wait_result::woken};       ///< Set by the waker.
-        bool           active{false};                    ///< True while linked on a queue.
-        u32            domain_id{0xFFFFFFFFU};           ///< Domain that is sleeping.
+        turnstile::waiter        node{};                      ///< substrate node (FIFO: priority 0)
+        wait_flags               flags{wait_flags::none};     ///< Per-waiter behavioural flags.
+        std::atomic<wait_result> result{wait_result::woken};  ///< Published by the waker.
+        u32                      domain_id{0xFFFFFFFFU};      ///< Domain that is sleeping.
 
         wait_entry()   noexcept = default;
 
@@ -63,10 +62,9 @@ namespace zxfoundation::sync::waitqueue {
         auto operator=(wait_entry&&)             = delete;
     };
 
-    /// @brief Wait queue — a spinlock-protected list of wait_entry nodes.
+    /// @brief Wait queue — the turnstile's FIFO configuration.
     struct wait_head {
-        sync::qspinlock::qspinlock lock{};            ///< Protects the entry list.
-        lib::list_head             entries{};         ///< Linked list of wait_entry nodes.
+        turnstile::turnstile     q{};
 
         wait_head() noexcept = default;
 
@@ -77,6 +75,6 @@ namespace zxfoundation::sync::waitqueue {
         auto operator=(wait_head&&)          = delete;
     };
 
-} // namespace zxfoundation::sync
+} // namespace zxfoundation::sync::waitqueue
 
 } // end export

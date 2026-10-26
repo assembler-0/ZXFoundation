@@ -1,2 +1,3 @@
+/// @file crypto/sha256.zcomponent/interface.cxxm
 export module crypto.sha256;
 export import crypto.sha256.core;

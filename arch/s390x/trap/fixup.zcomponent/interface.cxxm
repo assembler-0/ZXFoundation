@@ -1,2 +1,3 @@
+/// @file arch/s390x/trap/fixup.zcomponent/interface.cxxm
 export module arch.s390x.trap.fixup;
 export import arch.s390x.trap.fixup.core;

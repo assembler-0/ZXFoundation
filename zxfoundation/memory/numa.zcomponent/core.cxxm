@@ -13,15 +13,6 @@ export {
 
 namespace zxfoundation::memory::numa {
 
-    /// @brief Initialize immutable NUMA topology from the ZXFL boot protocol.
-    /// @param[in] protocol Loader-supplied boot protocol containing memory and CPU topology evidence.
-    /// @return Success when at least the deterministic bootstrap fallback node exists.
-    /// @note The current implementation consumes ZXFL records only; later boot-topology hardening may replace the evidence with direct STSI/SCLP records.
-    /// @warning This function must run before AP release and before node-owned allocator state is initialized.
-    auto init(
-        const arch::s390x::init::zxfl::protocol& protocol
-    ) noexcept -> std::expected<void, lib::kernel_error>;
-
     /// @brief Report whether NUMA topology has been initialized.
     /// @return true after `init()` has completed successfully.
     /// @note The topology table is immutable after successful initialization in this migration wave.

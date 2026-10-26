@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file fixed_string.cxxm
+/// @file lib/fixed_string.cxxm
 /// @brief C++ fixed string
 
 export module lib.fixed_string;

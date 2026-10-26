@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file scoms_object_core.cxxm
+/// @file zxfoundation/scoms/metadata.zcomponent/core.cxxm
 /// @brief Nucleus-owned metadata for the unified object ontology.
 
 export module zxfoundation.scoms.metadata.core;
@@ -28,7 +28,8 @@ export {
         u32 object_flags{0};
         u32 dependent_count{0};
         u32 hardware_generation{0};
-        void (*reclaimer)(kobject::bobject&) noexcept{nullptr};
+        void (*reclaimer)(kobject::bobject&, void* ctx) noexcept{nullptr};
+        void* reclaimer_ctx{nullptr};
         bool active{false};
         bool reclaim_pending{false};
     };
@@ -41,9 +42,12 @@ export {
         kobject::bobject& object
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    /// @brief Register the table-specific final reclaimer for an object.
+    /// @brief Table-owned final reclaimer: receives the owning table as
+    ///        @c ctx so no process-wide singleton is consulted (BUG-049).
+    using reclaimer_fn = void (*)(kobject::bobject&, void* ctx) noexcept;
+
     [[nodiscard]] auto set_reclaimer(
-        kobject::bobject& object, void (*reclaimer)(kobject::bobject&) noexcept
+        kobject::bobject& object, reclaimer_fn reclaimer, void* ctx
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Dispatch the final-put reclaimer retained in object metadata.

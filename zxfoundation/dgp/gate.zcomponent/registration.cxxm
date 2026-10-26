@@ -5,7 +5,7 @@
 export module zxfoundation.dgp.gate.registration;
 import zxfoundation.dgp.authorize.core;
 import zxfoundation.dgp.gate.types;
-import zxfoundation.dgp.gate.dispatch;
+import zxfoundation.dgp.svc;
 import zxfoundation.base.types;
 
 export {
@@ -14,17 +14,16 @@ namespace zxfoundation::dgp::gate::registration {
 
     [[nodiscard]] constexpr auto make_op(
         u8                                      op_id,
-        dispatch::dispatch_handler        handler,
-        dispatch::gate_auth_level         auth   = dispatch::gate_auth_level::none,
-        dgp::operation_kind                     op_kind = dgp::operation_kind::none
-    ) noexcept -> dispatch::registration_op {
-        return dispatch::registration_op{
+        svc::dispatch_handler        handler,
+        dgp::operation_kind                     op_kind = dgp::operation_kind::none,
+        bool                                    capability_addressed = false
+    ) noexcept -> svc::registration_op {
+        return svc::registration_op{
             .operation_id = op_id,
             .handler      = handler,
-            .meta         = dispatch::entry_meta{
-                .operation_id    = op_id,
-                .auth            = auth,
-                .op_kind         = op_kind,
+            .meta         = svc::entry_meta{
+                .op_kind              = op_kind,
+                .capability_addressed = capability_addressed,
             },
         };
     }

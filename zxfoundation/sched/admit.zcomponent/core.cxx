@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/admit.cxxm
+/// @file zxfoundation/sched/admit.zcomponent/core.cxx
 /// @brief DGP scheduler admission gate.
 
 module zxfoundation.sched.admit.core;
@@ -17,7 +17,6 @@ namespace zxfoundation::sched::admit {
         const zxfoundation::dgp::domain::domain* d
     ) noexcept -> bool {
         if (!d) return true;
-        if (zxfoundation::dgp::domain::is_idle_domain(*d)) return true;
         auto result = zxfoundation::dgp::isolation::validate_scheduler_admission(
             d->ko.state, d->root_phys, d->asce.val);
         return static_cast<bool>(result);

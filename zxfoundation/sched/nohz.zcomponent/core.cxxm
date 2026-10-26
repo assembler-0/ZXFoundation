@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/nohz.cxxm
+/// @file zxfoundation/sched/nohz.zcomponent/core.cxxm
 /// @brief Per-CPU tickless (nohz) idle state machine.
 
 export module zxfoundation.sched.nohz.core;

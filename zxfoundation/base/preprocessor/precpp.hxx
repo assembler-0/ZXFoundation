@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file precpp.hxx
+/// @file zxfoundation/base/preprocessor/precpp.hxx
 /// @brief Validation header
 
 #pragma once

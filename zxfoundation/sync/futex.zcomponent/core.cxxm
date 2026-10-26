@@ -1,0 +1,31 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/futex.zcomponent/core.cxxm
+/// @brief The user futex: sleep until a user-memory word changes.
+
+export module zxfoundation.sync.futex.core;
+import zxfoundation.base.types;
+import zxfoundation.dgp.domain.types;
+import lib.error;
+import lib.stl;
+
+export {
+
+namespace zxfoundation::sync::futex {
+
+    /// @brief Block the calling strand until @c *uaddr differs from
+    ///        @c expected, or @c timeout_ns elapses (0 = wait forever).
+    [[nodiscard]] auto futex_wait(
+        zxfoundation::dgp::domain::domain& caller,
+        u64 uaddr, u64 expected, u64 timeout_ns
+    ) noexcept -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Wake up to @c count waiters keyed by (caller domain, uaddr).
+    /// @return The number of waiters woken.
+    [[nodiscard]] auto futex_wake(
+        zxfoundation::dgp::domain::domain& caller,
+        u64 uaddr, u64 count
+    ) noexcept -> u32;
+
+}
+
+}

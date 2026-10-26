@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/trap/mcck.cxxm
+/// @file arch/s390x/trap/mcck.zcomponent/core.cxx
 /// @brief Centralized Machine-Check (MCCK) dispatcher.
 
 module arch.s390x.trap.mcck.core;
@@ -174,9 +174,6 @@ namespace arch::s390x::trap::mcck {
                     ::lib::machine_error::storage_degradation),
                 "mcck: storage degradation at fsa={:#018x}", fsa);
         } else if ((mcic & MCIC_DS) != 0ULL) {
-            // DS set but no FA validity — failing address is unreliable.
-            // Still fatal (storage degradation implies a poisoned frame), but
-            // we record the address-unknown status for forensics.
             zxfoundation::sys::syschk::syschk_fatal(
                 ::lib::kernel_error::from_machine(
                     ::lib::machine_error::storage_degradation),

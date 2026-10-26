@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/lowcore.cxxm
+/// @file arch/s390x/cpu/lowcore.zcomponent/lowcore.cxx
 /// @brief Lowcore (prefix area) management: access, initialization, and AP setup.
 
 module arch.s390x.cpu.lowcore;
@@ -11,8 +11,14 @@ import arch.s390x.init.zxfl.protocol;
 import zxfoundation.memory.hhdm;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import zxfoundation.sys.zinit.core;
+import zxfoundation.init.storage.core;
 import zxfoundation.sync.qspinlock.mcs;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
+
 
 /// @brief Physical addresses of each CPU's lowcore page, indexed by logical CPU ID.
 no_export std::array<std::atomic<u64>, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> __percpu_lowcore_phys{};
@@ -30,19 +36,34 @@ from_global(nomangle) {
     auto trap_restart_entry() -> void;
     auto ap_dat_on()          -> void;
 
+    /// @brief Kernel-owned BSP boot stack (in nucleus .bss), defined in head64.S.
+    from_global(reference) u8 __kernel_boot_stack[];
+
     /// @brief Kernel-wide stack-protector guard
     from_global(reference) u64 __stack_chk_guard;
 }
 
 namespace arch::s390x::cpu::lowcore {
 
+    /// @brief Return the current CPU's prefixed lowcore mapping.
+    /// @return HHDM pointer whose low 8 KiB are redirected by PoP prefixing.
     [[nodiscard]] auto get_current() noexcept -> zlowcore* {
         return reinterpret_cast<zlowcore*>(
             zxfoundation::memory::hhdm::phys_to_virt(0ULL));
     }
 
-    [[nodiscard]] auto get_current_phys() noexcept -> zlowcore* {
-        return nullptr;
+    /// @brief Return the lowcore at absolute storage address zero.
+    /// @return HHDM pointer whose real address equals the current Prefix
+    ///        Register, causing PoP prefixing to select absolute address 0.
+    [[nodiscard]] auto get_absolute() noexcept -> zlowcore* {
+        return reinterpret_cast<zlowcore*>(
+            zxfoundation::memory::hhdm::phys_to_virt(get_current_phys()));
+    }
+
+    /// @brief Read the physical base currently installed in the Prefix Register.
+    /// @return Prefix base used by the executing CPU, in physical address form.
+    [[nodiscard]] auto get_current_phys() noexcept -> u64 {
+        return static_cast<u64>(processor::get_prefix());
     }
 
     /// @brief Retrieve the lowcore structure pointer for a specific CPU, taking prefixing into account.
@@ -74,6 +95,19 @@ namespace arch::s390x::cpu::lowcore {
             return;
         __percpu_lowcore_phys[cpu_id].store(
             phys_lc, std::memory_order::release);
+    }
+
+    auto unregister_cpu_lowcore(const u16 cpu_id, const u64 phys_lc) noexcept -> void {
+        if (cpu_id >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]]
+            return;
+
+        auto& binding = __percpu_lowcore_phys[cpu_id];
+        u64 expected = phys_lc;
+        discard_value binding.compare_exchange_strong(
+            expected,
+            0ULL,
+            std::memory_order::acq_rel,
+            std::memory_order::acquire);
     }
 
     /// @brief Get the current domain pointer from lowcore.
@@ -125,7 +159,7 @@ namespace arch::s390x::cpu::lowcore {
         lc->set<"mcck_stack">   (reinterpret_cast<u64>(s_boot_mcck_stack    + sizeof(s_boot_mcck_stack)));
         lc->set<"nodat_stack">  (reinterpret_cast<u64>(s_boot_nodat_stack   + sizeof(s_boot_nodat_stack)));
         lc->set<"restart_stack">(reinterpret_cast<u64>(s_boot_restart_stack + sizeof(s_boot_restart_stack)));
-        lc->set<"kernel_stack"> (proto.kernel_stack_top);
+        lc->set<"kernel_stack"> (reinterpret_cast<u64>(&__kernel_boot_stack[processor::STACK_SIZE]));
         lc->set<"kernel_asce">  (proto.cr1_snapshot);
         lc->set<"user_asce">    (0ULL);
         lc->set<"ap_cr0">       (proto.cr0_snapshot);
@@ -153,7 +187,7 @@ namespace arch::s390x::cpu::lowcore {
                 break;
             }
         }
-        pcp.kernel_stack = proto.kernel_stack_top;
+        pcp.kernel_stack = reinterpret_cast<u64>(&__kernel_boot_stack[processor::STACK_SIZE]);
         pcp.lock_depth   = 0;
         pcp.preempt_count = 0;
         pcp.irq_nesting  = 0;
@@ -163,6 +197,14 @@ namespace arch::s390x::cpu::lowcore {
         lc->set<"stack_canary">(__stack_chk_guard);
         lc->set<"current_domain">(0);
     }
+
+    auto zi_lowcore_init_bsp(const zxfoundation::sys::zinit::zi_desc&) noexcept
+        -> zxfoundation::sys::zinit::zi_result
+    {
+        init_bsp(zxfoundation::init::storage::get_protocol());
+        return {};
+    }
+    __zinit__(early, p70, zi_lowcore_init_bsp, fatal)
 
     /// @brief Prepare an AP lowcore for SIGP RESTART.
     /// @param lc   HHDM-mapped pointer to the AP's lowcore page.

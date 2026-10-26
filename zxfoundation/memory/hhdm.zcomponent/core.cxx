@@ -5,6 +5,14 @@
 module zxfoundation.memory.hhdm.core;
 import zxfoundation.memory.hhdm.types;
 import zxfoundation.base.types;
+import zxfoundation.sys.zinit.core;
+import zxfoundation.init.storage.core;
+import arch.s390x.init.zxfl.protocol;
+import lib.error;
+import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::memory::hhdm::detail {
 
@@ -55,6 +63,46 @@ namespace zxfoundation::memory::hhdm {
     [[nodiscard]] auto virt_to_phys(u64 virt) noexcept -> u64 {
         return virt - KERNEL_VIRTUAL_OFFSET;
     }
+
+    /// @brief Initialize the HHDM coverage contract exported by ZXFL.
+    auto zi_hhdm_contract(const sys::zinit::zi_desc&) noexcept
+        -> sys::zinit::zi_result
+    {
+        const auto& boot = zxfoundation::init::storage::get_protocol();
+        if (boot.hhdm_phys_coverage_end == 0U
+            || (boot.hhdm_phys_coverage_end & (4096ULL - 1ULL)) != 0U
+            || boot.hhdm_phys_coverage_end < boot.pgtbl_pool_end
+            || boot.hhdm_phys_coverage_end < boot.kernel_phys_end) [[unlikely]] {
+            return std::unexpected(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol));
+            }
+
+        const auto* map = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
+            boot.mem_map_addr);
+        if (boot.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
+            || (boot.mem_map_count != 0U && !map)) [[unlikely]] {
+            return std::unexpected(
+               lib::kernel_error::from_init(lib::init_error::code::invalid_protocol));
+            }
+        u64 highest_ram_end = 0U;
+        for (u32 i = 0U; i < boot.mem_map_count; ++i) {
+            if (map[i].length != 0U
+                && map[i].base > ~0ULL - map[i].length) [[unlikely]] {
+                return std::unexpected(
+                    lib::kernel_error::from_init(lib::init_error::code::invalid_protocol));
+                }
+            if (const u64 region_end = map[i].base + map[i].length;
+                region_end > highest_ram_end) highest_ram_end = region_end;
+        }
+        if (highest_ram_end > boot.hhdm_phys_coverage_end) [[unlikely]] {
+            return std::unexpected(
+                lib::kernel_error::from_init(lib::init_error::code::invalid_protocol));
+        }
+
+        set_phys_coverage_end(boot.hhdm_phys_coverage_end);
+        return {};
+    }
+    __zinit__(mm, p00, zi_hhdm_contract, fatal)
 
 } // namespace zxfoundation::memory::hhdm
 

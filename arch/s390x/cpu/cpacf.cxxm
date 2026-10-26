@@ -246,7 +246,7 @@ namespace arch::s390x::cpu::cpacf {
 
     template <kmo_fc Fc, cipher_modifiers Mod, typename Pb>
         requires kmo_pb_for<Fc, Pb>
-    auto kmf(Pb& pb, u8& dest, std::span<const u8> src) -> i32 {
+    auto kmo(Pb& pb, u8& dest, std::span<const u8> src) -> i32 {
         const u64 fc = make_cipher_function_control(Fc, Mod);
         processor::register_pair
             d { .even = reinterpret_cast<u64>(&dest), .odd = 0 },
@@ -254,7 +254,7 @@ namespace arch::s390x::cpu::cpacf {
         __asm__ volatile(
             "	lgr	    0,%[fc]\n"
             "	lgr	    1,%[pba]\n"
-            "0:	kmf     %[dst],%[src]\n"
+            "0:	kmo     %[dst],%[src]\n"
             "	brc	    1,0b"
             : [src] "+&d" (s.pair),
               [dst] "+&d" (d.pair)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/zxfoundation/memory/hhdm.h - HHDM constants and helpers
+/// @file arch/s390x/init/zxfl/include/zxfoundation/memory/hhdm.h - HHDM constants and helpers
 
 #pragma once
 

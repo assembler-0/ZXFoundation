@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/mmu/mmu_tlb.cxxm
+/// @file arch/s390x/mmu/tlb.cxxm
 /// @brief TLB invalidation primitives for z/Architecture.
 
 export module arch.s390x.mmu.tlb;

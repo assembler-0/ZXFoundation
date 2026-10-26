@@ -1,9 +1,8 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/stacktrace.cxxm
+/// @file arch/s390x/lib/stacktrace.zcomponent/core.cxxm
 /// @brief s390x backchain-based stack unwinder with zxallsyms symbol resolution.
 
 export module arch.s390x.lib.stacktrace.core;
-import arch.s390x.cpu.types;
 import arch.s390x.cpu.irq;
 import zxfoundation.base.types;
 
@@ -11,49 +10,69 @@ export {
 
 namespace arch::s390x::lib::stacktrace {
 
-    using cpu::processor::stack_frame;
-    using cpu::processor::STACK_SIZE;
-    using cpu::processor::ASYNC_STACK_SIZE;
-    using cpu::processor::MCCK_STACK_SIZE;
-    using cpu::processor::STACK_FRAME_SIZE;
-
+    /// @brief Classification of the stack an SP currently belongs to.
     enum class stack_type : u8 {
         unknown = 0,
-        task,
-        async,
-        mcck,
+        task    = 1,
+        async   = 2,
+        nodat   = 3,
+        mcck    = 4,
     };
 
+    /// @brief Bounds and type of a resolved kernel stack.
     struct stack_info {
         stack_type type{stack_type::unknown};
         u64 begin{};
         u64 end{};
     };
 
+    /// @brief A single resolved stack frame return address.
     struct trace_entry {
-        u64 addr{};
-        u64 sym_addr{};
-        const char* sym_name{};
+        u64 addr{};          ///< Raw (possibly non-canonicalized) instruction address.
+        u64 sym_addr{};      ///< Resolved symbol base address (0 if unresolved).
+        const char* sym_name{}; ///< Symbol name (nullptr if unresolved).
     };
 
-    constexpr u32 MAX_TRACE_DEPTH = 32;
+    constexpr u32 MAX_TRACE_DEPTH = 64;
 
+    /// @brief Resolve which kernel stack contains @p sp, reading the current
+    ///        CPU's lowcore stack pointers.
+    /// @param[in] sp  Stack pointer (r15) value to classify.
+    /// @return stack_info with type/begin/end, or type==unknown if none match.
     [[nodiscard]] auto get_stack_info(u64 sp) noexcept -> stack_info;
 
+    /// @brief Test whether @p sp is within @p info, with headroom for one full
+    ///        stack frame (the frame at @p sp must fit entirely).
+    /// @param[in] sp    Candidate stack pointer.
+    /// @param[in] info  Previously resolved stack bounds.
     [[nodiscard]] auto on_stack(u64 sp, const stack_info& info) noexcept -> bool;
 
+    /// @brief Unwind the backchain starting from an arbitrary @p sp, recording
+    ///        return addresses into @p buf.
+    /// @param[in]  sp          Starting stack pointer (frame address).
+    /// @param[in]  first_addr  Optional explicit return address for the first
+    ///                         frame.
+    /// @param[out] buf         Destination trace_entry buffer.
+    /// @param[in]  max_entries Capacity of @p buf.
+    /// @return Number of entries written.
     [[nodiscard]] auto save_stack_trace_at(
-        u64 sp, trace_entry* buf, u32 max_entries
+        u64 sp, u64 first_addr, trace_entry* buf, u32 max_entries
     ) noexcept -> u32;
 
+    /// @brief Unwind the current CPU's stack, recording return addresses.
+    /// @param[out] buf         Destination trace_entry buffer.
+    /// @param[in]  max_entries Capacity of @p buf.
     [[nodiscard]] auto save_stack_trace(
         trace_entry* buf, u32 max_entries
     ) noexcept -> u32;
 
     /// @brief Print a backtrace starting from a given SP.
-    auto dump_stack_at(u64 sp) noexcept -> void;
+    /// @param[in] sp          Starting stack pointer.
+    /// @param[in] first_addr  Optional explicit first return address.
+    auto dump_stack_at(u64 sp, u64 first_addr) noexcept -> void;
 
     /// @brief Print a backtrace from an IRQ frame (interrupt/pgm-check context).
+    /// @param[in] frame  The saved interrupt frame (@c irq_frame).
     auto dump_stack_from_irq(
         const arch::s390x::cpu::irq::irq_frame* frame
     ) noexcept -> void;

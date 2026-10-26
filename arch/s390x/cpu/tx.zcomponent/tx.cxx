@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/tx.cxxm
+/// @file arch/s390x/cpu/tx.zcomponent/tx.cxx
 /// @brief Verified z/Architecture transactional execution primitives.
 
 module arch.s390x.cpu.tx;

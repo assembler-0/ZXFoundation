@@ -4,9 +4,9 @@ PROJECT_NAME           = "ZXFoundation™"
 PROJECT_NUMBER         = "26h2"
 OUTPUT_DIRECTORY       = "doxygen-build"
 OPTIMIZE_OUTPUT_FOR_C  = YES
-INPUT                  = arch/ crypto/ drivers/ lib/ zxfoundation/
+INPUT                  = arch/ crypto/ drivers/ lib/ fs/ zxfoundation/ tools/
 RECURSIVE              = YES
-FILE_PATTERNS          = *.cxxm *.cxx
+FILE_PATTERNS          = *.cxxm *.cxx *.h *.c *.hxx
 CLANG_ASSISTED_PARSING = YES
 CLANG_OPTIONS          = -std=c++23
 GENERATE_HTML 	       = YES

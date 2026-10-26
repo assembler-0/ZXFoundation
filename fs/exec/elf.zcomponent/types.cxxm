@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file types.cxxm
+/// @file fs/exec/elf.zcomponent/types.cxxm
 /// @brief ELF64 type definitions for the kernel ELF loader.
 
 export module fs.exec.elf.types;
@@ -35,7 +35,7 @@ namespace fs::exec::elf {
 
     /// EI_OSABI
     constexpr u8 ELFOSABI_NONE  = 0;     ///< Generic / System V.
-    constexpr u8 ELFOSABI_ZXF   = 0x42;  ///< ZXFoundation OSABI.
+    constexpr u8 ELFOSABI_ZXF   = 0x5A;  ///< ZXFoundation OSABI ('Z', tributes to well, !IBM Z).
 
     /// e_type
     constexpr u16 ET_EXEC = 2;   ///< Static executable.
@@ -136,6 +136,6 @@ namespace fs::exec::elf {
         return true;
     }
 
-} // namespace zxfoundation::exec::elf
+} // namespace fs::exec::elf
 
 } // end export

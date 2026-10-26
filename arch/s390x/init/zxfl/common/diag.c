@@ -1,5 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/diag.c - DIAG 8 hypervisor console driver for the ZXFL bootloader.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/diag.c
+/// @brief DIAG 8 hypervisor console driver for the ZXFL bootloader.
 
 #include <arch/s390x/init/zxfl/diag.h>
 #include <arch/s390x/init/zxfl/ebcdic.h>
@@ -25,12 +26,6 @@ static inline void diag8_write(const char *addr, uint32_t len) {
 #define EBCDIC_ST 0x5CU  // '*'
 
 /// @brief Flush the ASCII line_buf to DIAG 8.
-///
-///        Strategy: build a separate EBCDIC transmit buffer.
-///        - Bytes 0-5: EBCDIC "MSG * " written directly as constants.
-///        - Bytes 6-N: payload converted from ASCII to EBCDIC.
-///        The ASCII line_buf is never modified, so there is no
-///        double-conversion hazard and no need for a prefix_reset.
 static void diag_flush(const char *line_buf, uint32_t line_len) {
     if (line_len <= MSG_PREFIX_LEN) return;
 

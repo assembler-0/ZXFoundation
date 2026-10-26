@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/smp/smp.cxxm
+/// @file zxfoundation/smp/csd.zcomponent/core.cxx
 /// @brief Cross-CPU function-call IPI subsystem — queue, completion, RCU free.
 
 module zxfoundation.smp.csd.core;
@@ -74,7 +74,7 @@ namespace zxfoundation::smp::csd::detail {
         return head.exchange(nullptr, std::memory_order::acq_rel);
     }
 
-} // namespace zxfoundation::smp::detail
+} // namespace zxfoundation::smp::csd::detail
 
 namespace zxfoundation::smp::csd {
 
@@ -331,4 +331,4 @@ namespace zxfoundation::smp::csd {
         return detail::g_csd_stats[cpu];
     }
 
-} // namespace zxfoundation::smp
+} // namespace zxfoundation::smp::csd

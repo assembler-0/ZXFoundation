@@ -1,10 +1,12 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/cpudl.cxx
+/// @file zxfoundation/sched/cpudl.zcomponent/core.cxx
 /// @brief Per-system per-CPU earliest-deadline index
 
 module zxfoundation.sched.cpudl.core;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockable;
 import arch.s390x.cpu.cpumask;
 import lib.rbtree;
 import lib.cpumask;
@@ -29,6 +31,7 @@ namespace zxfoundation::sched::cpudl::detail {
     struct alignas(64) cpudl_index {
         lib::rb_root            root{};
         std::array<cpudl_node, CONFIG_ZX_MAX_CPUS> nodes{};
+        sync::qspinlock::qspinlock<sync::lock_rank::cpudl> deadline_lock{};
         /// @brief Cached snapshot of the earliest-deadline CPU + deadline ns.
         std::atomic<u64>  earliest_ns{0ULL};
         std::atomic<u32> earliest_cpu{0xFFFF'FFFFU};
@@ -62,9 +65,9 @@ namespace zxfoundation::sched::cpudl {
     /// @brief Insert / update a CPU's top-deadline entry.
     /// @param[in] cpu          Logical CPU.
     /// @param[in] deadline_ns  Absolute deadline in nanoseconds (TOD-derived).
-    /// @note Caller must hold the global @c deadline_lock.
     auto set_dl(u16 cpu, u64 deadline_ns) noexcept -> void {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
+        const sync::irq_lock_guard _{detail::g_cpudl.deadline_lock};
         auto& node = detail::g_cpudl.nodes[cpu];
         if (node.is_set) {
             lib::rb_erase(&node.rb_link, detail::g_cpudl.root);
@@ -92,6 +95,7 @@ namespace zxfoundation::sched::cpudl {
     /// @param[in] cpu Logical CPU.
     auto clear_dl(u16 cpu) noexcept -> void {
         if (cpu >= zxfoundation::base::config::CONFIG_ZX_MAX_CPUS) [[unlikely]] return;
+        const sync::irq_lock_guard _{detail::g_cpudl.deadline_lock};
         auto& node = detail::g_cpudl.nodes[cpu];
         if (!node.is_set) return;
         lib::rb_erase(&node.rb_link, detail::g_cpudl.root);
@@ -110,14 +114,6 @@ namespace zxfoundation::sched::cpudl {
         }
     }
 
-    /// @brief Return the CPU id with the earliest currently-set deadline, or
-    ///        @c CONFIG_ZX_MAX_CPUS when none set.
-    [[nodiscard]] auto first_cpu() noexcept -> u16 {
-        const u32 cpu = detail::g_cpudl.earliest_cpu.load(
-            std::memory_order::acquire);
-        if (cpu == 0xFFFF'FFFFU) return static_cast<u16>(zxfoundation::base::config::CONFIG_ZX_MAX_CPUS);
-        return static_cast<u16>(cpu);
-    }
 
     /// @brief Return the latest @c set deadline among all CPUs
     /// @note O(N) walk — ran once per push, results cached by the caller.

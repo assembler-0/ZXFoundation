@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file types.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/base/types.cxxm
 /// @brief foundational types
 
 export module zxfoundation.base.types;

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/dasd_fba.h
-//
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/dasd_fba.h
 /// @brief FBA (Fixed Block Architecture) DASD driver for ZXFL.
 
 #ifndef ZXFOUNDATION_ZXFL_DASD_FBA_H
@@ -38,17 +37,12 @@ typedef struct __attribute__((packed)) {
 } fba_locate_arg_t;
 
 /// @brief Probe an FBA device and populate geometry.
-///
-///        Issues Sense ID and Read Device Characteristics to determine
-///        the device type, block size, and total block count.
-///
 /// @param schid    Subchannel ID
 /// @param out_geo  Output geometry structure
 /// @return 0 on success, -1 if the device is not an FBA device or I/O fails
 int dasd_fba_probe(uint32_t schid, dasd_fba_geo_t *out_geo);
 
 /// @brief Read a single block from an FBA device by LBA.
-///
 /// @param schid    Subchannel ID
 /// @param geo      Device geometry (from dasd_fba_probe)
 /// @param lba      Linear block address (0-based)
@@ -59,10 +53,6 @@ int dasd_fba_read_block(uint32_t schid, const dasd_fba_geo_t *geo,
                         uint32_t lba, void *buf, uint32_t len);
 
 /// @brief Read a contiguous range of blocks from an FBA device.
-///
-///        Issues a single LOCATE + READ CCW chain for the entire range,
-///        which is more efficient than issuing one chain per block.
-///
 /// @param schid      Subchannel ID
 /// @param geo        Device geometry
 /// @param lba_start  First LBA to read

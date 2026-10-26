@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/stage2/entry.S
+/// @file arch/s390x/init/zxfl/stage2/entry.S
 
 #include <arch/s390x/init/zxfl/psw.h>
 

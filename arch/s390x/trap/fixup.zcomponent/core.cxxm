@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file fixup.cxxm
+/// @file arch/s390x/trap/fixup.zcomponent/core.cxxm
 /// @brief Program-check fixup table
 
 export module arch.s390x.trap.fixup.core;

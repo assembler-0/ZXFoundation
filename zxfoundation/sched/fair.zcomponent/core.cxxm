@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/fair.cxxm
+/// @file zxfoundation/sched/fair.zcomponent/core.cxxm
 /// @brief EEVDF (Earliest Eligible Virtual Deadline First) scheduling class.
 
 export module zxfoundation.sched.fair.core;
@@ -23,8 +23,8 @@ namespace zxfoundation::sched::fair {
     /// @brief Default nice-0 weight (1024).
     inline constexpr u32 NICE_0_WEIGHT = 1024U;
 
-    /// @brief Default EEVDF slice in TOD ticks
-    inline constexpr u64 EEVDF_DEFAULT_SLICE_NS = 40'960'000ULL;
+    /// @brief Default EEVDF slice in nanoseconds (§9.2: 2.5 ms).
+    inline constexpr u64 EEVDF_DEFAULT_SLICE_NS = 2'500'000ULL;
 
     /// @brief Maximum weight used in inverse-weight scaling (1024 == 1.0).
     inline constexpr u32 WEIGHT_MAX = 1024U;
@@ -38,25 +38,26 @@ namespace zxfoundation::sched::fair {
     [[nodiscard]] auto calc_delta_fair(u64 delta, const sched_entity& se) noexcept -> u64;
 
     /// @brief Compute the average vruntime across the queued entities.
-    /// @param[in] cfs_min_vruntime  Current min_vruntime of the cfs_rq.
-    /// @param[in] avg_vruntime_acc   Accumulator keeping weighted average.
+    /// @param[in] cfs_min_vruntime  Current min_vruntime of the cfs_rq
+    ///                              (returned when the queue is empty).
+    /// @param[in] avg_vruntime_acc   Absolute weighted vruntime sum
+    ///                              (Σ w_i × vruntime_i, see add/sub).
     /// @param[in] avg_weight_acc     Accumulator keeping total weight.
-    /// @return The current avg vruntime (in vruntime units).
+    /// @return The current avg vruntime (ns domain).
     [[nodiscard]] auto avg_vruntime(u64 cfs_min_vruntime,
                                     i64 avg_vruntime_acc,
                                     u64 avg_weight_acc) noexcept -> u64;
 
-    /// @brief Update the running avg_vruntime accumulator when an entity is
-    ///        added to the cfs_rq.
+    /// @brief Add an entity to the avg_vruntime accumulator.
     /// @param[in]     se         Entity being inserted.
-    /// @param[in,out] avg_acc    Mutable accumulator (i64, signed).
+    /// @param[in,out] avg_acc    Absolute weighted sum (i64, signed).
     /// @param[in,out] avg_w_acc  Mutable total weight accumulator (u64).
-    auto avg_vruntime_add(const sched_entity& se, u64 cfs_min_vruntime,
+    /// @note The accumulator holds Σ w_i × vruntime_i over queued entities.
+    auto avg_vruntime_add(const sched_entity& se,
                           i64& avg_acc, u64& avg_w_acc) noexcept -> void;
 
-    /// @brief Update the running avg_vruntime accumulator when an entity is
-    ///        removed from the cfs_rq.
-    auto avg_vruntime_sub(const sched_entity& se, u64 cfs_min_vruntime,
+    /// @brief Remove an entity from the avg_vruntime accumulator.
+    auto avg_vruntime_sub(const sched_entity& se,
                           i64& avg_acc, u64& avg_w_acc) noexcept -> void;
 
     /// @brief Promote @c min_vruntime on every tick / dequeue to prevent the
@@ -103,14 +104,7 @@ namespace zxfoundation::sched::fair {
     /// @param[in]     dst_min_vr  Destination cfs_rq::min_vruntime.
     auto migrate_entity(sched_entity& se, u64 src_min_vr, u64 dst_min_vr) noexcept -> void;
 
-    /// @brief Yield: collapse @c se->vruntime to @c min_vruntime so the runner
-    ///        ages backward into the queue.
-    auto yield_entity(sched_entity& se, u64 min_vr) noexcept -> void;
 
-    /// @brief Directed yield: move @c yielding_se ahead of @c target_se.
-    auto yield_to_entity(sched_entity& yielding_se,
-                         const sched_entity& target_se,
-                         u64 min_vr) noexcept -> void;
 
     /// @brief Extract strand from @c rb_node
     [[nodiscard]] inline auto rb_node_to_strand(lib::rb_node* node) noexcept -> strand* {

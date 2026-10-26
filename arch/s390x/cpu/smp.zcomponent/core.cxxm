@@ -1,0 +1,114 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/smp.zcomponent/core.cxxm
+/// @brief CPU manager implementation module interface.
+
+export module arch.s390x.cpu.smp.core;
+export import arch.s390x.cpu.smp.types;
+import zxfoundation.base.types;
+import arch.s390x.init.zxfl.protocol;
+import lib.error;
+import lib.stl;
+
+export {
+
+namespace arch::s390x::cpu::smp {
+
+    /// @brief Issue a manager-owned SIGP operation for a logical CPU.
+    /// @param[in] cpu_id Logical target CPU identifier.
+    /// @param[in] order SIGP order code.
+    /// @param[in] parameter Order parameter.
+    /// @return Success or translated SIGP failure.
+    [[nodiscard]] auto signal(u16 cpu_id, u8 order, u32 parameter = 0U) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Complete BSP/AP CPU-manager bring-up from the ZXFL CPU map.
+    /// @param[in] protocol Validated ZXFL boot protocol and CPU topology map.
+    /// @return Number of APs that reached the online state, or a recoverable
+    ///         bring-up error.
+    [[nodiscard]] auto bringup(const init::zxfl::protocol& protocol) noexcept
+        -> ::std::expected<u32, ::lib::kernel_error>;
+
+    /// @brief Initialize the manager and publish the bootstrap CPU descriptor.
+    /// @return Success or an initialization error.
+    [[nodiscard]] auto initialize() noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Register hardware evidence for a logical CPU slot.
+    /// @param[in] descriptor Stable logical and hardware CPU identity.
+    /// @return Success or an invalid/conflicting descriptor error.
+    [[nodiscard]] auto register_cpu(const cpu_descriptor& descriptor) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Update the lowcore binding for a registered CPU.
+    /// @param[in] cpu_id Logical CPU identifier.
+    /// @param[in] lowcore_phys Physical lowcore prefix address.
+    /// @return Success or an invalid CPU error.
+    [[nodiscard]] auto bind_lowcore(u16 cpu_id, u64 lowcore_phys) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Remove a lowcore binding during a failed startup rollback.
+    /// @param[in] cpu_id Logical CPU identifier.
+    /// @param[in] lowcore_phys Expected physical lowcore address.
+    /// @return Success or a binding mismatch error.
+    [[nodiscard]] auto unbind_lowcore(u16 cpu_id, u64 lowcore_phys) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Mark a registered CPU as possible for startup.
+    /// @param[in] cpu_id Logical CPU identifier.
+    [[nodiscard]] auto mark_possible(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Enter the serialized startup phase.
+    /// @param[in] cpu_id Logical CPU identifier.
+    [[nodiscard]] auto begin_start(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Publish a failed startup and terminate the attempted transition.
+    /// @param[in] cpu_id Logical CPU identifier whose startup failed.
+    /// @return Success after the failed state is published.
+    [[nodiscard]] auto fail_start(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Cancel a startup while serializing against online publication.
+    /// @param[in] cpu_id Logical CPU identifier.
+    /// @param[in] cpu_addr Hardware CPU address used by SIGP.
+    /// @return Success after the processor is stopped and startup is failed.
+    [[nodiscard]] auto abort_start(u16 cpu_id, u16 cpu_addr) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Complete startup after the AP has entered C++ and its scheduler is ready.
+    /// @param[in] cpu_id Logical CPU identifier.
+    /// @return Success after all manager-owned online publication completed.
+    [[nodiscard]] auto acknowledge_startup(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Publish a CPU online after all subsystem attach hooks succeeded.
+    /// @param[in] cpu_id Logical CPU identifier.
+    [[nodiscard]] auto online(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Quiesce, stop, detach, and publish a CPU offline.
+    /// @param[in] cpu_id Logical CPU identifier.
+    [[nodiscard]] auto offline(u16 cpu_id) noexcept
+        -> ::std::expected<void, ::lib::kernel_error>;
+
+    /// @brief Request the currently executing CPU to stop through the manager.
+    /// @note This path only publishes the terminal state and returns false when
+    ///       the caller must enter disabled wait immediately.
+    auto request_stop_current() noexcept -> void;
+
+    /// @brief Register a lifecycle observer.
+    /// @param[in] callback Observer invoked in manager serialization context.
+    [[nodiscard]] auto register_notifier(lifecycle_callback callback) noexcept -> bool;
+
+    /// @brief Read the authoritative lifecycle state.
+    /// @param[in] cpu_id Logical CPU identifier.
+    [[nodiscard]] auto state(u16 cpu_id) noexcept -> lifecycle_state;
+
+    /// @brief Test the authoritative online publication.
+    /// @param[in] cpu_id Logical CPU identifier.
+    [[nodiscard]] auto is_online(u16 cpu_id) noexcept -> bool;
+
+}
+
+}

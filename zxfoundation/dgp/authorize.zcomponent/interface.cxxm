@@ -1,2 +1,3 @@
+/// @file zxfoundation/dgp/authorize.zcomponent/interface.cxxm
 export module zxfoundation.dgp.authorize;
 export import zxfoundation.dgp.authorize.core;

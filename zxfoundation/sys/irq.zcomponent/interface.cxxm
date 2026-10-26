@@ -1,3 +1,4 @@
+/// @file zxfoundation/sys/irq.zcomponent/interface.cxxm
 export module zxfoundation.sys.irq;
 export import zxfoundation.sys.irq.core;
 export import zxfoundation.sys.irq.consts;

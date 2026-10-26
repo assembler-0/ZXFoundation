@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/lib/cstring.cxx
+/// @file arch/s390x/lib/cstring.zcomponent/cstring.cxx
 /// @brief z/Architecture string/memory operations.
 
 module arch.s390x.lib.cstring;

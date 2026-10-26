@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/dgp/authorize.zcomponent/core.cxxm
+/// @file zxfoundation/dgp/authorize.zcomponent/core.cxx
 /// @brief Unified DGP authorization.
 
 module zxfoundation.dgp.authorize.core;
@@ -8,6 +8,8 @@ import zxfoundation.base.typestate;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.sync_contract.core;
 import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.dgp.cap.core;
 import zxfoundation.scoms.kobject.base;
 import lib.error;
 import lib.stl;
@@ -40,75 +42,78 @@ namespace zxfoundation::dgp::detail {
     }
 
     [[nodiscard]] constexpr auto required_rights_for_op(operation_kind op) noexcept
-        -> dgp::isolation::isolation_rights
+        -> ::zxfoundation::dgp::right_mask
     {
         switch (op) {
-            case operation_kind::domain_create:    return dgp::isolation::isolation_rights::lifecycle;
-            case operation_kind::domain_destroy:   return dgp::isolation::isolation_rights::lifecycle;
-            case operation_kind::gate_create:      return dgp::isolation::isolation_rights::lifecycle;
-            case operation_kind::gate_destroy:     return dgp::isolation::isolation_rights::lifecycle;
-            case operation_kind::portal_destroy:   return dgp::isolation::isolation_rights::lifecycle;
-            case operation_kind::portal_create:    return dgp::isolation::isolation_rights::lifecycle | dgp::isolation::isolation_rights::share;
-            case operation_kind::strand_create:    return dgp::isolation::isolation_rights::lifecycle | dgp::isolation::isolation_rights::sched;
-            case operation_kind::address_space_create: return dgp::isolation::isolation_rights::lifecycle;
-            case operation_kind::ipc_endpoint_create: return dgp::isolation::isolation_rights::signal;
-            case operation_kind::ipc_endpoint_destroy: return dgp::isolation::isolation_rights::signal;
-            case operation_kind::ipc_send: return dgp::isolation::isolation_rights::signal;
-            case operation_kind::ipc_receive: return dgp::isolation::isolation_rights::signal;
-            case operation_kind::shm_export: return dgp::isolation::isolation_rights::share;
-            case operation_kind::shm_import: return dgp::isolation::isolation_rights::map;
-            case operation_kind::shm_map: return dgp::isolation::isolation_rights::map | dgp::isolation::isolation_rights::share;
-            case operation_kind::policy_server_register: return dgp::isolation::isolation_rights::service;
-            case operation_kind::policy_server_unregister: return dgp::isolation::isolation_rights::service;
+            case operation_kind::domain_create:    return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
+            case operation_kind::domain_destroy:   return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
+            case operation_kind::gate_create:      return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
+            case operation_kind::gate_destroy:     return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
+            case operation_kind::portal_destroy:   return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
+            case operation_kind::domain_exec:      return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
+            case operation_kind::portal_create:    return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy ) | ::zxfoundation::dgp::right::share;
+            case operation_kind::strand_create:    return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy ) | ::zxfoundation::dgp::right::sched;
+            case operation_kind::address_space_create: return ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
+            case operation_kind::ipc_endpoint_create: return ::zxfoundation::dgp::right::signal;
+            case operation_kind::ipc_endpoint_destroy: return ::zxfoundation::dgp::right::signal;
+            case operation_kind::ipc_send: return ::zxfoundation::dgp::right::signal;
+            case operation_kind::ipc_receive: return ::zxfoundation::dgp::right::signal;
+            case operation_kind::shm_export: return ::zxfoundation::dgp::right::share;
+            case operation_kind::shm_import: return ::zxfoundation::dgp::right::map;
+            case operation_kind::shm_map: return ::zxfoundation::dgp::right::map | ::zxfoundation::dgp::right::share;
+            case operation_kind::policy_server_register: return ::zxfoundation::dgp::right::naming_service;
+            case operation_kind::policy_server_unregister: return ::zxfoundation::dgp::right::naming_service;
 
-            case operation_kind::io_bind:          return dgp::isolation::isolation_rights::io;
-            case operation_kind::io_unbind:        return dgp::isolation::isolation_rights::io;
-            case operation_kind::io_submit:        return dgp::isolation::isolation_rights::io;
-            case operation_kind::io_irq_bind:      return dgp::isolation::isolation_rights::io;
-            case operation_kind::io_dma_extent:    return dgp::isolation::isolation_rights::io;
-            case operation_kind::io_completion_dequeue: return dgp::isolation::isolation_rights::io;
+            case operation_kind::io_bind:          return ( ::zxfoundation::dgp::right::bind | ::zxfoundation::dgp::right::submit | ::zxfoundation::dgp::right::observe );
+            case operation_kind::io_unbind:        return ( ::zxfoundation::dgp::right::bind | ::zxfoundation::dgp::right::submit | ::zxfoundation::dgp::right::observe );
+            case operation_kind::io_submit:        return ( ::zxfoundation::dgp::right::bind | ::zxfoundation::dgp::right::submit | ::zxfoundation::dgp::right::observe );
+            case operation_kind::io_dma_extent:    return ( ::zxfoundation::dgp::right::bind | ::zxfoundation::dgp::right::submit | ::zxfoundation::dgp::right::observe );
+            case operation_kind::io_completion_dequeue: return ( ::zxfoundation::dgp::right::bind | ::zxfoundation::dgp::right::submit | ::zxfoundation::dgp::right::observe );
 
-            case operation_kind::signal_register:  return dgp::isolation::isolation_rights::signal;
-            case operation_kind::signal_poll:      return dgp::isolation::isolation_rights::signal;
-            case operation_kind::signal_ack:       return dgp::isolation::isolation_rights::signal;
-            case operation_kind::signal_send:      return dgp::isolation::isolation_rights::signal;
-            case operation_kind::signal_mask_set:  return dgp::isolation::isolation_rights::signal;
-            case operation_kind::signal_mask_get:   return dgp::isolation::isolation_rights::signal;
-            case operation_kind::signal_wait:       return dgp::isolation::isolation_rights::signal;
+            case operation_kind::signal_register:  return ::zxfoundation::dgp::right::signal;
+            case operation_kind::signal_poll:      return ::zxfoundation::dgp::right::signal;
+            case operation_kind::signal_ack:       return ::zxfoundation::dgp::right::signal;
+            case operation_kind::signal_send:      return ::zxfoundation::dgp::right::signal;
+            case operation_kind::signal_mask_set:  return ::zxfoundation::dgp::right::signal;
+            case operation_kind::signal_mask_get:   return ::zxfoundation::dgp::right::signal;
+            case operation_kind::signal_wait:       return ::zxfoundation::dgp::right::signal;
 
-            case operation_kind::mem_alloc:        return dgp::isolation::isolation_rights::map;
-            case operation_kind::mem_free:         return dgp::isolation::isolation_rights::map;
-            case operation_kind::mem_map:          return dgp::isolation::isolation_rights::map;
-            case operation_kind::mem_unmap:        return dgp::isolation::isolation_rights::map;
-            case operation_kind::mem_protect:      return dgp::isolation::isolation_rights::map;
-            case operation_kind::mem_share:        return dgp::isolation::isolation_rights::share;
+            case operation_kind::mem_alloc:        return ::zxfoundation::dgp::right::map;
+            case operation_kind::mem_free:         return ::zxfoundation::dgp::right::map;
+            case operation_kind::mem_map:          return ::zxfoundation::dgp::right::map;
+            case operation_kind::mem_unmap:        return ::zxfoundation::dgp::right::map;
+            case operation_kind::mem_protect:      return ::zxfoundation::dgp::right::map;
 
-            case operation_kind::gate_entry:       return dgp::isolation::isolation_rights::enter;
+            case operation_kind::gate_entry:       return ::zxfoundation::dgp::right::call;
+            case operation_kind::gate_query:       return ::zxfoundation::dgp::right::none;
 
-            case operation_kind::cap_acquire:      return dgp::isolation::isolation_rights::none;
-            case operation_kind::cap_release:      return dgp::isolation::isolation_rights::none;
-            case operation_kind::cap_validate:     return dgp::isolation::isolation_rights::none;
-            case operation_kind::cap_revoke:       return dgp::isolation::isolation_rights::delegate | dgp::isolation::isolation_rights::lifecycle;
+            case operation_kind::cap_acquire:      return ::zxfoundation::dgp::right::none;
+            case operation_kind::cap_release:      return ::zxfoundation::dgp::right::none;
+            case operation_kind::cap_validate:     return ::zxfoundation::dgp::right::none;
+            case operation_kind::cap_revoke:       return ::zxfoundation::dgp::right::delegate | ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
 
-            case operation_kind::time_yield:       return dgp::isolation::isolation_rights::none;
-            case operation_kind::time_deadline:    return dgp::isolation::isolation_rights::none;
-            case operation_kind::time_now:         return dgp::isolation::isolation_rights::none;
-            case operation_kind::console_write:    return dgp::isolation::isolation_rights::console;
-            case operation_kind::register_service: return dgp::isolation::isolation_rights::service;
-            case operation_kind::lookup_service:   return dgp::isolation::isolation_rights::service;
-            case operation_kind::unregister_service:return dgp::isolation::isolation_rights::service | dgp::isolation::isolation_rights::lifecycle;
+            case operation_kind::time_yield:       return ::zxfoundation::dgp::right::none;
+            case operation_kind::time_deadline:    return ::zxfoundation::dgp::right::none;
+            case operation_kind::time_now:         return ::zxfoundation::dgp::right::none;
+            case operation_kind::time_sleep:       return ::zxfoundation::dgp::right::none;
+            case operation_kind::strand_join:      return ::zxfoundation::dgp::right::none;
+            case operation_kind::strand_exit:      return ::zxfoundation::dgp::right::none;
+            case operation_kind::console_write:    return ::zxfoundation::dgp::right::console;
+            case operation_kind::register_service: return ::zxfoundation::dgp::right::naming_service;
+            case operation_kind::lookup_service:   return ::zxfoundation::dgp::right::naming_service;
+            case operation_kind::unregister_service:return ::zxfoundation::dgp::right::naming_service | ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy );
 
-            case operation_kind::domain_exit:      return dgp::isolation::isolation_rights::none;
-            case operation_kind::domain_info:      return dgp::isolation::isolation_rights::none;
-            case operation_kind::domain_query:     return dgp::isolation::isolation_rights::debug;
+            case operation_kind::domain_exit:      return ::zxfoundation::dgp::right::none;
+            case operation_kind::domain_info:      return ::zxfoundation::dgp::right::none;
+            case operation_kind::domain_query:     return ::zxfoundation::dgp::right::debug;
 
-            case operation_kind::strand_set_policy:   return dgp::isolation::isolation_rights::sched;
-            case operation_kind::strand_set_affinity: return dgp::isolation::isolation_rights::sched;
-            case operation_kind::strand_query_state:  return dgp::isolation::isolation_rights::sched | dgp::isolation::isolation_rights::debug;
+            case operation_kind::strand_set_policy:   return ::zxfoundation::dgp::right::sched;
+            case operation_kind::strand_set_affinity: return ::zxfoundation::dgp::right::sched;
+            case operation_kind::strand_query_state:  return ::zxfoundation::dgp::right::sched | ::zxfoundation::dgp::right::debug;
 
-            case operation_kind::none:                return dgp::isolation::isolation_rights::none;
+            case operation_kind::none:                return ::zxfoundation::dgp::right::none;
         }
-        return dgp::isolation::isolation_rights::none;
+        return ::zxfoundation::dgp::right::none;
     }
 
     // Validate operation-specific metadata beyond the common caller/target check.
@@ -121,7 +126,6 @@ namespace zxfoundation::dgp::detail {
             // Operations that require a valid VA range:
             case operation_kind::portal_create:
             case operation_kind::mem_map:
-            case operation_kind::mem_share:
             case operation_kind::mem_unmap:
             case operation_kind::mem_protect:
             case operation_kind::mem_free:
@@ -134,7 +138,6 @@ namespace zxfoundation::dgp::detail {
 
                 // Operations that require a non-zero gate_id:
             case operation_kind::gate_entry:
-            case operation_kind::io_irq_bind:
                 if (meta.gate_id == 0U) {
                     return std::unexpected(
                         lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
@@ -143,6 +146,7 @@ namespace zxfoundation::dgp::detail {
 
                 // Operations with no extra metadata to validate:
             case operation_kind::domain_create:
+            case operation_kind::domain_exec:
             case operation_kind::domain_destroy:
             case operation_kind::domain_exit:
             case operation_kind::domain_info:
@@ -151,6 +155,7 @@ namespace zxfoundation::dgp::detail {
             case operation_kind::address_space_create:
             case operation_kind::ipc_endpoint_create:
             case operation_kind::ipc_endpoint_destroy:
+            case operation_kind::gate_query:
             case operation_kind::ipc_send:
             case operation_kind::ipc_receive:
             case operation_kind::shm_import:
@@ -183,6 +188,9 @@ namespace zxfoundation::dgp::detail {
             case operation_kind::time_yield:
             case operation_kind::time_deadline:
             case operation_kind::time_now:
+            case operation_kind::time_sleep:
+            case operation_kind::strand_join:
+            case operation_kind::strand_exit:
             case operation_kind::console_write:
             case operation_kind::register_service:
             case operation_kind::lookup_service:
@@ -220,12 +228,20 @@ namespace zxfoundation::dgp {
             return std::unexpected(op_metadata_result.error());
         }
 
-        const dgp::isolation::isolation_rights required = detail::required_rights_for_op(op);
-        if (required != dgp::isolation::isolation_rights::none) {
-            const dgp::isolation::isolation_rights effective = meta.requested_rights | required;
+        const ::zxfoundation::dgp::right_mask required = detail::required_rights_for_op(op);
+        if (required != ::zxfoundation::dgp::right::none) {
+            const ::zxfoundation::dgp::right_mask effective = meta.requested_rights | required;
             if (!has_all_rights(caller.granted_rights, effective)) {
                 return std::unexpected(
-                    lib::kernel_error::from_memory(lib::memory_error::capability_invalid));
+                    lib::kernel_error::from_generic(lib::generic_error::denied));
+            }
+        }
+
+        if (meta.token) {
+            auto cap_r = zxfoundation::dgp::cap::cap_validate_generic_for(
+                meta.token, meta.token_rights, caller.ko.id);
+            if (!cap_r) {
+                return std::unexpected(cap_r.error());
             }
         }
 

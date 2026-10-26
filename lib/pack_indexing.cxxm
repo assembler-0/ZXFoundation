@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lib/pack_indexing.cxxm
 /// @brief C++26 pack indexing
 

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/lowcore_types.cxxm
+/// @file arch/s390x/cpu/lowcore.zcomponent/lowcore.cxxm
 /// @brief z/Architecture 8 KB prefix (lowcore) layout.
 
 export module arch.s390x.cpu.lowcore;
@@ -207,8 +207,15 @@ namespace arch::s390x::cpu::lowcore {
         lib::rw<"transactional_diagnostic_block", lib::bytes<6144, 6399>, tx::tdb>
     >;
 
+    /// @brief get current lowcore at real address 0x0 (with prefixing)
     [[nodiscard]] auto get_current() noexcept -> zlowcore*;
-    [[nodiscard]] auto get_current_phys() noexcept -> zlowcore*;
+
+    /// @brief Return the lowcore at absolute storage address zero.
+    [[nodiscard]] auto get_absolute() noexcept -> zlowcore*;
+
+    /// @brief Read the physical base address installed in the Prefix Register.
+    /// @return Physical address of the current CPU's lowcore prefix area.
+    [[nodiscard]] auto get_current_phys() noexcept -> u64;
 
     /// @brief Retrieve the lowcore structure pointer for a specific CPU, taking prefixing into account.
     /// @param[in] cpu_id  The logical target CPU ID.
@@ -216,6 +223,13 @@ namespace arch::s390x::cpu::lowcore {
     [[nodiscard]] auto get_for_cpu(u16 cpu_id) noexcept -> zlowcore*;
 
     auto register_cpu_lowcore(u16 cpu_id, u64 phys_lc) noexcept -> void;
+
+    /// @brief Remove a CPU lowcore binding if it still refers to a page.
+    /// @param[in] cpu_id Logical CPU identifier.
+    /// @param[in] phys_lc Expected physical lowcore address.
+    /// @note The compare-and-clear operation prevents rollback from erasing
+    ///       a newer binding published by a subsequent startup transaction.
+    auto unregister_cpu_lowcore(u16 cpu_id, u64 phys_lc) noexcept -> void;
 
     /// @brief Initialize the BSP lowcore.  Must be called once after HHDM is active.
     auto init_bsp(const init::zxfl::protocol& proto) noexcept -> void;

@@ -1,3 +1,4 @@
+/// @file zxfoundation/sys/irq.zcomponent/storage.cxx
 import zxfoundation.scoms.table;
 import zxfoundation.sys.irq.desc;
 import zxfoundation.sys.irq.consts;

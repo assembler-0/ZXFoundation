@@ -97,7 +97,7 @@ namespace zxfoundation::memory::slub {
 
     /// @brief Per-NUMA-node slab state.
     struct kmem_cache_node {
-        sync::qspinlock::qspinlock list_lock{};
+        sync::qspinlock::qspinlock<sync::lock_rank::slub_node> list_lock{};
         slab_header*  partial{nullptr};       ///< Partially-filled slabs.
         u32           nr_partial{0};          ///< Count of partial slabs.
         u32           min_partial{SLUB_MIN_PARTIAL}; ///< Reclaim threshold.

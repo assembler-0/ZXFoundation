@@ -1,0 +1,6 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/pcss.zcomponent/interface.cxxm
+/// @brief PC-ss substrate umbrella module.
+
+export module arch.s390x.cpu.pcss;
+export import arch.s390x.cpu.pcss.types;

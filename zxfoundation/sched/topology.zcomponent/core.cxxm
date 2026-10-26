@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/topology.cxxm
+/// @file zxfoundation/sched/topology.zcomponent/core.cxxm
 /// @brief Scheduler topology records derived from per-CPU and loader evidence.
 
 export module zxfoundation.sched.topology.core;
@@ -21,7 +21,7 @@ namespace zxfoundation::sched::topology::detail {
     /// @brief Single mask covering all online CPUs across all NUMA nodes.
     from_global(reference) ::lib::cpumask g_remote_mask;
 
-} // namespace zxfoundation::sched::topology::_internal
+} // namespace zxfoundation::sched::topology::detail
 
 export {
 

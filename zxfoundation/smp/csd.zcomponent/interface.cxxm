@@ -1,3 +1,4 @@
+/// @file zxfoundation/smp/csd.zcomponent/interface.cxxm
 export module zxfoundation.smp.csd;
 export import zxfoundation.smp.csd.core;
 export import zxfoundation.smp.csd.types;

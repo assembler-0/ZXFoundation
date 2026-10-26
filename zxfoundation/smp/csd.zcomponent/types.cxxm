@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/smp/smp_types.cxxm
+/// @file zxfoundation/smp/csd.zcomponent/types.cxxm
 /// @brief Cross-CPU function-call IPI data structures.
 
 export module zxfoundation.smp.csd.types;
@@ -54,6 +54,6 @@ namespace zxfoundation::smp::csd {
         u64 csd_call_many_count{0};    ///< Total @c smp_call_function_many invocations on this CPU.
     };
 
-} // namespace zxfoundation::smp
+} // namespace zxfoundation::smp::csd
 
 } // end export

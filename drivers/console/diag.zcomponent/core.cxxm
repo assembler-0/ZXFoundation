@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file diag.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file drivers/console/diag.zcomponent/core.cxxm
 /// @brief idiomatic C++23 DIAG 8 hypervisor console driver.
 
 export module drivers.console.diag.core;

@@ -16,15 +16,14 @@ namespace zxfoundation::dgp::gate {
     /// @param type             Gate type (nucleus or domain).
     /// @param auth             Authorization policy.
     /// @param target_domain_id Target domain ID.
-    /// @param entry_va         Entry-point virtual address in the target domain.
     /// @param target_key       Storage key of the target domain.
     /// @return                 The allocated slot ID, or an error if the table is full.
     auto gate_create(
         gate_type type,
         gate_auth auth,
         u32       target_domain_id,
-        u64       entry_va,
-        u8        target_key
+        u8        target_key,
+        u64       entry_va
     ) noexcept -> std::expected<u32, lib::kernel_error>;
 
     /// @brief Destroy a gate, freeing its slot.
@@ -44,9 +43,6 @@ namespace zxfoundation::dgp::gate {
     auto gate_find(u32 id) noexcept -> gate_desc*;
 
     auto register_gate_cap_lookup() noexcept -> void;
-
-    /// @brief Initialize the gate subsystem.
-    auto gate_init() noexcept -> void;
 
     /// @brief Return the current number of active gates.
     auto gate_count() noexcept -> u32;

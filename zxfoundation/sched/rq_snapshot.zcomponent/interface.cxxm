@@ -1,2 +1,3 @@
+/// @file zxfoundation/sched/rq_snapshot.zcomponent/interface.cxxm
 export module zxfoundation.sched.rq_snapshot;
 export import zxfoundation.sched.rq_snapshot.core;

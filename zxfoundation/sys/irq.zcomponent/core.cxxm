@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/irq.zcomponent/irqdesc.cxxm
+/// @file zxfoundation/sys/irq.zcomponent/core.cxxm
 /// @brief Generic IRQ descriptor table
 
 export module zxfoundation.sys.irq.core;
@@ -45,10 +45,6 @@ namespace zxfoundation::sys::irq {
     /// @brief Unregister the handler for a vector and release the SCOMS slot.
     /// @param[in] irq  Vector slot to clear.
     auto irq_unregister(u16 irq) noexcept -> void;
-
-    /// @brief Initialize the IRQ subsystem with the SCOMS scoms_table.
-    /// @note Idempotent — safe to invoke from `main` after `printk::init()`.
-    auto init() noexcept -> void;
 
     /// @brief Set one deferred-work bit on the calling CPU's
     ///        @c percpu::s390x_percpu_data::deferred_pending field.

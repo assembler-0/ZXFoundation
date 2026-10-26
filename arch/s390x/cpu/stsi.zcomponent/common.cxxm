@@ -1,3 +1,4 @@
+/// @file arch/s390x/cpu/stsi.zcomponent/common.cxxm
 export module arch.s390x.cpu.stsi:common;
 export import lib.error;
 export import lib.stl;

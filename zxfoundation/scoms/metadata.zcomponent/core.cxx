@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file scoms_object_core.cxxm
+/// @file zxfoundation/scoms/metadata.zcomponent/core.cxx
 /// @brief Nucleus-owned metadata for the unified object ontology.
 
 module zxfoundation.scoms.metadata.core;
@@ -19,7 +19,7 @@ auto allocate(u64) noexcept -> void* symalias_reference(kmalloc);
 namespace zxfoundation::scoms::object_core::detail {
 
     no_export std::array<object_metadata*, METADATA_BLOCK_COUNT> g_metadata{};
-    alignas(4) no_export sync::qspinlock::qspinlock g_lock{};
+    alignas(4) no_export sync::qspinlock::qspinlock<sync::lock_rank::scoms_meta> g_lock{};
 
     [[nodiscard]] no_export auto metadata_at(u32 index, bool create = false) noexcept
         -> object_metadata* {
@@ -82,7 +82,7 @@ namespace zxfoundation::scoms::object_core {
     [[nodiscard]] auto register_object(
         kobject::bobject& object, u32 owner_domain
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         if (detail::find_locked(object)) {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
@@ -112,7 +112,7 @@ namespace zxfoundation::scoms::object_core {
     [[nodiscard]] auto unregister_object(
         kobject::bobject& object
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* entry = detail::find_locked(object);
         if (!entry) return std::unexpected(detail::error_not_found());
         if (entry->dependent_count != 0U) {
@@ -126,30 +126,33 @@ namespace zxfoundation::scoms::object_core {
     }
 
     [[nodiscard]] auto set_reclaimer(
-        kobject::bobject& object, void (*reclaimer)(kobject::bobject&) noexcept
+        kobject::bobject& object, reclaimer_fn reclaimer, void* ctx
     ) noexcept -> std::expected<void, lib::kernel_error> {
         if (!reclaimer) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::invalid_arg));
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* entry = detail::find_locked(object);
         if (!entry) return std::unexpected(detail::error_not_found());
         entry->reclaimer = reclaimer;
+        entry->reclaimer_ctx = ctx;
         return {};
     }
 
     auto finalize_last_put(kobject::bobject& object) noexcept -> void {
-        void (*reclaimer)(kobject::bobject&) noexcept = nullptr;
+        void (*reclaimer)(kobject::bobject&, void*) noexcept = nullptr;
+        void* reclaimer_ctx = nullptr;
         {
-            const sync::irq_lock_guard guard{detail::g_lock};
+            const sync::irq_lock_guard _{detail::g_lock};
             auto* entry = detail::retired_locked(object);
             if (!entry || !entry->reclaimer) __builtin_trap();
             reclaimer = entry->reclaimer;
+            reclaimer_ctx = entry->reclaimer_ctx;
         }
-        reclaimer(object);
+        reclaimer(object, reclaimer_ctx);
     }
 
     auto complete_reclaim(kobject::bobject& object) noexcept -> void {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* entry = detail::retired_locked(object);
         if (!entry) __builtin_trap();
         entry->object = nullptr;
@@ -161,7 +164,7 @@ namespace zxfoundation::scoms::object_core {
     [[nodiscard]] auto set_owner(
         kobject::bobject& object, u32 owner_domain
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* entry = detail::find_locked(object);
         if (!entry) return std::unexpected(detail::error_not_found());
         entry->owner_domain = owner_domain;
@@ -175,7 +178,7 @@ namespace zxfoundation::scoms::object_core {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* child_meta = detail::find_locked(child);
         auto* parent_meta = detail::find_locked(parent);
         if (!child_meta || !parent_meta || child_meta->parent_id != kobject::KOBJECT_ID_INVALID) {
@@ -192,7 +195,7 @@ namespace zxfoundation::scoms::object_core {
     [[nodiscard]] auto detach(
         kobject::bobject& child
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* child_meta = detail::find_locked(child);
         if (!child_meta) return std::unexpected(detail::error_not_found());
         if (child_meta->parent_id == kobject::KOBJECT_ID_INVALID) return {};
@@ -204,7 +207,7 @@ namespace zxfoundation::scoms::object_core {
     [[nodiscard]] auto has_dependents(
         const kobject::bobject& object
     ) noexcept -> bool {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         const auto* entry = detail::find_locked(object);
         return entry != nullptr && entry->dependent_count != 0U;
     }
@@ -212,7 +215,7 @@ namespace zxfoundation::scoms::object_core {
     [[nodiscard]] auto bump_hardware_generation(
         kobject::bobject& object
     ) noexcept -> std::expected<u32, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* entry = detail::find_locked(object);
         if (!entry) return std::unexpected(detail::error_not_found());
         ++entry->hardware_generation;
@@ -222,7 +225,7 @@ namespace zxfoundation::scoms::object_core {
     [[nodiscard]] auto metadata(
         const kobject::bobject& object
     ) noexcept -> std::expected<object_metadata, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         const auto* entry = detail::find_locked(object);
         if (!entry) return std::unexpected(detail::error_not_found());
         return *entry;

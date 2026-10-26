@@ -12,15 +12,11 @@ import arch.s390x.mmu.types;
 import lib.error;
 import lib.stl;
 
+using zxfoundation::base::lifecycle_state;
+
 export {
+
 namespace zxfoundation::dgp::isolation {
-
-    using zxfoundation::base::lifecycle_state;
-
-    /// @brief Initialize the DGP isolation clean core.
-    /// @note The initial implementation resets the bootstrap storage-key registry before domain-visible DGP objects exist.
-    /// @warning This function must run before domain, gate, or portal policy is exposed to user-visible objects.
-    auto init() noexcept -> void;
 
     /// @brief Create initial DGP isolation state for a domain.
     /// @param[in] domain_id Domain identifier assigned by the caller.
@@ -153,7 +149,7 @@ namespace zxfoundation::dgp::isolation {
     [[nodiscard]] auto validate_gate_entry(
         u32 caller_domain_id,
         u32 gate_id,
-        dgp::isolation::isolation_rights requested
+        ::zxfoundation::dgp::right_mask requested
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Validate creation or use of a DGP portal.
@@ -168,7 +164,7 @@ namespace zxfoundation::dgp::isolation {
         u32 target_domain_id,
         u64 va_start,
         u64 va_end,
-        dgp::isolation::isolation_rights requested
+        ::zxfoundation::dgp::right_mask requested
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Lazy revocation of DGP rights on a domain.
@@ -177,8 +173,9 @@ namespace zxfoundation::dgp::isolation {
     /// @return Success on completion, or kernel_error when @c d is not active.
     auto revoke_domain_rights(
         zxfoundation::dgp::domain::domain& d,
-        dgp::isolation::isolation_rights drop_mask
+        ::zxfoundation::dgp::right_mask drop_mask
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
-} // namespace zxfoundation::dgp
+} // namespace zxfoundation::dgp::isolation
+
 } // end export

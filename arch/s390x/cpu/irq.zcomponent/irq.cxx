@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/irq.cxxm
+/// @file arch/s390x/cpu/irq.zcomponent/irq.cxx
 /// @brief z/Architecture interrupt-mask control.
 
 module arch.s390x.cpu.irq;

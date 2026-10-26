@@ -1,38 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/mmu.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/mmu.c
 /// @brief z/Architecture 5-level DAT setup for the ZXFL bootloader.
-///
-///        Builds the full z/Architecture paging hierarchy with a Region-First
-///        table root (DT=11) and identity-maps + HHDM-maps all detected
-///        physical memory, then enables DAT and LPSWE into the kernel.
-///
-///        5-level paging hierarchy (PoP SA22-7832-13, Chapter 3):
-///          ASCE (DT=11) → R1 Table → R2 Table → R3 Table → Seg Table → Page Table
-///                          2048        2048       2048       2048        256
-///                          TT=11       TT=10      TT=01      TT=00
-///
-///        Virtual address bit decomposition for DT=11 (R1 root):
-///          Bits 0-10:  RFX — Region-First-Table index   (R1, 2048 entries)
-///          Bits 11-21: RSX — Region-Second-Table index  (R2, 2048 entries)
-///          Bits 22-32: RTX — Region-Third-Table index   (R3, 2048 entries)
-///          Bits 33-43: SX  — Segment-Table index        (Seg, 2048 entries)
-///          Bits 44-51: PX  — Page-Table index           (PT, 256 entries)
-///          Bits 52-63: BX  — Byte index within page     (4096 bytes)
-///
-///        Memory coverage per hierarchy level:
-///          One R1 entry  → 8 PB   (2048 R2 entries × 4 TB)
-///          One R2 entry  → 4 TB   (2048 R3 entries × 2 GB)
-///          One R3 entry  → 2 GB   (2048 segment entries × 1 MB)
-///          One STE       → 1 MB   (256 page entries × 4 KB)
-///          One PTE       → 4 KB
-///
-///        HHDM mapping for CONFIG_KERNEL_VIRT_OFFSET = 0xFFFF800000000000:
-///          RFX = 2047 (topmost R1 entry — clean kernel/user separation)
-///          RSX = 2016
-///          RTX = 0
-///          Both identity (RFX=0) and HHDM (RFX=2047) share the same R2
-///          table because their RSX indices do not overlap (0 vs 2016).
 
 #include <arch/s390x/init/zxfl/processor.h>
 #include <arch/s390x/init/zxfl/zxfl.h>
@@ -41,20 +9,17 @@
 #include <arch/s390x/init/zxfl/string.h>
 #include <zxfoundation/memory/hhdm.h>
 
-
 /// ASCE Designation-Type field (bits 60-61).
 /// DT=11 means the root table is a Region-First table (5-level paging).
 #define Z_ASCE_DT_R1        0x0CULL
 
 /// ASCE Table-Length field (bits 62-63).
-/// TL=11 means the table has 2048 entries.
 #define Z_ASCE_TL_2048      0x03ULL
 
 /// Region/Segment Table Entry: Invalid bit (bit 58).
 #define Z_I                  0x20ULL
 
 /// Region Table Entry: Table-Type field (bits 60-61).
-/// TT identifies which level THIS entry belongs to.
 #define Z_TT_R1              0x0CULL   // TT=11: entry belongs to R1 table
 #define Z_TT_R2              0x08ULL   // TT=10: entry belongs to R2 table
 #define Z_TT_R3              0x04ULL   // TT=01: entry belongs to R3 table
@@ -64,14 +29,10 @@
 #define Z_TL_2048            0x03ULL
 
 /// Segment Table Entry: Format-Control bit (bit 53 IBM = LSB bit 10).
-/// With EDAT-1, the STE directly maps a 1 MB large page.
 #define Z_STE_FC             0x400ULL
 
 /// Page Table Entry: Invalid bit (bit 53).
 #define Z_PTE_I              0x400ULL
-
-/// STFLE facility bit for EDAT-1 (enhanced DAT 1).
-/// Defined in stfle.h as STFLE_BIT_EDAT1 = 8.
 
 /// Bytes per 1 MB segment.
 #define SEG_SIZE             (1024ULL * 1024ULL)
@@ -88,19 +49,6 @@
 /// Entries per Region-3 table.
 #define R3_TABLE_ENTRIES     2048U
 
-/// Maximum physical memory the HHDM will map.
-///
-/// This covers the ENTIRE installed RAM — phys_to_virt() must work for
-/// every valid physical address.  A single z16 drawer holds up to 2 TB;
-/// a 4-drawer system can exceed 8 TB.  We cap at 16 TB which covers
-/// any practical z/Architecture LPAR with comfortable headroom.
-///
-/// Page-table overhead with EDAT-1 (1 MB large pages):
-///   512 GB  →  ~4 MB       2 TB  → ~16 MB
-///     4 TB  → ~32 MB      16 TB  → ~128 MB
-///
-/// Projects that depend on the loader's HHDM for the kernel's entire
-/// lifetime should set this high enough for their target hardware.
 #define MAX_PHYS_MAP         (16ULL * 1024 * 1024 * 1024 * 1024)
 
 static uint64_t r1_table[2048] __attribute__((aligned(16384)));
@@ -152,14 +100,12 @@ static uint64_t *alloc_page_table(void) {
 /// @param entry      Kernel entry point (HHDM virtual address from ELF e_entry).
 /// @param boot_proto Physical address of the zxfl_boot_protocol_t struct.
 [[noreturn]] void zxfl_mmu_setup_and_jump(uint64_t entry, uint64_t boot_proto) {
-    zxfl_boot_protocol_t *proto = (zxfl_boot_protocol_t *)boot_proto;
+    auto proto = (zxfl_boot_protocol_t *)boot_proto;
     const uint64_t virt_base = CONFIG_KERNEL_VIRT_OFFSET;
 
     const bool has_edat1 = stfle_has_facility(proto->stfle_fac, STFLE_BIT_EDAT1);
 
-    // We map ALL usable physical memory up to the highest probed byte.
     uint64_t map_bytes = proto->mem_total_bytes;
-    // Find the actual highest physical address in the map
     const zxfl_mem_region_t *mmap = (const zxfl_mem_region_t *)(uintptr_t)proto->mem_map_addr;
     for (uint32_t i = 0; i < proto->mem_map_count; i++) {
         uint64_t end = mmap[i].base + mmap[i].length;
@@ -169,7 +115,6 @@ static uint64_t *alloc_page_table(void) {
     if (map_bytes < 0x200000ULL) map_bytes = 0x200000ULL;
     map_bytes = (map_bytes + SEG_TABLE_COVERAGE - 1) & ~(SEG_TABLE_COVERAGE - 1);
 
-    // Hard limit — see MAX_PHYS_MAP definition for rationale.
     if (map_bytes > MAX_PHYS_MAP) map_bytes = MAX_PHYS_MAP;
 
     for (uint32_t i = 0; i < 2048; i++) {
@@ -182,31 +127,22 @@ static uint64_t *alloc_page_table(void) {
     if (pool_base < 0x2000000ULL) pool_base = 0x2000000ULL;
     pool_next = pool_base;
 
-    // Compute R1/R2 index offsets for identity and HHDM mappings.
     const uint32_t rfx_identity = 0;
     const uint32_t rfx_hhdm     = (uint32_t)((virt_base >> 53) & 0x7FFULL);
     const uint32_t rsx_hhdm     = (uint32_t)((virt_base >> 42) & 0x7FFULL);
 
-    // Build the Region-3 and Segment tables.
-    // Each R3 table covers 4 TB (2048 entries × 2 GB).
-    // Each R2 entry points to one R3 table.
-    // For >4 TB, we need multiple R3 tables (one per 4 TB).
     const uint64_t r3_coverage = (uint64_t)R3_TABLE_ENTRIES * SEG_TABLE_COVERAGE;
     const uint32_t num_r2_entries = (uint32_t)((map_bytes + r3_coverage - 1) / r3_coverage);
 
-    // --- Relocate BSP Lowcore ---
-    // Allocate 8KB for the new prefix area (lowcore), 8KB aligned.
     uint64_t bsp_lowcore_phys = pool_alloc(8192, 8192);
     memset((void*)(uintptr_t)bsp_lowcore_phys, 0, 8192);
-    
-    // Pass the relocated lowcore address to the kernel.
+
     proto->lowcore_phys = bsp_lowcore_phys;
     proto->flags |= ZXFL_FLAG_LOWCORE;
 
     for (uint32_t r2e = 0; r2e < num_r2_entries; r2e++) {
         uint64_t *r3_tab = alloc_r3_table();
 
-        // How many R3 entries are needed in this slice?
         uint64_t slice_start = (uint64_t)r2e * r3_coverage;
         uint64_t slice_end   = slice_start + r3_coverage;
         if (slice_end > map_bytes) slice_end = map_bytes;
@@ -246,7 +182,6 @@ static uint64_t *alloc_page_table(void) {
     r1_table[rfx_hhdm]     = (uint64_t)(uintptr_t)r2_table_hhdm | Z_TL_2048 | Z_TT_R1;
 
     // Update protocol addresses to be HHDM-virtual.
-    proto->kernel_stack_top = hhdm_phys_to_virt(proto->kernel_stack_top);
     proto->mem_map_addr     = hhdm_phys_to_virt(proto->mem_map_addr);
     proto->cmdline_addr     = hhdm_phys_to_virt(proto->cmdline_addr);
     if (proto->cksum_table)
@@ -255,7 +190,6 @@ static uint64_t *alloc_page_table(void) {
         proto->sclp_info_addr = hhdm_phys_to_virt(proto->sclp_info_addr);
 
     uint64_t v_proto = hhdm_phys_to_virt(boot_proto);
-    uint64_t v_stack = proto->kernel_stack_top;
 
     uint64_t cr0;
     arch_ctl_store(cr0, 0, 0);
@@ -287,20 +221,15 @@ static uint64_t *alloc_page_table(void) {
 
     __asm__ volatile("ptlb" ::: "memory");
 
-    // PSW_MASK_KERNEL_DAT = PSW_BIT_DAT | PSW_BIT_EA | PSW_BIT_BA
-    // = 0x0400000180000000.  Using the named constant instead of a literal
-    // ensures this stays in sync with the rest of the kernel's PSW definitions.
     static uint64_t jump_psw[2] __attribute__((aligned(16)));
     jump_psw[0] = PSW_MASK_KERNEL_DAT;
     jump_psw[1] = entry;
 
     __asm__ volatile(
         "lgr   %%r2, %[proto]\n"
-        "lgr   %%r15, %[stack]\n"
         "lpswe %[psw]\n"
         :
         : [proto] "r"(v_proto),
-          [stack] "r"(v_stack),
           [psw]   "Q"(jump_psw)
         : "r2", "memory"
     );

@@ -1,0 +1,99 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/smp.zcomponent/types.cxxm
+/// @brief Authoritative s390x CPU lifecycle types.
+
+export module arch.s390x.cpu.smp.types;
+import zxfoundation.base.types;
+import zxfoundation.sys.irq.consts;
+
+export {
+
+namespace arch::s390x::cpu::smp {
+
+    constexpr u16 IPI_IRQ_EMERGENCY =
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT + zxfoundation::sys::irq::EXT_IRQ_EMERGENCY_SIGNAL);
+    constexpr u16 IPI_IRQ_EXTCALL   =
+        static_cast<u16>(zxfoundation::sys::irq::IRQ_BASE_EXT +
+                         zxfoundation::sys::irq::EXT_IRQ_EXTERNAL_CALL);
+
+    /// @brief Soft-IPI bit indices — OR-ed into percpu::ec_bits by the sender
+    ///        and atomically drained by the receiver.
+    /// @{
+    constexpr u64 EC_SCHEDULE             = 0;  ///< Request reschedule.
+    constexpr u64 EC_CALL_FUNCTION        = 1;  ///< Generic function-call IPI.
+    constexpr u64 EC_CALL_FUNCTION_SINGLE  = 2;  ///< Single-CPU function-call IPI.
+    constexpr u64 EC_STOP_CPU              = 3;  ///< Stop this CPU.
+    constexpr u64 EC_MCCK_PENDING          = 4;  ///< Deferred MCCK work pending.
+    constexpr u64 EC_IRQ_WORK              = 5;  ///< IRQ work (timer/lists).
+    constexpr u64 EC_HALT                  = 6;  ///< Halt / shutdown ordering.
+    /// @}
+
+    /// @brief 1<<N masks derived from the bit positions above.
+    constexpr u64 EC_SCHEDULE_BIT            = 1ULL << EC_SCHEDULE;
+    constexpr u64 EC_CALL_FUNCTION_BIT       = 1ULL << EC_CALL_FUNCTION;
+    constexpr u64 EC_CALL_FUNCTION_SINGLE_BIT= 1ULL << EC_CALL_FUNCTION_SINGLE;
+    constexpr u64 EC_STOP_CPU_BIT            = 1ULL << EC_STOP_CPU;
+    constexpr u64 EC_MCCK_PENDING_BIT        = 1ULL << EC_MCCK_PENDING;
+    constexpr u64 EC_IRQ_WORK_BIT            = 1ULL << EC_IRQ_WORK;
+    constexpr u64 EC_HALT_BIT_OFFSET         = 1ULL << EC_HALT;
+
+    static_assert((EC_SCHEDULE_BIT ^ EC_CALL_FUNCTION_BIT ^ EC_CALL_FUNCTION_SINGLE_BIT ^
+                   EC_STOP_CPU_BIT ^ EC_MCCK_PENDING_BIT ^ EC_IRQ_WORK_BIT ^
+                   EC_HALT_BIT_OFFSET) ==
+                  (EC_SCHEDULE_BIT | EC_CALL_FUNCTION_BIT | EC_CALL_FUNCTION_SINGLE_BIT |
+                   EC_STOP_CPU_BIT | EC_MCCK_PENDING_BIT | EC_IRQ_WORK_BIT |
+                   EC_HALT_BIT_OFFSET),
+                  "soft-IPI bit masks must be pairwise distinct");
+    static_assert(EC_HALT_BIT_OFFSET == (1ULL << 6));
+
+    /// @brief CR0 subclass control bit positions (IBM MSB-0 numbering)
+    /// @{
+    constexpr u8 CR0_SC_EXTERNAL_CALL       = 13; ///< CR0 bit 13 → ext_call 0x1202.
+    constexpr u8 CR0_SC_EMERGENCY_SIGNAL    = 14; ///< CR0 bit 14 → emergency 0x1201.
+    constexpr u8 CR0_SC_SERVICE_SIGNAL      = 15; ///< CR0 bit 15 → service 0x2401.
+    constexpr u8 CR0_SC_CPU_TIMER           = 23; ///< CR0 bit 23 → CPU timer 0x1005.
+    constexpr u8 CR0_SC_CLOCK_COMPARATOR    = 24; ///< CR0 bit 24 → clock comp 0x1004.
+    constexpr u8 CR0_SC_TIMING_ALERT        = 30; ///< CR0 bit 30 → timing alert 0x1406.
+    /// @}
+
+    /// @brief Authoritative state of a logical CPU slot.
+    enum class lifecycle_state : u8 {
+        absent = 0,
+        present = 1,
+        possible = 2,
+        starting = 3,
+        online = 4,
+        quiescing = 5,
+        stopping = 6,
+        offline = 7,
+        failed = 8,
+    };
+
+    /// @brief Lifecycle notification emitted after a serialized transition point.
+    enum class notify_reason : u8 {
+        pre_setup = 0,
+        post_setup = 1,
+        pre_online = 2,
+        post_online = 3,
+        pre_offline = 4,
+        post_offline = 5,
+        failed = 6,
+    };
+
+    /// @brief Stable identity and lowcore binding for one logical CPU.
+    struct cpu_descriptor {
+        u16 logical_id{};
+        u16 cpu_addr{};
+        u64 lowcore_phys{};
+        u64 generation{};
+    };
+
+    /// @brief Lifecycle observer callback.
+    using lifecycle_callback = auto (*)(u16, notify_reason) noexcept -> void;
+
+    /// @brief Maximum number of lifecycle observers.
+    constexpr u32 LIFECYCLE_NOTIFIER_MAX = 8U;
+
+} // namespace arch::s390x::cpu::smp
+
+} // end export

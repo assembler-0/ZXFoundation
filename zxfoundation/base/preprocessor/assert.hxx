@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file assert.hxx
+/// @file zxfoundation/base/preprocessor/assert.hxx
 /// @brief Runtime/Static assertion support
 /// @note requires __zxmacro_want_assert=1
 
@@ -17,10 +17,32 @@
     })
 
 /// @brief lightweight runtime assertion
-#define chk_assert(cond) (static_cast<bool>(cond) ? (void)0 : __syschk(stringify(cond)))
+#define chk_assert(cond)                   \
+    do {                                   \
+        if (!(cond)) [[unlikely]]          \
+            __syschk(stringify(cond));     \
+    } while(0)
 
 /// @brief lightweight runtime check
-#define chk_on(cond) (static_cast<bool>(cond) ? __syschk(stringify(cond)) : (void)0)
+#define chk_on(cond)                       \
+    do {                                   \
+        if ((cond)) [[unlikely]]           \
+            __syschk(stringify(cond));     \
+    } while(0)
+
+/// @brief lightweight runtime assertion
+#define trap_assert(cond)         \
+    do {                          \
+        if (!(cond)) [[unlikely]] \
+            __builtin_trap();     \
+    } while(0)
+
+/// @brief lightweight runtime assertion
+#define trap_on(cond)             \
+    do {                          \
+        if ((cond)) [[unlikely]]  \
+            __builtin_trap();     \
+    } while(0)
 
 /// @name quick static size and offset checks
 /// @{

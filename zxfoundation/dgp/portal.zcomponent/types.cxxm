@@ -62,7 +62,11 @@ namespace zxfoundation::dgp::portal {
         u32          source_domain{0};    ///< Domain that holds this portal (has the ALET).
         u32          target_domain{0};    ///< Domain whose address space is accessed.
         u64          va_start{0};         ///< Start of accessible range in target.
-        u64          va_end{0};           ///< End of accessible range in target.
+        u64          va_end{0};            ///< End of accessible range in target.
+        u64          backing_va_start{0};  ///< Target-side VA the range maps; may
+                                           ///< differ from va_start for AR-view
+                                           ///< imports — fault resolution (§6.3)
+                                           ///< asks the target at THIS address.
         portal_prot  prot{portal_prot::none};
         u32          alet{0};             ///< Access List Entry Token assigned to this portal.
         u8           ar_num{0};           ///< Access register number (0-15) in source domain.

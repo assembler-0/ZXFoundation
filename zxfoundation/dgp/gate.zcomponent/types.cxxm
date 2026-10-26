@@ -6,9 +6,75 @@
 export module zxfoundation.dgp.gate.types;
 import zxfoundation.base.types;
 import zxfoundation.scoms.kobject.base;
-import zxfoundation.dgp.authorize;
+import arch.s390x.cpu.pcss.types;
 
 export {
+
+namespace zxfoundation::dgp {
+
+    /// @brief Operation kinds recognized by the DGP chokepoint.
+    enum class operation_kind : u8 {
+        none              = 0,
+        domain_create     = 1,   ///< Create a new sub-domain.
+        domain_destroy    = 2,   ///< Destroy a domain.
+        domain_exit       = 3,   ///< Self-terminate current domain.
+        domain_info       = 4,   ///< Query own domain metadata.
+        domain_query      = 5,   ///< Query another domain's metadata.
+        strand_create     = 6,   ///< Create a strand in a domain.
+        address_space_create = 43, ///< Create an address-space object.
+        gate_create       = 7,   ///< Create a gate descriptor.
+        gate_destroy      = 8,   ///< Destroy a gate descriptor.
+        gate_entry        = 9,   ///< Cross-domain gate entry (dispatch-level).
+        portal_create     = 10,  ///< Create a portal between domains.
+        portal_destroy    = 11,  ///< Destroy a portal.
+        io_bind           = 12,  ///< Bind a device to a domain.
+        io_unbind         = 13,  ///< Unbind a device.
+        io_submit         = 14,  ///< Submit a channel program.
+        io_dma_extent     = 59,  ///< Issue an exact DMA memory extent.
+        io_completion_dequeue = 60, ///< Consume a kernel-owned I/O completion.
+        signal_register   = 16,  ///< Register a signal handler.
+        signal_poll       = 17,  ///< Poll for pending signals.
+        signal_ack        = 18,  ///< Acknowledge signals.
+        signal_send       = 19,  ///< Cross-domain signal delivery.
+        signal_mask_set   = 20,  ///< Update blocked mask.
+        signal_mask_get   = 21,  ///< Read blocked mask.
+        signal_wait       = 22,  ///< Block current strand for next unblocked signal.
+        mem_alloc         = 23,  ///< Allocate anonymous memory.
+        mem_free          = 24,  ///< Free anonymous memory.
+        mem_map           = 25,  ///< Map physical memory.
+        mem_unmap         = 26,  ///< Unmap a memory range.
+        mem_protect       = 27,  ///< Change memory protection.
+        cap_acquire       = 29,  ///< Acquire a capability token.
+        cap_release       = 30,  ///< Release a capability token (voluntary).
+        cap_validate      = 31,  ///< Validate a capability token.
+        cap_revoke        = 32,  ///< Admin-side revoke of a capability/rights bundle.
+        time_yield        = 33,  ///< Yield CPU.
+        time_deadline     = 34,  ///< Compute a deadline.
+        time_now          = 35,  ///< Get monotonic time.
+        console_write     = 36,  ///< Write to console.
+        register_service  = 37,  ///< Register a named service.
+        lookup_service    = 38,  ///< Look up a named service.
+        unregister_service = 39,  ///< Unregister a service.
+        strand_set_policy   = 40,  ///< Change a strand's scheduler policy.
+        strand_set_affinity = 41,  ///< Change a strand's CPU affinity.
+        strand_query_state  = 42,  ///< Read a strand's scheduler state.
+        gate_query          = 44,  ///< Read a gate's caller-side PC number.
+        ipc_endpoint_create = 50,
+        ipc_endpoint_destroy = 51,
+        ipc_send = 52,
+        ipc_receive = 53,
+        shm_export = 54,
+        shm_import = 55,
+        shm_map = 56,
+        policy_server_register = 57,
+        policy_server_unregister = 58,
+        strand_join   = 61,
+        strand_exit   = 62,
+        time_sleep    = 63,
+        domain_exec,
+    };
+
+} // namespace zxfoundation::dgp
 
 namespace zxfoundation::dgp::gate {
 
@@ -54,23 +120,30 @@ namespace zxfoundation::dgp::gate {
         strand_set_policy   = 6,  ///< (strand_id, &sched_policy, ctx) — change class/prio/affinity.
         strand_set_affinity = 7,  ///< (strand_id, sched_mask_bits) — restrict CPU placement.
         strand_query_state  = 8,  ///< (strand_id, &out) — read cpu/on_rq/substate/prio/vruntime.
-        _count       = 9,
+        strand_join   = 9,   ///< (strand_id) — park until the strand exits; returns its code.
+        strand_exit   = 10,  ///< (code) — terminate the calling strand (§9.4 A10).
+        exec          = 11,  ///< (dom_id, image_va, image_len) — exec-analog
+        _count       = 12,
     };
 
     enum class mem_op : u32 {
-        alloc   = 0,
-        free    = 1,
-        map     = 2,
-        unmap   = 3,
-        protect = 4,
-        share   = 5,
-        _count  = 6,
+        alloc     = 0,
+        free      = 1,
+        map       = 2,
+        unmap     = 3,
+        protect   = 4,
+        futex_wait = 6,
+        futex_wake = 7,
+        _count    = 8,
     };
 
     enum class gate_op : u32 {
         create  = 0,
         destroy = 1,
-        _count  = 2,
+        query   = 2,   ///< Return the caller-side PC number (the capability).
+        defer   = 3,   ///< Handler cannot complete synchronously: park the caller.
+        resume  = 4,   ///< Worker completes a deferred request (reply registers).
+        _count  = 5,
     };
 
     enum class portal_op : u32 {
@@ -83,7 +156,6 @@ namespace zxfoundation::dgp::gate {
         bind               = 0,
         unbind             = 1,
         submit             = 2,
-        irq_bind           = 3, ///< Retired: hard IRQs never enter user gates.
         dma_extent         = 4,
         completion_dequeue = 5,
         _count             = 6,
@@ -125,7 +197,12 @@ namespace zxfoundation::dgp::gate {
         shm_map = 13,
         policy_register = 14,
         policy_unregister = 15,
-        _count             = 16,
+        last_error = 16,
+        ipc_reply = 17,
+        ipc_call = 18,
+        signal_return = 19,
+        time_sleep    = 20,
+        _count             = 21,
     };
 
     struct gate_desc {
@@ -135,7 +212,10 @@ namespace zxfoundation::dgp::gate {
         u8        target_key{0};
         u8        _pad0{0};
         u32       target_domain{0};
-        u64       entry_va{0};
+        u32       et_index{0};       ///< the gate's ETE (ch. 07: the ETE IS the gate)
+        u16       class_mask{0};     ///< EKM materialized into the ETE
+        u8        _pad1[2]{};
+        arch::s390x::cpu::pcss::pc_number pc_nr{}; ///< caller-side LX|EX (the capability)
 
         gate_desc() noexcept = default;
     };
@@ -144,29 +224,15 @@ namespace zxfoundation::dgp::gate {
 
 } // namespace zxfoundation::dgp::gate
 
-namespace zxfoundation::dgp::gate::dispatch {
+namespace zxfoundation::dgp::svc {
 
     using zxfoundation::dgp::gate::call_namespace;
 
-    /// @brief Gate authorization level enforced at dispatch time.
-    enum class gate_auth_level : u8 {
-        none        = 0, ///< No capability check — self-domain, time, console.
-        capability  = 1, ///< Capability token required in a0.
-        admin       = 2, ///< Admin-level capability required.
-        domain_map  = 3, ///< Legacy domain capability with map right required.
-        storage_key = 4, ///< Storage-key match required between caller and target.
-        io          = 5, ///< I/O authority required (a0 is op-specific, not a cap).
-        signal      = 6, ///< Signal-send right required (a0 = target domain id).
-    };
-
     /// @brief Metadata attached to each dispatch table entry.
     struct entry_meta {
-        u8                              namespace_id{0};
-        u8                              operation_id{0};
-        gate_auth_level                 auth{gate_auth_level::none};
-        bool                            requires_admin{false};
         zxfoundation::dgp::operation_kind op_kind{
             zxfoundation::dgp::operation_kind::none};
+        bool                            capability_addressed{false};
     };
 
     /// @brief Maximum entries: 8 namespaces x 32 operations = 256.
@@ -184,6 +250,6 @@ namespace zxfoundation::dgp::gate::dispatch {
         u64 a0, u64 a1, u64 a2, u64 a3, u64 a4
     ) noexcept -> u64;
 
-} // namespace zxfoundation::dgp::gate::dispatch_table
+} // namespace zxfoundation::dgp::svc
 
 } // end export

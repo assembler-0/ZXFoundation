@@ -1,3 +1,4 @@
+/// @file zxfoundation/dgp/cap.zcomponent/interface.cxxm
 export module zxfoundation.dgp.cap;
 export import zxfoundation.dgp.cap.core;
 export import zxfoundation.dgp.cap.types;

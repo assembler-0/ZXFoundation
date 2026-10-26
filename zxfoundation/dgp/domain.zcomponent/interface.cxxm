@@ -1,3 +1,4 @@
+/// @file zxfoundation/dgp/domain.zcomponent/interface.cxxm
 export module zxfoundation.dgp.domain;
 export import zxfoundation.dgp.domain.types;
 export import zxfoundation.dgp.domain.core;

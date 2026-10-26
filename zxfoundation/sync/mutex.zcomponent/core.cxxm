@@ -1,9 +1,10 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/locking/mutex.cxxm
+/// @file zxfoundation/sync/mutex.zcomponent/core.cxxm
 /// @brief Blocking mutex — sleep/wake lock with wait-queue integration.
 
 export module zxfoundation.sync.mutex.core;
-import zxfoundation.sync.waitqueue.types;
+import zxfoundation.sync.turnstile;
+import zxfoundation.dgp.domain.types;
 import zxfoundation.base.types;
 import arch.s390x.cpu.irq;
 import lib.stl;
@@ -15,7 +16,8 @@ namespace zxfoundation::sync::mutex {
     /// @brief Blocking mutex — sleep/wake mutual exclusion.
     class mutex {
         std::atomic<u32>  m_val{0};
-        waitqueue::wait_head m_wq{};
+        turnstile::turnstile m_turnstile{};
+        dgp::domain::strand* m_owner{nullptr};
 
     public:
         constexpr mutex() noexcept = default;

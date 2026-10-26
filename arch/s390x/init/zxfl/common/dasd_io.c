@@ -1,15 +1,9 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/dasd_io.c - Raw DASD channel I/O engine for ZXFL.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/dasd_io.c
+/// @brief Raw DASD channel I/O engine for ZXFL.
 
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/string.h>
-
-#define ASSERT_CDA_SAFE(ptr) \
-    _Static_assert(sizeof(ptr) > 0, "cda-safe"); \
-    do { \
-        if ((uintptr_t)(ptr) > 0x7FFFFFFFUL) \
-            __builtin_trap(); \
-    } while (0)
 
 static inline uint32_t cda_of(const void *p) {
     uintptr_t addr = (uintptr_t)p;

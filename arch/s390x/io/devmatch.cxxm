@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file devmatch.cxxm
+/// @file arch/s390x/io/devmatch.cxxm
 /// @brief z/Architecture CCW device identification database.
 
 export module arch.s390x.io.devmatch;

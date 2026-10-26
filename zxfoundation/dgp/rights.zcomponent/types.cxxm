@@ -1,0 +1,120 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/rights.zcomponent/types.cxxm
+/// @brief The single rights vocabulary
+
+export module zxfoundation.dgp.rights.types;
+import zxfoundation.base.types;
+
+export {
+
+namespace zxfoundation::dgp {
+
+    /// @brief The single rights vocabulary.
+    enum class right : u32 {
+        none    = 0,
+        // Object control
+        create  = 1U << 0,
+        destroy = 1U << 1,
+        read    = 1U << 2,
+        write   = 1U << 3,
+        // Memory
+        map      = 1U << 4,
+        share    = 1U << 5,
+        execute  = 1U << 6,
+        protect  = 1U << 7,
+        // Control transfer
+        call     = 1U << 8,
+        signal   = 1U << 9,
+        ipc      = 1U << 10,
+        delegate = 1U << 11,
+        // Scheduling
+        sched    = 1U << 12,
+        migrate  = 1U << 13,
+        boost    = 1U << 14,
+        reserve  = 1U << 15,
+        // I/O
+        bind     = 1U << 16,
+        submit   = 1U << 17,
+        observe  = 1U << 18,
+        reset    = 1U << 19,
+        // Administrative
+        query   = 1U << 20,
+        name    = 1U << 21,
+        revoke  = 1U << 22,
+        admin   = 1U << 23,
+        // Kernel-reserved (never tokenizable)
+        nucleus        = 1U << 24,
+        debug          = 1U << 25,
+        naming_service = 1U << 26,
+        console        = 1U << 27,  ///< SCR-1: console write authority.
+        meta           = 1U << 28,
+        all            = 0xFFFF'FFFFU,
+    };
+
+    /// @brief A rights mask is an OR of right values.
+    using right_mask = right;
+
+    /// @brief Combine two right masks.
+    [[nodiscard]] constexpr auto operator|(right a, right b) noexcept -> right {
+        return static_cast<right>(static_cast<u32>(a) | static_cast<u32>(b));
+    }
+
+    /// @brief Intersect two right masks.
+    [[nodiscard]] constexpr auto operator&(right a, right b) noexcept -> right {
+        return static_cast<right>(static_cast<u32>(a) & static_cast<u32>(b));
+    }
+
+    /// @brief Complement a right mask.
+    [[nodiscard]] constexpr auto operator~(right a) noexcept -> right {
+        return static_cast<right>(~static_cast<u32>(a));
+    }
+
+    /// @brief Test that all requested rights are present.
+    /// @param[in] available  Right mask held.
+    /// @param[in] requested  Right mask required.
+    /// @return true when every requested bit is present.
+    /// @note  Named for ADL continuity with the pre-unification vocabulary.
+    [[nodiscard]] constexpr auto has_all_rights(
+        right available, right requested
+    ) noexcept -> bool {
+        return (static_cast<u32>(available & requested)
+                == static_cast<u32>(requested));
+    }
+
+    /// @brief Test that all requested rights are present (alias).
+    [[nodiscard]] constexpr auto has_all(
+        right available, right requested
+    ) noexcept -> bool {
+        return has_all_rights(available, requested);
+    }
+
+    /// @brief Mask of rights that may appear in a capability token
+    ///        (bits 0..23).
+    inline constexpr right tokenizable_rights =
+        static_cast<right>(0x00FF'FFFFU);
+
+    /// @brief Test whether a mask is tokenizable (ch. 03 §3.2, SCR-2).
+    [[nodiscard]] constexpr auto tokenizable(right m) noexcept -> bool {
+        return (static_cast<u32>(m) & ~static_cast<u32>(tokenizable_rights)) == 0U;
+    }
+
+    /// @brief Canonical token-carried form of a mask: reserved bits stripped.
+    [[nodiscard]] constexpr auto carried_rights(right m) noexcept -> right {
+        return m & tokenizable_rights;
+    }
+
+    /// @brief Test whether a (possibly unmasked) held mask covers a
+    ///        (possibly unmasked) needed mask within the tokenizable space.
+    [[nodiscard]] constexpr auto token_covers(right held, right needed) noexcept -> bool {
+        const right need = carried_rights(needed);
+        return (held & need) == need;
+    }
+
+    static_assert(static_cast<u32>(right::admin) == (1U << 23),
+        "admin must be the last tokenizable bit (ch. 03 3.1)");
+    static_assert(tokenizable(right::all) == false && tokenizable(right::admin),
+        "tokenizable boundary must sit between bits 23 and 24");
+
+} // namespace zxfoundation::dgp
+
+} // end export

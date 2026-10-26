@@ -68,10 +68,9 @@ namespace arch::s390x::cpu::ptf {
     template <polarization Pol>
     [[nodiscard]] auto set_polarization() noexcept
         -> std::expected<void, rejection_reason> {
-        const auto result = detail::invoke<Pol>();
-        switch (result.cc) {
+        switch (const auto [cc, rc] = detail::invoke<Pol>(); cc) {
             case 0:  return {};
-            case 2:  return std::unexpected(static_cast<rejection_reason>(result.rc));
+            case 2:  return std::unexpected(static_cast<rejection_reason>(rc));
             default: std::unreachable();
         }
     }
@@ -79,9 +78,8 @@ namespace arch::s390x::cpu::ptf {
     /// @brief Check (and, if pending, consume) the topology-change-
     ///        report-pending condition for this configuration.
     [[nodiscard]] auto consume_topology_change_pending() noexcept -> bool {
-        if (features::has(features::facility::configuration_topology)) return false;
-        const auto result = detail::invoke<function_code::check_topo_change_status>();
-        switch (result.cc) {
+        if (!features::has(features::facility::configuration_topology)) return false;
+        switch (const auto [cc, _] = detail::invoke<function_code::check_topo_change_status>(); cc) {
             case 0:  return false;
             case 1:  return true;
             default: std::unreachable();

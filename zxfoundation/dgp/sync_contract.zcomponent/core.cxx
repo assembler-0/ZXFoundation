@@ -112,4 +112,4 @@ namespace zxfoundation::dgp::sync_contract {
     static_assert(static_cast<u8>(teardown_phase::deny_new_entries) < static_cast<u8>(teardown_phase::release_identity), "DGP teardown phases must remain ordered");
 
 
-} // namespace zxfoundation::dgp
+} // namespace zxfoundation::dgp::sync_contract

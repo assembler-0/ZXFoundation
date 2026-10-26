@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/exec/loader.cxxm
+/// @file fs/exec/elf.zcomponent/core.cxx
 /// @brief ELF64 loader — loads s390x executables into domain address spaces.
 
 module fs.exec.elf.core;
@@ -118,7 +118,8 @@ namespace fs::exec::elf::detail {
             return std::unexpected(map_r.error());
         }
 
-        auto* rgn = vm::vm_find(d->vm_space, seg_start);
+        auto rgn_ref = vm::vm_find_ref(d->vm_space, seg_start);
+        auto* rgn = rgn_ref.raw();
         if (!rgn) [[unlikely]] {
             discard_value vm::vm_unmap(
                 d->vm_space, d->root_phys, seg_start, seg_size);
@@ -253,7 +254,8 @@ namespace fs::exec::elf::detail {
         if (!map_r) [[unlikely]]
             return std::unexpected(map_r.error());
 
-        auto* rgn = vm::vm_find(d->vm_space, stack_bottom);
+        auto rgn_ref = vm::vm_find_ref(d->vm_space, stack_bottom);
+        auto* rgn = rgn_ref.raw();
         if (!rgn) [[unlikely]] {
             discard_value vm::vm_unmap(
                 d->vm_space, d->root_phys, stack_bottom, stack_size);
@@ -351,7 +353,7 @@ namespace fs::exec::elf::detail {
         return USER_STACK_TOP;
     }
 
-} // namespace zxfoundation::exec::detail
+} // namespace fs::exec::elf::detail
 
 namespace fs::exec::elf {
 
@@ -417,4 +419,4 @@ namespace fs::exec::elf {
         return ehdr.e_entry;
     }
 
-} // namespace zxfoundation::exec
+} // namespace fs::exec::elf

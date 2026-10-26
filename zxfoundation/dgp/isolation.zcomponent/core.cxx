@@ -4,6 +4,9 @@
 
 module zxfoundation.dgp.isolation.core;
 import zxfoundation.base.types;
+import zxfoundation.sync.lockrank;
+import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.lockgraph;
 import zxfoundation.base.typestate;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.memory_contract;
@@ -11,33 +14,46 @@ import zxfoundation.dgp.domain.types;
 import zxfoundation.sync.lockable;
 import zxfoundation.sched.policy;
 import zxfoundation.base.config;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.mmu.types;
 import lib.error;
 import lib.stl;
+import arch.s390x.cpu.irq;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::dgp::isolation::detail {
 
     static std::atomic<bool> g_isolation_initialized{false};
     static bool g_storage_key_used[STORAGE_KEY_COUNT]{};
     static u32 g_storage_key_generation[STORAGE_KEY_COUNT]{};
-    static std::atomic<u32> g_storage_key_lock{0U};
+    static sync::qspinlock::qspinlock<sync::lock_rank::skey> g_storage_key_lock{};
 
     class storage_key_lock_guard {
     public:
+        static constexpr zxfoundation::sync::lock_rank rank = zxfoundation::sync::lock_rank::skey;
+
+        [[nodiscard]] static auto class_depmap() noexcept
+            -> zxfoundation::sync::lockgraph::lockdep_map& {
+            static zxfoundation::sync::lockgraph::lockdep_map map{"skey", rank, 0, {}};
+            return map;
+        }
+
         storage_key_lock_guard() noexcept {
-            u32 expected = 0U;
-            while (!g_storage_key_lock.compare_exchange_weak(
-                expected, 1U, std::memory_order::acquire, std::memory_order::relaxed)) {
-                expected = 0U;
-            }
+            zxfoundation::sync::lockgraph::acquire(class_depmap(), this);
+            m_flags = g_storage_key_lock.lock_irqsave();
         }
 
         ~storage_key_lock_guard() noexcept {
-            g_storage_key_lock.store(0U, std::memory_order::release);
+            g_storage_key_lock.unlock_irqrestore(m_flags);
+            zxfoundation::sync::lockgraph::release(this);
         }
 
         storage_key_lock_guard(const storage_key_lock_guard&) = delete;
         auto operator=(const storage_key_lock_guard&) -> storage_key_lock_guard& = delete;
+
+        ::irqflags m_flags{};
     };
 
     [[nodiscard]] auto generic_invalid_arg() noexcept -> lib::kernel_error {
@@ -61,7 +77,7 @@ namespace zxfoundation::dgp::isolation::detail {
     [[nodiscard]] auto allocate_storage_key(u8 requested) noexcept
         -> std::expected<u8, lib::kernel_error>
     {
-        const storage_key_lock_guard guard{};
+        const storage_key_lock_guard _{};
         if (requested != STORAGE_KEY_AUTO) {
             if (requested < STORAGE_KEY_USER_BASE || requested > STORAGE_KEY_USER_MAX) {
                 return std::unexpected(generic_invalid_arg());
@@ -86,7 +102,7 @@ namespace zxfoundation::dgp::isolation::detail {
     }
 
     [[nodiscard]] auto release_storage_key(u8 key) noexcept -> u32 {
-        const storage_key_lock_guard guard{};
+        const storage_key_lock_guard _{};
         if (key >= STORAGE_KEY_USER_BASE && key <= STORAGE_KEY_USER_MAX) {
             if (g_storage_key_used[key]) {
                 g_storage_key_used[key] = false;
@@ -98,13 +114,13 @@ namespace zxfoundation::dgp::isolation::detail {
     }
 
     [[nodiscard]] auto storage_key_generation(u8 key) noexcept -> u32 {
-        const storage_key_lock_guard guard{};
+        const storage_key_lock_guard _{};
         if (key >= STORAGE_KEY_COUNT) return 0U;
         return g_storage_key_generation[key];
     }
 
 
-} // namespace zxfoundation::dgg::isolation
+} // namespace zxfoundation::dgp::isolation::detail
 
 namespace zxfoundation::dgp::isolation {
 
@@ -113,9 +129,8 @@ namespace zxfoundation::dgp::isolation {
 
     /// @brief Initialize the DGP isolation clean core.
     /// @note The initial implementation resets the bootstrap storage-key registry before domain-visible DGP objects exist.
-    /// @warning This function must run before domain, gate, or portal policy is exposed to user-visible objects.
-    auto init() noexcept -> void {
-        const storage_key_lock_guard guard{};
+    auto zi_isolation_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
+        const storage_key_lock_guard _{};
         for (u8 key = 0U; key < STORAGE_KEY_COUNT; ++key) {
             g_storage_key_used[key] = false;
             g_storage_key_generation[key] = 1U;
@@ -124,14 +139,14 @@ namespace zxfoundation::dgp::isolation {
         g_storage_key_used[0U] = true;
 
         g_isolation_initialized.store(true, std::memory_order::release);
+        return {};
     }
+    __zinit__(core, p20, zi_isolation_init, fatal)
 
     /// @brief Create initial DGP isolation state for a domain.
     /// @param[in] domain_id Domain identifier assigned by the caller.
     /// @param[in] policy Hardware-first isolation policy for the domain.
     /// @return Isolation domain state, or a kernel error.
-    /// @note This skeleton allocates storage-key ownership and records policy state; later wiring supplies committed ASCE roots from the MMU/domain transaction.
-    /// @warning On success, callers must either activate or destroy the returned state to avoid leaking storage-key ownership.
     [[nodiscard]] auto create_domain(
         u32 domain_id,
         const isolation_policy& policy
@@ -155,13 +170,13 @@ namespace zxfoundation::dgp::isolation {
 
         if (policy.bootstrap_admin) {
             state.granted_rights = state.granted_rights
-                | dgp::isolation::isolation_rights::lifecycle
-                | dgp::isolation::isolation_rights::delegate
-                | dgp::isolation::isolation_rights::quota
-                | dgp::isolation::isolation_rights::debug
-                | dgp::isolation::isolation_rights::sched
-                | dgp::isolation::isolation_rights::console
-                | dgp::isolation::isolation_rights::service;
+                | ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy )
+                | ::zxfoundation::dgp::right::delegate
+                | ::zxfoundation::dgp::right::reserve
+                | ::zxfoundation::dgp::right::debug
+                | ::zxfoundation::dgp::right::sched
+                | ::zxfoundation::dgp::right::console
+                | ::zxfoundation::dgp::right::naming_service;
         }
 
         return state;
@@ -173,8 +188,6 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in] asce Typed region-first ASCE constructed from the committed DAT root.
     /// @param[in] root_phys Physical address of the committed region-first root table.
     /// @return Success when the state can accept the ASCE root metadata.
-    /// @note The IBM PoP defines ASCE contents as hardware-consumed DAT state; this helper records ownership and does not load a control register.
-    /// @warning The caller remains responsible for allocating and freeing the DAT table through the MMU transaction path.
     [[nodiscard]] auto bind_asce_root(
         isolation_domain_state& state,
         lifecycle_state current_ls,
@@ -196,8 +209,6 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in] root_phys Physical address of the committed region-first root table.
     /// @param[in] storage_key The domain's hardware storage key.
     /// @return Success when the domain transitions to active.
-    /// @note Activation requires committed ASCE root metadata before scheduler admission.
-    /// @warning Active domains must deny new gate and portal entries before destruction.
     [[nodiscard]] auto activate_domain(
         lifecycle_state& state,
         arch::s390x::mmu::typed_asce<arch::s390x::mmu::dat_level::region_1> asce,
@@ -214,8 +225,6 @@ namespace zxfoundation::dgp::isolation {
     /// @brief Begin revocation of the storage-key authority attached to a DGP domain.
     /// @param[in,out] state Isolation state whose key is entering the draining phase.
     /// @return Success when no live gate or portal authority can still observe the key.
-    /// @note Storage-key reuse is delayed until callers have invalidated DAT and ALB state associated with the domain.
-    /// @warning This function does not modify hardware storage keys; it records the software authority transition.
     [[nodiscard]] auto begin_storage_key_revocation(
         lifecycle_state& state,
         skey_revocation_state& storage_key_state,
@@ -255,8 +264,6 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in,out] storage_key_generation Storage key generation counter.
     /// @param[in,out] storage_key_state Storage key revocation state.
     /// @return Success when DGP-owned key metadata is no longer reusable by stale mappings.
-    /// @note The key generation is advanced by the storage-key allocator when the key is released.
-    /// @warning Callers must only invoke this after VM, DAT, and portal teardown have completed.
     [[nodiscard]] auto complete_storage_key_revocation(
         [[maybe_unused]] lifecycle_state& state,
         u8& storage_key,
@@ -284,8 +291,6 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in,out] state Isolation state for the source domain that held the portal.
     /// @param[in,out] revocation_epoch Revocation epoch counter.
     /// @return Success when one active portal reference was converted into revocation progress.
-    /// @note Portal teardown must purge ALB state before the corresponding `ALE` can be reused.
-    /// @warning This function only updates DGP metadata; callers still destroy hardware access-list entries.
     [[nodiscard]] auto begin_portal_teardown(
         [[maybe_unused]] lifecycle_state& state,
         std::atomic<u16>& revocation_epoch
@@ -308,8 +313,6 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in] root_phys Physical address of the region-first root table.
     /// @param[in] asce_raw Raw ASCE value.
     /// @return Success when the domain is active and has committed ASCE metadata.
-    /// @note Scheduler admission is a hardware boundary because a later context switch may load the ASCE into CR1.
-    /// @warning Callers must still serialize run-queue mutation with the scheduler lock after this check succeeds.
     [[nodiscard]] auto validate_scheduler_admission(
         const lifecycle_state state,
         u64 root_phys,
@@ -331,8 +334,6 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in] policy Requested scheduler policy.
     /// @param[in] has_rt_authority True when the caller holds the domain's RT/admin capability authority.
     /// @return Scheduler admission result, or kernel_error describing the denied request.
-    /// @note RT and deadline bandwidth reservation is completed by scheduler backends after this DGP check.
-    /// @warning User-visible RT requests must pass this function before any run-queue insertion.
     [[nodiscard]] auto validate_scheduler_policy(
         const lifecycle_state state,
         const zxfoundation::sched::sched_policy& policy,
@@ -392,8 +393,6 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in,out] storage_key_state Storage key revocation state.
     /// @param[in,out] revocation_epoch Revocation epoch counter.
     /// @return Success when storage-key ownership is released; SCOMS records the terminal state.
-    /// @note This helper releases DGP-owned identity only; the caller remains responsible for DAT tables, VM regions, portals, gates, and stacks.
-    /// @warning Destruction with active gate or portal counts is rejected to prevent stale authority use.
     [[nodiscard]] auto destroy_domain(
         lifecycle_state& state,
         u8& storage_key,
@@ -451,13 +450,13 @@ namespace zxfoundation::dgp::isolation {
     [[nodiscard]] auto validate_gate_entry(
         u32 caller_domain_id,
         u32 gate_id,
-        dgp::isolation::isolation_rights requested
+        ::zxfoundation::dgp::right_mask requested
     ) noexcept -> std::expected<void, lib::kernel_error> {
         if (!g_isolation_initialized.load(std::memory_order::acquire)) {
             return std::unexpected(generic_invalid_arg());
         }
 
-        if (requested == dgp::isolation::isolation_rights::none) {
+        if (requested == ::zxfoundation::dgp::right::none) {
             return std::unexpected(generic_invalid_arg());
         }
 
@@ -480,14 +479,12 @@ namespace zxfoundation::dgp::isolation {
     /// @param[in] va_end Exclusive end of the target virtual range.
     /// @param[in] requested Rights requested for the portal mapping.
     /// @return Success when the portal request is structurally valid.
-    /// @note Later migration binds this validation to ASTE/ALE ownership, ALB invalidation, and capability policy.
-    /// @warning This function does not allocate an ASTE, create an ALE, or install access-register state.
     [[nodiscard]] auto validate_portal(
         u32 source_domain_id,
         u32 target_domain_id,
         u64 va_start,
         u64 va_end,
-        dgp::isolation::isolation_rights requested
+        ::zxfoundation::dgp::right_mask requested
     ) noexcept -> std::expected<void, lib::kernel_error> {
         if (!g_isolation_initialized.load(std::memory_order::acquire)) {
             return std::unexpected(generic_invalid_arg());
@@ -500,7 +497,7 @@ namespace zxfoundation::dgp::isolation {
             return std::unexpected(generic_invalid_arg());
         }
 
-        if (!has_all_rights(requested, dgp::isolation::isolation_rights::share)) {
+        if (!has_all_rights(requested, ::zxfoundation::dgp::right::share)) {
             return std::unexpected(generic_invalid_arg());
         }
 
@@ -514,9 +511,9 @@ namespace zxfoundation::dgp::isolation {
     /// @return Success on completion, or kernel_error when @c d is not active.
     auto revoke_domain_rights(
         zxfoundation::dgp::domain::domain& d,
-        dgp::isolation::isolation_rights drop_mask
+        ::zxfoundation::dgp::right_mask drop_mask
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const zxfoundation::sync::irq_lock_guard guard{d.ko.lock};
+        const zxfoundation::sync::irq_lock_guard _{d.ko.lock};
         if (d.ko.state != lifecycle_state::active) {
             return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
@@ -528,7 +525,7 @@ namespace zxfoundation::dgp::isolation {
             return {};
         }
 
-        d.granted_rights = static_cast<dgp::isolation::isolation_rights>(granted_raw & ~effective_drop);
+        d.granted_rights = static_cast<::zxfoundation::dgp::right_mask>(granted_raw & ~effective_drop);
         d.pending_rights_revoke_raw |= effective_drop;
         discard_value d.revocation_epoch.fetch_add(1U, std::memory_order::acq_rel);
 
@@ -536,4 +533,4 @@ namespace zxfoundation::dgp::isolation {
     }
 
 
-} // namespace zxfoundation::dgp
+} // namespace zxfoundation::dgp::isolation

@@ -15,7 +15,7 @@ namespace zxfoundation::dgp::memory_contract::detail {
     /// @brief Live monotonic generation.
     no_export std::atomic<u64> g_generation{1ULL};
 
-} // namespace zxfoundation::dgp (implementation state)
+} // namespace zxfoundation::dgp::memory_contract::detail
 
 namespace zxfoundation::dgp::memory_contract {
 
@@ -184,4 +184,4 @@ namespace zxfoundation::dgp::memory_contract {
         return *result;
     }
 
-} // namespace zxfoundation::dgp
+} // namespace zxfoundation::dgp::memory_contract

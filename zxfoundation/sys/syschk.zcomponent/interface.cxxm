@@ -1,3 +1,4 @@
+/// @file zxfoundation/sys/syschk.zcomponent/interface.cxxm
 export module zxfoundation.sys.syschk;
 export import zxfoundation.sys.syschk.core;
 export import zxfoundation.sys.syschk.types;

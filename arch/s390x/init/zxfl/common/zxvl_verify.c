@@ -1,11 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/zxvl_verify.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/zxvl_verify.c
 /// @brief ZXVerifiedLoad — kernel checksum verification.
-///
-///        The checksum table physical address is discovered dynamically by
-///        elfload.c scanning PT_LOAD p_flags for ZXVL_PFLAGS_CKSUM.
-///        No hardcoded offsets are used here.
 
 #include <arch/s390x/init/zxfl/zxvl.h>
 #include <arch/s390x/init/zxfl/panic.h>

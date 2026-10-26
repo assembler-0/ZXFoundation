@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/sclp.cxxm
+/// @file arch/s390x/cpu/sclp.zcomponent/sclp.cxx
 /// @brief SCLP (Service Call Logical Processor) kernel API.
 
 module arch.s390x.cpu.sclp;

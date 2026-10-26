@@ -42,7 +42,6 @@ namespace arch::s390x::cpu::processor {
 
     /// @brief Store Prefix (STPX) — returns the physical address in the Prefix Register.
     /// @return Physical base address of the current CPU's lowcore.
-    [[deprecated("STPX is expensive — use lowcore::get_current() on the hot path")]]
     [[gnu::no_stack_protector]] auto get_prefix() noexcept -> u32 {
         u32 prefix;
         __asm__ volatile ("stpx %0" : "=Q"(prefix) : : "memory");

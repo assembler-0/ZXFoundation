@@ -1,174 +1,120 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/locking/mutex.cxxm
-/// @brief Blocking mutex — sleep/wake lock with wait-queue integration.
+/// @file zxfoundation/sync/mutex.zcomponent/core.cxx
+/// @brief Turnstile-backed blocking mutex implementation.
 
 module zxfoundation.sync.mutex.core;
-import zxfoundation.base.types;
-import zxfoundation.sync.qspinlock.core;
-import zxfoundation.sync.waitqueue.types;
-import zxfoundation.dgp.domain.types;
-import zxfoundation.dgp.domain.types;
-import zxfoundation.sync.lockable;
+import zxfoundation.sync.turnstile;
 import zxfoundation.sched.context.core;
 import zxfoundation.sched.core;
-import zxfoundation.base.typestate;
 import zxfoundation.sched.policy;
+import zxfoundation.dgp.domain.types;
 import arch.s390x.cpu.percpu;
-import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.irq;
-import lib.list;
-import lib.container_of;
 import lib.stl;
 
 namespace zxfoundation::sync::mutex {
 
-    using zxfoundation::dgp::domain::strand;
-    using zxfoundation::sync::waitqueue::wait_entry;
+    using zxfoundation::dgp::domain::domain;
     using zxfoundation::dgp::domain::strand;
     using zxfoundation::sched::sched_substate;
-    using zxfoundation::base::lifecycle_state;
-    using zxfoundation::dgp::domain::domain;
-    using zxfoundation::dgp::domain::domain_flags;
-    using zxfoundation::sync::waitqueue::wait_head;
-    using zxfoundation::sync::waitqueue::wait_entry;
-    using zxfoundation::sync::waitqueue::wait_flags;
-    using zxfoundation::sync::waitqueue::wait_result;
-    using std::atomic;
-    using std::memory_order;
 
     struct mutex_waiter {
-        wait_entry entry{};
-        strand*    strand_ptr{nullptr};
+        turnstile::waiter node{};
+        strand* strand_ptr{nullptr};
     };
 
-    /// @brief Acquire the mutex, blocking if contended.
-    /// @pre  can_sleep() must hold (IRQs enabled, not in interrupt,
-    ///       preemption enabled, not in RCU read-side).
-    /// @post The mutex is held.  Caller call unlock() exactly once.
+    no_export auto wake_mutex_waiter(void* opaque) noexcept -> void {
+        auto* waiter = static_cast<mutex_waiter*>(opaque);
+        if (!waiter || !waiter->strand_ptr) return;
+        auto* strand_ptr = waiter->strand_ptr;
+        strand_ptr->substate = sched_substate::runnable;
+        zxfoundation::sched::enqueue_strand(strand_ptr);
+        if (auto* owner = static_cast<domain*>(strand_ptr->owner))
+            owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+    }
+
     auto mutex::lock() noexcept -> void {
-        sched::context::assert_can_sleep();
-
-        const irqflags flags = arch::s390x::cpu::irq::irq_save_disable();
-
-        u32 expected = 0;
-        if (m_val.compare_exchange_strong(
-                expected, 1, memory_order::acquire, memory_order::relaxed)) {
+        zxfoundation::sched::context::assert_can_sleep();
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* self = reinterpret_cast<strand*>(pcp.current_strand);
+        u32 expected = 0U;
+        if (m_val.compare_exchange_strong(expected, 1U,
+                std::memory_order::acquire, std::memory_order::relaxed)) {
+            m_owner = self;
             arch::s390x::cpu::irq::irq_restore(flags);
             return;
         }
-
         slow_lock(flags);
     }
 
-    /// @brief Try to acquire the mutex without blocking.
-    /// @return true if the mutex was acquired.
     [[nodiscard]] auto mutex::try_lock() noexcept -> bool {
-        u32 expected = 0;
-        return m_val.compare_exchange_strong(
-            expected, 1, memory_order::acquire, memory_order::relaxed);
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* self = reinterpret_cast<strand*>(pcp.current_strand);
+        u32 expected = 0U;
+        const bool acquired = m_val.compare_exchange_strong(expected, 1U,
+            std::memory_order::acquire, std::memory_order::relaxed);
+        if (acquired) m_owner = self;
+        arch::s390x::cpu::irq::irq_restore(flags);
+        return acquired;
     }
 
-    /// @brief Release the mutex and wake the first waiter, if any.
-    /// @pre The caller holds the mutex.
-    /// @post The mutex is released.
     auto mutex::unlock() noexcept -> void {
-        strand* to_wake = nullptr;
-
-        {
-            wait_entry* entry = nullptr;
-
-            {
-                sync::irq_lock_guard wq_guard(m_wq.lock);
-
-                if (!m_wq.entries.empty()) {
-                    lib::list_node* node = *m_wq.entries.begin();
-                    entry = lib::container_of<wait_entry,
-                        lib::list_node, &wait_entry::link>(node);
-
-                    entry->result = wait_result::woken;
-                    entry->active = false;
-                    lib::list_head::remove(*node);
-                }
-
-                m_val.store(0, memory_order::release);
-            }
-
-            if (entry) {
-                auto* waiter = lib::container_of<mutex_waiter,
-                    wait_entry, &mutex_waiter::entry>(entry);
-                to_wake = waiter->strand_ptr;
-            }
+        mutex_waiter* selected = nullptr;
+        const auto flags = m_turnstile.lock_irqsave();
+        auto* current = reinterpret_cast<strand*>(
+            arch::s390x::cpu::percpu::this_cpu().current_strand);
+        if (m_owner != current) [[unlikely]] {
+            m_turnstile.unlock_irqrestore(flags);
+            __builtin_trap();
         }
-
-        if (to_wake) {
-            to_wake->substate = sched_substate::runnable;
-            zxfoundation::sched::enqueue_strand(to_wake);
-
-            auto* owner_dom = static_cast<domain*>(to_wake->owner);
-            if (owner_dom) {
-                owner_dom->flags |= domain_flags::need_resched;
-            }
+        selected = reinterpret_cast<mutex_waiter*>(m_turnstile.grant_locked());
+        if (selected) {
+            m_owner = selected->strand_ptr;
+            m_val.store(1U, std::memory_order::release);
+        } else {
+            m_owner = nullptr;
+            m_val.store(0U, std::memory_order::release);
         }
+        m_turnstile.unlock_irqrestore(flags);
+        if (selected && selected->node.wake_fn)
+            selected->node.wake_fn(selected->node.context);
     }
 
-    /// @brief Non-deterministic snapshot: true if the mutex appears held.
     [[nodiscard]] auto mutex::is_locked() const noexcept -> bool {
-        return m_val.load(memory_order::relaxed) != 0;
+        return m_val.load(std::memory_order::relaxed) != 0U;
     }
 
-    /// @brief Slow path: add to wait queue, block, re-contend.
     auto mutex::slow_lock(const irqflags flags) noexcept -> void {
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
-        auto* current = reinterpret_cast<strand*>(pcp.current_strand);
-
-        mutex_waiter w{};
-        w.strand_ptr = current;
-
-        const auto* lc = arch::s390x::cpu::lowcore::get_current();
-        if (lc->get<"current_domain">() != 0) {
-            w.entry.domain_id =
-                *reinterpret_cast<const u32*>(lc->get<"current_domain">());
-        }
-
-        {
-            sync::irq_lock_guard wq_guard(m_wq.lock);
-
-            u32 expected = 0;
-            if (m_val.compare_exchange_strong(
-                    expected, 1, memory_order::acquire, memory_order::relaxed)) {
+        auto* self = reinterpret_cast<strand*>(pcp.current_strand);
+        mutex_waiter waiter{};
+        waiter.strand_ptr = self;
+        waiter.node.context = &waiter;
+        waiter.node.wake_fn = wake_mutex_waiter;
+        for (;;) {
+            const auto queue_flags = m_turnstile.lock_irqsave();
+            if (waiter.node.state.load(std::memory_order::acquire)
+                    == turnstile::waiter_state::granted) {
+                m_turnstile.unlock_irqrestore(queue_flags);
                 arch::s390x::cpu::irq::irq_restore(flags);
                 return;
             }
-
-            w.entry.flags = wait_flags::exclusive;
-            w.entry.active = true;
-            m_wq.entries.push_back(w.entry.link);
-        }
-
-        for (;;) {
-            {
-                sync::irq_lock_guard wq_guard(m_wq.lock);
-
-                u32 expected = 0;
-                if (m_val.compare_exchange_strong(
-                        expected, 1, memory_order::acquire, memory_order::relaxed)) {
-                    if (w.entry.active) {
-                        lib::list_head::remove(w.entry.link);
-                        w.entry.active = false;
-                    }
-                    arch::s390x::cpu::irq::irq_restore(flags);
-                    return;
-                }
-
-                if (!w.entry.active) {
-                    w.entry.active = true;
-                    m_wq.entries.push_back(w.entry.link);
-                }
+            u32 expected = 0U;
+            if (m_val.compare_exchange_strong(expected, 1U,
+                    std::memory_order::acquire, std::memory_order::relaxed)) {
+                m_owner = self;
+                m_turnstile.cancel_locked(waiter.node);
+                m_turnstile.unlock_irqrestore(queue_flags);
+                arch::s390x::cpu::irq::irq_restore(flags);
+                return;
             }
-
-            current->substate = sched_substate::idle;
+            m_turnstile.enqueue_locked(waiter.node);
+            m_turnstile.unlock_irqrestore(queue_flags);
+            self->substate = sched_substate::blocked;
             zxfoundation::sched::schedule();
         }
-    };
+    }
 
-} // namespace zxfoundation::sync::mutex
+}

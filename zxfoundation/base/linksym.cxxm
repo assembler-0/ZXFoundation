@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file linksym.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/base/linksym.cxxm
 /// @brief linker script-exported symbols
 
 export module zxfoundation.base.linksym;

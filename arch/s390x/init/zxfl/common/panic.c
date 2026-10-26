@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/panic.c
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/panic.c
 
 #include <arch/s390x/init/zxfl/processor.h>
 #include <arch/s390x/init/zxfl/diag.h>

@@ -1,32 +1,27 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sync/waitqueue.cxxm
-/// @brief Wait queue operations — prepare, finish, and wake primitives.
+/// @file zxfoundation/sync/waitqueue.zcomponent/core.cxx
+/// @brief Wait queue operations — the FIFO flavor over the turnstile
+///        substrate (ch. 20 §20.2a).
 
 module zxfoundation.sync.waitqueue.core;
 import zxfoundation.sync.waitqueue.types;
-import zxfoundation.sync.qspinlock.core;
-import zxfoundation.sync.lockable;
+import zxfoundation.sync.turnstile;
 import zxfoundation.base.types;
-import arch.s390x.cpu.irq;
 import arch.s390x.cpu.lowcore;
-import lib.list;
 import lib.container_of;
+import lib.stl;
 
 namespace zxfoundation::sync::waitqueue {
 
-    /// @brief Initialize a wait queue head to the empty state.
+    using turnstile::waiter_state;
+
     auto init(wait_head& wq) noexcept -> void {
         static_cast<void>(wq);
     }
 
-    /// @brief Add a wait entry to the queue and mark it active.
-    /// @param wq    The wait queue to join.
-    /// @param entry The caller-owned wait entry (typically on kernel stack).
-    /// @param flags Behavioural flags for this wait (exclusive, interruptible, etc.).
     auto prepare_to_wait(wait_head& wq,
                          wait_entry& entry,
                          wait_flags flags) noexcept -> void {
-        // Capture the sleeping domain's ID from lowcore before taking the lock.
         const auto* lc = arch::s390x::cpu::lowcore::get_current();
         const u64 dom_addr = lc->get<"current_domain">();
         u32 dom_id = 0xFFFFFFFFU;
@@ -34,74 +29,80 @@ namespace zxfoundation::sync::waitqueue {
             dom_id = *reinterpret_cast<const u32*>(dom_addr);
         }
 
-        sync::irq_lock_guard guard(wq.lock);
+        const auto saved_flags = wq.q.lock_irqsave();
+
+        if (entry.node.state.load(std::memory_order::acquire) == waiter_state::queued) {
+            entry.flags = flags;
+            wq.q.unlock_irqrestore(saved_flags); return;
+        }
 
         entry.flags     = flags;
-        entry.result    = wait_result::woken;
+        entry.result.store(wait_result::woken, std::memory_order::relaxed);
         entry.domain_id = dom_id;
-        entry.active    = true;
-
-        // Append to the tail so that FIFO ordering is preserved for
-        // exclusive wakeups (wake_up_one wakes the first entry).
-        wq.entries.push_back(entry.link);
+        entry.node.priority = 0;
+        discard_value wq.q.enqueue_locked(entry.node);
+        wq.q.unlock_irqrestore(saved_flags);
     }
 
-    /// @brief Remove a wait entry from the queue if still active.
-    /// @param wq    The wait queue the entry was added to.
-    /// @param entry The wait entry to remove.
     auto finish_wait(wait_head& wq,
                      wait_entry& entry) noexcept -> void {
-        sync::irq_lock_guard guard(wq.lock);
-
-        if (entry.active) {
-            lib::list_head::remove(entry.link);
-            entry.active = false;
+        const auto flags = wq.q.lock_irqsave();
+        if (entry.node.state.load(std::memory_order::acquire) == waiter_state::queued) {
+            discard_value wq.q.cancel_locked(entry.node);
         }
+        wq.q.unlock_irqrestore(flags);
     }
 
-    /// @brief Wake ALL waiters on the queue.
-    /// @param wq The wait queue to drain.
     auto wake_up(wait_head& wq) noexcept -> void {
-        sync::irq_lock_guard guard(wq.lock);
-
-        for (const auto& node : wq.entries) {
-            auto* entry = lib::container_of<wait_entry, lib::list_node, &wait_entry::link>(node);
-
-            entry->result = wait_result::woken;
-            entry->active = false;
-            lib::list_head::remove(entry->link);
+        bool exclusive_woken = false;
+        for (;;) {
+            wait_entry* entry = nullptr;
+            {
+                const auto flags = wq.q.lock_irqsave();
+                for (auto* node = wq.q.first_locked(); node; node = wq.q.next_locked(*node)) {
+                    auto* candidate = lib::container_of<wait_entry, turnstile::waiter,
+                        &wait_entry::node>(node);
+                    const bool exclusive =
+                        (candidate->flags & wait_flags::exclusive) != wait_flags::none;
+                    if (exclusive && exclusive_woken) continue;
+                    entry = candidate;
+                    entry->result.store(wait_result::woken, std::memory_order::release);
+                    discard_value wq.q.grant_specific_locked(*node);
+                    if (exclusive) exclusive_woken = true;
+                    break;
+                }
+                wq.q.unlock_irqrestore(flags);
+            }
+            if (!entry) return;
+            if (entry->node.wake_fn) entry->node.wake_fn(entry->node.context);
         }
     }
 
-    /// @brief Wake the first waiter on the queue.
-    /// @param wq The wait queue.
     auto wake_up_one(wait_head& wq) noexcept -> void {
-        sync::irq_lock_guard guard(wq.lock);
-
-        if (wq.entries.empty()) {
-            return;
+        wait_entry* entry = nullptr;
+        {
+            const auto flags = wq.q.lock_irqsave();
+            if (auto* node = wq.q.first_locked()) {
+                entry = lib::container_of<wait_entry, turnstile::waiter,
+                    &wait_entry::node>(node);
+                entry->result.store(wait_result::woken, std::memory_order::release);
+                discard_value wq.q.grant_specific_locked(*node);
+            }
+            wq.q.unlock_irqrestore(flags);
         }
-
-        lib::list_node* node = *wq.entries.begin();
-        auto* entry = lib::container_of<wait_entry, lib::list_node, &wait_entry::link>(node);
-
-        entry->result = wait_result::woken;
-        entry->active = false;
-        lib::list_head::remove(entry->link);
+        if (entry && entry->node.wake_fn) entry->node.wake_fn(entry->node.context);
     }
 
-    /// @brief Lockless snapshot: returns true if any waiters are queued.
-    /// @param wq The wait queue to test.
-    /// @return true if the entry list is non-empty.
     [[nodiscard]] auto active(const wait_head& wq) noexcept -> bool {
-        return !wq.entries.empty();
+        auto& q = const_cast<turnstile::turnstile&>(wq.q);
+        const auto flags = q.lock_irqsave();
+        const bool result = !q.empty_locked();
+        q.unlock_irqrestore(flags);
+        return result;
     }
 
-    /// @brief Lockless snapshot: returns the number of queued waiters.
-    /// @param wq The wait queue to count.
-    /// @return Number of entries currently linked.
     [[nodiscard]] auto count(const wait_head& wq) noexcept -> u32 {
-        return static_cast<u32>(wq.entries.count());
+        return const_cast<turnstile::turnstile&>(wq.q).count();
     }
 
-} // namespace zxfoundation::sync
+} // namespace zxfoundation::sync::waitqueue

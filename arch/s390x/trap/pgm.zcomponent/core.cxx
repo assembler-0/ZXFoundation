@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file pgm.cxxm
+/// @file arch/s390x/trap/pgm.zcomponent/core.cxx
 /// @brief Centralized pgm dispatch.
 
 module arch.s390x.trap.pgm.core;
@@ -10,6 +10,11 @@ import arch.s390x.trap.fixup.core;
 import arch.s390x.cpu.teid;
 import arch.s390x.cpu.features;
 import arch.s390x.lib.stacktrace.core;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.percpu;
+import zxfoundation.memory.hhdm;
+import arch.s390x.cpu.pcss.core;
+import arch.s390x.mmu;
 import zxfoundation.scoms.kobject.ref;
 import zxfoundation.scoms.kobject.types;
 import zxfoundation.sys.irq.core;
@@ -18,10 +23,13 @@ import zxfoundation.sys.syschk.core;
 import zxfoundation.sys.timer.core;
 import zxfoundation.sys.printk.core;
 import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.domain.core;
 import zxfoundation.memory.vm.fault;
+import zxfoundation.memory.pmm;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.base.typestate;
 import zxfoundation.dgp.signal;
+import zxfoundation.dgp.portal;
 import lib.error;
 import lib.stl;
 
@@ -176,6 +184,38 @@ namespace arch::s390x::trap::pgm::detail {
         return true;
     }
 
+    constexpr u16 PGM_PC_TRANSLATION_SPEC = 0x001FU;
+    constexpr u16 PGM_AFX_TRANS  = 0x0020U;
+    constexpr u16 PGM_ASTE_INSTANCE = 0x002FU;
+    constexpr u16 PGM_STACK_FULL = 0x0030U;
+    constexpr u16 PGM_STACK_SPECIFICATION = 0x0033U;
+    constexpr u16 PGM_STACK_OPERATION = 0x0034U;
+
+    [[nodiscard]] auto is_nullified_stack_check(const u16 code) noexcept -> bool {
+        return code >= PGM_STACK_FULL && code <= PGM_STACK_OPERATION;
+    }
+
+    [[nodiscard]] auto is_pcpr_translation(const u16 code) noexcept -> bool {
+        return code >= PGM_AFX_TRANS && code <= PGM_ASTE_INSTANCE;
+    }
+
+    [[nodiscard]] auto teid_class_name(const u64 teid_raw) noexcept -> std::string_view {
+        u64 raw = teid_raw;
+        switch (cpu::teid::teid_prot_except_view{raw}.get<"asce_identifier">()) {
+            case cpu::teid::teid_asce_id::primary_asce:   return "primary";
+            case cpu::teid::teid_asce_id::ar_mode:        return "ar";
+            case cpu::teid::teid_asce_id::secondary_asce: return "secondary";
+            case cpu::teid::teid_asce_id::home_asce:      return "home";
+        }
+        return "unknown";
+    }
+
+    [[nodiscard]] auto teid_access_name(const u64 teid_raw) noexcept -> std::string_view {
+        if (is_exec_from_teid(teid_raw)) return "fetch";
+        if (is_write_from_teid(teid_raw)) return "store";
+        return "update";
+    }
+
 }
 
 namespace arch::s390x::trap::pgm {
@@ -211,6 +251,55 @@ namespace arch::s390x::trap::pgm {
         const bool in_problem_state =
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0;
 
+        if (detail::is_nullified_stack_check(pgm_code)) {
+            if (pgm_code == detail::PGM_STACK_FULL) {
+                auto* strand = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
+                    arch::s390x::cpu::percpu::this_cpu().current_strand);
+                if (strand != nullptr && strand->body != nullptr) {
+                    auto& s = strand->body->linkage_stack;
+                    u64 live_cr15 = 0;
+                    arch::s390x::cpu::ctlreg::crread<15, 15>(live_cr15);
+                    if (live_cr15 == 0U
+                            && (s.cr15 != 0U || s.section_count != 0U)) {
+                        // §5.12: impossible on a seeded stack — CR15 is
+                        // restored from this very field at dispatch, so a
+                        // zero register here means the cross-CPU CR15
+                        // discipline regressed.  Fail loudly instead of
+                        // growing a section nothing points at.
+                        zxfoundation::sys::syschk::syschk_fatal(
+                            ::lib::kernel_error::from_generic(
+                                ::lib::generic_error::internal_error),
+                            "pgm: stack-full with CR15=0 on seeded stack "
+                            "strand={} stash={:#x} sections={}",
+                            strand->ko.id, s.cr15, s.section_count);
+                    }
+                    // The register is the truth (it drifts forward with
+                    // every push); adopt it before growing.
+                    s.cr15 = live_cr15;
+                    if (live_cr15 != 0U) {
+                    }
+                    auto grown = arch::s390x::cpu::pcss::stack_grow(s);
+                    if (grown) {
+                        if (live_cr15 == 0U) {
+                            // Fresh stack: seed CR15 at the new header
+                            // descriptor; nothing else points there.
+                            arch::s390x::cpu::ctlreg::crwrite<15, 15>(s.cr15);
+                        }
+                        // Seeded case: CR15 stays at the old current
+                        // entry — the re-executed instruction walks the
+                        // chained trailer into the new section, writes
+                        // its backward link, and advances CR15 itself.
+                        return;
+                    }
+                    zxfoundation::sys::printk::perr(
+                        "pgm: stack-full grow failed: {} strand={} "
+                        "sections={} cr15={:#x}",
+                        grown.error(), strand->ko.id, s.section_count,
+                        live_cr15);
+                }
+            }
+        }
+
         ::std::string_view pgm_name = master_pgm_name_for(pgm_code);
 
         if (!in_problem_state) {
@@ -237,7 +326,69 @@ namespace arch::s390x::trap::pgm {
                 static_cast<u64>(frame->psw_addr), trans_exc);
         }
 
+        // §5.12: record mid-PC state for the interrupted strand.
+        zxfoundation::dgp::domain::strand_note_interrupt_context(
+            in_problem_state);
+
         auto* d = reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->get<"current_domain">());
+        // §5.12: a user fault while the hardware is inside a stacking PC
+        // belongs to the CALLEE domain — the PC switched PASN and
+        // current_domain is the stale caller.  Resolve the real domain
+        // by PASN; fatal faults then terminate the callee (and the
+        // caller whose PC can no longer complete), never the wrong one.
+        if (in_problem_state && d != nullptr) {
+            u64 fault_pasn = 0;
+            arch::s390x::cpu::ctlreg::crread<4, 4>(fault_pasn);
+            const u16 asn = static_cast<u16>(fault_pasn & 0xFFFFULL);
+            if (asn != 0U && static_cast<u16>(d->pc_asn) != asn) {
+                zxfoundation::dgp::domain::domain* callee = nullptr;
+                discard_value zxfoundation::dgp::domain::domain_for_each(
+                    [&](zxfoundation::dgp::domain::domain& cand) noexcept -> bool {
+                        if (static_cast<u16>(cand.pc_asn & 0xFFFFU) == asn) {
+                            callee = &cand;
+                            return false;
+                        }
+                        return true;
+                    });
+                if (callee != nullptr && callee != d) {
+                    d = callee;
+                }
+            }
+        }
+
+        {
+            u64 live_cr1 = 0;
+            arch::s390x::cpu::ctlreg::crread<1, 1>(live_cr1);
+            const bool borrowed_now = live_cr1 != arch::s390x::cpu::percpu::this_cpu().attached.asce;
+            if (borrowed_now) {
+            // Only stacked-state exception classes may consume a linkage
+            // stack entry (PoP 5-12: PR/stack-operation family).  A plain
+            // fault in a borrowed space must NOT unstack — the entry
+            // belongs to an in-flight PC the fault interrupted.
+            const bool stacked_state_class =
+                pgm_code == detail::PGM_STACK_OPERATION ||
+                pgm_code == detail::PGM_STACK_SPECIFICATION ||
+                pgm_code == detail::PGM_PC_TRANSLATION_SPEC ||
+                detail::is_pcpr_translation(pgm_code);
+            auto* strand = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
+                arch::s390x::cpu::percpu::this_cpu().current_strand);
+            if (stacked_state_class && strand != nullptr
+                && strand->body != nullptr) {
+                u64 cr15 = 0;
+                arch::s390x::cpu::ctlreg::crread<15, 15>(cr15);
+                const u64 entry_base = cr15 - 288U;
+                if (arch::s390x::cpu::pcss::state_entry_restore(*frame, entry_base)) {
+                    const auto* caller_dom =
+                        static_cast<const zxfoundation::dgp::domain::domain*>(
+                            strand->owner);
+                    arch::s390x::cpu::pcss::state_entry_unstack(
+                        strand->body->linkage_stack, entry_base,
+                        caller_dom ? caller_dom->asce.val : 0ULL);
+                    return;
+                }
+            }
+            }
+        }
 
         const bool is_translation_exception =
             pgm_code == PGM_SEGMENT_TRANS       ||
@@ -247,12 +398,64 @@ namespace arch::s390x::trap::pgm {
             pgm_code == PGM_REGION_FIRST_TRANS  ||
             pgm_code == PGM_REGION_SECOND_TRANS ||
             pgm_code == PGM_REGION_THIRD_TRANS  ||
-            pgm_code == PGM_ASCE_TYPE;
+            pgm_code == PGM_ASCE_TYPE           ||
+            pgm_code == detail::PGM_PC_TRANSLATION_SPEC ||
+            detail::is_pcpr_translation(pgm_code);
+
+        {
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+            u64 cr1 = 0;
+            u64 cr4 = 0;
+            arch::s390x::cpu::ctlreg::crread<1, 1>(cr1);
+            arch::s390x::cpu::ctlreg::crread<4, 4>(cr4);
+            pcp.attached.publish_space(
+                static_cast<u16>(cr4 & 0xFFFFULL),
+                static_cast<u8>(cr1 != pcp.attached.asce ? 1U : 0U));
+        }
+        {
+            constexpr u64 ps_dat = 0x0200'0000'0000'0000ULL;
+            if (detail::is_pcpr_translation(pgm_code) &&
+                ((frame->psw_mask & ps_dat) == 0ULL)) {
+                goto portal_fault;
+            }
+        }
 
         if (is_translation_exception && d) {
-            if (cpu::teid::teid_prot_except_view{trans_exc}.get<"asce_identifier">() == cpu::teid::teid_asce_id::ar_mode) {
+            if (cpu::teid::teid_prot_except_view{trans_exc}.get<"asce_identifier">() == cpu::teid::teid_asce_id::ar_mode
+                && (trans_exc & 0x00CULL) != 0ULL) {
                 const u8 ar_num = lc->get<R"(exception_address_id\access_register_num)">();
                 if (ar_num < 16U && frame->access_regs[ar_num] > 2U) {
+                    // Portal-mediated access (§6.3): resolve against the
+                    // live portal before any kill decision.  Revocation
+                    // signals the accessor with the portal id packed in
+                    // the payload (RC-06.4 — no unconditional kill);
+                    // stale ALETs and out-of-contract accesses keep the
+                    // legacy defaults.
+                    const auto [outcome, portal_id] =
+                        zxfoundation::dgp::portal::resolve_fault(
+                            d->ko.id, ar_num,
+                            frame->access_regs[ar_num],
+                            trans_exc & ~0xFFFULL,
+                            pgm_code == PGM_PROTECTION
+                                ? detail::is_write_from_teid(trans_exc)
+                                : false);
+                    if (outcome == zxfoundation::dgp::portal::
+                            fault_outcome::resolved) {
+                        return;
+                    }
+                    if (outcome == zxfoundation::dgp::portal::
+                            fault_outcome::revoked) {
+                        zxfoundation::dgp::signal::signal_enqueue(
+                            *d,
+                            zxfoundation::dgp::signal::signal_kind::fault,
+                            (static_cast<u64>(portal_id) << 44U)
+                                | ((trans_exc & ~0xFFFULL) >> 12U));
+                        zxfoundation::sys::printk::pnotice(
+                            "pgm: portal fault revoked portal={} "
+                            "va={:#x} — signaled, domain lives",
+                            portal_id, trans_exc & ~0xFFFULL);
+                        return;
+                    }
                     goto portal_fault;
                 }
             }
@@ -278,6 +481,23 @@ portal_fault:
                 trans_exc & ~0xFFFULL);
 
             detail::log_domain_pgm(pgm_code, frame, trans_exc);
+            if (detail::is_nullified_stack_check(pgm_code)) {
+                {
+                    u64 live_cr15 = 0;
+                    arch::s390x::cpu::ctlreg::crread<15, 15>(live_cr15);
+                    zxfoundation::sys::printk::perr(
+                        "pgm: {} (nullified; no state change) at PSW {:#018x} cr15={:#x}\n",
+                        pgm_name, static_cast<u64>(frame->psw_addr), live_cr15);
+                }
+            } else if (detail::is_pcpr_translation(pgm_code) ||
+                       pgm_code == detail::PGM_PC_TRANSLATION_SPEC) {
+                zxfoundation::sys::printk::perr(
+                    "pgm: {} teid-class={} access={} at PSW {:#018x}\n",
+                    pgm_name,
+                    detail::teid_class_name(trans_exc),
+                    detail::teid_access_name(trans_exc),
+                    static_cast<u64>(frame->psw_addr));
+            }
             if (pgm_code == PGM_DATA) {
                 const auto dxc_name = dxc_pgm_name_for(
                     static_cast<u8>(data_exc_code & 0xFFU));
@@ -289,6 +509,25 @@ portal_fault:
 
             discard_value zxfoundation::scoms::kobject::mark_dying(d);
             d->flags = d->flags | zxfoundation::dgp::domain::domain_flags::need_resched;
+
+            // §5.12: fatal fault mid-PC — the interrupted strand belongs
+            // to the CALLER (its PC can never complete now); terminate it
+            // too, then land the interrupted strand on the sched exit.
+            auto* interrupted = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
+                arch::s390x::cpu::percpu::this_cpu().current_strand);
+            if (interrupted != nullptr && interrupted->body != nullptr
+                && interrupted->body->in_pc != 0U && interrupted->owner != nullptr
+                && interrupted->owner != d) {
+                auto* caller = static_cast<zxfoundation::dgp::domain::domain*>(
+                    interrupted->owner);
+                zxfoundation::sys::printk::perr(
+                    "pgm: fatal callee fault mid-PC — terminating caller "
+                    "domain {} too",
+                    caller->ko.id);
+                discard_value zxfoundation::scoms::kobject::mark_dying(caller);
+                caller->flags = caller->flags
+                    | zxfoundation::dgp::domain::domain_flags::need_resched;
+            }
 
             frame->gprs[15] = d->primary_strand.kstack_top - 160U;
             frame->psw_mask = arch::s390x::cpu::psw::PSW_MASK_KERNEL_DAT;

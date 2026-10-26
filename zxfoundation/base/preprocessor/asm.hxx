@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file asm.hxx
+/// @file zxfoundation/base/preprocessor/asm.hxx
 /// @brief asm macros
 /// @note requires __zxmacro_want_asm=1
 

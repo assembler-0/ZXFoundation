@@ -1,4 +1,7 @@
 !files : !compile_group -> [auto] {
-    smp.cxxm
-    smp.cxx
+    types.cxxm
+    interface.cxxm
+    core.cxxm
+    core.cxx
+    ap.S
 }

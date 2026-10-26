@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file svc.cxxm
+/// @file arch/s390x/trap/svc.zcomponent/core.cxxm
 /// @brief Centralized SVC dispatch.
 
 export module arch.s390x.trap.svc.core;

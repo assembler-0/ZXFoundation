@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/sclp_types.cxxm
+/// @file arch/s390x/cpu/sclp.zcomponent/sclp.cxxm
 /// @brief SCLP (Service Call Logical Processor) types and constants.
 
 export module arch.s390x.cpu.sclp;

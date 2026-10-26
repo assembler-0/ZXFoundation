@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file symalias.hxx
+/// @file zxfoundation/base/preprocessor/symalias.hxx
 /// @brief symbol aliasing
 /// @note requires __zxmacro_want_symalias=1
 

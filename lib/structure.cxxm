@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file structure.cxxm
+/// @file lib/structure.cxxm
 /// @brief C++26 memory-mapped structure framework built on the unified `field`.
 export module lib.structure;
 import lib.bitfield;
@@ -1008,11 +1008,11 @@ namespace lib {
 
         [[nodiscard]] constexpr auto as_bytes(this auto &self) noexcept -> std::span<u8, extent> requires (!
             std::is_const_v<std::remove_reference_t<decltype(self)> >) {
-            return {self.raw_ptr(), extent};
+            return std::span<u8, extent>(self.raw_ptr(), extent);
         }
 
         [[nodiscard]] constexpr auto as_bytes(this const auto &self) noexcept -> std::span<const u8, extent> {
-            return {self.raw_ptr(), extent};
+            return std::span<const u8, extent>(self.raw_ptr(), extent);
         }
 
         template<class T>

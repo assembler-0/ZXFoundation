@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/mmu.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/mmu.h
 #pragma once
 
 #include <zxfoundation/types.h>

@@ -1,6 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zinit.cxxm
-/// @brief initcall system
+/// @file zxfoundation/sys/zinit.zcomponent/core.cxxm
+/// @brief zinit engine — initcall core.
 
 export module zxfoundation.sys.zinit.core;
 import zxfoundation.base.types;
@@ -11,57 +11,88 @@ export {
 
 namespace zxfoundation::sys::zinit {
 
+    /// @brief Execution class.  Lower values execute earlier.
     enum class zi_class : u8 {
-        prelink   =    0,
-        early     =    1,
-        mm        =    2,
-        core      =    3,
-        fs        =    4,
-        bus       =    5,
-        device    =    6,
-        late      =    7,
-        max       =    8
+        early   = 0,
+        mm      = 1,
+        core    = 2,
+        dgp     = 3,
+        sched   = 4,
+        smp     = 5,
+        io      = 6,
+        drivers = 7,
+        fs      = 8,
+        late    = 9,
+        max     = 10,
     };
 
+    /// @brief Priority within a class.  Smaller values execute earlier.
     enum class zi_prio : u8 {
-        high      =    0,
-        normal    =   50,
-        low       =   99,
+        p00 = 0,  p10 = 10, p20 = 20, p30 = 30, p40 = 40,
+        p50 = 50, p60 = 60, p70 = 70, p80 = 80, p90 = 90, p99 = 99,
+
+        highest = p00,
+        high    = p20,
+        normal  = p50,
+        low     = p80,
+        lowest  = p99,
     };
 
+    /// @brief Failure-handling policy for a descriptor.
     enum class zi_action : u8 {
-        warn      =  0x1,
-        fatal     =  0x2,
-        silent    =  0x4,
+        warn   = 0x1,  ///< Log a warning and continue.
+        fatal  = 0x2,  ///< Invoke system check (fatal) on failure.
     };
 
+    /// @brief Bitwise OR for zi_action.
     constexpr auto operator|(zi_action a, zi_action b) noexcept -> zi_action {
-        if consteval {
-            return static_cast<zi_action>(static_cast<u8>(a) | static_cast<u8>(b));
-        }
         return static_cast<zi_action>(static_cast<u8>(a) | static_cast<u8>(b));
     }
 
+    /// @brief Bitwise AND for zi_action, for flag testing.
     constexpr auto operator&(zi_action a, zi_action b) noexcept -> bool {
-        if consteval {
-            return static_cast<u8>(a) & static_cast<u8>(b);
-        }
-        return static_cast<u8>(a) & static_cast<u8>(b);
+        return (static_cast<u8>(a) & static_cast<u8>(b)) != 0u;
     }
 
     struct zi_desc;
+    using zi_result  = std::expected<void, lib::kernel_error>;
 
-    using zi_fn = auto (*)(const zi_desc&) noexcept -> std::expected<void, lib::kernel_error>;
+    /// @brief Initializer signature.
+    /// @param[in] desc  Reference to the descriptor being executed.
+    /// @return std::expected<void, lib::kernel_error>; empty on success.
+    using zi_fn = auto (*)(const zi_desc&) noexcept -> zi_result;
 
+    /// @brief Static init descriptor emitted into .zinit_data.
     struct zi_desc {
-        std::string_view name{}; ///< Name of the method
-        zi_fn            init{}; ///< Function pointer
-        zi_class          cls{}; ///< Class
-        zi_prio          prio{}; ///< Prority
-        zi_action      action{}; ///< Failure action
+        std::string_view    name;    ///< Node name (unique within a graph).
+        zi_fn               init;    ///< Initializer entry point.
+        zi_class            cls;     ///< Execution class.
+        zi_prio             prio;    ///< Class-internal priority.
+        zi_action           action;  ///< Failure policy.
+        const char* const*  deps;    ///< NULL-terminated predecessor names.
+        const char* const*  entails; ///< NULL-terminated successor names.
     };
 
+    /// @brief Execute one descriptor, honoring its failure policy.
+    /// @param[in] desc  The descriptor to execute.
+    /// @return The initializer's result, or an error if desc or fn is invalid.
+    [[nodiscard]] auto execute(const zi_desc& desc) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Execute every descriptor in the given class, sorted by prio.
+    /// @param[in] cls  Class to execute.
+    /// @return Number of descriptors that reported a failure.
     [[nodiscard]] auto run_class(zi_class cls) noexcept -> u32;
+
+    /// @brief Execute all classes from prelink through late, in order.
+    /// @return Aggregate number of descriptors that reported a failure.
+    [[nodiscard]] auto run_all() noexcept -> u32;
+
+    /// @brief Total number of descriptors registered in .zinit_data.
+    [[nodiscard]] auto count() noexcept -> usize;
+
+    /// @brief Read-only view of the full descriptor table.
+    [[nodiscard]] auto descriptors() noexcept -> std::span<const zi_desc>;
 
 } // namespace zxfoundation::sys::zinit
 

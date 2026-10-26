@@ -1,0 +1,272 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/svc_mem.cxxm
+/// @brief Memory namespace dispatch handler.
+
+export module zxfoundation.dgp.gate.registration:svc_mem;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.svc;
+import zxfoundation.base.types;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.sys.printk.core;
+import zxfoundation.memory.objects;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.pmm.types;
+import zxfoundation.memory.vm;
+import zxfoundation.memory.vm.types;
+import zxfoundation.dgp.cap.core;
+import zxfoundation.sync.futex.core;
+import zxfoundation.dgp.cap.types;
+import zxfoundation.scoms.kobject.base;
+import zxfoundation.scoms.kobject.types;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.skey;
+import arch.s390x.mmu;
+import lib.error;
+import lib.stl;
+
+using zxfoundation::dgp::domain::domain;
+using zxfoundation::dgp::cap::cap_token;
+using ::zxfoundation::dgp::right_mask;
+using zxfoundation::dgp::cap::cap_type;
+
+namespace zxfoundation::dgp::gate::svc_mem::detail {
+
+    namespace vm = zxfoundation::memory::vm;
+    namespace mmu = arch::s390x::mmu;
+    namespace pmm = zxfoundation::memory::pmm;
+    namespace skey = arch::s390x::cpu::skey;
+
+    using ::PAGE_SIZE;
+
+    [[nodiscard]] auto page_align_size(u64 size, u64& aligned_size) noexcept -> bool {
+        if (size == 0U || size > ~0ULL - (PAGE_SIZE - 1U)) return false;
+        aligned_size = (size + PAGE_SIZE - 1U) & ~(PAGE_SIZE - 1U);
+        return true;
+    }
+
+    [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
+    }
+
+    auto svc_mem_alloc(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u64 size = a0;
+        u64 aligned_size{};
+        if (!page_align_size(size, aligned_size)) {
+            zxfoundation::sys::printk::perr("mem_alloc: zero size");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        }
+
+                auto result = vm::vm_map(
+            d->vm_space, aligned_size,
+            vm::vm_prot::rw,
+            vm::vm_flags::anonymous);
+
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_alloc: vm_map failed for size={:#x}", aligned_size);
+            return svc::fail(result.error());
+        }
+
+        return *result;
+    }
+
+    auto svc_mem_free(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        u64 aligned_size{};
+        if (va == 0 || !page_align_size(size, aligned_size) || va + aligned_size < va) {
+            zxfoundation::sys::printk::perr("mem_free: invalid args va={:#x} size={}", va, size);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+                auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_free: vm_unmap failed va={:#x}", va);
+            return svc::fail(result.error());
+        }
+
+        return 0;
+    }
+
+    /// @brief Map an exact subrange of a capability-bound memory extent.
+    /// a0 = extent cap, a1 = VA, a2 = page-aligned extent offset,
+    /// a3 = size, a4 = protection bits.
+    auto svc_mem_map(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const cap_token token{a0};
+        const u64 va = a1;
+        const u64 extent_offset = a2;
+        u64 length{};
+        if (token.type() != cap_type::memory_extent || va == 0U ||
+            (extent_offset & (PAGE_SIZE - 1U)) != 0U ||
+            !page_align_size(a3, length) || va + length < va) {
+            zxfoundation::sys::printk::perr("mem_map: invalid extent mapping arguments");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto owner = zxfoundation::dgp::cap::cap_validate_generic_for(
+            token, ::zxfoundation::dgp::right::map, d->ko.id);
+        if (!owner) {
+            zxfoundation::sys::printk::perr("mem_map: extent capability denied");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::unknown));
+        }
+
+        auto extent_object = zxfoundation::dgp::cap::cap_resolve(
+            token, ::zxfoundation::dgp::right::map);
+        if (!extent_object) {
+            zxfoundation::sys::printk::perr("mem_map: extent resolution failed");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::unknown));
+        }
+        auto* extent = reinterpret_cast<zxfoundation::memory::objects::memory_object*>(
+            *extent_object);
+        if (extent->ko.type != zxfoundation::scoms::kobject::kobject_type::memory_extent ||
+            extent->owner_domain != d->ko.id ||
+            extent_offset + length < extent_offset ||
+            extent_offset + length > extent->range_length) {
+            zxfoundation::sys::printk::perr("mem_map: stale or out-of-range extent");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+                const vm::vm_prot prot =
+            ((a4 & 0x1U) ? vm::vm_prot::read : vm::vm_prot::none) |
+            ((a4 & 0x2U) ? vm::vm_prot::write : vm::vm_prot::none) |
+            ((a4 & 0x4U) ? vm::vm_prot::exec : vm::vm_prot::none);
+        if (prot == vm::vm_prot::none ||
+            ((prot & vm::vm_prot::write) != vm::vm_prot::none &&
+             (prot & vm::vm_prot::exec) != vm::vm_prot::none)) {
+            zxfoundation::sys::printk::perr("mem_map: invalid protection bits");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto result = vm::vm_map_extent(
+            d->vm_space, d->root_phys, va, length, prot,
+            zxfoundation::memory::objects::memory_object_ref{
+                extent->ko.type, extent->ko.id, extent->ko.generation},
+            extent_offset);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_map: extent mapping failed");
+            return svc::fail(result.error());
+        }
+        return va;
+    }
+
+    auto svc_mem_unmap(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u64 va   = a0;
+        const u64 size = a1;
+
+        u64 aligned_size{};
+        if (va == 0 || !page_align_size(size, aligned_size) || va + aligned_size < va) {
+            zxfoundation::sys::printk::perr("mem_unmap: invalid args va={:#x} size={}", va, size);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+                auto result = vm::vm_unmap(d->vm_space, d->root_phys, va, aligned_size);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_unmap: vm_unmap failed va={:#x}", va);
+            return svc::fail(result.error());
+        }
+
+        return 0;
+    }
+
+    auto svc_mem_protect(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u64 va        = a0;
+        const u64 size      = a1;
+        const u64 prot_bits = a2;
+
+        u64 aligned_size{};
+        if (va == 0 || !page_align_size(size, aligned_size) || va + aligned_size < va) {
+            zxfoundation::sys::printk::perr("mem_protect: invalid args va={:#x} size={}", va, size);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+                vm::vm_prot new_prot = vm::vm_prot::none;
+        if (prot_bits & 0x1) new_prot = new_prot | vm::vm_prot::read;
+        if (prot_bits & 0x2) new_prot = new_prot | vm::vm_prot::write;
+        if (prot_bits & 0x4) new_prot = new_prot | vm::vm_prot::exec;
+
+        auto result = vm::vm_protect(d->vm_space, d->root_phys, va, aligned_size, new_prot);
+        if (!result) {
+            zxfoundation::sys::printk::perr("mem_protect: vm_protect failed at va={:#x}", va);
+            return svc::fail(result.error());
+        }
+
+        // Flush the local TLB so that the new protection bits take effect
+        // immediately on this CPU.
+        arch::s390x::mmu::tlb_flush_local();
+
+        return 0;
+    }
+
+} // namespace zxfoundation::dgp::gate::svc_mem::detail
+
+export {
+
+namespace zxfoundation::dgp::gate::svc_mem {
+
+    /// §20.2b: block until *uaddr differs from expected (0 timeout = forever).
+    auto svc_futex_wait(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        auto* d = detail::current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        auto r = zxfoundation::sync::futex::futex_wait(*d, a0, a1, a2);
+        return r ? 0U : svc::fail(r.error());
+    }
+
+    /// §20.2b: wake up to a1 waiters keyed by (domain, a0).
+    auto svc_futex_wake(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        auto* d = detail::current_domain();
+        if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        return zxfoundation::sync::futex::futex_wake(*d, a0, a1);
+    }
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::dgp::gate::mem_op;
+
+        switch (static_cast<mem_op>(op)) {
+        case mem_op::alloc:
+            return zxfoundation::dgp::gate::svc_mem::detail::svc_mem_alloc(a0, a1, a2, a3, a4);
+        case mem_op::free:
+            return zxfoundation::dgp::gate::svc_mem::detail::svc_mem_free(a0, a1, a2, a3, a4);
+        case mem_op::map:
+            return zxfoundation::dgp::gate::svc_mem::detail::svc_mem_map(a0, a1, a2, a3, a4);
+        case mem_op::unmap:
+            return zxfoundation::dgp::gate::svc_mem::detail::svc_mem_unmap(a0, a1, a2, a3, a4);
+        case mem_op::protect:
+            return zxfoundation::dgp::gate::svc_mem::detail::svc_mem_protect(a0, a1, a2, a3, a4);
+        case mem_op::futex_wait:
+            return svc_futex_wait(a0, a1, a2, a3, a4);
+        case mem_op::futex_wake:
+            return svc_futex_wake(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("mem_dispatch: unknown op {}", op);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::unknown));
+        }
+    }
+
+
+    template <mem_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
+    }
+
+} // namespace zxfoundation::dgp::gate::svc_mem
+
+} // end export

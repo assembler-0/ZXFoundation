@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/io_types.cxxm
+/// @file zxfoundation/sys/zxio.zcomponent/types.cxxm
 /// @brief I/O binding type definitions — device capability management
 ///        for the DGP kernel's channel-subsystem-based I/O model.
 
@@ -18,9 +18,6 @@ namespace zxfoundation::sys::zxio {
 
     /// @brief Bounded kernel-owned completion records per device binding.
     constexpr u32 IO_COMPLETION_DEPTH = 32;
-
-    /// @brief Maximum number of segments in a DMA scatter-gather list.
-    constexpr u32 IO_DMA_MAX_SEGMENTS = 32;
 
     /// @brief Maximum linear format-1 CCWs accepted in one verified request.
     constexpr u16 IO_MAX_CCWS = 64;
@@ -73,8 +70,7 @@ namespace zxfoundation::sys::zxio {
         u32               storage_key_generation{0};
         u8                storage_key{0};
         u8                allowed_lpm{0};
-        bool              teardown_started{false};
-        u8                _reserved{0};
+        u8                _reserved[2]{0};
 
         io_completion     completions[IO_COMPLETION_DEPTH]{};
         u32               completion_head{0};

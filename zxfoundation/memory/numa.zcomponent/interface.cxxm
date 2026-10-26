@@ -1,3 +1,4 @@
+/// @file zxfoundation/memory/numa.zcomponent/interface.cxxm
 export module zxfoundation.memory.numa;
 export import zxfoundation.memory.numa.core;
 export import zxfoundation.memory.numa.types;

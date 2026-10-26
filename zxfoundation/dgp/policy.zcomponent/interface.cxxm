@@ -1,3 +1,4 @@
+/// @file zxfoundation/dgp/policy.zcomponent/interface.cxxm
 export module zxfoundation.dgp.policy;
 export import zxfoundation.dgp.policy.types;
 export import zxfoundation.dgp.policy.core;

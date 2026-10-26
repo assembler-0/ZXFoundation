@@ -1,3 +1,4 @@
+/// @file zxfoundation/scoms/kobject.zcomponent/interface.cxxm
 export module zxfoundation.scoms.kobject;
 export import zxfoundation.scoms.kobject.types;
 export import zxfoundation.scoms.kobject.base;

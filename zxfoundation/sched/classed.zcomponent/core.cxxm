@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/classed.cxxm
+/// @file zxfoundation/sched/classed.zcomponent/core.cxxm
 /// @brief Strict-priority scheduler class dispatch surface.
 
 export module zxfoundation.sched.classed.core;

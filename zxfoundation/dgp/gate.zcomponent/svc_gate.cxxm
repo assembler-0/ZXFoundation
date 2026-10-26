@@ -1,0 +1,304 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/svc_gate.cxxm
+/// @brief Gate namespace dispatch handler.
+
+export module zxfoundation.dgp.gate.registration:svc_gate;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.svc;
+import zxfoundation.base.types;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.domain.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.memory.hhdm;
+import zxfoundation.sys.time.core;
+import zxfoundation.sched.core;
+import zxfoundation.sched.cbs.core;
+import zxfoundation.sched.policy;
+import zxfoundation.sync.waitqueue.core;
+import zxfoundation.sync.waitqueue.types;
+import zxfoundation.sync.lockable;
+import lib.error;
+import lib.stl;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.pcss.types;
+import arch.s390x.cpu.pcss.core;
+import zxfoundation.dgp.gate.core;
+
+using zxfoundation::dgp::domain::domain;
+
+namespace zxfoundation::dgp::gate::svc_gate::detail {
+
+    [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
+    }
+
+    auto svc_gate_create(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        discard_value a0; // validated cap token (dispatch_table already checked it)
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const auto type      = static_cast<zxfoundation::dgp::gate::gate_type>(a1);
+        const auto auth      = static_cast<zxfoundation::dgp::gate::gate_auth>(a2);
+        const auto target_id = static_cast<u32>(a3);
+        const u64  entry_va  = a4;
+
+        if (static_cast<u8>(type) > 1) {
+            zxfoundation::sys::printk::perr("gate_create: invalid gate_type {}", static_cast<u8>(type));
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+        if (static_cast<u8>(auth) > 2) {
+            zxfoundation::sys::printk::perr("gate_create: invalid gate_auth {}", static_cast<u8>(auth));
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        const auto key = [] (u32 tid) -> u8 {
+            auto* t = zxfoundation::dgp::domain::domain_find(tid);
+            return t ? t->storage_key : 0;
+        }(target_id);
+
+        auto result = zxfoundation::dgp::gate::gate_create(type, auth, target_id, key, entry_va);
+        if (!result) {
+            zxfoundation::sys::printk::perr("gate_create: failed tgt={} entry={:#x} err={:#x}",
+                target_id, entry_va,
+                (static_cast<u64>(result.error().category) << 32)
+                    | result.error().code);
+            return svc::fail(result.error());
+        }
+
+        return *result;
+    }
+
+    auto svc_gate_destroy(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        discard_value a0; // validated cap token (dispatch_table already checked it)
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const auto gid = static_cast<u32>(a1);
+
+        auto result = zxfoundation::dgp::gate::gate_destroy(gid);
+        if (!result) {
+            zxfoundation::sys::printk::perr("gate_destroy: gate_destroy({}) failed", gid);
+            return svc::fail(result.error());
+        }
+
+        return 0;
+    }
+
+    auto svc_gate_query(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
+        discard_value a0;
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        const auto gid = static_cast<u32>(a1);
+        auto* desc = zxfoundation::dgp::gate::gate_find(gid);
+        if (!desc) {
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::not_found));
+        }
+        return static_cast<u64>(desc->pc_nr.underlying());
+    }
+
+    [[nodiscard]] auto callee_domain() noexcept -> domain::domain* {
+        const auto pasn =
+            arch::s390x::cpu::percpu::this_cpu().attached.space_asn;
+        domain::domain* found = nullptr;
+        discard_value zxfoundation::dgp::domain::domain_for_each(
+            [&](domain::domain& d) noexcept -> bool {
+                if (static_cast<u16>(d.pc_asn & 0xFFFFU) == pasn) {
+                    found = &d;
+                    return false;
+                }
+                return true;
+            });
+        return found;
+    }
+
+    auto strand_wake(void* opaque) noexcept -> void {
+        auto* s = static_cast<zxfoundation::dgp::domain::strand*>(opaque);
+        if (!s) return;
+        auto* owner = static_cast<zxfoundation::dgp::domain::domain*>(s->owner);
+        // Only a parked strand may be enqueued (§09.2). A wake landing on a
+        // strand that is running (mid re-park) or already queued must not
+        // link it again: the duplicate run-queue node gets picked later and
+        // resumes a stale stack context next to the live one.
+        if (s->substate != zxfoundation::sched::sched_substate::blocked) {
+            if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+            return;
+        }
+        s->substate = zxfoundation::sched::sched_substate::runnable;
+        zxfoundation::sched::enqueue_strand(s);
+        if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+    }
+
+    auto nc_gate_defer(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::dgp::domain::deferred_request;
+        using zxfoundation::dgp::domain::DEFER_QUEUE_DEPTH;
+
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* self = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
+            pcp.current_strand);
+        if (!self || !self->body) [[unlikely]]
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        auto* callee = callee_domain();
+        if (!callee) [[unlikely]] {
+            zxfoundation::sys::printk::perr("gate_defer: no handler-owner domain");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+        }
+
+        u64 cr15 = 0;
+        arch::s390x::cpu::ctlreg::crread<15, 15>(cr15);
+        const u64 entry_base = cr15 -
+            (arch::s390x::cpu::pcss::STACK_STATE_SIZE -
+             arch::s390x::cpu::pcss::STACK_DESC_SIZE);
+        // CR15 carries an IDENTITY home VA; the kernel reads the
+        // entry through the HHDM alias.
+        const auto* desc = reinterpret_cast<const u8*>(
+            zxfoundation::memory::hhdm::phys_to_virt(
+                entry_base + arch::s390x::cpu::pcss::STACK_STATE_SIZE -
+                arch::s390x::cpu::pcss::STACK_DESC_SIZE));
+        if ((desc[0] & 0x7FU) != arch::s390x::cpu::pcss::STACK_ET_STATE) {
+            zxfoundation::sys::printk::perr("gate_defer: not inside a stacked gate call");
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto& q = callee->gate_defer;
+        deferred_request* req = nullptr;
+        {
+            const zxfoundation::sync::irq_lock_guard _{q.lock};
+            if (q.count == DEFER_QUEUE_DEPTH) {
+                return svc::fail(lib::kernel_error::from_driver(
+                    lib::driver_error::busy));
+            }
+            req = &q.requests[q.tail];
+            q.tail = (q.tail + 1U) % DEFER_QUEUE_DEPTH;
+            ++q.count;
+            req->caller = self;
+            req->entry_va = entry_base;
+            req->arg_regs[0] = a0;
+            req->arg_regs[1] = a1;
+            req->arg_regs[2] = a2;
+            req->arg_regs[3] = a3;
+            req->arg_regs[4] = a4;
+            req->done.store(false, std::memory_order::release);
+            req->enqueued_mono_ns = zxfoundation::sys::time::monotonic_now()
+                                        .nanoseconds_since_epoch();
+        }
+        self->body->gate_defer_entry = entry_base;
+
+        // A deferred request now exists — wake the worker's blocking receive.
+        zxfoundation::sync::waitqueue::wake_up(q.work);
+
+        // Block until the worker resumes us (writes the reply, sets done).
+        zxfoundation::sync::waitqueue::wait_entry entry{};
+        entry.node.context = self;
+        entry.node.wake_fn = strand_wake;
+        for (;;) {
+            self->substate = zxfoundation::sched::sched_substate::blocked;
+            if (zxfoundation::sync::waitqueue::prepare_to_wait_event(
+                    q.completion, entry, zxfoundation::sync::waitqueue::wait_flags::none,
+                    [req]() noexcept -> bool {
+                    return req->done.load(std::memory_order::acquire);
+                }))
+                break;
+            zxfoundation::sched::schedule();
+        }
+        self->substate = zxfoundation::sched::sched_substate::running;
+        zxfoundation::sync::waitqueue::finish_wait(q.completion, entry);
+        return 0xFFFF'FFFF'FFFF'FFFEULL;
+    }
+
+    auto nc_gate_resume(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        using zxfoundation::dgp::domain::deferred_request;
+        using zxfoundation::dgp::domain::DEFER_QUEUE_DEPTH;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        auto& q = d->gate_defer;
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* self = reinterpret_cast<zxfoundation::dgp::domain::strand*>(pcp.current_strand);
+
+        deferred_request* req = nullptr;
+        while (req == nullptr) {
+            // Blocking receive: park until a deferred request exists. Replaces the
+            // old busy-wait (stall + yield spin) that starved the caller.
+            zxfoundation::sync::waitqueue::wait_entry we{};
+            we.node.context = self;
+            we.node.wake_fn = strand_wake;
+            for (;;) {
+                if (self) self->substate = zxfoundation::sched::sched_substate::blocked;
+                if (zxfoundation::sync::waitqueue::prepare_to_wait_event(
+                        q.work, we, zxfoundation::sync::waitqueue::wait_flags::none,
+                        [&q]() noexcept -> bool { return q.count > 0U; }))
+                    break;
+                zxfoundation::sched::schedule();
+            }
+            if (self) self->substate = zxfoundation::sched::sched_substate::running;
+            zxfoundation::sync::waitqueue::finish_wait(q.work, we);
+
+            const zxfoundation::sync::irq_lock_guard _{q.lock};
+            if (q.count > 0U) {
+                req = &q.requests[q.head];
+                q.head = (q.head + 1U) % DEFER_QUEUE_DEPTH;
+                --q.count;
+            }
+        }
+
+        arch::s390x::cpu::pcss::state_entry_write_reply(req->entry_va, a0, a1, a2);
+        req->done.store(true, std::memory_order::release);
+        // S10.5 deferred-work billing, server-worker leg (OBL-034): the
+        // request's lifetime (defer enqueue → reply completion) is charged
+        // to the resuming worker's CBS — the fast-path leg already bills
+        // the strand owner by construction.
+        if (self && self->body && req->enqueued_mono_ns != 0U) {
+            const u64 now_ns = zxfoundation::sys::time::monotonic_now()
+                                   .nanoseconds_since_epoch();
+            if (now_ns > req->enqueued_mono_ns) {
+                zxfoundation::sched::cbs::charge(
+                    self->body->cbs, now_ns - req->enqueued_mono_ns);
+            }
+        }
+        zxfoundation::sync::waitqueue::wake_up(q.completion);
+        return 0;
+    }
+
+} // namespace zxfoundation::dgp::gate::svc_gate::detail
+
+export {
+
+namespace zxfoundation::dgp::gate::svc_gate {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::dgp::gate::gate_op;
+
+        switch (static_cast<gate_op>(op)) {
+        case gate_op::create:
+            return zxfoundation::dgp::gate::svc_gate::detail::svc_gate_create(a0, a1, a2, a3, a4);
+        case gate_op::destroy:
+            return zxfoundation::dgp::gate::svc_gate::detail::svc_gate_destroy(a0, a1, a2, a3, a4);
+        case gate_op::query:
+            return zxfoundation::dgp::gate::svc_gate::detail::svc_gate_query(a0, a1, a2, a3, a4);
+        case gate_op::defer:
+            return zxfoundation::dgp::gate::svc_gate::detail::nc_gate_defer(a0, a1, a2, a3, a4);
+        case gate_op::resume:
+            return zxfoundation::dgp::gate::svc_gate::detail::nc_gate_resume(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("gate_dispatch: unknown op {}", op);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::unknown));
+        }
+    }
+
+
+    template <gate_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
+    }
+
+} // namespace zxfoundation::dgp::gate::svc_gate
+
+} // end export

@@ -28,12 +28,20 @@ namespace zxfoundation::dgp::signal {
         const u8 idx = static_cast<u8>(entry.kind);
         const auto& hinfo = d.signal_queue.handlers[idx];
 
-        bool handled = false;
+        bool consumed = false;
         if (hinfo.handler != nullptr) {
-            handled = hinfo.handler(entry.kind, entry.data, hinfo.user_data);
+            auto* s = &d.primary_strand;
+            if (s->body != nullptr && s->body->signal_return_kind == 0U) {
+                s->body->signal_return_kind   = static_cast<u8>(entry.kind);
+                s->body->signal_handler_va    = reinterpret_cast<u64>(hinfo.handler);
+                s->body->signal_payload       = entry.data;
+                s->body->signal_user_ctx      = reinterpret_cast<u64>(hinfo.user_data);
+                consumed = true;
+            }
+            if (consumed) return true;
         }
 
-        if (!handled) {
+        {
             auto effective_def = hinfo.def;
             if (hinfo.handler == nullptr) {
                 switch (entry.kind) {
@@ -51,17 +59,16 @@ namespace zxfoundation::dgp::signal {
                           d.ko.id, signal_kind_name(entry.kind));
                     discard_value scoms::kobject::mark_dying(&d);
                     d.flags = d.flags | domain_flags::need_resched;
-                    break;
+                    return true;    // consumed: the domain is dying
                 case signal_default::notify:
-                    // Domain can poll signal_queue.pending_mask.
-                    break;
+                    // Stays queued: the domain polls pending_mask and acks.
+                    return false;
                 case signal_default::ignore:
                 default:
-                    // Silent discard.
-                    break;
+                    return false;
             }
         }
-        return true;
+        return false;
     }
         
     /// @brief Register a signal handler for the given domain and kind.
@@ -118,7 +125,10 @@ namespace zxfoundation::dgp::signal {
             if (k == signal_kind::none) continue;
             const u32 kbit = 1U << static_cast<u8>(k);
             if ((q.blocked_mask & kbit) == 0U) {
-                auto entry = q.entries[idx];
+                const auto entry = q.entries[idx];
+                if (!deliver_entry(d, entry)) {
+                    continue;
+                }
                 if (idx == q.head) {
                     q.entries[q.head] = {};
                     q.head = (q.head + 1) % SIGNAL_QUEUE_DEPTH;
@@ -126,7 +136,7 @@ namespace zxfoundation::dgp::signal {
                     for (u32 j = idx;
                          j != (q.head + (q.count - 1U)) % SIGNAL_QUEUE_DEPTH;
                          j = (j + 1) % SIGNAL_QUEUE_DEPTH) {
-                        q.entries[j] = q.entries[(j + 1) % SIGNAL_QUEUE_DEPTH];
+                        q.entries[j] = q.entries[(j + 1U) % SIGNAL_QUEUE_DEPTH];
                     }
                     const u32 last = (q.head + (q.count - 1U)) % SIGNAL_QUEUE_DEPTH;
                     q.entries[last] = {};
@@ -141,10 +151,41 @@ namespace zxfoundation::dgp::signal {
                             q.pending_mask |= (1U << static_cast<u8>(rk));
                     }
                 }
-                return deliver_entry(d, entry);
+                return true;
             }
         }
         return false;
+    }
+
+    /// @brief Consume queued signals whose kind bits appear in ack_mask.
+    /// @param[in,out] d        The target domain.
+    /// @param[in]     ack_mask Bitmask of signal_kind values acknowledged.
+    /// @note  Matching ring entries are dequeued and the pending mask is
+    ///        rebuilt from the surviving entries
+    auto signal_ack(domain& d, u32 ack_mask) noexcept -> void {
+        auto& q = d.signal_queue;
+        u32 write = q.head;
+        u32 kept  = 0U;
+        for (u32 i = 0U; i < q.count; ++i) {
+            const u32 idx = (q.head + i) % SIGNAL_QUEUE_DEPTH;
+            const auto e = q.entries[idx];
+            q.entries[idx] = {};
+            const u32 kbit = 1U << static_cast<u8>(e.kind);
+            if (e.kind == signal_kind::none || (ack_mask & kbit) != 0U) {
+                continue;
+            }
+            q.entries[write] = e;
+            write = (write + 1) % SIGNAL_QUEUE_DEPTH;
+            ++kept;
+        }
+        q.tail = write;
+        q.count = kept;
+        q.pending_mask = 0;
+        for (u32 r = 0U; r < kept; ++r) {
+            const auto rk = q.entries[(q.head + r) % SIGNAL_QUEUE_DEPTH].kind;
+            if (rk != signal_kind::none)
+                q.pending_mask |= (1U << static_cast<u8>(rk));
+        }
     }
 
     /// @brief Deliver all pending signals to the domain.
@@ -153,7 +194,9 @@ namespace zxfoundation::dgp::signal {
     auto signal_deliver_all(domain& d) noexcept -> bool {
         bool needs_resched = false;
         while (d.signal_queue.has_pending()) {
-            discard_value signal_deliver_one(d);
+            if (!signal_deliver_one(d)) {
+                break;
+            }
             if (d.ko.state == base::lifecycle_state::dying) {
                 needs_resched = true;
                 break;

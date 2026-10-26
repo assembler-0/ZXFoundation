@@ -5,6 +5,7 @@
 module zxfoundation.memory.pmm.core;
 import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
+import zxfoundation.sys.printk.core;
 import zxfoundation.memory.numa;
 import zxfoundation.memory.numa.types;
 import zxfoundation.sched.context.core;
@@ -14,7 +15,10 @@ import zxfoundation.sync.lockable;
 import zxfoundation.base.types;
 import zxfoundation.base.linksym;
 import zxfoundation.sys.syschk.core;
+import zxfoundation.memory.reclaim.core;
 import zxfoundation.scoms.kobject.types;
+import zxfoundation.sys.zinit.core;
+import zxfoundation.init.storage.core;
 import arch.s390x.cpu.percpu;
 import arch.s390x.init.zxfl.protocol;
 import arch.s390x.cpu.irq;
@@ -22,8 +26,9 @@ import arch.s390x.cpu.skey;
 import lib.error;
 import lib.static_vector;
 import lib.stl;
-import zxfoundation.memory.reclaim.core;
 
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::memory::pmm::detail {
 
@@ -76,21 +81,24 @@ namespace zxfoundation::memory::pmm::detail {
 
         /// @brief Remove a specific block from the order-ord free list (O(1)).
         auto remove(u32 ord, u64 phys) noexcept -> void {
+            if (phys == 0 || (phys & (PAGE_SIZE - 1)) != 0) return;
             auto* n = reinterpret_cast<free_node*>(hhdm::phys_to_virt(phys));
-            if (n->prev_phys)
-                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->prev_phys))->next_phys = n->next_phys;
+            const u64 next = n->next_phys;
+            const u64 prev = n->prev_phys;
+            if (prev && (prev & (PAGE_SIZE - 1)) == 0)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(prev))->next_phys = next;
             else
-                heads[ord] = n->next_phys;
-            if (n->next_phys)
-                reinterpret_cast<free_node*>(hhdm::phys_to_virt(n->next_phys))->prev_phys = n->prev_phys;
-            --counts[ord];
+                heads[ord] = next;
+            if (next && (next & (PAGE_SIZE - 1)) == 0)
+                reinterpret_cast<free_node*>(hhdm::phys_to_virt(next))->prev_phys = prev;
+            if (counts[ord] > 0) --counts[ord];
         }
     };
 
     /// @brief Per-node allocator state.
     struct numa_zone_set {
         buddy_zone zones[static_cast<u32>(zone::count)]{};
-        sync::qspinlock::qspinlock locks[static_cast<u32>(zone::count)]{};
+        sync::qspinlock::qspinlock<sync::lock_rank::pmm_zone> locks[static_cast<u32>(zone::count)]{};
         u64 free_pages[static_cast<u32>(zone::count)]{};
         u64 total_pages[static_cast<u32>(zone::count)]{};
     };
@@ -183,18 +191,21 @@ namespace zxfoundation::memory::pmm::detail {
         return &g_frame_table[pfn];
     }
 
-    /// @brief Fail-closed validation of a frame handed back by the buddy / PCP layer.
-    /// @param[in] phys  Candidate physical base address taken from a free list.
+    /// @brief Fail-closed validation of a frame handed back by a free list.
+    /// @param[in] phys      Candidate physical base address taken from a free list.
+    /// @param[in] expected  Ownership the list guarantees: frame_owner::buddy
+    ///                      for buddy-list pops (linked free blocks) and
+    ///                      frame_owner::none for PCP pops (free but unlinked).
     /// @warning Triggers syschk_fatal on any inconsistency and does not return
     ///          in that case.
-    auto assert_allocatable_frame(u64 phys) noexcept -> void {
+    auto assert_allocatable_frame(u64 phys, frame_owner expected) noexcept -> void {
         const u64 max_phys = g_max_pfn << PAGE_SHIFT;
         auto desc = desc_of(phys);
-        bool owned_by_buddy = desc && (*desc)->owner() == frame_owner::buddy;
+        bool owner_ok = desc && (*desc)->owner() == expected;
         if (phys == 0U
             || (phys & (static_cast<u64>(PAGE_SIZE) - 1U)) != 0U
             || phys >= max_phys
-            || !owned_by_buddy) [[unlikely]] {
+            || !owner_ok) [[unlikely]] {
             u64 owner_val = 0xFF;
             u64 order_val = 0xFF;
             if (desc) {
@@ -234,7 +245,7 @@ namespace zxfoundation::memory::pmm::detail {
             return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
         }
 
-        auto fde = desc_of(phys);
+        auto fde = detail::desc_of(phys);
         if (!fde) {
             return std::unexpected(lib::kernel_error::from_memory(lib::memory_error::invalid_address));
         }
@@ -272,7 +283,7 @@ namespace zxfoundation::memory::pmm::detail {
             const u64 phys = bz.pop(ord);
             if (!phys) continue;
 
-            assert_allocatable_frame(phys);
+            assert_allocatable_frame(phys, frame_owner::buddy);
 
             for (u32 s = ord; s > order; --s) {
                 const u64 buddy_phys = phys + (static_cast<u64>(PAGE_SIZE) << (s - 1));
@@ -283,6 +294,10 @@ namespace zxfoundation::memory::pmm::detail {
                 }
             }
 
+            {
+                auto fde = detail::desc_of(phys);
+                if (fde) [[likely]] (*fde)->set(static_cast<u8>(order), frame_owner::none, node);
+            }
             g_node_zones[node].free_pages[zi] -= 1ULL << order;
             return phys;
         }
@@ -295,6 +310,11 @@ namespace zxfoundation::memory::pmm::detail {
         const u8 node = normalize_node_id(node_id);
         const u32 zi = static_cast<u32>(z);
         auto& bz     = g_node_zones[node].zones[zi];
+
+        {
+            auto pde = desc_of(phys);
+            if (pde) [[likely]] (*pde)->set(0, frame_owner::none, node);
+        }
 
         u32 ord = order;
         for (; ord < MAX_ORDER; ++ord) {
@@ -323,13 +343,15 @@ namespace zxfoundation::memory::pmm::detail {
             phys = std::min(phys, buddy);
         }
 
-        auto pde = desc_of(phys);
-        if (pde) [[likely]] {
-            const u8 flags = static_cast<u8>(
+        u8 flags = 0;
+        if (auto pde = desc_of(phys); pde) [[likely]] {
+            flags = static_cast<u8>(
                 (*pde)->load_flags(std::memory_order::acquire) & ff_suspect);
-            (*pde)->set(static_cast<u8>(ord), frame_owner::buddy, node, flags);
         }
         bz.push(ord, phys);
+        if (auto pde = desc_of(phys); pde) [[likely]] {
+            (*pde)->set(static_cast<u8>(ord), frame_owner::buddy, node, flags);
+        }
         g_node_zones[node].free_pages[zi] += 1ULL << ord;
     }
 
@@ -348,7 +370,7 @@ namespace zxfoundation::memory::pmm::detail {
         const u64 required_pages = 1ULL << order;
         if (g_node_zones[node].free_pages[zi] < required_pages) return {};
 
-        const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+        const sync::irq_lock_guard _{g_node_zones[node].locks[zi]};
         const u64 phys = alloc_locked(order, z, node);
         if (!phys) return {};
 
@@ -403,7 +425,7 @@ namespace zxfoundation::memory::pmm::detail {
     [[nodiscard]] auto pcp_pop(pcp_list& lst) noexcept -> u64 {
         if (!lst.head_phys) return 0;
         const u64 phys = lst.head_phys;
-        assert_allocatable_frame(phys);
+        assert_allocatable_frame(phys, frame_owner::none);
         const auto* node = reinterpret_cast<const pcp_node*>(hhdm::phys_to_virt(phys));
         lst.head_phys = node->next_phys;
         --lst.count;
@@ -422,12 +444,10 @@ namespace zxfoundation::memory::pmm::detail {
     auto pcp_refill(pcp_list& lst, u32 ord, zone z, u8 node_id) noexcept -> void {
         const u8 node = normalize_node_id(node_id);
         const u32 zi = static_cast<u32>(z);
-        const sync::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
+        const sync::lock_guard _{g_node_zones[node].locks[zi]};
         for (u32 i = 0; i < PCP_BATCH; ++i) {
             const u64 phys = alloc_locked(ord, z, node);
             if (!phys) break;
-            auto fde = desc_of(phys);
-            if (fde) [[likely]] (*fde)->set(static_cast<u8>(ord), frame_owner::buddy, node);
             pcp_push(lst, phys);
         }
     }
@@ -438,7 +458,7 @@ namespace zxfoundation::memory::pmm::detail {
         const u8 node = normalize_node_id(node_id);
         const u32 zi     = static_cast<u32>(z);
         const u32 target = PCP_HIGH / 2U;
-        const sync::lock_guard guard{g_node_zones[node].locks[zi]}; // IRQs already off
+        const sync::lock_guard _{g_node_zones[node].locks[zi]};
         while (lst.count > target) {
             const u64 phys = pcp_pop(lst);
             if (!phys) break;
@@ -502,26 +522,25 @@ namespace zxfoundation::memory::pmm {
     auto reserve(u64 phys, u32 order) noexcept -> void;
 
     /// @brief Initialize the PMM from the ZXFL boot protocol.
-    /// @param[in] proto  Validated ZXFL boot protocol.
-    auto init(const arch::s390x::init::zxfl::protocol& proto) noexcept -> void {
+    auto zi_pmm_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         using namespace detail;
-        if (g_initialized) return;
+        if (g_initialized) return {};
+
+        const auto& proto = init::storage::get_protocol();
 
         const auto* map = reinterpret_cast<const arch::s390x::init::zxfl::mem_region*>(
             proto.mem_map_addr);
         if (proto.mem_map_count > arch::s390x::init::zxfl::ZXFL_MEM_MAP_MAX
             || (proto.mem_map_count != 0U && !map)) {
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
-                "pmm: invalid ZXFL memory map descriptor");
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
         for (u32 i = 0; i < proto.mem_map_count; ++i) {
             if (map[i].length != 0U
                 && map[i].base > ~0ULL - map[i].length) {
-                sys::syschk::syschk_fatal(
-                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg),
-                    "pmm: ZXFL memory-map range overflow at entry {}", i);
+                return std::unexpected(
+                    lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
             }
             const u64 region_end = map[i].base + map[i].length;
             const u64 pfn_end = (region_end + PAGE_SIZE - 1U) >> PAGE_SHIFT;
@@ -583,9 +602,8 @@ namespace zxfoundation::memory::pmm {
         if (table_end < table_phys
             || table_end > (g_max_pfn << PAGE_SHIFT)
             || !hhdm::phys_range_is_mapped(table_phys, table_pages << PAGE_SHIFT)) {
-            sys::syschk::syschk_fatal(
-                lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed),
-                "pmm: frame table extent exceeds HHDM coverage / installed RAM");
+            return std::unexpected(
+                lib::kernel_error::from_memory(lib::memory_error::hhdm_init_failed));
         }
 
         g_frame_table = reinterpret_cast<frame_desc*>(hhdm::phys_to_virt(table_phys));
@@ -653,7 +671,9 @@ namespace zxfoundation::memory::pmm {
         reserve(proto.lowcore_phys, 1);
 
         g_initialized = true;
+        return {};
     }
+    __zinit_dep__(mm, p20, zi_pmm_init, fatal, "zi_numa_init")
 
     /// @brief Mark a physical range as permanently reserved (runtime call).
     /// @param[in] phys   Start of the range (page-aligned).
@@ -678,7 +698,7 @@ namespace zxfoundation::memory::pmm {
                     continue;
             }
 
-            const sync::irq_lock_guard guard{node_zones.locks[zi]};
+            const sync::irq_lock_guard _{node_zones.locks[zi]};
             auto& bz = node_zones.zones[zi];
 
             for (u32 ord = 0; ord <= MAX_ORDER; ++ord) {
@@ -745,89 +765,86 @@ namespace zxfoundation::memory::pmm {
         }
     }
 
+    auto transaction::on_rollback() noexcept -> void {
+        using namespace detail;
+        for (u32 i = 0; i < m_count; ++i) {
+            auto fde = desc_of(m_slots[i].phys);
+            if (!fde) continue;
+            if ((*fde)->load_flags() & ff_offline) {
+                (*fde)->set(static_cast<u8>(m_slots[i].order),
+                    frame_owner::reserved,
+                    normalize_node_id(m_slots[i].node_id),
+                    static_cast<u8>(ff_offline | ff_suspect));
+                g_retired_pages += 1ULL << m_slots[i].order;
+                continue;
+            }
+            const u32 zi = static_cast<u32>(m_slots[i].z);
+            const u8 node = normalize_node_id(m_slots[i].node_id);
+            const sync::irq_lock_guard _{g_node_zones[node].locks[zi]};
+            free_locked(m_slots[i].phys, m_slots[i].order, m_slots[i].z, node);
+        }
+    }
 
-        auto transaction::on_rollback() noexcept -> void {
-            using namespace detail;
-            for (u32 i = 0; i < m_count; ++i) {
-                auto fde = desc_of(m_slots[i].phys);
-                if (!fde) continue;
-                if ((*fde)->load_flags() & ff_offline) {
-                    (*fde)->set(static_cast<u8>(m_slots[i].order),
-                        frame_owner::reserved,
-                        normalize_node_id(m_slots[i].node_id),
-                        static_cast<u8>(ff_offline | ff_suspect));
-                    g_retired_pages += 1ULL << m_slots[i].order;
-                    continue;
-                }
-                const u32 zi = static_cast<u32>(m_slots[i].z);
-                const u8 node = normalize_node_id(m_slots[i].node_id);
-                const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
-                free_locked(m_slots[i].phys, m_slots[i].order, m_slots[i].z, node);
+    [[nodiscard]] auto transaction::alloc(
+        u32       order,
+        zone      z,
+        purpose   p,
+        page_init init
+    ) noexcept -> std::expected<folio_embryo, lib::kernel_error> {
+        using namespace detail;
+
+        if (committed() || m_count >= TXN_MAX)
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::out_of_memory));
+
+        if (sched::context::in_mcck())
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::transaction::alloc forbidden in MCCK context");
+        if (sched::context::in_hardirq() && order > 0U)
+            sys::syschk::syschk_fatal(
+                lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
+                "pmm::transaction::alloc order > 0 forbidden in hard-IRQ context");
+
+        const u8 local_node = local_node_id();
+        const numa::allocation_policy placement{
+            .preferred_node = local_node,
+            .fallback = numa::fallback_mode::local_first,
+            .require_dma31 = z == zone::dma31,
+            .allow_remote = true,
+        };
+        const node_allocation allocation = alloc_node_aware(order, z, placement, local_node);
+        if (!allocation.phys)
+            return std::unexpected(lib::kernel_error::from_memory(
+                lib::memory_error::zone_exhausted));
+
+        const frame_owner fo = owner_for_purpose(p);
+        {
+            auto fde_txn = desc_of(allocation.phys);
+            if (fde_txn) [[likely]] (*fde_txn)->set(static_cast<u8>(order), fo, allocation.node_id);
+        }
+
+        if (p == purpose::page_table) {
+            auto validation = validate_page_table_allocation(allocation.phys, order, z, allocation.node_id);
+            if (!validation) {
+                quarantine_failed_allocation(allocation.phys, order, allocation.node_id);
+                return std::unexpected(validation.error());
             }
         }
 
-        [[nodiscard]] auto transaction::alloc(
-            u32       order,
-            zone      z,
-            purpose   p,
-            page_init init
-        ) noexcept -> std::expected<folio_embryo, lib::kernel_error> {
-            using namespace detail;
+        if (init == page_init::zeroed)
+            std::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
+                        static_cast<u64>(PAGE_SIZE) << order, u8{0});
 
-            if (committed() || m_count >= TXN_MAX)
-                return std::unexpected(lib::kernel_error::from_memory(
-                    lib::memory_error::out_of_memory));
+        m_slots[m_count++] = { allocation.phys, order, z, p, allocation.node_id };
+        return folio_embryo{ allocation.phys, order, p, z };
+    }
 
-            if (sched::context::in_mcck())
-                sys::syschk::syschk_fatal(
-                    lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
-                    "pmm::transaction::alloc forbidden in MCCK context");
-            if (sched::context::in_hardirq() && order > 0U)
-                sys::syschk::syschk_fatal(
-                    lib::kernel_error::from_memory(lib::memory_error::invalid_irq_contex),
-                    "pmm::transaction::alloc order > 0 forbidden in hard-IRQ context");
+    [[nodiscard]] auto transaction::count() const noexcept -> u32 { return m_count; }
 
-            const u8 local_node = local_node_id();
-            const numa::allocation_policy placement{
-                .preferred_node = local_node,
-                .fallback = numa::fallback_mode::local_first,
-                .require_dma31 = z == zone::dma31,
-                .allow_remote = true,
-            };
-            const node_allocation allocation = alloc_node_aware(order, z, placement, local_node);
-            if (!allocation.phys)
-                return std::unexpected(lib::kernel_error::from_memory(
-                    lib::memory_error::zone_exhausted));
-
-            const frame_owner fo = owner_for_purpose(p);
-            {
-                auto fde_txn = desc_of(allocation.phys);
-                if (fde_txn) [[likely]] (*fde_txn)->set(static_cast<u8>(order), fo, allocation.node_id);
-            }
-
-            if (p == purpose::page_table) {
-                auto validation = validate_page_table_allocation(allocation.phys, order, z, allocation.node_id);
-                if (!validation) {
-                    quarantine_failed_allocation(allocation.phys, order, allocation.node_id);
-                    return std::unexpected(validation.error());
-                }
-            }
-
-            if (init == page_init::zeroed)
-                std::fill_n(reinterpret_cast<u8*>(hhdm::phys_to_virt(allocation.phys)),
-                            static_cast<u64>(PAGE_SIZE) << order, u8{0});
-
-            m_slots[m_count++] = { allocation.phys, order, z, p, allocation.node_id };
-            return folio_embryo{ allocation.phys, order, p, z };
-        }
-
-        [[nodiscard]] auto transaction::count() const noexcept -> u32 { return m_count; }
-
-        [[nodiscard]] auto transaction::phys(u32 i) const noexcept -> u64 {
-            return (i < m_count) ? m_slots[i].phys : 0;
-        }
-
-
+    [[nodiscard]] auto transaction::phys(u32 i) const noexcept -> u64 {
+        return (i < m_count) ? m_slots[i].phys : 0;
+    }
 
     /// @brief Allocate a single folio.
     /// @param[in] request Node-aware allocation request.
@@ -974,22 +991,21 @@ namespace zxfoundation::memory::pmm {
         const u64   phys  = f.phys_base;
         const u8    node  = frame_node_id(phys);
 
-        // Reset frame_desc so the frame shows as buddy-owned.
-        {
-            auto fde = desc_of(phys);
-            if (fde) [[likely]] (*fde)->set(static_cast<u8>(order), frame_owner::buddy, node);
-        }
         if (order <= PCP_MAX_ORDER && !sched::context::in_interrupt()) {
             const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
             pcp_list& lst = arch::s390x::cpu::percpu::this_cpu()
                                 .pcp.lists[node][static_cast<u32>(z)][order];
             pcp_push(lst, phys);
+            {
+                auto fde = detail::desc_of(phys);
+                if (fde) [[likely]] (*fde)->set(static_cast<u8>(order), frame_owner::none, node);
+            }
             if (lst.count > PCP_HIGH)
                 pcp_drain(lst, order, z, node); // drains under node-zone lock
             arch::s390x::cpu::irq::irq_restore(irq_flags);
         } else {
             const u32 zi = static_cast<u32>(z);
-            const sync::irq_lock_guard guard{g_node_zones[node].locks[zi]};
+            const sync::irq_lock_guard _{g_node_zones[node].locks[zi]};
             free_locked(phys, order, z, node);
         }
     }
@@ -1232,6 +1248,5 @@ namespace zxfoundation::memory::pmm {
         if (pfn >= g_max_pfn) return nullptr;
         return &g_frame_table[pfn];
     }
-
 
 } // namespace zxfoundation::memory::pmm

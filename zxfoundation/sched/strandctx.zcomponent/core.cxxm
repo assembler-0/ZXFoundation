@@ -3,6 +3,8 @@
 /// @brief Strand context setup and user-mode first-entry trampolines.
 
 export module zxfoundation.sched.strandctx.core;
+import lib.error;
+import lib.stl;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.base.types;
 import arch.s390x.sched.types;
@@ -53,6 +55,11 @@ namespace zxfoundation::sched::strandctx {
     auto setup_primary_strand_context_user(
         domain* d
     ) noexcept -> void;
+
+    /// @brief Seed a domain primary's linkage stack (§5.12) — CR15=0 is
+    ///        an architecturally empty stack; a PC from it is unrecoverable.
+    [[nodiscard]] auto seed_primary_linkage_stack(
+        domain* d) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Enter user mode for a domain at runtime
     /// @param s  Strand with valid @c body->uregs; domain accessed via @c s->owner.

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/printk.cxxm
+/// @file zxfoundation/sys/printk.zcomponent/core.cxxm
 /// @brief Kernel logging framework.
 
 export module zxfoundation.sys.printk.core;
@@ -7,6 +7,7 @@ import zxfoundation.base.types;
 import zxfoundation.sys.printk.types;
 import zxfoundation.sys.printk.format;
 import lib.format;
+import lib.error;
 import lib.stl;
 
 export {
@@ -19,9 +20,7 @@ namespace zxfoundation::sys::printk {
 
     auto handle_min_level(std::string_view val) noexcept -> bool;
 
-    auto init() noexcept -> void;
-
-    auto register_backend(const printk_backend& backend) noexcept -> void;
+    auto register_backend(const printk_backend& backend) noexcept -> std::expected<void, lib::kernel_error>;
 
     auto read_logs(std::span<u8> dest, bool consume) noexcept -> usize;
 

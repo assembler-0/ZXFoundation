@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/irq.zcomponent/irqdesc.cxxm
+/// @file zxfoundation/sys/irq.zcomponent/desc.cxxm
 /// @brief Generic IRQ descriptor table
 
 export module zxfoundation.sys.irq.desc;
@@ -25,7 +25,7 @@ namespace zxfoundation::sys::irq {
         u16                                      irq_nr{0};         ///< Vector number.
 
         std::atomic<u32>    count{0};          ///< Dispatch count (relaxed).
-        sync::qspinlock::qspinlock            lock{};
+        sync::qspinlock::qspinlock<sync::lock_rank::irq_desc> lock{};
 
         irq_desc() noexcept = default;
 

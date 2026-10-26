@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/node_distance.cxx
+/// @file zxfoundation/sched/numa.zcomponent/core.cxx
 /// @brief STSI 15.1.x topology-list probe — feeds PMM's single-source SLIT.
 
 module zxfoundation.sched.numa.core;
@@ -9,12 +9,16 @@ import zxfoundation.memory.numa.types;
 import zxfoundation.memory.numa;
 import zxfoundation.base.types;
 import zxfoundation.base.config;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.stsi;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.lowcore;
 import lib.cpumask;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::sched::numa::detail {
 
@@ -135,7 +139,7 @@ namespace zxfoundation::sched::numa::detail {
 namespace zxfoundation::sched::numa {
 
     /// @brief Probe STSI 15.1.x and install the resulting SLIT into PMM.
-    auto slit_load() noexcept -> void {
+    auto zi_slit_load(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         for (u8& i : detail::g_stsi_cpu_to_node) {
             i = zxfoundation::memory::numa::NUMA_NODE_BOOT;
         }
@@ -153,6 +157,8 @@ namespace zxfoundation::sched::numa {
         zxfoundation::memory::numa::slit_install(
             matrix,
             stsi_ok && wrote_node);
+        return {};
     }
+    __zinit_dep__(sched, p10, zi_slit_load, warn, "zi_sched_init")
 
 } // namespace zxfoundation::sched::numa

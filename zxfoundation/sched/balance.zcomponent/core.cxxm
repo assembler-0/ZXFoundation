@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/balance.cxxm
+/// @file zxfoundation/sched/balance.zcomponent/core.cxxm
 /// @brief Topology-aware DGP scheduler balancing policy helpers.
 
 export module zxfoundation.sched.balance.core;

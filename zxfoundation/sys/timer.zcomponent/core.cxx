@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/timer.cxxm
+/// @file zxfoundation/sys/timer.zcomponent/core.cxx
 /// @brief Generic kernel timer subsystem — per-CPU min-heap with clock comparator arming.
 
 module zxfoundation.sys.timer.core;
@@ -12,10 +12,14 @@ import arch.s390x.cpu.irq;
 import arch.s390x.cpu.percpu;
 import zxfoundation.sys.irq.core;
 import zxfoundation.sys.irq.consts;
+import zxfoundation.sys.zinit.core;
 import lib.min_heap;
 import lib.error;
 import lib.format;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::sys::timer::detail {
 
@@ -37,7 +41,7 @@ namespace zxfoundation::sys::timer::detail {
         if (top) {
             arch::s390x::cpu::clock::sckc(top->deadline_tod);
         } else {
-            // Far future: current TOD + ~10 seconds.
+            // Far future: current TOD + ~10 seconds (TOD units, 4096/µs).
             const u64 far_future = arch::s390x::cpu::clock::stck()
                                  + 40'960'000'000ULL;
             arch::s390x::cpu::clock::sckc(far_future);
@@ -75,6 +79,21 @@ namespace zxfoundation::sys::timer::detail {
 } // namespace detail
 
 namespace zxfoundation::sys::timer {
+
+    /// @brief Reset a CPU's timer heap at attach (cold bring-up or hotplug
+    ///        re-online).
+    /// @param[in] cpu_id  Logical CPU whose heap to reset.
+    auto init_ap(u16 cpu_id) noexcept -> void {
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        auto& heap = detail::g_heaps[cpu_id];
+        constexpr detail::timer_less less{};
+        while (!heap.empty()) {
+            kernel_timer* t = heap.peek();
+            heap.pop(less);
+            if (t != nullptr) t->armed = false;
+        }
+        arch::s390x::cpu::irq::irq_restore(flags);
+    }
 
     /// @brief Add a timer to the current CPU's heap and arm the clock comparator.
     [[nodiscard]] auto timer_add(kernel_timer& t) noexcept
@@ -177,7 +196,7 @@ namespace zxfoundation::sys::timer {
     }
 
     /// @brief Initialize the timer subsystem on the BSP (CPU 0).
-    auto init() noexcept -> void {
+    auto zi_timer_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {
         using irq::IRQ_BASE_EXT;
         using irq::EXT_IRQ_CLOCK_COMPARATOR;
         using irq::EXT_IRQ_TIMING_ALERT;
@@ -195,6 +214,9 @@ namespace zxfoundation::sys::timer {
         reg(clk_comp_irq,       detail::irq_handler_clock_comparator);
         reg(timing_alert_irq,   detail::irq_handler_timing_alert);
         reg(service_signal_irq, detail::irq_handler_service_signal);
+
+        return {};
     }
+    __zinit_dep__(core, p40, zi_timer_init, fatal, "zi_irq_init")
 
 } // namespace zxfoundation::sys::timer

@@ -1,3 +1,4 @@
+/// @file arch/s390x/interface.cxxm
 export module arch.s390x;
 export import arch.s390x.cpu;
 export import arch.s390x.io;

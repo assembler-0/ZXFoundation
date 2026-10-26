@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxallsyms_stub.cxx
+/// @file zxfoundation/sys/zxallsyms.zcomponent/storage.cxx
 /// @brief Global kernel symbol table stub
 
 using u64 = unsigned long long;

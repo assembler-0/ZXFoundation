@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/fair.cxx
+/// @file zxfoundation/sched/fair.zcomponent/core.cxx
 /// @brief EEVDF (Earliest Eligible Virtual Deadline First) scheduling class.
 
 module zxfoundation.sched.fair.core;
@@ -31,40 +31,38 @@ namespace zxfoundation::sched::fair {
     }
 
     /// @brief Compute the average vruntime across the queued entities.
-    /// @param[in] cfs_min_vruntime  Current min_vruntime of the cfs_rq.
-    /// @param[in] avg_vruntime_acc   Accumulator keeping weighted average.
+    /// @param[in] cfs_min_vruntime  Current min_vruntime of the cfs_rq
+    ///                              (returned when the queue is empty).
+    /// @param[in] avg_vruntime_acc   Absolute weighted vruntime sum.
     /// @param[in] avg_weight_acc     Accumulator keeping total weight.
-    /// @return The current avg vruntime (in vruntime units).
+    /// @return The current avg vruntime (ns domain).
     [[nodiscard]] auto avg_vruntime(u64 cfs_min_vruntime,
                                     i64 avg_vruntime_acc,
                                     u64 avg_weight_acc) noexcept -> u64 {
         if (avg_weight_acc == 0U) return cfs_min_vruntime;
         const i128 acc = static_cast<i128>(avg_vruntime_acc);
         const i128 wgt = static_cast<i128>(avg_weight_acc);
-        const i128 avg = acc / wgt;
-        return static_cast<u64>(static_cast<i64>(avg) + static_cast<i64>(cfs_min_vruntime));
+        return static_cast<u64>(static_cast<i64>(acc / wgt));
     }
 
-    /// @brief Update the running avg_vruntime accumulator when an entity is
-    ///        added to the cfs_rq.
+    /// @brief Add an entity to the avg_vruntime accumulator.
     /// @param[in]     se         Entity being inserted.
-    /// @param[in,out] avg_acc    Mutable accumulator (i64, signed).
+    /// @param[in,out] avg_acc    Absolute weighted sum (Σ w_i × vruntime_i).
     /// @param[in,out] avg_w_acc  Mutable total weight accumulator (u64).
-    auto avg_vruntime_add(const sched_entity& se, u64 cfs_min_vruntime,
+    auto avg_vruntime_add(const sched_entity& se,
                           i64& avg_acc, u64& avg_w_acc) noexcept -> void {
         const u32 w = (se.weight == 0U) ? NICE_0_WEIGHT : se.weight;
-        const i64 normalized = static_cast<i64>(se.vruntime) - static_cast<i64>(cfs_min_vruntime);
-        avg_acc += static_cast<i64>(w) * normalized;
+        avg_acc += static_cast<i64>(
+            static_cast<i128>(w) * static_cast<i128>(se.vruntime));
         avg_w_acc += w;
     }
 
-    /// @brief Update the running avg_vruntime accumulator when an entity is
-    ///        removed from the cfs_rq.
-    auto avg_vruntime_sub(const sched_entity& se, u64 cfs_min_vruntime,
+    /// @brief Remove an entity from the avg_vruntime accumulator.
+    auto avg_vruntime_sub(const sched_entity& se,
                           i64& avg_acc, u64& avg_w_acc) noexcept -> void {
         const u32 w = (se.weight == 0U) ? NICE_0_WEIGHT : se.weight;
-        const i64 normalized = static_cast<i64>(se.vruntime) - static_cast<i64>(cfs_min_vruntime);
-        avg_acc -= static_cast<i64>(w) * normalized;
+        avg_acc -= static_cast<i64>(
+            static_cast<i128>(w) * static_cast<i128>(se.vruntime));
         if (avg_w_acc >= w) avg_w_acc -= w; else avg_w_acc = 0U;
     }
 
@@ -150,30 +148,6 @@ namespace zxfoundation::sched::fair {
         se.rel_count += 1U;
     }
 
-    /// @brief Yield: collapse @c se->vruntime to @c min_vruntime so the runner
-    ///        ages backward into the queue.
-    auto yield_entity(sched_entity& se, u64 min_vr) noexcept -> void {
-        const u64 new_vr = (se.vruntime > min_vr) ? (se.vruntime - se.slice) : min_vr;
-        se.vruntime = new_vr;
-        se.deadline = se.vruntime + se.slice;
-        se.lag = static_cast<i64>(se.vruntime) - static_cast<i64>(min_vr);
-    }
-
-    /// @brief Directed yield: move @c yielding_se ahead of @c target_se.
-    auto yield_to_entity(sched_entity& yielding_se,
-                         const sched_entity& target_se,
-                         u64 min_vr) noexcept -> void {
-        if (yielding_se.vruntime < target_se.vruntime) {
-            const u64 delta = target_se.vruntime - yielding_se.vruntime;
-            yielding_se.vruntime = (yielding_se.vruntime + delta + 1ULL) & ~0ULL;
-            if (yielding_se.vruntime < min_vr) yielding_se.vruntime = min_vr;
-        } else {
-            yielding_se.vruntime += 1ULL;
-        }
-        yielding_se.deadline = yielding_se.vruntime + yielding_se.slice;
-        yielding_se.lag = static_cast<i64>(yielding_se.vruntime) - static_cast<i64>(min_vr);
-    }
-
     const classed::sched_class the_class{
         vtable_enqueue, dequeue, pick_next, tick, preempt
     };
@@ -184,6 +158,7 @@ namespace zxfoundation::sched::fair {
     /// @return Success, or @c kernel_error when SMT isolation-sensitive
     ///         placement is violated on the target CPU.
     [[nodiscard]] auto enqueue(run_queue& rq, strand& s) noexcept -> std::expected<void, lib::kernel_error> {
+        if (s.on_rq) return {};
         if (!s.sched_policy.allow_smt_sibling
             && zxfoundation::sched::smt::isolation_violation(s, rq.cpu_id)) {
             return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
@@ -193,7 +168,7 @@ namespace zxfoundation::sched::fair {
 
         const u64 avg = avg_vruntime(rq.min_vruntime, rq.avg_vruntime_acc, rq.avg_weight_acc);
         place_entity(s.se, avg, rq.min_vruntime, rq.nr_running + 1U, initial);
-        avg_vruntime_add(s.se, rq.min_vruntime, rq.avg_vruntime_acc, rq.avg_weight_acc);
+        avg_vruntime_add(s.se, rq.avg_vruntime_acc, rq.avg_weight_acc);
 
         lib::rb_node** link = &rq.fair_tree.root.node;
         lib::rb_node*  parent = nullptr;
@@ -219,7 +194,7 @@ namespace zxfoundation::sched::fair {
 
     auto dequeue(run_queue& rq, strand& s) noexcept -> void {
         if (!s.on_rq) return;
-        avg_vruntime_sub(s.se, rq.min_vruntime, rq.avg_vruntime_acc, rq.avg_weight_acc);
+        avg_vruntime_sub(s.se, rq.avg_vruntime_acc, rq.avg_weight_acc);
         lib::rb_erase_cached(&s.se.fair_node, rq.fair_tree);
         s.on_rq = false;
         --rq.nr_running;
@@ -244,10 +219,8 @@ namespace zxfoundation::sched::fair {
     }
 
     auto tick(run_queue& rq, strand& s) noexcept -> void {
-        const u64 prev_deadline = s.se.deadline;
-        update_curr(s.se, rq.min_vruntime, EEVDF_DEFAULT_SLICE_NS);
-
-        if (s.se.deadline != prev_deadline) {
+        if (s.se.vruntime >= s.se.deadline) {
+            s.se.deadline = s.se.vruntime + s.se.slice;
             auto* owner = static_cast<dgp::domain::domain*>(s.owner);
             owner->flags |= dgp::domain::domain_flags::need_resched;
         }

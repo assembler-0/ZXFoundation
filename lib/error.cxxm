@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file error.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/error.cxxm
 /// @brief Kernel error code system for all subsystems
 
 export module lib.error;
@@ -76,6 +76,7 @@ namespace lib {
             capability_invalid  = 9,  ///< Capability token is null, revoked, or wrong purpose.
             purpose_mismatch    = 10, ///< Capability purpose does not match the requested use.
             zone_exhausted      = 11, ///< All pages in the target zone are allocated.
+            corruption          = 12, ///< Allocator/object metadata corruption detected.
             ssp_check_fail      = 13, ///< SSP check fail (stack smashing detected).
         };
     }
@@ -137,6 +138,9 @@ namespace lib {
             out_of_range    = 7,  ///< Index or address is outside valid bounds.
             uninitialized   = 8,  ///< Uninitialized.
             stall           = 9,  ///< CPU or subsystem stall detected (watchdog).
+            denied          = 10, ///< Authorization refused (rights, chokepoint).
+            slot_busy       = 11, ///< Requested table slot is occupied (ch. 15.1).
+            name_in_use     = 12, ///< Duplicate registered name (ch. 15.1).
         };
     }
 
@@ -327,6 +331,7 @@ namespace lib {
                     expand(capability_invalid)
                     expand(purpose_mismatch)
                     expand(zone_exhausted)
+                    expand(corruption)
                     expand(ssp_check_fail)
                 #undef expand
                     default: return "?";
@@ -398,6 +403,9 @@ namespace lib {
                     expand(out_of_range)
                     expand(uninitialized)
                     expand(stall)
+                    expand(denied)
+                    expand(slot_busy)
+                    expand(name_in_use)
                 #undef expand
                     default: return "?";
                 }

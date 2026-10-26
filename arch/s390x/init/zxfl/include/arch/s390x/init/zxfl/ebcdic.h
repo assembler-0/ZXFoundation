@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// include/zxfoundation/ebcdic.h - ASCII/EBCDIC conversion tables
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/ebcdic.h - ASCII/EBCDIC conversion tables
 
 #pragma once
 

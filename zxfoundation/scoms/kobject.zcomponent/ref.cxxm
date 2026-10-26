@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/scoms/robject.cxxm
+/// @file zxfoundation/scoms/kobject.zcomponent/ref.cxxm
 /// @brief SCOMS — robject<T, State>: typestate-tracked, reference-counted
 ///        handle to any kernel object.
 
@@ -211,6 +211,6 @@ namespace zxfoundation::scoms::kobject {
         return swap_state_to(::zxfoundation::base::lifecycle_state::suspended, obj);
     }
 
-} // namespace zxfoundation::scoms
+} // namespace zxfoundation::scoms::kobject
 
 } // end export

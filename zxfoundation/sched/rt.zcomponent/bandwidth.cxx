@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/rt_bandwidth.cxx
+/// @file zxfoundation/sched/rt.zcomponent/bandwidth.cxx
 /// @brief Global RT bandwidth controller — sched_rt_period_us + per-CPU runtime
 ///        enforcement.
 
@@ -62,4 +62,4 @@ namespace zxfoundation::sched::rt::bw {
         return false;
     }
 
-} // namespace zxfoundation::sched::rt_bw
+} // namespace zxfoundation::sched::rt::bw

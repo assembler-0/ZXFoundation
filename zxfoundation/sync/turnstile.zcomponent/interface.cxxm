@@ -1,0 +1,4 @@
+/// @file zxfoundation/sync/turnstile.zcomponent/interface.cxxm
+export module zxfoundation.sync.turnstile;
+export import zxfoundation.sync.turnstile.types;
+export import zxfoundation.sync.turnstile.core;

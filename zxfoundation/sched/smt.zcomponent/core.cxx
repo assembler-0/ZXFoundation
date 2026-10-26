@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/smt.cxx
+/// @file zxfoundation/sched/smt.zcomponent/core.cxx
 /// @brief SMT-aware strand-group or co-scheduling decisions
 
 module zxfoundation.sched.smt.core;
@@ -65,9 +65,9 @@ namespace zxfoundation::sched::smt {
             static_cast<const zxfoundation::dgp::domain::domain*>(strand.owner);
 
         const bool wants_isolation = my_dom
-            && !zxfoundation::dgp::isolation::has_all_rights(
+            && !zxfoundation::dgp::has_all_rights(
                 my_dom->granted_rights,
-                zxfoundation::dgp::isolation::isolation_rights::sched);
+                ::zxfoundation::dgp::right::sched);
         if (my_rec->smt_evidence == zxfoundation::sched::topology_evidence::degraded
             && wants_isolation) {
             return true;
@@ -80,7 +80,7 @@ namespace zxfoundation::sched::smt {
                 if (violated) return;
                 const auto* pcp = arch::s390x::cpu::percpu::cpu_percpu(y);
                 if (!pcp) return;
-                const u32 attached_dom = pcp->attached_domain_id;
+                const u32 attached_dom = pcp->attached.domain_id;
                 if (my_dom && attached_dom != 0U && attached_dom != my_dom->ko.id) {
                     violated = true;
                 }

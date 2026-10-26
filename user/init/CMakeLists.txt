@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # user/init/CMakeLists.txt — ZXFoundation user-space init binary
 
-add_executable(zxf.init init.S)
+add_executable(zxf.init init.c dasd.c entry.S)
 
 target_compile_options(zxf.init PRIVATE
     -ffreestanding
@@ -30,6 +30,8 @@ set_target_properties(zxf.init
         LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/link.ld"
         CXX_MODULE_STD OFF
 )
+
+target_link_libraries(zxf.init PRIVATE libzxf.nuclbase)
 
 target_link_options(zxf.init PRIVATE
     -T ${CMAKE_CURRENT_SOURCE_DIR}/link.ld

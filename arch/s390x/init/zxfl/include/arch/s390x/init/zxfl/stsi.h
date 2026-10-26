@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/cpu/stsi.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/stsi.h
 
 #ifndef ZXFOUNDATION_S390X_STSI_H
 #define ZXFOUNDATION_S390X_STSI_H

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file transaction.cxxm
+/// @file zxfoundation/base/transaction.cxxm
 /// @brief Generic kernel transaction base (CRTP).
 
 export module zxfoundation.base.transaction;
@@ -29,7 +29,8 @@ namespace zxfoundation::base {
         transaction()                            noexcept = default;
         transaction(const transaction&)                   = delete;
         auto operator=(const transaction&)                = delete;
-        transaction(transaction&&)               noexcept = default;
+        transaction(transaction&&)                       = delete;
+        auto operator=(transaction&&)                    = delete;
 
         /// @brief Commit — disarms the automatic rollback on destruction.
         auto commit() noexcept -> void {
@@ -38,7 +39,6 @@ namespace zxfoundation::base {
                     std::memory_order::release, std::memory_order::relaxed)) {
                 return;
             }
-            if (m_rolled_back.load(std::memory_order::acquire)) {}
         }
 
         /// @brief Return true if commit() has been called.
@@ -50,14 +50,8 @@ namespace zxfoundation::base {
         [[nodiscard]] auto rolled_back() const noexcept -> bool {
             return m_rolled_back.load(std::memory_order::acquire);
         }
-
-        /// @brief Explicitly mark as rolled back (for derived classes that do
-        ///        custom rollback before destruction).
-        auto mark_rolled_back() noexcept -> void {
-            m_rolled_back.store(true, std::memory_order::release);
-        }
     };
 
-} // namespace zxfoundation
+} // namespace zxfoundation::base
 
 } // end export

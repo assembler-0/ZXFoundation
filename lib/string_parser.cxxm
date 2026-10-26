@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lib/string_parser.cxxm
 /// @brief Zero-allocation, high-performance string tokenizer.
 

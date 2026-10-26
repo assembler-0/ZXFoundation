@@ -1,3 +1,4 @@
+/// @file zxfoundation/sys/printk.zcomponent/state.cxxm
 export module zxfoundation.sys.printk.core:state;
 import zxfoundation.sys.printk.types;
 import zxfoundation.sync.qspinlock.core;
@@ -9,8 +10,8 @@ export {
 namespace zxfoundation::sys::printk {
 
     struct printk_state {
-        sync::qspinlock::qspinlock lock;
-        sync::qspinlock::qspinlock flush_lock;
+        sync::qspinlock::qspinlock<sync::lock_rank::printk> lock;
+        sync::qspinlock::qspinlock<sync::lock_rank::printk_flush> flush_lock;
         lib::static_vector<printk_backend, MAX_BACKENDS> backends{};
         log_level min_level{log_level::VERBOSE};
         lib::ring_buffer<LOG_BUFFER_SIZE> log_buffer;

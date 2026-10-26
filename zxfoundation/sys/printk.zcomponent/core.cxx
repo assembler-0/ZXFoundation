@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/printk.cxxm
+/// @file zxfoundation/sys/printk.zcomponent/core.cxx
 /// @brief Kernel logging framework.
 
 module zxfoundation.sys.printk.core;
@@ -10,6 +10,7 @@ import zxfoundation.sys.time.core;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import zxfoundation.dgp.domain.types;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
@@ -20,6 +21,10 @@ import lib.ring_buffer;
 import lib.static_vector;
 import lib.stl;
 import :state;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
+import lib.error;
 
 namespace zxfoundation::sys::printk {
 
@@ -46,17 +51,21 @@ namespace zxfoundation::sys::printk {
         return true;
     }
 
-    auto init() noexcept -> void {
+    auto zi_printk_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {
+        return {};
     }
+    __zinit__(early, p20, zi_printk_init, fatal)
 
-    auto register_backend(const printk_backend& backend) noexcept -> void {
-        if (!backend.emit) return;
+    auto register_backend(const printk_backend& backend) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!backend.emit) {
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::uninitialized));
+        }
         const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
         g_state.lock.lock();
         if (g_state.backends.full()) {
             g_state.lock.unlock();
             arch::s390x::cpu::irq::irq_restore(irq_flags);
-            return;
+            return std::unexpected(lib::kernel_error::from_generic(lib::generic_error::out_of_range));
         }
         if (backend.init) backend.init();
         auto b = backend;
@@ -64,6 +73,7 @@ namespace zxfoundation::sys::printk {
         discard_value g_state.backends.push_back(b);
         g_state.lock.unlock();
         arch::s390x::cpu::irq::irq_restore(irq_flags);
+        return {};
     }
 
     auto read_logs(std::span<u8> dest, bool consume) noexcept -> usize {

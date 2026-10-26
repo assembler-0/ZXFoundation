@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/trap/trap.cxxm
+/// @file arch/s390x/trap/core.cxx
 /// @brief interrupt handlers
 
 import arch.s390x.cpu.lowcore;

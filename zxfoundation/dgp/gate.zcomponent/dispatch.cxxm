@@ -2,15 +2,17 @@
 /// @file zxfoundation/dgp/gate.zcomponent/dispatch.cxxm
 /// @brief Gate subsystem dispatch table
 
-export module zxfoundation.dgp.gate.dispatch;
+export module zxfoundation.dgp.svc;
 import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.domain.types;
+import arch.s390x.cpu.percpu;
 import zxfoundation.base.types;
 import lib.error;
 import lib.stl;
 
 export {
 
-namespace zxfoundation::dgp::gate::dispatch {
+namespace zxfoundation::dgp::svc {
 
     /// @brief Register a handler at a given packed call slot.
     /// @param packed_nr  Table index: (namespace << 5) | operation.
@@ -52,6 +54,15 @@ namespace zxfoundation::dgp::gate::dispatch {
     /// @brief Return true if the given slot has a registered handler.
     [[nodiscard]] auto is_registered(u32 packed_nr) noexcept -> bool;
 
-} // namespace zxfoundation::dgp::gate::dispatch_table
+    /// @brief Record the last nucleus-call failure on the calling strand and
+    ///        return the universal error sentinel
+    [[nodiscard]] inline auto fail(lib::kernel_error err) noexcept -> u64 {
+        auto* s = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
+            arch::s390x::cpu::percpu::this_cpu().current_strand);
+        if (s && s->body) s->body->last_error = err;
+        return ~0ULL;
+    }
+
+} // namespace zxfoundation::dgp::svc
 
 } // end export

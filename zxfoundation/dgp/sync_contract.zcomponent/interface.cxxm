@@ -1,2 +1,3 @@
+/// @file zxfoundation/dgp/sync_contract.zcomponent/interface.cxxm
 export module zxfoundation.dgp.sync_contract;
 export import zxfoundation.dgp.sync_contract.core;

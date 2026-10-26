@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file ipc.cxxm
+/// @file zxfoundation/sys/ipc.zcomponent/core.cxx
 /// @brief Bounded endpoint/message object management and grant transfer.
 
 module zxfoundation.sys.ipc.core;
@@ -23,20 +23,35 @@ import zxfoundation.dgp.portal.types;
 import zxfoundation.dgp.authorize;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.sync.qspinlock.core;
+import zxfoundation.sync.waitqueue.core;
+import zxfoundation.sync.waitqueue.types;
+import zxfoundation.dgp.signal.core;
+import zxfoundation.dgp.signal.types;
+import zxfoundation.sched.core;
+import zxfoundation.sched.policy;
+import zxfoundation.sys.timer.core;
+import zxfoundation.sys.time.core;
+import arch.s390x.cpu.clock;
+import arch.s390x.cpu.percpu;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.sync.lockable;
 import zxfoundation.base.typestate;
 import zxfoundation.sys.printk.core;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.lowcore;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
+import zxfoundation.sys.timer.types;
 
 namespace zxfoundation::sys::ipc::detail {
 
     static scoms::scoms_table<endpoint_object, MAX_ENDPOINTS> g_endpoints{};
     static scoms::scoms_table<message_object, MAX_MESSAGES> g_messages{};
     static bool g_initialized{false};
-    alignas(4) static sync::qspinlock::qspinlock g_lock{};
+    alignas(4) static sync::qspinlock::qspinlock<sync::lock_rank::ipc_table> g_lock{};
 
     [[nodiscard]] auto endpoint(u32 id) noexcept -> endpoint_object* {
         return g_endpoints.find_raw(id);
@@ -63,12 +78,31 @@ namespace zxfoundation::sys::ipc::detail {
 
 namespace zxfoundation::sys::ipc {
 
-    auto ipc_init() noexcept -> void {
-        if (detail::g_initialized) return;
+    namespace {
+
+        auto ipc_strand_wake(void* opaque) noexcept -> void {
+            auto* s = static_cast<dgp::domain::strand*>(opaque);
+            if (!s) return;
+            auto* owner = static_cast<dgp::domain::domain*>(s->owner);
+            if (s->substate != zxfoundation::sched::sched_substate::blocked) {
+                if (owner) owner->flags |= dgp::domain::domain_flags::need_resched;
+                return;
+            }
+            s->substate = zxfoundation::sched::sched_substate::runnable;
+            zxfoundation::sched::enqueue_strand(s);
+            if (owner) owner->flags |= dgp::domain::domain_flags::need_resched;
+        }
+
+    }
+
+    auto zi_ipc_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {
+        if (detail::g_initialized) return {};
         detail::g_endpoints.init(scoms::kobject::kobject_type::endpoint);
         detail::g_messages.init(scoms::kobject::kobject_type::message);
         detail::g_initialized = true;
+        return {};
     }
+    __zinit__(core, p00, zi_ipc_init, fatal)
 
     [[nodiscard]] auto endpoint_create(
         dgp::domain::domain& owner, u32 peer_domain
@@ -79,10 +113,10 @@ namespace zxfoundation::sys::ipc {
         auto auth = dgp::authorize(
             owner, *peer, dgp::operation_kind::ipc_endpoint_create,
             dgp::authorization_metadata{
-                .requested_rights =  dgp::isolation::isolation_rights::signal});
+                .requested_rights =  ::zxfoundation::dgp::right::signal});
         if (!auth) return std::unexpected(auth.error());
 
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto result = detail::g_endpoints.alloc();
         if (!result) return std::unexpected(result.error());
         auto ref = static_cast<scoms::kobject::robject<endpoint_object,
@@ -91,6 +125,9 @@ namespace zxfoundation::sys::ipc {
         endpoint.owner_domain = owner.ko.id;
         endpoint.peer_domain = peer_domain;
         endpoint.queue = memory::kmalloc::kmalloc_t<endpoint_queue>();
+        if (endpoint.queue) {
+            ::new(static_cast<void*>(endpoint.queue)) endpoint_queue{};
+        }
         if (!endpoint.queue) {
             discard_value detail::g_endpoints.release(endpoint.ko.id);
             return std::unexpected(lib::kernel_error::from_memory(
@@ -116,7 +153,7 @@ namespace zxfoundation::sys::ipc {
     [[nodiscard]] auto endpoint_destroy(
         dgp::domain::domain& caller, u32 endpoint_id
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto* endpoint = detail::endpoint(endpoint_id);
         if (!endpoint || endpoint->owner_domain != caller.ko.id) {
             return std::unexpected(lib::kernel_error::from_generic(
@@ -128,12 +165,12 @@ namespace zxfoundation::sys::ipc {
         auto auth = dgp::authorize(
             caller, *peer, dgp::operation_kind::ipc_endpoint_destroy,
             dgp::authorization_metadata{
-                .requested_rights =  dgp::isolation::isolation_rights::signal});
+                .requested_rights =  ::zxfoundation::dgp::right::signal});
         if (!auth) return std::unexpected(auth.error());
         while (endpoint->queue_count != 0U) {
             auto* msg = detail::message(endpoint->queue->message_ids[endpoint->queue_head]);
             endpoint->queue_head = (endpoint->queue_head + 1U) % IPC_QUEUE_DEPTH;
-            --endpoint->queue_count;
+            endpoint->queue_count.fetch_sub(1U, std::memory_order::release);
             if (msg) detail::release_message(*msg);
         }
         memory::kmalloc::kfree_t(endpoint->queue);
@@ -169,32 +206,38 @@ namespace zxfoundation::sys::ipc {
             });
     }
 
-    [[nodiscard]] auto message_send(
+    struct send_wake {
+        endpoint_object* endpoint{nullptr};
+        dgp::domain::domain* peer{nullptr};
+        u32 message_id{0};
+    };
+
+    [[nodiscard]] static auto message_send_locked(
         dgp::domain::domain& caller, u32 endpoint_id,
         const u8* payload, u32 length,
         const dgp::cap::cap_token* capabilities, u32 capability_count,
-        const memory::objects::memory_object_ref* grants, u32 grant_count
+        const memory::objects::memory_object_ref* grants, u32 grant_count,
+        u64 correlation, send_wake& wake
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        if (!payload || length > IPC_MESSAGE_BYTES ||
-            capability_count > IPC_MESSAGE_CAPS || grant_count > IPC_MESSAGE_GRANTS) {
-            return std::unexpected(lib::kernel_error::from_generic(
-                lib::generic_error::invalid_arg));
-        }
-        const sync::irq_lock_guard guard{detail::g_lock};
         auto* endpoint = detail::endpoint(endpoint_id);
         if (!endpoint || endpoint->owner_domain != caller.ko.id) {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
+        if (correlation != 0ULL && endpoint->call_correlation.load(
+                std::memory_order::acquire) != 0ULL) {
+            return std::unexpected(lib::kernel_error::from_driver(
+                lib::driver_error::busy));
+        }
         auto* peer = dgp::domain::domain_find(endpoint->peer_domain);
-        if (!peer || endpoint->queue_count >= IPC_QUEUE_DEPTH) {
+        if (!peer || endpoint->queue_count.load(std::memory_order::acquire) >= IPC_QUEUE_DEPTH) {
             return std::unexpected(lib::kernel_error::from_driver(
                 lib::driver_error::busy));
         }
         auto auth = dgp::authorize(
             caller, *peer, dgp::operation_kind::ipc_send,
             dgp::authorization_metadata{
-                .requested_rights =  dgp::isolation::isolation_rights::signal});
+                .requested_rights =  ::zxfoundation::dgp::right::signal});
         if (!auth) return std::unexpected(auth.error());
         auto result = detail::g_messages.alloc();
         if (!result) return std::unexpected(result.error());
@@ -202,6 +245,9 @@ namespace zxfoundation::sys::ipc {
             base::lifecycle_state::embryo>&&>(result.value());
         auto& msg = *ref;
         msg.body = memory::kmalloc::kmalloc_t<message_body>();
+        if (msg.body) {
+            ::new(static_cast<void*>(msg.body)) message_body{};
+        }
         if (!msg.body) {
             discard_value detail::g_messages.release(msg.ko.id);
             return std::unexpected(lib::kernel_error::from_memory(
@@ -209,6 +255,7 @@ namespace zxfoundation::sys::ipc {
         }
         msg.sender_domain = caller.ko.id;
         msg.length = length;
+        msg.correlation = correlation;
         msg.capability_count = capability_count;
         msg.grant_count = grant_count;
         std::copy_n(payload, length, msg.body->payload);
@@ -235,7 +282,7 @@ namespace zxfoundation::sys::ipc {
                     lib::memory_error::capability_invalid));
             }
             const auto attenuation = (*grant_result)->authority_rights
-                & ( dgp::isolation::isolation_rights::map |  dgp::isolation::isolation_rights::share);
+                & ( ::zxfoundation::dgp::right::map |  ::zxfoundation::dgp::right::share);
             auto delegated = memory::objects::memory_object_delegate(
                 grants[i], caller.ko.id, peer->ko.id, attenuation);
             if (!delegated) {
@@ -249,35 +296,66 @@ namespace zxfoundation::sys::ipc {
             base::lifecycle_state::embryo>&&>(ref).activate();
         endpoint->queue->message_ids[endpoint->queue_tail] = msg.ko.id;
         endpoint->queue_tail = (endpoint->queue_tail + 1U) % IPC_QUEUE_DEPTH;
-        ++endpoint->queue_count;
+        endpoint->queue_count.fetch_add(1U, std::memory_order::release);
         if (!auth->consume()) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::invalid_arg));
+        if (correlation != 0ULL) {
+            endpoint->call_correlation.store(correlation,
+                std::memory_order::release);
+        }
+        wake.endpoint = endpoint;
+        wake.peer = peer;
+        wake.message_id = msg.ko.id;
         return {};
     }
 
-    [[nodiscard]] auto message_receive(
+    [[nodiscard]] auto message_send(
         dgp::domain::domain& caller, u32 endpoint_id,
+        const u8* payload, u32 length,
+        const dgp::cap::cap_token* capabilities, u32 capability_count,
+        const memory::objects::memory_object_ref* grants, u32 grant_count,
+        u64 correlation
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!payload || length > IPC_MESSAGE_BYTES ||
+            capability_count > IPC_MESSAGE_CAPS || grant_count > IPC_MESSAGE_GRANTS) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        send_wake wake{};
+        {
+            const sync::irq_lock_guard _{detail::g_lock};
+            auto locked = message_send_locked(caller, endpoint_id, payload,
+                length, capabilities, capability_count, grants, grant_count,
+                correlation, wake);
+            if (!locked) return std::unexpected(locked.error());
+        }
+        // Outside g_lock: the parked-receiver condition reads endpoint state
+        // under the WQ irqsave, so taking a WQ lock here would invert order.
+        if (wake.peer) {
+            discard_value dgp::signal::signal_enqueue(*wake.peer,
+                dgp::signal::signal_kind::ipc, wake.message_id);
+        }
+        if (wake.endpoint) {
+            sync::waitqueue::wake_up(wake.endpoint->receiver_wait);
+        }
+        return {};
+    }
+
+    [[nodiscard]] static auto try_dequeue_locked(
+        dgp::domain::domain& caller, endpoint_object* endpoint,
         u8* payload, u32 payload_capacity, u32& out_length,
         dgp::cap::cap_token* capabilities, u32& capability_count,
-        memory::objects::memory_object_ref* grants, u32& grant_count
+        memory::objects::memory_object_ref* grants, u32& grant_count,
+        u64& out_correlation
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        if (!payload || !capabilities || !grants) return std::unexpected(lib::kernel_error::from_generic(
-            lib::generic_error::invalid_arg));
-        const sync::irq_lock_guard guard{detail::g_lock};
-        auto* endpoint = detail::endpoint(endpoint_id);
-        if (!endpoint || endpoint->peer_domain != caller.ko.id ||
-            endpoint->queue_count == 0U) {
-            return std::unexpected(lib::kernel_error::from_generic(
-                lib::generic_error::not_found));
-        }
         auto* msg = detail::message(endpoint->queue->message_ids[endpoint->queue_head]);
         if (!msg || payload_capacity < msg->length) return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         std::copy_n(msg->body->payload, msg->length, payload);
         out_length = msg->length;
         if (capability_count < msg->capability_count || grant_count < msg->grant_count) {
-            return std::unexpected(lib::kernel_error::from_generic(
-                lib::generic_error::invalid_arg));
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
         for (u32 i = 0; i < msg->capability_count; ++i)
             capabilities[i] = msg->body->capabilities[i].token;
@@ -285,11 +363,159 @@ namespace zxfoundation::sys::ipc {
             grants[i] = msg->body->grants[i].grant;
         capability_count = msg->capability_count;
         grant_count = msg->grant_count;
+        out_correlation = msg->correlation;
         msg->capability_count = 0;
         msg->grant_count = 0;
         endpoint->queue_head = (endpoint->queue_head + 1U) % IPC_QUEUE_DEPTH;
-        --endpoint->queue_count;
+        endpoint->queue_count.fetch_sub(1U, std::memory_order::release);
         detail::release_message(*msg);
+        return {};
+    }
+
+    [[nodiscard]] auto message_receive(
+        dgp::domain::domain& caller, u32 endpoint_id,
+        u8* payload, u32 payload_capacity, u32& out_length,
+        dgp::cap::cap_token* capabilities, u32& capability_count,
+        memory::objects::memory_object_ref* grants, u32& grant_count,
+        u64& out_correlation,
+        receive_mode mode
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        out_correlation = 0;
+        if (!payload || !capabilities || !grants) return std::unexpected(lib::kernel_error::from_generic(
+            lib::generic_error::invalid_arg));
+
+        if (mode == receive_mode::block) {
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+            auto* self = reinterpret_cast<dgp::domain::strand*>(
+                pcp.current_strand);
+            sync::waitqueue::wait_entry entry{};
+            entry.node.context = self;
+            entry.node.wake_fn = ipc_strand_wake;
+            for (;;) {
+                if (self) self->substate = zxfoundation::sched::sched_substate::blocked;
+                if (sync::waitqueue::prepare_to_wait_event(
+                        detail::endpoint(endpoint_id)->receiver_wait, entry,
+                        sync::waitqueue::wait_flags::none,
+                        [endpoint_id, &caller]() noexcept -> bool {
+                            auto* ep = detail::endpoint(endpoint_id);
+                            return ep && ep->peer_domain == caller.ko.id
+                                && ep->queue_count.load(std::memory_order::acquire) > 0U;
+                        }))
+                    break;
+                zxfoundation::sched::schedule();
+            }
+            if (self) self->substate = zxfoundation::sched::sched_substate::running;
+            sync::waitqueue::finish_wait(
+                detail::endpoint(endpoint_id)->receiver_wait, entry);
+        }
+
+        const sync::irq_lock_guard _{detail::g_lock};
+        auto* endpoint = detail::endpoint(endpoint_id);
+        if (!endpoint) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+        }
+        if (endpoint->peer_domain != caller.ko.id) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::denied));
+        }
+        if (endpoint->queue_count.load(std::memory_order::acquire) == 0U) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                mode == receive_mode::block
+                    ? lib::generic_error::stall
+                    : lib::generic_error::not_found));
+        }
+        return try_dequeue_locked(caller, endpoint, payload, payload_capacity,
+            out_length, capabilities, capability_count, grants, grant_count,
+            out_correlation);
+    }
+
+    [[nodiscard]] auto message_reply(
+        dgp::domain::domain& caller, u32 endpoint_id,
+        u64 correlation, u64 status
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        const sync::irq_lock_guard _{detail::g_lock};
+        auto* endpoint = detail::endpoint(endpoint_id);
+        if (!endpoint || endpoint->peer_domain != caller.ko.id) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        const u64 active = endpoint->call_correlation.load(
+            std::memory_order::acquire);
+        if (active == 0ULL || active != correlation) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::not_found));
+        }
+        endpoint->reply_status.store(status, std::memory_order::release);
+        endpoint->call_correlation.store(0ULL, std::memory_order::release);
+        sync::waitqueue::wake_up(endpoint->caller_wait);
+        return {};
+    }
+
+    [[nodiscard]] auto message_call_wait(
+        dgp::domain::domain& caller, u32 endpoint_id, u64 correlation,
+        u64 timeout_ns, u64& out_status
+    ) noexcept -> std::expected<void, lib::kernel_error> {
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        auto* self = reinterpret_cast<dgp::domain::strand*>(
+            pcp.current_strand);
+        sync::waitqueue::wait_entry entry{};
+        entry.node.context = self;
+        entry.node.wake_fn = ipc_strand_wake;
+
+        struct timeout_ctx {
+            sync::waitqueue::wait_head* wq;
+            bool fired;
+        };
+        timeout_ctx tctx{ &detail::endpoint(endpoint_id)->caller_wait, false };
+        sys::timer::kernel_timer timeout{};
+        const bool timed = timeout_ns != 0ULL;
+        if (timed) {
+            timeout.callback = [](void* data) noexcept -> void {
+                auto* c = static_cast<timeout_ctx*>(data);
+                c->fired = true;
+                sync::waitqueue::wake_up(*c->wq);
+            };
+            timeout.data = &tctx;
+            timeout.deadline_tod = arch::s390x::cpu::clock::stck()
+                + sys::time::duration{timeout_ns}.to_tod();
+            const auto armed = sys::timer::timer_add(timeout);
+            if (!armed) return std::unexpected(armed.error());
+        }
+
+        for (;;) {
+            if (self) self->substate = zxfoundation::sched::sched_substate::blocked;
+            if (sync::waitqueue::prepare_to_wait_event(
+                    detail::endpoint(endpoint_id)->caller_wait, entry,
+                    sync::waitqueue::wait_flags::none,
+                    [endpoint_id, correlation, &tctx]() noexcept -> bool {
+                        if (tctx.fired) return true;
+                        return detail::endpoint(endpoint_id)->call_correlation.load(
+                                   std::memory_order::acquire) != correlation;
+                    }))
+                break;
+            zxfoundation::sched::schedule();
+        }
+        if (self) self->substate = zxfoundation::sched::sched_substate::running;
+        if (timed && !tctx.fired) discard_value sys::timer::timer_cancel(timeout);
+        sync::waitqueue::finish_wait(
+            detail::endpoint(endpoint_id)->caller_wait, entry);
+
+        if (detail::endpoint(endpoint_id)->call_correlation.load(
+                std::memory_order::acquire) == correlation) {
+            // Woken by the timer, not the reply: free the slot so a late
+            // reply does not wedge the endpoint.
+            const sync::irq_lock_guard _{detail::g_lock};
+            auto* ep = detail::endpoint(endpoint_id);
+            if (ep->call_correlation.load(std::memory_order::acquire)
+                    == correlation) {
+                ep->call_correlation.store(0ULL, std::memory_order::release);
+            }
+            return std::unexpected(lib::kernel_error::from_driver(
+                lib::driver_error::timeout));
+        }
+        out_status = detail::endpoint(endpoint_id)->reply_status.load(
+            std::memory_order::acquire);
         return {};
     }
 
@@ -311,13 +537,14 @@ namespace zxfoundation::sys::ipc {
     auto auth = dgp::authorize(
         caller, *target, dgp::operation_kind::shm_export,
         dgp::authorization_metadata{
-            .requested_rights =  dgp::isolation::isolation_rights::share,
+            .requested_rights =  ::zxfoundation::dgp::right::share,
             .target_va_start = va, .target_va_end = va + length});
     if (!auth) {
         sys::printk::perr("shm_export: DGP authorize denied");
         return std::unexpected(auth.error());
     }
-    auto* region = memory::vm::vm_find(caller.vm_space, va);
+    auto region_ref = memory::vm::vm_find_ref(caller.vm_space, va);
+    auto* region = region_ref.raw();
     if (!region) {
         sys::printk::perr("shm_export: vm_find failed va={:#x}", va);
         return std::unexpected(lib::kernel_error::from_memory(
@@ -347,8 +574,8 @@ namespace zxfoundation::sys::ipc {
     }
     auto token = dgp::cap::cap_issue(
         dgp::cap::cap_type::memory, static_cast<u16>((*grant)->ko.id),
-        dgp::cap::cap_rights::read | dgp::cap::cap_rights::map |
-            dgp::cap::cap_rights::delegate,
+        ::zxfoundation::dgp::right::read | ::zxfoundation::dgp::right::map |
+            ::zxfoundation::dgp::right::delegate,
         target_domain);
         if (!token) {
             sys::printk::perr("shm_export: cap_issue failed err={} grant.id={} grant.state={}",
@@ -373,13 +600,13 @@ namespace zxfoundation::sys::ipc {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::invalid_address));
         auto grant = dgp::cap::cap_validate<memory::objects::memory_object>(
-            grant_token, dgp::cap::cap_rights::map);
+            grant_token, ::zxfoundation::dgp::right::map);
         if (!grant) {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
         auto owner_check = dgp::cap::cap_validate_generic_for(
-            grant_token, dgp::cap::cap_rights::map, caller.ko.id);
+            grant_token, ::zxfoundation::dgp::right::map, caller.ko.id);
         if (!owner_check) return std::unexpected(owner_check.error());
         auto* source = dgp::domain::domain_find((*grant)->owner_domain);
         if (!source) return std::unexpected(lib::kernel_error::from_generic(
@@ -388,8 +615,9 @@ namespace zxfoundation::sys::ipc {
             length != (*grant)->range_length)
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
-        auto* source_region = memory::vm::vm_find_grant_mapping(
+        auto source_region_ref = memory::vm::vm_find_grant_mapping_ref(
             source->vm_space, memory::objects::memory_object_ref_of(**grant));
+        auto* source_region = source_region_ref.raw();
         if (!source_region || source_region->owner_domain != source->ko.id ||
             source_region->size() != length) {
             return std::unexpected(lib::kernel_error::from_memory(
@@ -398,7 +626,7 @@ namespace zxfoundation::sys::ipc {
         auto auth = dgp::authorize(
             *source, caller, dgp::operation_kind::shm_import,
             dgp::authorization_metadata{
-                .requested_rights =  dgp::isolation::isolation_rights::map,
+                .requested_rights =  ::zxfoundation::dgp::right::map,
                 .target_va_start = va, .target_va_end = va + length});
         if (!auth) return std::unexpected(auth.error());
         if (va < memory::vm::VM_USER_START || va + length < va ||

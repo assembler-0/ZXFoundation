@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lib/idalloc.cxxm
 /// @brief Fixed-capacity SMP-safe ID allocator backed by a bitmap.
 
@@ -18,7 +18,7 @@ namespace lib {
     template <usize MaxIds>
     class id_allocator {
         static_bitmap<MaxIds> m_bitmap{};
-        zxfoundation::sync::qspinlock::qspinlock m_lock{};
+        zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::idalloc> m_lock{};
         u32 m_reserve{0};   ///< IDs below this are pre-reserved.
         u32 m_count{0};     ///< Number of currently allocated IDs.
 
@@ -35,7 +35,7 @@ namespace lib {
         /// @brief Allocate the lowest available ID.
         /// @return The allocated ID, or nullopt if all IDs exhausted.
         [[nodiscard]] auto alloc() noexcept -> std::optional<u32> {
-            const zxfoundation::sync::irq_lock_guard guard{m_lock};
+            const zxfoundation::sync::irq_lock_guard _{m_lock};
             auto bit = m_bitmap.find_first_unset();
             if (!bit) return std::nullopt;
             m_bitmap.set_relaxed(*bit);
@@ -46,7 +46,7 @@ namespace lib {
         /// @brief Free a previously allocated ID.
         auto free(u32 id) noexcept -> void {
             if (id >= MaxIds || id < m_reserve) return;
-            const zxfoundation::sync::irq_lock_guard guard{m_lock};
+            const zxfoundation::sync::irq_lock_guard _{m_lock};
             m_bitmap.clear_relaxed(id);
             --m_count;
         }

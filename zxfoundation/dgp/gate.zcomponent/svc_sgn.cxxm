@@ -1,0 +1,179 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/gate.zcomponent/svc_sgn.cxxm
+/// @brief Signal namespace dispatch handler.
+
+export module zxfoundation.dgp.gate.registration:svc_sgn;
+import zxfoundation.dgp.gate.types;
+import zxfoundation.dgp.svc;
+import zxfoundation.dgp.domain.types;
+import zxfoundation.dgp.signal;
+import zxfoundation.dgp.authorize;
+import zxfoundation.dgp.isolation.types;
+import zxfoundation.base.types;
+import zxfoundation.sys.printk.core;
+import zxfoundation.dgp.domain.core;
+import zxfoundation.sched.core;
+import arch.s390x.cpu.percpu;
+import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.ipi;
+import lib.error;
+import lib.stl;
+
+using zxfoundation::dgp::domain::domain;
+
+namespace zxfoundation::dgp::gate::svc_sgn::detail {
+
+    [[nodiscard]] auto current_domain() noexcept -> domain::domain* {
+        auto* lc = arch::s390x::cpu::lowcore::get_current();
+        if (!lc) [[unlikely]] return nullptr;
+        return reinterpret_cast<domain::domain*>(lc->get<"current_domain">());
+    }
+
+    auto nc_signal_register(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::dgp::signal;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const auto kind = static_cast<signal_kind>(a0 & 0xFFU);
+        const u64 handler_addr = a1;
+
+        const u64 user_data    = a2;
+
+        zxfoundation::dgp::signal::signal_handler_info info{};
+        info.handler   = reinterpret_cast<zxfoundation::dgp::signal::signal_handler_fn>(handler_addr);
+        info.user_data = reinterpret_cast<void*>(user_data);
+        info.def       = signal_default::notify;
+
+        auto result = zxfoundation::dgp::signal::signal_register_handler(*d, kind, info);
+        if (!result) {
+            zxfoundation::sys::printk::perr("signal_register: kind={} failed",
+                                           static_cast<u32>(kind));
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        return 0;
+    }
+
+    auto nc_signal_poll(u64, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        return static_cast<u64>(d->signal_queue.pending_mask);
+    }
+
+    auto nc_signal_ack(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u32 ack_mask = static_cast<u32>(a0 & 0xFFFFFFFFU);
+        zxfoundation::dgp::signal::signal_ack(*d, ack_mask);
+
+        return 0;
+    }
+
+    auto nc_signal_send(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::dgp::signal;
+
+        auto* caller = current_domain();
+        if (!caller) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const auto target_id = static_cast<zxfoundation::dgp::domain::domain_id>(a0);
+        auto* target = zxfoundation::dgp::domain::domain_find(target_id);
+        if (!target) {
+            zxfoundation::sys::printk::perr("signal_send: target domain {} not found",
+                                            static_cast<u32>(target_id));
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+                const auto kind = static_cast<signal_kind>(a1 & 0xFFU);
+        const u64  data = a2;
+
+        // Enqueue on target.  signal_enqueue handles queue-full gracefully.
+        signal_enqueue(*target, kind, data);
+
+        const auto target_cpu = target->primary_strand.cpu;
+        if (target_cpu != 0xFFFFU) {
+            auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+            if (target_cpu != pcp.cpu_id) {
+                arch::s390x::cpu::ipi::send_reschedule(target_cpu);
+            }
+        }
+        target->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+
+        return 0;
+    }
+
+    auto nc_signal_mask_set(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::dgp::signal;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        const u32 mask = static_cast<u32>(a0 & 0xFFFFFFFFU);
+        signal_block(*d, mask);
+        return 0;
+    }
+
+    auto nc_signal_mask_get(u64, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::dgp::signal;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        return static_cast<u64>(signal_blocked_mask(*d));
+    }
+
+    auto nc_signal_wait(u64, u64, u64, u64, u64) noexcept -> u64 {
+        using namespace zxfoundation::dgp::signal;
+
+        auto* d = current_domain();
+        if (!d) [[unlikely]] return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
+
+        // Fast path: a pending unblocked signal already exists.
+        if (d->signal_queue.has_pending()) {
+            return static_cast<u64>(d->signal_queue.pending_mask);
+        }
+
+        zxfoundation::sched::schedule();
+        return static_cast<u64>(d->signal_queue.pending_mask);
+    }
+
+} // namespace zxfoundation::dgp::gate::svc_sgn::detail
+
+export {
+
+namespace zxfoundation::dgp::gate::svc_sgn {
+
+    auto dispatch(u32 op, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        using zxfoundation::dgp::gate::sgn_op;
+
+        switch (static_cast<sgn_op>(op)) {
+        case sgn_op::register_handler:
+            return zxfoundation::dgp::gate::svc_sgn::detail::nc_signal_register(a0, a1, a2, a3, a4);
+        case sgn_op::poll:
+            return zxfoundation::dgp::gate::svc_sgn::detail::nc_signal_poll(a0, a1, a2, a3, a4);
+        case sgn_op::ack:
+            return zxfoundation::dgp::gate::svc_sgn::detail::nc_signal_ack(a0, a1, a2, a3, a4);
+        case sgn_op::send:
+            return zxfoundation::dgp::gate::svc_sgn::detail::nc_signal_send(a0, a1, a2, a3, a4);
+        case sgn_op::mask_set:
+            return zxfoundation::dgp::gate::svc_sgn::detail::nc_signal_mask_set(a0, a1, a2, a3, a4);
+        case sgn_op::mask_get:
+            return zxfoundation::dgp::gate::svc_sgn::detail::nc_signal_mask_get(a0, a1, a2, a3, a4);
+        case sgn_op::wait:
+            return zxfoundation::dgp::gate::svc_sgn::detail::nc_signal_wait(a0, a1, a2, a3, a4);
+        default:
+            zxfoundation::sys::printk::perr("sgn_dispatch: unknown op {}", op);
+            return svc::fail(lib::kernel_error::from_generic(lib::generic_error::unknown));
+        }
+    }
+
+    template <sgn_op Op>
+    auto dispatch_wrap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
+        return dispatch(static_cast<u32>(Op), a0, a1, a2, a3, a4);
+    }
+
+} // namespace zxfoundation::dgp::gate::svc_sgn
+
+} // end export

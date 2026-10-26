@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file bits.hxx
+/// @file zxfoundation/base/preprocessor/bits.hxx
 /// @brief bits/bytes utility
 /// @note requires __zxmacro_want_bits=1
 

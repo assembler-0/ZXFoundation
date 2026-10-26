@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/cputimer.cxxm
+/// @file arch/s390x/cpu/cputimer.zcomponent/cputimer.cxx
 /// @brief z/Architecture CPU Timer — raw hardware accessors (SPT / STPT).
 
 module arch.s390x.cpu.cputimer;

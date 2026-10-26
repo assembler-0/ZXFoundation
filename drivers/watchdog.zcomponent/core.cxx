@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file watchdog.cxxm
+/// @file drivers/watchdog.zcomponent/core.cxx
 /// @brief SMP watchdog — detects CPUs stuck without scheduler ticks.
 
 module drivers.watchdog.core;
@@ -9,6 +9,7 @@ import zxfoundation.sys.timer.types;
 import zxfoundation.sys.timer.core;
 import zxfoundation.sys.printk.core;
 import zxfoundation.sys.syschk.core;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.processor;
@@ -18,6 +19,9 @@ import arch.s390x.cpu.psw;
 import arch.s390x.trap.fixup.core;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace drivers::watchdog::detail {
 
@@ -103,7 +107,9 @@ namespace drivers::watchdog {
         detail::g_harddog_armed = false;
     }
 
-    auto init() noexcept -> void {
+    auto zi_watchdog_init(const zxfoundation::sys::zinit::zi_desc&) noexcept
+        -> zxfoundation::sys::zinit::zi_result
+    {
         using namespace detail;
         using namespace zxfoundation::sys::timer;
         using namespace zxfoundation::sys::printk;
@@ -131,10 +137,12 @@ namespace drivers::watchdog {
 
         pinfo("watchdog: softdog armed (interval={}s, miss_threshold={})",
             WATCHDOG_INTERVAL_SECONDS, WATCHDOG_FATAL_THRESHOLD);
+        return {};
     }
+    __zinit__(late, p00, zi_watchdog_init, warn)
 
     auto heartbeat_bump() noexcept -> void {
         arch::s390x::cpu::percpu::this_cpu().watchdog_heartbeat++;
     }
 
-} // namespace zxfoundation::sys::watchdog
+} // namespace drivers::watchdog

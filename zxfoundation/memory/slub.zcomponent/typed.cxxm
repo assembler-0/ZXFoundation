@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/memory/slub.zcomponent/slub_typed.cxxm
+/// @file zxfoundation/memory/slub.zcomponent/typed.cxxm
 /// @brief Type-safe SLUB facade and RAII ownership for kernel objects.
 
 export module zxfoundation.memory.slub.typed;

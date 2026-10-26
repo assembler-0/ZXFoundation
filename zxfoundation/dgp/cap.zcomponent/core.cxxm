@@ -25,7 +25,7 @@ namespace zxfoundation::dgp::cap {
     /// @return  cap_token on success, kernel_error on failure.
     [[nodiscard]] auto cap_acquire(
         cap_token  source,
-        cap_rights rights,
+        ::zxfoundation::dgp::right_mask rights,
         u32        owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error>;
 
@@ -35,7 +35,7 @@ namespace zxfoundation::dgp::cap {
     /// @param[in] rights Rights granted to the recipient.
     /// @param[in] owner_domain Domain receiving the capability.
     [[nodiscard]] auto cap_issue(
-        cap_type type, u16 obj_id, cap_rights rights, u32 owner_domain
+        cap_type type, u16 obj_id, ::zxfoundation::dgp::right_mask rights, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error>;
 
     /// @brief Duplicate a capability for a new owner from kernel policy code.
@@ -43,12 +43,12 @@ namespace zxfoundation::dgp::cap {
     /// @param[in] rights Rights to retain.
     /// @param[in] owner_domain Domain receiving the capability.
     [[nodiscard]] auto cap_duplicate(
-        cap_token source, cap_rights rights, u32 owner_domain
+        cap_token source, ::zxfoundation::dgp::right_mask rights, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error>;
 
     /// @brief Duplicate a capability after checking its current owner.
     [[nodiscard]] auto cap_duplicate_for(
-        cap_token source, cap_rights rights, u32 source_domain,
+        cap_token source, ::zxfoundation::dgp::right_mask rights, u32 source_domain,
         u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error>;
 
@@ -65,7 +65,7 @@ namespace zxfoundation::dgp::cap {
     /// @param[in]  needed Rights required for the intended operation.
     /// @return  Pointer to the validated object, or kernel_error.
     template <typename T>
-    [[nodiscard]] auto cap_validate(cap_token token, cap_rights needed) noexcept
+    [[nodiscard]] auto cap_validate(cap_token token, ::zxfoundation::dgp::right_mask needed) noexcept
         -> std::expected<T*, lib::kernel_error>;
 
     /// @brief Validate a capability token without a concrete type parameter
@@ -73,7 +73,7 @@ namespace zxfoundation::dgp::cap {
     ///        it only returns success/failure.
     [[nodiscard]] auto cap_validate_generic(
         cap_token   token,
-        cap_rights  needed
+        ::zxfoundation::dgp::right_mask  needed
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Validate a capability against its owning domain.
@@ -81,7 +81,7 @@ namespace zxfoundation::dgp::cap {
     /// @param[in] needed Rights required by the operation.
     /// @param[in] owner_domain Domain making the call.
     [[nodiscard]] auto cap_validate_generic_for(
-        cap_token token, cap_rights needed, u32 owner_domain
+        cap_token token, ::zxfoundation::dgp::right_mask needed, u32 owner_domain
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
     /// @brief Resolve a validated capability to its SCOMS object.
@@ -89,7 +89,7 @@ namespace zxfoundation::dgp::cap {
     /// @param[in] needed Rights required by the operation.
     /// @return Referenced SCOMS object, or an authorization error.
     [[nodiscard]] auto cap_resolve(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<scoms::kobject::bobject*, lib::kernel_error>;
 
     /// @brief Revoke a capability token administratively.
@@ -129,22 +129,22 @@ namespace zxfoundation::dgp::cap {
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::dgp::domain::domain>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::dgp::domain::domain*, lib::kernel_error>;
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::dgp::gate::gate_desc>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::dgp::gate::gate_desc*, lib::kernel_error>;
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::dgp::portal::portal_desc>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::dgp::portal::portal_desc*, lib::kernel_error>;
 
     template <>
     [[nodiscard]] auto cap_validate<zxfoundation::memory::objects::memory_object>(
-        cap_token token, cap_rights needed
+        cap_token token, ::zxfoundation::dgp::right_mask needed
     ) noexcept -> std::expected<zxfoundation::memory::objects::memory_object*, lib::kernel_error>;
 
 } // namespace zxfoundation::dgp::cap

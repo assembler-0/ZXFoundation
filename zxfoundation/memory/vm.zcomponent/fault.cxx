@@ -51,8 +51,8 @@ namespace zxfoundation::memory::vm {
         bool need_file_io = false;
 
         {
-        const sync::irq_lock_guard guard{space.lock};
-        auto* rgn = vm_find(space, fault_va);
+        const sync::irq_lock_guard _{space.lock};
+        auto* rgn = vm_find_locked(space, fault_va);
 
         if (rgn) {
             const u64 current_gen = zxfoundation::dgp::memory_contract::contract_generation();
@@ -110,7 +110,7 @@ namespace zxfoundation::memory::vm {
                 }
 
                 // Check that the new page doesn't overlap an existing region.
-                if (vm_find(space, new_start)) {
+                if (vm_find_locked(space, new_start)) {
                     return fault_action::killed;
                 }
 
@@ -232,7 +232,7 @@ namespace zxfoundation::memory::vm {
         if (auto* existing = rgn->find_page(page_va)) {
             if (is_write && (existing->state == vm_page_state::cow ||
                                existing->state == vm_page_state::file_cache ||
-                               existing->state == vm_page_state::ipc) && cow_write) {
+                               existing->state == vm_page_state::ipc)) {
                 const auto old_state = existing->state;
                 const bool needs_commit = old_state == vm_page_state::file_cache;
                 if (needs_commit && !vm_commit_admitted(space, 1U)) {
@@ -322,6 +322,25 @@ namespace zxfoundation::memory::vm {
                     ++space.total_committed;
                 }
                 return fault_action::resolved;
+            }
+            const dat_table<dat_level::region_1> heal_root{root_phys};
+            if (!walk<dat_level::region_1>(heal_root, page_va)) {
+                const dat_table<dat_level::region_1> root{root_phys};
+                u64 prot_bits = 0;
+                if (!(rgn->prot & vm_prot::exec)) prot_bits |= PTE_NOEXEC;
+                auto remap = map_page<dat_level::region_1>(root, page_va,
+                    existing->phys, page_prot{prot_bits & ~PTE_PROTECT});
+                if (!remap) return fault_action::killed;
+            } else if (is_write) {
+                const dat_table<dat_level::region_1> root{root_phys};
+                u64 prot_bits = 0;
+                if (!(rgn->prot & vm_prot::exec)) prot_bits |= PTE_NOEXEC;
+                discard_value unmap_page<dat_level::region_1>(root, page_va);
+                auto rearm = map_page<dat_level::region_1>(root, page_va,
+                    existing->phys, page_prot{prot_bits & ~PTE_PROTECT});
+                if (!rearm) return fault_action::killed;
+                discard_value arch::s390x::cpu::skey::sske_preserve_rc(
+                    existing->phys, storage_key, false);
             }
             return fault_action::resolved;
         }
@@ -453,7 +472,7 @@ namespace zxfoundation::memory::vm {
             };
             const dat_table<dat_level::region_1> root{root_phys};
             u64 prot_bits = PTE_PROTECT;
-            if (is_exec) prot_bits |= PTE_NOEXEC;
+            if (!(rgn->prot & vm_prot::exec)) prot_bits |= PTE_NOEXEC;
             auto map_r = map_page<dat_level::region_1>(
                 root, page_va, source_slot->phys, page_prot{prot_bits});
             if (!map_r) {
@@ -512,9 +531,9 @@ namespace zxfoundation::memory::vm {
         }
         auto lease = std::move(*page_result);
 
-        const sync::irq_lock_guard guard2{space.lock};
+        const sync::irq_lock_guard _{space.lock};
 
-        auto* rgn = vm_find(space, fault_va);
+        auto* rgn = vm_find_locked(space, fault_va);
         if (!rgn || rgn->backing != vm_backing::file ||
             rgn->file_node != file_req.file_node) {
             discard_value page_cache::release(std::move(lease));
@@ -573,4 +592,3 @@ namespace zxfoundation::memory::vm {
 }
 
 } // namespace zxfoundation::memory::vm
-

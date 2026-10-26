@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// include/arch/s390x/init/zxfl/elf64.h
+/// @file arch/s390x/init/zxfl/include/arch/s390x/init/zxfl/elf64.h
 //
 /// @brief Minimal ELF64 type definitions for the ZXFL bootloader.
 

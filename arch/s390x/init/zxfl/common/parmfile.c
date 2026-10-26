@@ -1,9 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/parmfile.c
-//
-/// @brief Freestanding syssize= parser for the ZXFL bootloader.
-///
-///        No libc, no kernel headers — only zxfl string primitives.
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/parmfile.c
+/// @brief Freestanding cmdline parser for the ZXFL bootloader.
 
 #include <arch/s390x/init/zxfl/parmfile.h>
 

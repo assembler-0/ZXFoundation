@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/syschk_types.cxxm
+/// @file zxfoundation/sys/syschk.zcomponent/types.cxxm
 /// @brief System-check crash record layout and formatting helpers.
 
 export module zxfoundation.sys.syschk.types;

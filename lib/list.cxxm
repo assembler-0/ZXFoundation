@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file list.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/list.cxxm
 /// @brief Intrusive circular doubly-linked list types
 
 export module lib.list;
@@ -41,6 +41,26 @@ namespace lib {
 
         [[nodiscard]] constexpr auto operator==(const list_iterator& o) const noexcept -> bool { return current == o.current; }
         [[nodiscard]] constexpr auto operator!=(const list_iterator& o) const noexcept -> bool { return current != o.current; }
+    };
+
+    /// @brief Typed bidirectional iterator over a const view of the list.
+    /// @tparam Owner   Enclosing struct type.
+    /// @tparam member  Pointer-to-member identifying the @c list_node field.
+    template <typename Owner, list_node Owner::* member>
+    struct typed_const_list_iterator {
+        const list_node* current;
+
+        constexpr explicit typed_const_list_iterator(const list_node* cur) noexcept : current(cur) {}
+
+        [[nodiscard]] constexpr auto operator*() const noexcept -> const Owner& { return *container_of<Owner, list_node, member>(current); }
+
+        constexpr auto operator++()    noexcept -> typed_const_list_iterator& { current = current->next; return *this; }
+        constexpr auto operator++(int) noexcept -> typed_const_list_iterator  { auto t = *this; current = current->next; return t; }
+        constexpr auto operator--()    noexcept -> typed_const_list_iterator& { current = current->prev; return *this; }
+        constexpr auto operator--(int) noexcept -> typed_const_list_iterator  { auto t = *this; current = current->prev; return t; }
+
+        [[nodiscard]] constexpr auto operator==(const typed_const_list_iterator& o) const noexcept -> bool { return current == o.current; }
+        [[nodiscard]] constexpr auto operator!=(const typed_const_list_iterator& o) const noexcept -> bool { return current != o.current; }
     };
 
     /// @brief Typed bidirectional iterator that yields @c Owner& directly.
@@ -160,10 +180,24 @@ namespace lib {
             [[nodiscard]] constexpr auto end()   noexcept { return typed_list_iterator<Owner, member>(&h.sentinel); }
         };
 
+        /// @brief Const typed range that yields @c const Owner& for range-for.
+        template <typename Owner, list_node Owner::* member>
+        struct typed_const_range {
+            const list_head& h;
+            [[nodiscard]] constexpr auto begin() const noexcept { return typed_const_list_iterator<Owner, member>(h.sentinel.next); }
+            [[nodiscard]] constexpr auto end()   const noexcept { return typed_const_list_iterator<Owner, member>(&h.sentinel); }
+        };
+
         /// @brief Return a typed range adaptor for range-for over @c Owner&.
         template <typename Owner, list_node Owner::* member>
         [[nodiscard]] constexpr auto iter() noexcept -> typed_range<Owner, member> {
             return typed_range<Owner, member>{*this};
+        }
+
+        /// @brief Return a const typed range adaptor for range-for over @c const Owner&.
+        template <typename Owner, list_node Owner::* member>
+        [[nodiscard]] constexpr auto iter() const noexcept -> typed_const_range<Owner, member> {
+            return typed_const_range<Owner, member>{*this};
         }
 
     private:

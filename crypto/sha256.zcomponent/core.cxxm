@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file crypto/sha256.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file crypto/sha256.zcomponent/core.cxxm
 /// @brief SHA-256 streaming hash implementation
 
 export module crypto.sha256.core;

@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lib/static_vector.cxxm
 /// @brief Fixed-capacity growable array with inline storage — no heap.
 

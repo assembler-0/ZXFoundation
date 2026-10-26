@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file barebones.cxxm
+/// @file zxfoundation/sys/syschk.zcomponent/barebones.cxx
 /// @brief Barebones mode
 
 module zxfoundation.sys.syschk.barebones;
@@ -10,7 +10,7 @@ import lib.stl;
 
 namespace zxfoundation::sys::syschk {
 
-    [[noreturn]] auto bug(const panic_info& info) noexcept -> void {
+    [[gnu::noinline]] [[noreturn]] auto bug(const panic_info& info) noexcept -> void {
         system_check(lib::kernel_error::from_generic(lib::generic_error::internal_error),
             syschk_severity::fatal,
             info.msg,

@@ -1,0 +1,6 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/dgp/rights.zcomponent/interface.cxxm
+/// @brief Facade — the single rights vocabulary.
+
+export module zxfoundation.dgp.rights;
+export import zxfoundation.dgp.rights.types;

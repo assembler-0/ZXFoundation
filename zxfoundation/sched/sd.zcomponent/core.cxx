@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/domain_tree.cxx
+/// @file zxfoundation/sched/sd.zcomponent/core.cxx
 /// @brief Hierarchical balancing-domain builder and traversal helpers.
 
 module zxfoundation.sched.sd.core;
@@ -34,7 +34,8 @@ namespace zxfoundation::sched::sd::detail {
     alignas(64) sched_domain g_domain_pool[zxfoundation::base::config::CONFIG_ZX_MAX_CPUS][SCHED_DOMAIN_MAX_LEVEL]{};
 
     /// @brief Static descriptor pool for @c sched_group nodes.
-    alignas(64) std::array<sched_group, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS * 4U> g_group_pool{};
+    alignas(64) std::array<sched_group,
+        zxfoundation::base::config::CONFIG_ZX_MAX_CPUS * SCHED_DOMAIN_MAX_LEVEL> g_group_pool{};
 
     inline auto reset_domain(sched_domain& sd) noexcept -> void {
         sd.level               = sd_level::smt;
@@ -63,35 +64,20 @@ namespace zxfoundation::sched::sd::detail {
         sg.has_running      = true;
     }
 
-    inline auto group_index(u16 cpu, u32 group_n) noexcept -> u32 {
-        return static_cast<u32>(cpu) * 4U + (group_n & 3U);
+    inline auto group_index(u16 cpu, u32 level_idx) noexcept -> u32 {
+        return static_cast<u32>(cpu) * SCHED_DOMAIN_MAX_LEVEL + level_idx;
     }
 
     /// @brief Build the @c sched_group ring for one level/CPU.
     inline auto build_group_ring(sched_domain& sd, u16 local_cpu, u32 level_idx) noexcept -> void {
-        sched_group* ring_head = nullptr;
-        sched_group* ring_tail = nullptr;
-        u32 group_n = 0U;
-
+        auto& sg = g_group_pool[group_index(local_cpu, level_idx)];
+        reset_group(sg);
         sd.span_cpus.for_each([&](u16 cpu) noexcept -> void {
-            auto& sg = g_group_pool[group_index(local_cpu, group_n)];
-            reset_group(sg);
             sg.cpus.set(cpu, std::memory_order::relaxed);
-            sg.group_capacity = 100U;  // canonical nonsense capacity until refresh_cpu_record updates.
-            if (ring_tail == nullptr) {
-                ring_head = &sg;
-                ring_tail = &sg;
-            } else {
-                ring_tail->next = &sg;
-                ring_tail = &sg;
-            }
-            ++group_n;
         }, std::memory_order::relaxed);
-        if (ring_tail != nullptr) {
-            ring_tail->next = ring_head; // circular
-        }
-        sd.groups = ring_head;
-        discard_value level_idx;
+        sg.group_capacity = 100U;  // canonical nonsense capacity until refresh_cpu_record updates.
+        sg.next = &sg;             // self-circular single-node ring.
+        sd.groups = &sg;
     }
 
 } // namespace detail
@@ -187,43 +173,12 @@ namespace zxfoundation::sched::sd {
         out_tree.max_built_level = static_cast<u32>(last_built);
     }
 
-    /// @brief Walk up the hierarchy from @c base returning the first domain
-    ///        that has all of the requested flag bits set.
-    /// @param[in] base  Bottom-most domain in the search.
-    /// @param[in] flag  Flag bitmask required in the result.
-    /// @return Pointer to the highest ancestor that satisfies the flag test
-    [[nodiscard]] auto highest_flag_domain(const sched_domain* base, sd_flag flag) noexcept -> const sched_domain* {
-        const sched_domain* result = nullptr;
-        for (const sched_domain* sd = base; sd != nullptr; sd = sd->parent) {
-            if ((static_cast<u32>(sd->flags) & static_cast<u32>(flag)) == static_cast<u32>(flag)) {
-                result = sd;
-            }
-        }
-        return result;
-    }
 
-    /// @brief Walk down the hierarchy from @c base returning the lowest domain
-    ///        which has all of @c flag set.
-    /// @param[in] base  Top-most domain in the search.
-    /// @param[in] flag  Flag bitmask required in the result.
-    [[nodiscard]] auto lowest_flag_domain(const sched_domain* base, sd_flag flag) noexcept -> const sched_domain* {
-        for (const sched_domain* sd = base; sd != nullptr; sd = sd->child) {
-            if ((static_cast<u32>(sd->flags) & static_cast<u32>(flag)) == static_cast<u32>(flag)) {
-                return sd;
-            }
-        }
-        return nullptr;
-    }
 
     /// @brief Test whether @c cpu is in @c sd.span_cpus.
     [[nodiscard]] auto domain_contains_cpu(const sched_domain& sd, u16 cpu) noexcept -> bool {
         return sd.span_cpus.test(cpu, std::memory_order::relaxed);
     }
 
-    /// @brief Cache-hot predicate: keeping a strand on its current CPU for
-    ///        @c cache_hot_time_ns since last run.
-    [[nodiscard]] auto is_cache_hot(const sched_domain& sd, u64 elapsed_ns) noexcept -> bool {
-        return elapsed_ns < sd.cache_hot_time_ns;
-    }
 
 } // namespace zxfoundation::sched::sd

@@ -1,3 +1,4 @@
+/// @file zxfoundation/memory/slub.zcomponent/interface.cxxm
 export module zxfoundation.memory.slub;
 export import zxfoundation.memory.slub.types;
 export import zxfoundation.memory.slub.core;

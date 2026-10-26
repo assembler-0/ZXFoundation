@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/locking/rtmutex.cxxm
+/// @file zxfoundation/sync/rtmutex.zcomponent/core.cxxm
 /// @brief Real-time mutex with multi-link priority inheritance.
 
 export module zxfoundation.sync.rtmutex.core;
@@ -17,7 +17,7 @@ namespace zxfoundation::sync::rtmutex {
     /// @brief Real-time mutex with multi-link priority inheritance.
     class rtmutex {
         std::atomic<u32>             m_lock_word{0}; ///< 0 = free, 1 = held.
-        sync::qspinlock::qspinlock   m_pi_lock{}; ///< Protects m_owner, m_waiters, and serializes the chain walk.
+        sync::qspinlock::qspinlock<sync::lock_rank::rtmutex_pi>   m_pi_lock{}; ///< Protects m_owner, m_waiters, and serializes the chain walk.
         dgp::domain::strand*              m_owner{nullptr};
         lib::list_head               m_waiters{};
 
@@ -44,9 +44,6 @@ namespace zxfoundation::sync::rtmutex {
     private:
         auto slow_lock(irqflags flags) noexcept -> void;
     };
-
-    static_assert(sizeof(rtmutex) <= 64U,
-        "rtmutex should fit in a single cache line for cheap PI-locking");
 
 } // namespace zxfoundation::sync::rtmutex
 

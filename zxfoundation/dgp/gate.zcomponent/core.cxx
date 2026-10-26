@@ -13,15 +13,23 @@ import zxfoundation.dgp.authorize;
 import zxfoundation.dgp.domain.core;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.isolation.types;
+import zxfoundation.dgp.gate.registration;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.scoms.kobject.ref;
 import zxfoundation.scoms.kobject.types;
 import zxfoundation.scoms.metadata.core;
 import zxfoundation.scoms.table;
 import zxfoundation.sys.printk.core;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.lowcore;
+import arch.s390x.cpu.pcss.core;
+import arch.s390x.cpu.ctlreg;
+import arch.s390x.cpu.aste;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 using zxfoundation::dgp::gate::gate_desc;
 using zxfoundation::dgp::gate::gate_type;
@@ -46,15 +54,14 @@ namespace zxfoundation::dgp::gate {
     /// @param type             Gate type (nucleus or domain).
     /// @param auth             Authorization policy.
     /// @param target_domain_id Target domain ID.
-    /// @param entry_va         Entry-point virtual address in the target domain.
     /// @param target_key       Storage key of the target domain.
     /// @return                 The allocated slot ID, or an error if the table is full.
     auto gate_create(
         gate_type type,
         gate_auth auth,
         u32       target_domain_id,
-        u64       entry_va,
-        u8        target_key
+        u8        target_key,
+        u64       entry_va
     ) noexcept -> std::expected<u32, lib::kernel_error> {
 
         auto* caller = []() -> zxfoundation::dgp::domain::domain* {
@@ -71,7 +78,7 @@ namespace zxfoundation::dgp::gate {
             *caller, *target,
             zxfoundation::dgp::operation_kind::gate_create,
             zxfoundation::dgp::authorization_metadata{
-                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::lifecycle,
+                .requested_rights = ( ::zxfoundation::dgp::right::create | ::zxfoundation::dgp::right::destroy ),
             }
         );
         if (!auth_result) {
@@ -103,11 +110,27 @@ namespace zxfoundation::dgp::gate {
             return std::unexpected(lib::kernel_error::from_generic(
                 lib::generic_error::invalid_arg));
         }
+
+        arch::s390x::cpu::pcss::gate_request req{};
+        req.asn = static_cast<u16>(target->pc_asn);
+        req.entry_va = entry_va;
+        req.extended_addressing = true;
+        req.ekm = 0xFFFFU;
+        req.entry_key_mask = 0xFFFFU;
+        req.entry_key = static_cast<u8>(target->storage_key & 0x0FU);
+        req.problem_state = true;
+        arch::s390x::cpu::pcss::pc_number nr{};
+        auto mat = arch::s390x::cpu::pcss::gate_materialize(
+            target->pc_tables, caller->pc_tables, req, nr);
+        if (!mat) return std::unexpected(mat.error());
+
         desc.type          = type;
         desc.auth          = auth;
         desc.target_domain = target_domain_id;
-        desc.entry_va      = entry_va;
         desc.target_key    = target_key;
+        desc.et_index      = nr.get<"ex">();
+        desc.class_mask    = req.ekm;
+        desc.pc_nr         = nr;
 
         const u32 id = desc.ko.id;
 
@@ -115,11 +138,12 @@ namespace zxfoundation::dgp::gate {
             scoms::kobject::robject<gate_desc, base::lifecycle_state::embryo>&&
         >(embryo_ref).activate();
 
-        sys::printk::pverbose("gate: created gate {} (type={}, target_domain={}, entry_va={:#x})",
+        ++target->gate_count;
+
+        sys::printk::pverbose("gate: created gate {} (type={}, target_domain={}, entry={:#x})",
               id,
               static_cast<u8>(type),
-              target_domain_id,
-              entry_va);
+              target_domain_id, entry_va);
 
         return id;
     }
@@ -135,6 +159,7 @@ namespace zxfoundation::dgp::gate {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::not_found));
         }
+        const u32 owner_id = gate->target_domain;
         auto revoke_result = zxfoundation::dgp::cap::cap_revoke_target(gate->ko);
         if (!revoke_result) return std::unexpected(revoke_result.error());
 
@@ -142,6 +167,11 @@ namespace zxfoundation::dgp::gate {
         if (!result) {
             perr("gate: gate_destroy — id {} failed", id);
             return std::unexpected(result.error());
+        }
+
+        if (auto* owner = zxfoundation::dgp::domain::domain_find(owner_id);
+            owner != nullptr && owner->gate_count > 0U) {
+            --owner->gate_count;
         }
 
         sys::printk::pverbose("gate: destroyed gate {}", id);
@@ -175,13 +205,13 @@ namespace zxfoundation::dgp::gate {
     }
 
     /// @brief Initialize the gate subsystem.
-    auto gate_init() noexcept -> void {
+    auto zi_gate_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         detail::g_gate_table.init(scoms::kobject::kobject_type::gate);
-
         register_gate_cap_lookup();
-
-        pinfo("gate: subsystem initialized ({} slots)", MAX_GATES);
+        registration::register_all_handlers();
+        return {};
     }
+    __zinit__(dgp, p40, zi_gate_init, fatal)
 
     /// @brief Return the current number of active gates.
     auto gate_count() noexcept -> u32 {

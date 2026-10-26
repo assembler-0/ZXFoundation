@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/softirq.cxxm
+/// @file zxfoundation/sched/softirq.zcomponent/core.cxxm
 /// @brief SCHED_SOFTIRQ dispatcher and balancing orchestration.
 
 export module zxfoundation.sched.softirq.core;
@@ -41,15 +41,6 @@ namespace zxfoundation::sched::softirq {
         "balance_req must remain compact so it fits inside the rq lock-cache stride");
 
     /// @brief Reason flags for a balance pass failure (mirrors Linux's).
-    enum class balance_result : u8 {
-        ok          = 0,
-        no_runnable = 1,
-        cache_hot   = 2,
-        not_busy    = 3,
-        skip_smt     = 4,
-        throttled   = 5,
-        group_skip  = 6,
-    };
 
     /// @brief Open the SCHED_SOFTIRQ vector with the framework.
     /// @return Success when the vector was registered.

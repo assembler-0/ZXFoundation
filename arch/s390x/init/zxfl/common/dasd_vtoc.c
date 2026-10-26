@@ -1,8 +1,7 @@
-// SPDX-License-Identifier: Apache-2.0
-// arch/s390x/init/zxfl/common/dasd_vtoc.c
-//
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/init/zxfl/common/dasd_vtoc.c
 /// @brief VTOC dataset search for the ZXFL bootloader.
-///
+
 #include <arch/s390x/init/zxfl/dasd_vtoc.h>
 #include <arch/s390x/init/zxfl/dasd_io.h>
 #include <arch/s390x/init/zxfl/ebcdic.h>
@@ -27,7 +26,6 @@ static bool parse_extent(const uint8_t *e, dscb1_extent_t *out) {
 }
 
 /// @brief Read the VOL1 label and extract the VTOC start CCHH.
-///        Falls back to (0,1) if the label is absent or unreadable.
 static void vtoc_find_from_vol1(uint32_t schid,
                                 uint16_t *out_cyl, uint16_t *out_head) {
     static uint8_t vol1[80] __attribute__((aligned(4)));
@@ -49,7 +47,6 @@ static void vtoc_find_from_vol1(uint32_t schid,
 }
 
 /// @brief Read a DSCB record, trying key+data first then data-only.
-///        Returns the buffer length used (140 or 96), or 0 on failure.
 static uint32_t read_dscb(uint32_t schid, uint16_t cyl, uint16_t head,
                            uint8_t rec, uint8_t *buf) {
     if (dasd_read_record(schid, cyl, head, rec,
@@ -101,14 +98,9 @@ static void collect_dscb3_chain(uint32_t schid,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 int dasd_find_dataset_extents(uint32_t schid,
                               const char *dsname,
                               dasd_dataset_t *out_ds) {
-    // Convert ASCII dataset name to 44-byte space-padded EBCDIC.
     uint8_t target[44];
     memset(target, 0x40U, 44U);
     for (int i = 0; dsname[i] != '\0' && i < 44; i++)
@@ -150,14 +142,27 @@ int dasd_find_dataset_extents(uint32_t schid,
                 continue;
             }
 
-            // Skip non-DSCB1 records (F4=VTOC header, F5=free space, etc.)
             if (fmtid != DSCB_FMT1_ID) continue;
 
-            // Compare 44-byte EBCDIC dataset name.
             if (memcmp(dscb_buf + name_off, target, 44U) != 0) continue;
 
-            // Match found — collect up to 3 extents from DSCB1.
+            // Match found — DS1LSTAR (TTR of the last used block) first,
+            // then collect up to 3 extents from DSCB1.  Semantics follow
+            // hyperion's dasdseq reader (dasdblks.h FORMAT1_DSCB): TT is a
+            // RELATIVE track number from the dataset start (TTT when the
+            // DS1LARGE flag extends it via DS1TTTHI), R is the record on
+            // that track, and all-zero means "unknown" — read to EOF.
             out_ds->count = 0;
+            {
+                const uint8_t *ls   = dscb_buf + DSCB1_KD_LSTAR_OFF;
+                const bool     larg = (dscb_buf[DSCB1_KD_FLAG1_OFF]
+                                       & DS1LARGE_FLAG) != 0U;
+                out_ds->lstar_track = (uint32_t)((ls[0] << 8) | ls[1])
+                                    | (larg ? ((uint32_t)dscb_buf[DSCB1_KD_TTTHI_OFF] << 16)
+                                            : 0U);
+                out_ds->lstar_rec   = ls[2];
+                out_ds->lstar_valid = (ls[0] != 0U) || (ls[1] != 0U) || (ls[2] != 0U);
+            }
             for (uint32_t i = 0; i < 3U && out_ds->count < VTOC_MAX_EXTENTS; i++) {
                 dscb1_extent_t ext;
                 if (parse_extent(dscb_buf + ext0_off + i * 10U, &ext))

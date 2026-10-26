@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/rcu/rcu_types.cxxm
+/// @file zxfoundation/sync/rcu.zcomponent/types.cxxm
 /// @brief RCU type definitions.
 
 export module zxfoundation.sync.rcu.types;
@@ -33,6 +33,6 @@ namespace zxfoundation::sync::rcu {
     /// @brief Maximum number of callbacks to drain per tick per CPU.
     constexpr u32 RCU_MAX_DRAIN_PER_TICK = 64U;
 
-} // namespace zxfoundation::rcu
+} // namespace zxfoundation::sync::rcu
 
 } // end export

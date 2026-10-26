@@ -1,0 +1,123 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/pcss.zcomponent/core.cxxm
+/// @brief PC-ss substrate: per-domain LT/ET tables with ASTE LTD
+///        designation, PC-number materialization
+
+export module arch.s390x.cpu.pcss.core;
+export import arch.s390x.cpu.pcss.types;
+import arch.s390x.cpu.aste;
+import arch.s390x.cpu.irq;
+import zxfoundation.memory.pmm;
+import zxfoundation.memory.hhdm;
+import zxfoundation.base.types;
+import lib.error;
+import lib.stl;
+
+export {
+
+namespace arch::s390x::cpu::pcss {
+
+    /// @brief Gate materialization request (ch. 07 object model).
+    struct gate_request {
+        u16  asn{0};                 ///< target ASN; MUST be nonzero (PC-ss)
+        u64  entry_va{0};            ///< entry instruction address (owner space)
+        u16  ekm{0};                 ///< authorization key mask
+        u16  entry_key_mask{0};
+        u8   entry_key{0};                 ///< ETE4_EK: "entry key = owner key"
+        u64  entry_param{0};
+        bool extended_addressing{false};   ///< ETE bit 129 form selector
+        bool mode_31bit{true};             ///< ETE A bit: 31- vs 24-bit entry mode
+        bool problem_state{true};          ///< ETE P bit
+    };
+
+    /// @brief Allocate the linkage/entry tables and designate them in the
+    ///        primary ASTE's LTD (V | LTO | LTL).
+    [[nodiscard]] auto tables_init(aste::aste& primary, domain_tables& t) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Materialize ETE (owner) + LTE (caller) and mint the caller
+    ///        PC number (LX|EX)
+    [[nodiscard]] auto gate_materialize(
+        domain_tables& owner, domain_tables& caller,
+        const gate_request& req, pc_number& out) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Invalidate the LTE/ETE pair behind a PC number.
+    [[nodiscard]] auto pc_number_walk(
+        pc_number nr,
+        const domain_tables& t,
+        u32 gr15_low32,
+        bool reuse) noexcept
+        -> std::expected<translation, lib::kernel_error>;
+
+    /// @brief PROGRAM TRANSFER semantics: resolve the entry without
+    ///        stacking (T=0 requirements enforced by the hardware on
+    ///        the instruction; this resolves the tables only).
+    [[nodiscard]] auto program_transfer(
+        const domain_tables& t,
+        pc_number nr,
+        u32 gr15_low32) noexcept
+        -> std::expected<translation, lib::kernel_error>;
+
+    /// @brief PROGRAM TRANSFER with INSTANCE identity: also enforces
+    ///        the ASN-instance comparison (ASTE instance vs the
+    ///        caller-supplied instance value).
+    [[nodiscard]] auto program_transfer_instance(
+        const domain_tables& t,
+        pc_number nr,
+        u32 gr15_low32,
+        u32 instance) noexcept
+        -> std::expected<translation, lib::kernel_error>;
+
+    auto gate_revoke(domain_tables& t, pc_number nr) noexcept -> void;
+
+    /// @brief Form the first section (header + trailer) and set CR15 to
+    ///        the header entry descriptor (the initial current entry).
+    [[nodiscard]] auto stack_init(stack& s) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Capture the live CR15 value into the stack (dispatch out).
+    auto stack_save(stack& s, u64 cr15_value) noexcept -> void;
+
+    /// @brief The CR15 value to restore on dispatch in.
+    [[nodiscard]] auto stack_load(const stack& s) noexcept -> u64;
+
+    /// @brief Stack-full growth
+    [[nodiscard]] auto stack_grow(stack& s) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Forensics
+    [[nodiscard]] auto stack_forensics(const stack& s) noexcept -> bool;
+
+    /// @brief Release all sections.
+    auto stack_release(stack& s) noexcept -> void;
+
+    /// @brief Synthesized-return core
+    [[nodiscard]] auto state_entry_restore(
+        cpu::irq::irq_frame& frame, u64 entry_base) noexcept -> bool;
+
+    /// @brief Unstack tail of a synthesized return: CR1 back to the
+    ///        caller's own ASCE, CR15 past the unstacked state entry,
+    ///        space leg published from the entry's PASN.
+    /// @param[in] caller_asce The caller strand's owner ASCE value.  The
+    ///        percpu attached record holds the last DISPATCHED owner's
+    ///        ASCE, which on a deferred-gate resume is the serving
+    ///        worker's domain — never restore CR1 from it here.
+    auto state_entry_unstack(stack& s, u64 entry_base, u64 caller_asce) noexcept -> void;
+
+    /// @brief Write a deferred-gate reply into a parked caller's state entry
+    ///        (formal ABI: unstack-suppression first, reply registers
+    ///        GR0/GR1/GR15, then clear suppression).
+    auto state_entry_write_reply(
+        u64 entry_base, u64 r0, u64 r1, u64 status) noexcept -> void;
+
+    /// @brief The nucleus trampoline core: restore the parked caller from its
+    ///        state entry, deliver the reply registers, unstack, and return to
+    ///        the caller after its stacking pc.
+    auto state_entry_synthesize_return(
+        cpu::irq::irq_frame& frame, stack& s, u64 entry_base,
+        u64 caller_asce) noexcept -> void;
+
+} // namespace arch::s390x::cpu::pcss
+
+} // end export

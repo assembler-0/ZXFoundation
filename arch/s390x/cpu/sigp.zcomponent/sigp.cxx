@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file sigp.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/sigp.zcomponent/sigp.cxx
 /// @brief SIGP (SIGnal Processor) API.
 
 module arch.s390x.cpu.sigp;

@@ -1,10 +1,11 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file sigp.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/sigp.zcomponent/sigp.cxxm
 /// @brief SIGP (SIGnal Processor) API.
 
 export module arch.s390x.cpu.sigp;
 import zxfoundation.base.types;
 import lib.stl;
+import lib.bitfield;
 
 export {
 
@@ -30,6 +31,49 @@ namespace arch::s390x::cpu::sigp {
     constexpr auto SIGP_CC_STATUS_STORED         = 1;
     constexpr auto SIGP_CC_BUSY                  = 2;
     constexpr auto SIGP_CC_NOT_OPERATIONAL       = 3;
+
+    /// @brief SIGP order codes
+    enum class sigp_order : u8 {
+        sense                    = 0x01U,
+        external_call            = 0x02U,
+        emergency_signal         = 0x03U,
+        start                    = 0x04U,
+        stop                     = 0x05U,
+        restart                  = 0x06U,
+        stop_and_store_status    = 0x09U,
+        initial_cpu_reset        = 0x0BU,
+        set_prefix               = 0x0CU,
+        store_status_at          = 0x0DU,
+        store_ext_status_at      = 0x11U,
+        set_architecture         = 0x12U,
+        conditional_emerg_signal = 0x13U,
+        sense_running_statis     = 0x15U,
+        set_multithreading       = 0x16U,
+        store_additional_status_at = 0x16U,
+    };
+
+    /// @brief SIGP condition codes
+    enum class sigp_cc : u8 {
+        order_accepted    = 0,
+        status_stored     = 1,
+        busy              = 2,
+        not_operational   = 3,
+    };
+
+    /// @brief SIGP status codes
+    using sigp_status = lib::record<u64, lib::msb0_t,
+        lib::rw<"equipment_check", lib::bits<32, 32>>,
+        lib::rw<"not_running", lib::bits<53, 53>>,
+        lib::rw<"incorrect_state", lib::bits<54, 54>>,
+        lib::rw<"invalid_parameter", lib::bits<55, 55>>,
+        lib::rw<"external_call_pending", lib::bits<56, 56>>,
+        lib::rw<"stopped", lib::bits<57, 57>>,
+        lib::rw<"operator_intervening", lib::bits<58, 58>>,
+        lib::rw<"check_stop", lib::bits<60, 60>>,
+        lib::rw<"inoperative", lib::bits<61, 61>>,
+        lib::rw<"invalid_order", lib::bits<62, 62>>,
+        lib::rw<"receiver_check", lib::bits<63, 63>>
+    >;
 
     /// SIGP status bits stored when the condition code is STATUS_STORED.
     constexpr auto SIGP_STATUS_INVALID_ORDER     = 0x0000'0002U;

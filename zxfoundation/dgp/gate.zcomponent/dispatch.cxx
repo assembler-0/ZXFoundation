@@ -2,7 +2,7 @@
 /// @file zxfoundation/dgp/gate.zcomponent/dispatch.cxx
 /// @brief Gate subsystem dispatch table implementation
 
-module zxfoundation.dgp.gate.dispatch;
+module zxfoundation.dgp.svc;
 import zxfoundation.dgp.gate.types;
 import zxfoundation.dgp.gate.core;
 import zxfoundation.base.types;
@@ -11,6 +11,7 @@ import zxfoundation.dgp.cap.core;
 import zxfoundation.dgp.cap.types;
 import zxfoundation.dgp.authorize;
 import zxfoundation.dgp.domain.core;
+import zxfoundation.dgp.portal;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.isolation;
 import zxfoundation.dgp.isolation.types;
@@ -21,61 +22,39 @@ import zxfoundation.sys.printk.core;
 import lib.error;
 import lib.stl;
 
-namespace zxfoundation::dgp::gate::dispatch::detail {
+namespace zxfoundation::dgp::svc::detail {
 
     using zxfoundation::dgp::cap::cap_token;
-    using zxfoundation::dgp::cap::cap_rights;
-    using zxfoundation::dgp::isolation::isolation_rights;
+    using ::zxfoundation::dgp::right_mask;
+    using ::zxfoundation::dgp::right_mask;
     using zxfoundation::dgp::sync_contract::lock_context;
     using zxfoundation::dgp::sync_contract::teardown_phase;
     using zxfoundation::base::lifecycle_state;
     using zxfoundation::dgp::gate::gate_desc;
     using zxfoundation::dgp::gate::gate_auth;
-    using zxfoundation::dgp::isolation::has_all_rights;
+    using zxfoundation::dgp::has_all_rights;
 
     struct entry {
         dispatch_handler handler{nullptr};
         entry_meta meta{};
     };
 
-    static entry s_table[DISPATCH_TABLE_SIZE]{};
-    static sync::qspinlock::qspinlock s_lock{};
+    static entry nucleus_call_table[DISPATCH_TABLE_SIZE]{};
+    static sync::qspinlock::qspinlock<sync::lock_rank::svc_table> s_lock{};
 
     [[nodiscard]] auto acquire_caller_domain() noexcept
         -> zxfoundation::dgp::domain::domain * {
         return zxfoundation::dgp::domain::current_domain_or_nucleus();
     }
 
-    [[nodiscard]] auto dgp_rights_for(gate_auth_level auth) noexcept
-        -> dgp::isolation::isolation_rights {
-        switch (auth) {
-            case gate_auth_level::none:
-                return dgp::isolation::isolation_rights::enter;
-            case gate_auth_level::capability:
-                return dgp::isolation::isolation_rights::enter;
-            case gate_auth_level::admin:
-                return dgp::isolation::isolation_rights::enter | dgp::isolation::isolation_rights::lifecycle;
-            case gate_auth_level::domain_map:
-                return dgp::isolation::isolation_rights::enter | dgp::isolation::isolation_rights::map;
-            case gate_auth_level::storage_key:
-                return dgp::isolation::isolation_rights::enter | dgp::isolation::isolation_rights::share;
-            case gate_auth_level::io:
-                return dgp::isolation::isolation_rights::enter | dgp::isolation::isolation_rights::io;
-            case gate_auth_level::signal:
-                return dgp::isolation::isolation_rights::enter | dgp::isolation::isolation_rights::signal;
-        }
-        return dgp::isolation::isolation_rights::enter;
-    }
-
-    /// @brief Full DGP gate validation — checks gate state, rights, and auth.
-    /// @param gate       Pointer to the gate_desc (must be non-null).
+    /// @brief Full DGP gate-object validation — gate state + chokepoint.
+    /// @param caller_domain_id  Calling domain slot id.
+    /// @param gate              Pointer to the gate_desc (must be non-null).
     /// @return true if authorized.
     [[nodiscard]] auto validate_gate_entry(
         u32 caller_domain_id,
-        zxfoundation::dgp::gate::gate_desc* gate,
-        dgp::isolation::isolation_rights requested
+        zxfoundation::dgp::gate::gate_desc* gate
     ) noexcept -> bool {
-        // Check gate is active
         if (gate->ko.state != lifecycle_state::active) return false;
 
         auto* caller_domain = zxfoundation::dgp::domain::domain_find(caller_domain_id);
@@ -86,11 +65,10 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
             *caller_domain, *target_domain,
             zxfoundation::dgp::operation_kind::gate_entry,
             zxfoundation::dgp::authorization_metadata
-                { .requested_rights = requested, .gate_id = gate->ko.id }
+                { .gate_id = gate->ko.id }
         );
         if (!result) return false;
 
-        ++target_domain->gate_count;
         return true;
     }
 
@@ -104,13 +82,22 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
         using zxfoundation::dgp::operation_kind;
         switch (op_kind) {
             // Cross-domain ops (a1 carries the target domain id for most):
-            case operation_kind::mem_share:
             case operation_kind::portal_create:
-            case operation_kind::portal_destroy:
-            case operation_kind::domain_destroy: {
+            case operation_kind::domain_destroy:
+            case operation_kind::domain_exec: {
                 const auto tid = static_cast<zxfoundation::dgp::domain::domain_id>(a1);
                 if (tid == 0) return zxfoundation::dgp::domain::domain_nucleus();
                 return zxfoundation::dgp::domain::domain_find(tid);
+            }
+
+            case operation_kind::portal_destroy: {
+                auto* portal = zxfoundation::dgp::portal::portal_find(
+                    static_cast<u32>(a1));
+                if (portal == nullptr) return nullptr;
+                if (portal->source_domain == 0U)
+                    return zxfoundation::dgp::domain::domain_nucleus();
+                return zxfoundation::dgp::domain::domain_find(
+                    portal->source_domain);
             }
             // signal_send and domain_query carry the target domain id in a0:
             case operation_kind::signal_send: {
@@ -158,7 +145,6 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
                 meta.target_va_end   = a0 + a1;
                 break;
             }
-            case operation_kind::mem_share:
             case operation_kind::portal_create: {
                 meta.target_va_start = a2;
                 meta.target_va_end   = a3;
@@ -174,14 +160,29 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
             case operation_kind::gate_entry:
                 meta.gate_id = static_cast<u32>(a0);
                 break;
-            case operation_kind::io_irq_bind:
-                meta.gate_id = static_cast<u32>(a1);
-                break;
 
             default:
                 break;
         }
         return meta;
+    }
+
+    /// @brief Token rights required from a capability-addressed op's token
+    ///        (B1b chokepoint mapping; ch. 03 §3.1 semantics).
+    [[nodiscard]] constexpr auto token_rights_for_op(
+        zxfoundation::dgp::operation_kind op_kind
+    ) noexcept -> ::zxfoundation::dgp::right_mask {
+        using zxfoundation::dgp::operation_kind;
+        using ::zxfoundation::dgp::right;
+        switch (op_kind) {
+            case operation_kind::mem_map:              return right::map;
+            case operation_kind::io_unbind:            return right::reset;
+            case operation_kind::io_submit:            return right::submit;
+            case operation_kind::io_dma_extent:        return right::bind;
+            case operation_kind::io_completion_dequeue: return right::observe;
+            case operation_kind::register_service:     return right::none;
+            default:                                   return right::admin;
+        }
     }
 
     /// @brief Validate DGP contract + capability before dispatch.
@@ -203,6 +204,7 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
             return false;
         }
 
+        zxfoundation::dgp::authorization_metadata meta{};
         if (ent.meta.op_kind != zxfoundation::dgp::operation_kind::none) {
             auto* target = target_domain_for_op(
                 ent.meta.op_kind, *caller, a0, a1);
@@ -211,10 +213,14 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
                                   packed_nr);
                 return false;
             }
-            auto meta = metadata_for_op(ent.meta.op_kind, a0, a1, a2, a3);
+            meta = metadata_for_op(ent.meta.op_kind, a0, a1, a2, a3);
+            if (ent.meta.capability_addressed) {
+                meta.token = cap_token{a0};
+                meta.token_rights = token_rights_for_op(ent.meta.op_kind);
+            }
             auto dgp_r = zxfoundation::dgp::authorize(
                 *caller, *target, ent.meta.op_kind, meta);
-            if (!dgp_r) {
+            if (!dgp_r || !dgp_r->consume()) {
                 sys::printk::perr("dispatch: call {} — DGP authorize denied (op_kind={})",
                                   packed_nr,
                                   static_cast<u32>(ent.meta.op_kind));
@@ -222,10 +228,9 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
             }
         }
 
-        if (ent.meta.auth != gate_auth_level::none) {
-            if (auto* gate = zxfoundation::dgp::gate::gate_find(packed_nr)) {
-                if (!validate_gate_entry(caller->ko.id, gate,
-                                         dgp_rights_for(ent.meta.auth))) {
+        if (meta.gate_id != 0U) {
+            if (auto* gate = zxfoundation::dgp::gate::gate_find(meta.gate_id)) {
+                if (!validate_gate_entry(caller->ko.id, gate)) {
                     sys::printk::perr("dispatch: call {} — DGP gate validation failed",
                                       packed_nr);
                     return false;
@@ -233,60 +238,17 @@ namespace zxfoundation::dgp::gate::dispatch::detail {
             }
         }
 
-        switch (ent.meta.auth) {
-            case gate_auth_level::none:
-            case gate_auth_level::storage_key:
-                break;
-
-            case gate_auth_level::capability: {
-                auto cap_r = dgp::cap::cap_validate_generic_for(
-                    cap_token{a0}, cap_rights::none, caller->ko.id);
-                if (!cap_r) {
-                    sys::printk::perr("dispatch: call {} — capability validation failed",
-                                      packed_nr);
-                    return false;
-                }
-                break;
-            }
-
-            case gate_auth_level::admin: {
-                auto cap_r = dgp::cap::cap_validate_generic_for(
-                    cap_token{a0}, cap_rights::admin, caller->ko.id);
-                if (!cap_r) {
-                    sys::printk::perr("dispatch: call {} — admin cap validation failed",
-                                      packed_nr);
-                    return false;
-                }
-                break;
-            }
-
-            case gate_auth_level::domain_map: {
-                auto cap_r = dgp::cap::cap_validate_generic_for(
-                    cap_token{a0}, cap_rights::map, caller->ko.id);
-                if (!cap_r) {
-                    sys::printk::perr("dispatch: call {} — domain_map cap validation failed",
-                                      packed_nr);
-                    return false;
-                }
-                break;
-            }
-
-            case gate_auth_level::io:
-            case gate_auth_level::signal:
-                break;
-        }
-
         return true;
     }
 
-} // namespace zxfoundation::dgp::gate::dispatch::detail
+} // namespace zxfoundation::dgp::svc::detail
 
-namespace zxfoundation::dgp::gate::dispatch {
+namespace zxfoundation::dgp::svc {
 
     using zxfoundation::dgp::domain::domain;
     using zxfoundation::dgp::cap::cap_token;
-    using zxfoundation::dgp::cap::cap_rights;
-    using zxfoundation::dgp::isolation::isolation_rights;
+    using ::zxfoundation::dgp::right_mask;
+    using ::zxfoundation::dgp::right_mask;
     using zxfoundation::dgp::sync_contract::lock_context;
     using zxfoundation::dgp::sync_contract::teardown_phase;
 
@@ -309,15 +271,15 @@ namespace zxfoundation::dgp::gate::dispatch {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        const sync::irq_lock_guard guard{detail::s_lock};
+        const sync::irq_lock_guard _{detail::s_lock};
 
-        if (detail::s_table[packed_nr].handler) {
+        if (detail::nucleus_call_table[packed_nr].handler) {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::internal_error));
         }
 
-        detail::s_table[packed_nr].handler = handler;
-        detail::s_table[packed_nr].meta = meta;
+        detail::nucleus_call_table[packed_nr].handler = handler;
+        detail::nucleus_call_table[packed_nr].meta = meta;
 
         return {};
     }
@@ -356,7 +318,7 @@ namespace zxfoundation::dgp::gate::dispatch {
             return ~0ULL;
         }
 
-        const auto &ent = detail::s_table[packed_nr];
+        const auto &ent = detail::nucleus_call_table[packed_nr];
         if (!ent.handler) [[unlikely]] {
             sys::printk::perr("dispatch: no handler for packed_nr {}", packed_nr);
             return ~0ULL;
@@ -373,7 +335,7 @@ namespace zxfoundation::dgp::gate::dispatch {
     /// @brief Return true if the given slot has a registered handler.
     [[nodiscard]] auto is_registered(u32 packed_nr) noexcept -> bool {
         if (packed_nr >= DISPATCH_TABLE_SIZE) return false;
-        return detail::s_table[packed_nr].handler != nullptr;
+        return detail::nucleus_call_table[packed_nr].handler != nullptr;
     }
 
-} // namespace zxfoundation::dgp::gate::dispatch_table
+} // namespace zxfoundation::dgp::svc

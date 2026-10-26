@@ -1,3 +1,4 @@
+/// @file zxfoundation/dgp/signal.zcomponent/interface.cxxm
 export module zxfoundation.dgp.signal;
 export import zxfoundation.dgp.signal.core;
 export import zxfoundation.dgp.signal.types;

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/ar.cxx
+/// @file arch/s390x/cpu/ar.zcomponent/ar.cxx
 /// @brief z/Architecture access register operations (SAR, EAR, SAC, ALB purge).
 
 module arch.s390x.cpu.ar;

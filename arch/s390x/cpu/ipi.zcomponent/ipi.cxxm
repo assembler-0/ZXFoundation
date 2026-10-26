@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/ipi.cxxm
+/// @file arch/s390x/cpu/ipi.zcomponent/ipi.cxxm
 /// @brief Leaf IPI send primitives for s390x.
 
 export module arch.s390x.cpu.ipi;

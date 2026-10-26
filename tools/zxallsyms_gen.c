@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// tools/zxallsyms_gen.c
+/// @file tools/zxallsyms_gen.c
 //
 // Host tool: reads `nm --defined-only --numeric-sort` output from stdin (or
 // a file argument) and emits a C source file containing the three zxallsyms
@@ -14,8 +14,7 @@
 //
 // Only symbols with type in {T, t, D, d, R, r, B, b, W, w} are included.
 // Symbols whose name starts with '$' or '.' are excluded (linker artifacts).
-// When two symbols share the same address, the one with the longer name wins
-// (avoids retaining bare section-start labels over real function names).
+// When two symbols share the same address, the one with the longer name wins.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,10 +32,6 @@ typedef struct {
 
 static sym_t  g_syms[MAX_SYMS];
 static uint32_t g_count = 0;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 static int is_wanted_type(char t) {
     // Include text, data, rodata, bss, and weak variants.
@@ -61,10 +56,6 @@ static int is_unwanted_name(const char *name) {
         return 1;
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
 
 static void parse_nm(FILE *in) {
     char line[512];
@@ -122,10 +113,6 @@ static void parse_nm(FILE *in) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Emission
-// ---------------------------------------------------------------------------
-
 static void emit(FILE *out) {
     fprintf(out,
         "// SPDX-License-Identifier: Apache-2.0\n"
@@ -180,10 +167,6 @@ static void emit(FILE *out) {
 
     free(offsets);
 }
-
-// ---------------------------------------------------------------------------
-// main
-// ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
     if (argc < 2 || argc > 3) {

@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/softirq.cxx
+/// @file zxfoundation/sched/softirq.zcomponent/core.cxx
 /// @brief SCHED_SOFTIRQ dispatcher and balancing orchestration.
 
 module zxfoundation.sched.softirq.core;

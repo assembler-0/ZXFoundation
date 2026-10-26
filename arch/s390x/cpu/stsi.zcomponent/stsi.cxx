@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file stsi.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file arch/s390x/cpu/stsi.zcomponent/stsi.cxx
 /// @brief STSI (STore System Information) API
 
 module arch.s390x.cpu.stsi;
@@ -40,4 +40,4 @@ namespace arch::s390x::cpu::stsi::detail {
         return cc;
     }
 
-} // namespace arch::s390x::cpu::stsi
+} // namespace arch::s390x::cpu::stsi::detail

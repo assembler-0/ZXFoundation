@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/rt.cxxm
+/// @file zxfoundation/sched/rt.zcomponent/core.cxxm
 /// @brief Fixed-priority real-time scheduler backend with DGP admission gates.
 
 export module zxfoundation.sched.rt.core;

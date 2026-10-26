@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sys/irq.zcomponent/irqdesc.cxxm
+/// @file zxfoundation/sys/irq.zcomponent/desc.cxx
 /// @brief Generic IRQ descriptor table
 
 module zxfoundation.sys.irq.desc;

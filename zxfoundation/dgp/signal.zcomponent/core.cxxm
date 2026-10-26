@@ -46,6 +46,11 @@ namespace zxfoundation::dgp::signal {
     ///          or every pending kind was blocked.
     auto signal_deliver_one(domain::domain& d) noexcept -> bool;
 
+    /// @brief Consume queued signals whose kind bits appear in ack_mask.
+    /// @param[in,out] d        The target domain::domain.
+    /// @param[in]     ack_mask Bitmask of signal_kind values acknowledged.
+    auto signal_ack(domain::domain& d, u32 ack_mask) noexcept -> void;
+
     /// @brief Deliver all pending signals to the domain::domain.
     /// @return  true if the domain::domain should be rescheduled (terminate default
     ///          was taken).

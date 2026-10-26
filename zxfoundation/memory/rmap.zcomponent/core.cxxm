@@ -20,10 +20,6 @@ namespace zxfoundation::memory::rmap {
         vm::vm_page_slot& slot
     ) noexcept -> std::expected<bool, lib::kernel_error>;
 
-    /// @brief Allocate the reverse-map heads for @p max_pfn frames.
-    [[nodiscard]] auto init(u64 max_pfn) noexcept
-        -> std::expected<void, lib::kernel_error>;
-
     /// @brief Insert a reverse-map link: "slot @p slot_index in @p rgn
     ///        maps @p phys".
     [[nodiscard]] auto insert(vm::vm_region& rgn, u32 slot_index, u64 phys) noexcept

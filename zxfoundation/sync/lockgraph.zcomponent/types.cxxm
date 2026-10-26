@@ -1,0 +1,37 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/lockgraph.zcomponent/types.cxxm
+/// @brief Lockgraph — the runtime lock-order validator
+
+export module zxfoundation.sync.lockgraph.types;
+import zxfoundation.base.types;
+import zxfoundation.sync.lockrank;
+
+export {
+
+namespace zxfoundation::sync::lockgraph {
+
+    /// @brief Per-CPU held-chain depth before overflow accounting.
+    constexpr u32 MAX_HELD_CHAIN = 8;
+
+    /// @brief Bounded same-rank instance-order edge table.
+    constexpr u32 MAX_INSTANCE_EDGES = 256;
+
+    /// @brief Context classes in which a lock class was ever held.
+    enum ctx_class : u8 {
+        ctx_none    = 0,
+        ctx_process = 1U << 0,  ///< Held with IRQs ENABLED (the unsafe class).
+        ctx_irqoff  = 1U << 1,  ///< Held with IRQs disabled, no IRQ nesting.
+        ctx_hardirq = 1U << 2,  ///< Held with IRQ nesting > 0.
+    };
+
+    /// @brief Per-lock dependency record
+    struct lockdep_map {
+        const char*      name{nullptr};   ///< Static class name.
+        lock_rank        rank{};          ///< Node taxonomy key.
+        u8               ctx_classes{0};  ///< Ever-acquired ctx_class bits.
+        u8               _pad[3]{};
+    };
+
+} // namespace zxfoundation::sync::lockgraph
+
+} // end export

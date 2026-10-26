@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/cpumask.cxxm
+/// @file arch/s390x/cpu/cpumask.zcomponent/cpumask.cxx
 /// @brief Canonical possible / online CPU registry for the s390x platform.
 
 module arch.s390x.cpu.cpumask;

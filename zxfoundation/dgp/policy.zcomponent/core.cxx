@@ -19,13 +19,17 @@ import zxfoundation.dgp.authorize;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
+import zxfoundation.sys.zinit.core;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::dgp::policy::detail {
 
     no_export scoms::scoms_table<policy_server, MAX_POLICY_SERVERS> g_table{};
-    alignas(4) no_export sync::qspinlock::qspinlock g_lock{};
+    alignas(4) no_export sync::qspinlock::qspinlock<sync::lock_rank::policy_table> g_lock{};
     no_export bool g_initialized{false};
 
     [[nodiscard]] no_export auto valid_kind(server_kind kind) noexcept -> bool {
@@ -36,11 +40,13 @@ namespace zxfoundation::dgp::policy::detail {
 
 namespace zxfoundation::dgp::policy {
 
-    auto init() noexcept -> void {
-        if (detail::g_initialized) return;
+    auto zi_policy_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
+        if (detail::g_initialized) return {};
         detail::g_table.init(scoms::kobject::kobject_type::policy_server);
         detail::g_initialized = true;
+        return {};
     }
+    __zinit__(core, p10, zi_policy_init, fatal)
 
     [[nodiscard]] auto register_server(
         dgp::domain::domain& owner, server_kind kind, u32 endpoint_id
@@ -54,10 +60,10 @@ namespace zxfoundation::dgp::policy {
         auto auth = dgp::authorize(
             owner, owner, dgp::operation_kind::policy_server_register,
             dgp::authorization_metadata{
-                .requested_rights =  dgp::isolation::isolation_rights::service});
+                .requested_rights =  ::zxfoundation::dgp::right::naming_service});
         if (!auth) return std::unexpected(auth.error());
 
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         for (u32 i = 0; i < MAX_POLICY_SERVERS; ++i) {
             auto* existing = detail::g_table.find_raw(i);
             if (existing && existing->kind == kind)
@@ -76,7 +82,7 @@ namespace zxfoundation::dgp::policy {
         auto mo_result = memory::objects::memory_object_create(
             scoms::kobject::kobject_type::policy_server, owner.ko.id,
             &owner.ko, 0, 0,
-             dgp::isolation::isolation_rights::service);
+             ::zxfoundation::dgp::right::naming_service);
         if (!mo_result) {
             discard_value detail::g_table.release(server.ko.id);
             return std::unexpected(mo_result.error());
@@ -104,11 +110,11 @@ namespace zxfoundation::dgp::policy {
     [[nodiscard]] auto unregister_server(
         dgp::domain::domain& owner, server_kind kind
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         auto auth = dgp::authorize(
             owner, owner, dgp::operation_kind::policy_server_unregister,
             dgp::authorization_metadata{
-                .requested_rights =  dgp::isolation::isolation_rights::service});
+                .requested_rights =  ::zxfoundation::dgp::right::naming_service});
         if (!auth) return std::unexpected(auth.error());
         for (u32 i = 0; i < MAX_POLICY_SERVERS; ++i) {
             auto* server = detail::g_table.find_raw(i);
@@ -131,7 +137,7 @@ namespace zxfoundation::dgp::policy {
     }
 
     auto destroy_for_domain(u32 domain_id) noexcept -> void {
-        const sync::irq_lock_guard guard{detail::g_lock};
+        const sync::irq_lock_guard _{detail::g_lock};
         detail::g_table.destroy_if(
             [domain_id](const policy_server& server) noexcept -> bool {
                 auto* mo = memory::objects::memory_object_resolve_id(server.authority.id);

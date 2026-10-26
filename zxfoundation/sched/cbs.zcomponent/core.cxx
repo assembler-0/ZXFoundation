@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/cbs.cxx
+/// @file zxfoundation/sched/cbs.zcomponent/core.cxx
 /// @brief Per-strand CBS (Constant Bandwidth Server) replenishment timers
 ///        for the EDF deadline scheduling class
 

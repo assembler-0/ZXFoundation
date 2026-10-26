@@ -1,2 +1,3 @@
+/// @file zxfoundation/memory/oom.zcomponent/interface.cxxm
 export module zxfoundation.memory.oom;
 export import zxfoundation.memory.oom.core;

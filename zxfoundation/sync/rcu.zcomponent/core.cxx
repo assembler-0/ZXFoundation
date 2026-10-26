@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/rcu/rcu.cxxm
+/// @file zxfoundation/sync/rcu.zcomponent/core.cxx
 /// @brief Read-Copy-Update — non-preemptive SMP implementation.
 
 module zxfoundation.sync.rcu.core;
@@ -13,8 +13,12 @@ import arch.s390x.cpu.irq;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.sync;
+import zxfoundation.sys.zinit.core;
 import lib.cpumask;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 namespace zxfoundation::sync::rcu::detail {
 
@@ -25,7 +29,7 @@ namespace zxfoundation::sync::rcu::detail {
     no_export atomic_u64 g_gp_seq{0};    ///< GP sequence counter. Even=idle, odd=active.
     no_export atomic_u32 g_gp_lock{0};   ///< BSP-side GP state lock.
     no_export ::lib::cpumask g_qs_mask{};
-    no_export bool       g_initialized{false};
+    no_export std::atomic<bool> g_initialized{false};
 
     no_export auto gp_lock_acquire() noexcept -> void {
         u32 expected = 0;
@@ -75,16 +79,18 @@ namespace zxfoundation::sync::rcu::detail {
 
 namespace zxfoundation::sync::rcu {
 
-    auto init() noexcept -> void {
+    auto zi_rcu_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         using namespace detail;
-        if (g_initialized) return;
+        if (g_initialized.load(memory_order::acquire)) return {};
         g_gp_seq.store(0U, memory_order::relaxed);
         g_qs_mask.reset();
-        g_initialized = true;
+        g_initialized.store(true, memory_order::release);
+        return {};
     }
+    __zinit__(core, p50, zi_rcu_init, fatal)
 
     /// @brief Enter an RCU read-side critical section.
-    auto read_unlock() noexcept -> void {
+    auto read_lock() noexcept -> void {
         sched::context::preempt_disable();
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         ++pcp.in_rcu_read_side;
@@ -92,7 +98,7 @@ namespace zxfoundation::sync::rcu {
     }
 
     /// @brief Exit an RCU read-side critical section.
-    auto read_lock() noexcept -> void {
+    auto read_unlock() noexcept -> void {
         using namespace detail;
         arch::s390x::cpu::sync::barrier();
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
@@ -129,6 +135,7 @@ namespace zxfoundation::sync::rcu {
     /// @brief Block until all pre-existing RCU readers complete.
     auto synchronize_rcu() noexcept -> void {
         using namespace detail;
+        auto& current_pcp = arch::s390x::cpu::percpu::this_cpu();
         gp_lock_acquire();
         gp_seq_t seq = g_gp_seq.load(memory_order::acquire);
         if (!gp_in_progress(seq)) {
@@ -136,11 +143,34 @@ namespace zxfoundation::sync::rcu {
             g_gp_seq.store(seq + 1U, memory_order::release);
             seq = seq + 1U;
         }
+        if (current_pcp.in_rcu_read_side == 0U)
+            record_qs(current_pcp.cpu_id);
         gp_lock_release();
 
         const gp_seq_t target = seq + 1U;
-        while (!gp_seq_after(g_gp_seq.load(memory_order::acquire), target - 1U))
+        for (;;) {
+            if (gp_seq_after(g_gp_seq.load(memory_order::acquire), target - 1U))
+                return;
+            if (arch::s390x::cpu::percpu::this_cpu().cpu_id == 0U) {
+                gp_lock_acquire();
+                const gp_seq_t active = g_gp_seq.load(memory_order::relaxed);
+                if (gp_in_progress(active) && all_qs_reported()) {
+                    g_gp_seq.store(active + 1U, memory_order::release);
+                    g_qs_mask.reset();
+                }
+                gp_lock_release();
+            }
             arch::s390x::cpu::sync::cpu_relax();
+        }
+    }
+
+    auto quiescent_state() noexcept -> void {
+        using namespace detail;
+        if (!g_initialized.load(memory_order::acquire)) return;
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        if (pcp.in_rcu_read_side == 0U
+            && gp_in_progress(g_gp_seq.load(memory_order::acquire)))
+            record_qs(pcp.cpu_id);
     }
 
     /// @brief Wait until all enqueued call_rcu callbacks have fired.
@@ -149,7 +179,8 @@ namespace zxfoundation::sync::rcu {
             [](u16 cpu) noexcept -> void {
                 auto* lc = arch::s390x::cpu::lowcore::get_for_cpu(cpu);
                 if (!lc) return;
-                while (arch::s390x::cpu::percpu::at(cpu).rcu_pending_count > 0U)
+                while (__atomic_load_n(&arch::s390x::cpu::percpu::at(cpu).rcu_pending_count,
+                        static_cast<int>(std::memory_order::acquire)) > 0U)
                     arch::s390x::cpu::sync::cpu_relax();
             });
     }
@@ -195,4 +226,4 @@ namespace zxfoundation::sync::rcu {
             drain_callbacks(pcp, done_gp);
     }
 
-} // namespace zxfoundation::rcu
+} // namespace zxfoundation::sync::rcu

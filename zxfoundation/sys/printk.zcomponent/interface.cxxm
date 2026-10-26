@@ -1,4 +1,5 @@
+/// @file zxfoundation/sys/printk.zcomponent/interface.cxxm
 export module zxfoundation.sys.printk;
-import zxfoundation.sys.printk.core;
-import zxfoundation.sys.printk.types;
-import zxfoundation.sys.printk.format;
+export import zxfoundation.sys.printk.core;
+export import zxfoundation.sys.printk.types;
+export import zxfoundation.sys.printk.format;

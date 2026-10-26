@@ -21,6 +21,7 @@ import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.authorize;
 import zxfoundation.dgp.sync_contract;
 import zxfoundation.memory.vm;
+import zxfoundation.memory.vm.fault;
 import zxfoundation.memory.vm.types;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.hhdm;
@@ -30,6 +31,7 @@ import zxfoundation.base.types;
 import zxfoundation.base.config;
 import zxfoundation.base.typestate;
 import zxfoundation.smp.csd;
+import zxfoundation.sys.zinit.core;
 import arch.s390x.cpu.ar;
 import arch.s390x.cpu.aste;
 import arch.s390x.cpu.cpumask;
@@ -38,6 +40,9 @@ import arch.s390x.cpu.sync;
 import arch.s390x.mmu;
 import lib.error;
 import lib.stl;
+
+#define __zxmacro_want_zinit
+#include macro_extensions
 
 using zxfoundation::dgp::portal::portal_desc;
 using zxfoundation::dgp::portal::portal_prot;
@@ -50,7 +55,7 @@ namespace zxfoundation::dgp::portal::detail {
 
     /// @brief SCOMS-managed portal table (replaces ad-hoc array + lock + count).
     no_export scoms_table<portal_desc, MAX_PORTALS> g_portal_table{};
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock g_portal_lock{};
+    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::portal_ar> g_portal_lock{};
     no_export std::atomic_flag g_alb_purge_lock{};
     no_export ::lib::cpumask g_alb_purge_mask{};
     no_export std::array<smp::csd::call_single_data, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS>
@@ -150,7 +155,7 @@ namespace zxfoundation::dgp::portal::detail {
 
     [[nodiscard]] auto allocate_ar(zxfoundation::dgp::domain::domain& source) noexcept
         -> std::expected<u8, lib::kernel_error> {
-        const zxfoundation::sync::irq_lock_guard guard{g_portal_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_portal_lock};
         for (u8 ar = 1U; ar < arch::s390x::cpu::ar::AR_COUNT; ++ar) {
             const u16 bit = static_cast<u16>(1U << ar);
             if ((source.portal_ar_mask & bit) == 0U) {
@@ -163,7 +168,7 @@ namespace zxfoundation::dgp::portal::detail {
     }
 
     auto release_ar(zxfoundation::dgp::domain::domain& source, u8 ar) noexcept -> void {
-        const zxfoundation::sync::irq_lock_guard guard{g_portal_lock};
+        const zxfoundation::sync::irq_lock_guard _{g_portal_lock};
         if (ar < arch::s390x::cpu::ar::AR_COUNT)
             source.portal_ar_mask &= static_cast<u16>(~(1U << ar));
     }
@@ -287,7 +292,7 @@ namespace zxfoundation::dgp::portal {
             *src, *tgt,
             zxfoundation::dgp::operation_kind::portal_create,
             zxfoundation::dgp::authorization_metadata{
-                .requested_rights = zxfoundation::dgp::isolation::isolation_rights::share | zxfoundation::dgp::isolation::isolation_rights::map,
+                .requested_rights = ::zxfoundation::dgp::right::share | ::zxfoundation::dgp::right::map,
                 .target_va_start = va_start,
                 .target_va_end = va_end,
             }
@@ -349,8 +354,13 @@ namespace zxfoundation::dgp::portal {
         desc.prot          = prot;
         desc.ar_num        = ar_num;
 
-        auto* source_region = backing ? backing
-            : zxfoundation::memory::vm::vm_find(tgt->vm_space, va_start);
+        zxfoundation::memory::vm::vm_region_ref source_region_ref{};
+        auto* source_region = backing;
+        if (!source_region) {
+            source_region_ref = zxfoundation::memory::vm::vm_find_ref(
+                tgt->vm_space, va_start);
+            source_region = source_region_ref.raw();
+        }
         if (!source_region ||
             (!backing && source_region->va_start != va_start) ||
             source_region->size() != va_end - va_start ||
@@ -358,6 +368,7 @@ namespace zxfoundation::dgp::portal {
             return std::unexpected(lib::kernel_error::from_memory(
                 lib::memory_error::capability_invalid));
         }
+        desc.backing_va_start = source_region->va_start;
         auto root_result = detail::portal_root_create(desc, *source_region, prot);
         if (!root_result) return std::unexpected(root_result.error());
 
@@ -394,6 +405,67 @@ namespace zxfoundation::dgp::portal {
                    static_cast<u32>(ar_num), alet, va_start, va_end);
 
         return id;
+    }
+
+    [[nodiscard]] auto resolve_fault(
+        u32 accessor_domain, u8 ar_num, u32 alet,
+        u64 fault_va, bool is_write
+    ) noexcept -> std::pair<fault_outcome, u32> {
+        namespace mmu = arch::s390x::mmu;
+        namespace pmm = zxfoundation::memory::pmm;
+        namespace vm  = zxfoundation::memory::vm;
+
+        portal_desc* live = nullptr;
+        for (u32 id = 0U; id < MAX_PORTALS; ++id) {
+            auto* cand = detail::g_portal_table.find_raw(id);
+            if (!cand || cand->ko.state != zxfoundation::base::lifecycle_state::active)
+                continue;
+            if (cand->source_domain == accessor_domain && cand->ar_num == ar_num) {
+                live = cand;
+                break;
+            }
+        }
+
+        if (live == nullptr) return {fault_outcome::stale, 0U};
+        if (live->alet != alet) return {fault_outcome::stale, live->ko.id};
+        if (fault_va < live->va_start || fault_va >= live->va_end)
+            return {fault_outcome::stale, live->ko.id};
+        if (is_write && (live->prot & portal_prot::write) == portal_prot::none)
+            return {fault_outcome::stale, live->ko.id};
+
+        const u64 backing_va = live->backing_va_start
+            + (fault_va - live->va_start);
+        auto* target = zxfoundation::dgp::domain::domain_find(live->target_domain);
+        if (target != nullptr) {
+            const auto action = vm::handle_page_fault(
+                target->vm_space, target->root_phys, target->storage_key,
+                backing_va, is_write, false);
+            if (action == vm::fault_action::resolved ||
+                action == vm::fault_action::stack_grew) {
+                auto region_ref = vm::vm_find_ref(target->vm_space, backing_va);
+                auto* region = region_ref.raw();
+                if (region != nullptr) {
+                    if (auto* slot = region->find_page(backing_va); slot && slot->phys != 0U) {
+                        auto pin = pmm::frame_ref(slot->phys);
+                        if (pin) {
+                            mmu::dat_table<mmu::dat_level::region_1> root{
+                                live->portal_root_phys};
+                            const mmu::page_prot prot{
+                                mmu::PTE_PROTECT | mmu::PTE_NOEXEC};
+                            if (mmu::map_page(root, fault_va, slot->phys, prot)) {
+                                sys::printk::pverbose(
+                                    "portal: fault resolved id={} va={:#x}",
+                                    live->ko.id, fault_va);
+                                return {fault_outcome::resolved, live->ko.id};
+                            }
+                            discard_value pmm::frame_release_pin(slot->phys);
+                        }
+                    }
+                }
+            }
+        }
+
+        return {fault_outcome::revoked, live->ko.id};
     }
 
     [[nodiscard]] auto portal_find(u32 id) noexcept -> portal_desc* {
@@ -499,14 +571,13 @@ namespace zxfoundation::dgp::portal {
     }
 
     /// @brief Initialize the portal subsystem.
-    auto init() noexcept -> void {
+    auto zi_portal_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         detail::g_portal_table.init(scoms::kobject::kobject_type::portal);
-
         register_portal_cap_lookup();
-
-        sys::printk::pinfo("portal: subsystem initialized (max {} portals)",
-                   MAX_PORTALS);
+        return {};
     }
+    __zinit_dep__(dgp, p60, zi_portal_init, fatal, "zi_gate_register_handlers")
+
 
     /// @brief Return the number of currently active portals in the system.
     [[nodiscard]] auto portal_count() noexcept -> u32 {
@@ -514,4 +585,3 @@ namespace zxfoundation::dgp::portal {
     }
 
 } // namespace zxfoundation::dgp::portal
-

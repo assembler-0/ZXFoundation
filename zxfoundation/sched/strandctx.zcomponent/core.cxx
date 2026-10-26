@@ -6,9 +6,11 @@ module zxfoundation.sched.strandctx.core;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.base.types;
 import zxfoundation.dgp.isolation;
+import zxfoundation.sys.syschk.barebones;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.sys.syschk.core;
 import arch.s390x.sched.types;
+import arch.s390x.cpu.pcss.core;
 import arch.s390x.cpu.lowcore;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
@@ -17,6 +19,9 @@ import arch.s390x.cpu.aste;
 import arch.s390x.cpu.psw;
 import lib.cstring;
 import lib.stl;
+
+#define __zxmacro_want_assert
+#include macro_extensions
 
 from_global(nomangle) {
 
@@ -77,7 +82,8 @@ namespace zxfoundation::sched::strandctx::detail {
     ///                       its @c storage_key is blended into PSW bits 52..55.
     auto normalize_user_psw(user_regs& uregs, const domain* owner) noexcept -> void {
         uregs.psw_mask &= ~arch::s390x::cpu::psw::PSW_ASC_HOME;
-        uregs.psw_mask |= arch::s390x::cpu::psw::PSW_ASC_ACCREG;
+        uregs.psw_mask &= ~arch::s390x::cpu::psw::PSW_ASC_ACCREG;
+        uregs.psw_mask |= arch::s390x::cpu::psw::PSW_ASC_PRIMARY;
         if (owner) {
             const u64 key_field =
                 (static_cast<u64>(owner->storage_key) & 0xFULL)
@@ -219,6 +225,23 @@ namespace zxfoundation::sched::strandctx {
         s->ksp = ksp;
     }
 
+    /// @brief Seed a domain primary's linkage stack (§5.12).
+    /// @param[in,out] d  Domain whose primary strand gets the stack.
+    /// @return Success, or the stack allocation error.
+    /// @note CR15=0 means an architecturally empty linkage stack; any
+    ///       PROGRAM CALL from such a strand faults with no recoverable
+    ///       section.  Bootstrap-launched primaries must be seeded before
+    ///       first entry, exactly as dom_exec seeds its children.
+    [[nodiscard]] auto seed_primary_linkage_stack(
+        domain* d) noexcept -> std::expected<void, lib::kernel_error> {
+        if (!d || !d->primary_strand.body) {
+            return std::unexpected(lib::kernel_error::from_generic(
+                lib::generic_error::invalid_arg));
+        }
+        return arch::s390x::cpu::pcss::stack_init(
+            d->primary_strand.body->linkage_stack);
+    }
+
     /// @brief Convenience wrapper — kernel-thread first-switch for the
     ///        primary strand of a domain.
     auto setup_primary_strand_context(
@@ -242,24 +265,46 @@ namespace zxfoundation::sched::strandctx {
         auto* d = static_cast<domain*>(s->owner);
         auto* lc = arch::s390x::cpu::lowcore::get_current();
 
-        if (d && (d->flags & zxfoundation::dgp::domain::domain_flags::idle) == zxfoundation::dgp::domain::domain_flags::none) {
-            auto admission = zxfoundation::dgp::isolation::validate_scheduler_admission(
-                d->ko.state, d->root_phys, d->asce.val);
-            if (!admission) {
-                arch::s390x::cpu::psw::disabled_wait();
-            }
+        if (d) {
+            chk_on(!zxfoundation::dgp::isolation::validate_scheduler_admission(
+                d->ko.state, d->root_phys, d->asce.val));
         }
 
         lc->set<"user_asce"> (d ? d->asce.val : 0);
         const u64 user_asce = d ? d->asce.val : 0;
         arch::s390x::cpu::ctlreg::crwrite<1, 1>(user_asce);
+        arch::s390x::cpu::ctlreg::crwrite<15, 15>(
+            arch::s390x::cpu::pcss::stack_load(s->body->linkage_stack));
+        if (d) {
+            const u64 rec = d->pc_tables.aste_phys & 0x7FFF'FFC0ULL;
+            const u64 pasteo = (rec != 0ULL)
+                ? rec
+                : (arch::s390x::cpu::aste::aste_origin(d->pc_asn) & 0x7FFF'FFC0ULL);
+            arch::s390x::cpu::ctlreg::crwrite<5, 5>(pasteo);
+        }
+        {
+            u64 cr14 = 0;
+            arch::s390x::cpu::ctlreg::crread<14, 14>(cr14);
+            arch::s390x::cpu::ctlreg::crwrite<14, 14>(cr14 | 0x0008'0000ULL);
+        }
+        {
+            static bool probed = false;
+            if (!probed) {
+                probed = true;
+                u64 cr5 = 0, cr13 = 0, cr14 = 0;
+                arch::s390x::cpu::ctlreg::crread<5, 5>(cr5);
+                arch::s390x::cpu::ctlreg::crread<13, 13>(cr13);
+                arch::s390x::cpu::ctlreg::crread<14, 14>(cr14);
+            }
+        }
         if (d) arch::s390x::cpu::aste::art_context_load(d->art);
 
         if (d) {
             s->body->uregs.psw_mask |=
                 (static_cast<u64>(d->storage_key) << arch::s390x::cpu::psw::PSW_KEY_SHIFT);
             s->body->uregs.psw_mask &= ~arch::s390x::cpu::psw::PSW_ASC_HOME;
-            s->body->uregs.psw_mask |= arch::s390x::cpu::psw::PSW_ASC_ACCREG;
+            s->body->uregs.psw_mask &= ~arch::s390x::cpu::psw::PSW_ASC_ACCREG;
+            s->body->uregs.psw_mask |= arch::s390x::cpu::psw::PSW_ASC_PRIMARY;
         }
 
         static constexpr u64 RET_FRAME_SIZE = 0x90;
@@ -277,9 +322,8 @@ namespace zxfoundation::sched::strandctx {
         lc->set<"kernel_stack">   (s->kstack_top);
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         pcp.current_strand = reinterpret_cast<u64>(s);
-        pcp.attached_asce = user_asce;
-        pcp.attached_domain_id = d ? d->ko.id : 0;
-        pcp.attached_dgp_state = d ? static_cast<u8>(d->ko.state) : static_cast<u8>(0);
+        pcp.attached.publish(user_asce, reinterpret_cast<u64>(d),
+            d ? d->ko.id : 0U, d ? static_cast<u8>(d->ko.state) : 0U);
 
         __domain_enter_user_asm(frame_base, &s->body->uregs);
     }

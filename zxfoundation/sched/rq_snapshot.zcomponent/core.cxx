@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/rq_snapshot.cxx
+/// @file zxfoundation/sched/rq_snapshot.zcomponent/core.cxx
 /// @brief Remote run-queue snapshot taken via the CSD function-call IPI.
 
 module zxfoundation.sched.rq_snapshot.core;
@@ -54,4 +54,4 @@ namespace zxfoundation::sched::rq_snapshot {
         return {};
     }
 
-} // namespace zxfoundation::sched::rq_snap
+} // namespace zxfoundation::sched::rq_snapshot

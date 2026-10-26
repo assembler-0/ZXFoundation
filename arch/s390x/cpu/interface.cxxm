@@ -1,3 +1,4 @@
+/// @file arch/s390x/cpu/interface.cxxm
 export module arch.s390x.cpu;
 export import arch.s390x.cpu.ar;
 export import arch.s390x.cpu.aste;
@@ -10,10 +11,10 @@ export import arch.s390x.cpu.ctlreg;
 export import arch.s390x.cpu.diag;
 export import arch.s390x.cpu.ecag;
 export import arch.s390x.cpu.features;
-export import arch.s390x.cpu.hotplug;
 export import arch.s390x.cpu.ipi;
 export import arch.s390x.cpu.irq;
 export import arch.s390x.cpu.lowcore;
+export import arch.s390x.cpu.smp.core;
 export import arch.s390x.cpu.nnpa;
 export import arch.s390x.cpu.percpu;
 export import arch.s390x.cpu.processor;
@@ -21,7 +22,6 @@ export import arch.s390x.cpu.psw;
 export import arch.s390x.cpu.ptf;
 export import arch.s390x.cpu.sclp;
 export import arch.s390x.cpu.sigp;
-export import arch.s390x.cpu.smp;
 export import arch.s390x.cpu.stsi;
 export import arch.s390x.cpu.sthyi;
 export import arch.s390x.cpu.sync;

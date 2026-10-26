@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/io/ccw_io.cxxm
+/// @file arch/s390x/io/ccw.zcomponent/io.cxx
 /// @brief CCW I/O engine — synchronous I/O, SENSE ID, and device probing.
 
 module arch.s390x.io.ccw.core;

@@ -1,0 +1,54 @@
+/// SPDX-License-Identifier: Apache-2.0
+/// @file zxfoundation/sync/rwsem.zcomponent/core.cxxm
+/// @brief Writer-preferring sleepable reader/writer semaphore.
+
+export module zxfoundation.sync.rwsem.core;
+import zxfoundation.base.types;
+import zxfoundation.sync.turnstile;
+import lib.list;
+import lib.stl;
+
+export {
+
+namespace zxfoundation::sync::rwsem {
+
+    /// @brief Writer-preferring sleepable reader/writer semaphore.
+    /// @note Acquisition may schedule and is invalid in interrupt context.
+    class rw_semaphore {
+        turnstile::turnstile m_turnstile{};
+        u32 m_readers{0};
+        u32 m_waiting_writers{0};
+        bool m_writer{false};
+
+    public:
+        constexpr rw_semaphore() noexcept = default;
+        rw_semaphore(const rw_semaphore&) = delete;
+        auto operator=(const rw_semaphore&) = delete;
+        rw_semaphore(rw_semaphore&&) = delete;
+        auto operator=(rw_semaphore&&) = delete;
+
+        /// @brief Acquire a shared read permit, sleeping when a writer is active or queued.
+        auto lock_shared() noexcept -> void;
+
+        /// @brief Acquire exclusive ownership, sleeping while readers or another writer exist.
+        auto lock() noexcept -> void;
+
+        /// @brief Attempt a shared acquisition without sleeping.
+        [[nodiscard]] auto try_lock_shared() noexcept -> bool;
+
+        /// @brief Attempt an exclusive acquisition without sleeping.
+        [[nodiscard]] auto try_lock() noexcept -> bool;
+
+        /// @brief Release one shared read permit.
+        auto unlock_shared() noexcept -> void;
+
+        /// @brief Release exclusive ownership.
+        auto unlock() noexcept -> void;
+
+        /// @brief Return a racy diagnostic snapshot of writer ownership.
+        [[nodiscard]] auto is_write_locked() const noexcept -> bool;
+    };
+
+}
+
+}

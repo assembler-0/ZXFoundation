@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/topology.cxx
+/// @file zxfoundation/sched/topology.zcomponent/core.cxx
 /// @brief Scheduler topology records derived from per-CPU and loader evidence.
 
 module zxfoundation.sched.topology.core;

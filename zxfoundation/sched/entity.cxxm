@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/entity_types.cxxm
+/// @file zxfoundation/sched/entity.cxxm
 /// @brief Schedulable entity carrier
 
 export module zxfoundation.sched.entity;

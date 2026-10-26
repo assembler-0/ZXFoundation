@@ -1,10 +1,13 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sync/waitqueue.cxxm
+/// @file zxfoundation/sync/waitqueue.zcomponent/core.cxxm
 /// @brief Wait queue operations — prepare, finish, and wake primitives.
 
 export module zxfoundation.sync.waitqueue.core;
 import zxfoundation.sync.waitqueue.types;
 import zxfoundation.base.types;
+import zxfoundation.sync.lockable;
+import lib.stl;
+import lib.list;
 
 export {
 
@@ -20,6 +23,28 @@ namespace zxfoundation::sync::waitqueue {
     auto prepare_to_wait(wait_head& wq,
                          wait_entry& entry,
                          wait_flags flags) noexcept -> void;
+
+    /// @brief Check a condition and enqueue without a lost-wakeup window.
+    /// @return true when the condition is already satisfied.
+    template<typename Predicate>
+    auto prepare_to_wait_event(wait_head& wq, wait_entry& entry,
+                               wait_flags flags, Predicate&& condition) noexcept -> bool {
+        const auto saved_flags = wq.q.lock_irqsave();
+        if (static_cast<bool>(condition())) {
+            if (entry.node.state.load(std::memory_order::acquire) == turnstile::waiter_state::queued)
+                discard_value wq.q.cancel_locked(entry.node);
+            wq.q.unlock_irqrestore(saved_flags);
+            return true;
+        }
+        entry.flags = flags;
+        entry.result.store(wait_result::woken, std::memory_order::relaxed);
+        if (entry.node.state.load(std::memory_order::acquire) != turnstile::waiter_state::queued) {
+            entry.node.priority = 0;
+            discard_value wq.q.enqueue_locked(entry.node);
+        }
+        wq.q.unlock_irqrestore(saved_flags);
+        return false;
+    }
 
     /// @brief Remove a wait entry from the queue if still active.
     /// @param wq    The wait queue the entry was added to.
@@ -45,6 +70,6 @@ namespace zxfoundation::sync::waitqueue {
     /// @return Number of entries currently linked.
     [[nodiscard]] auto count(const wait_head& wq) noexcept -> u32;
 
-} // namespace zxfoundation::sync
+} // namespace zxfoundation::sync::waitqueue
 
 } // end export

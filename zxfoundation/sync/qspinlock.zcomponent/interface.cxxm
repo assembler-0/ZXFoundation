@@ -1,3 +1,4 @@
+/// @file zxfoundation/sync/qspinlock.zcomponent/interface.cxxm
 export module zxfoundation.sync.qspinlock;
 export import zxfoundation.sync.qspinlock.core;
 export import zxfoundation.sync.qspinlock.mcs;

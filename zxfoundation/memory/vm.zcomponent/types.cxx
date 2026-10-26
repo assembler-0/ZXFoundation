@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/memory/vm.zcomponent/vm_types.cxx
+/// @file zxfoundation/memory/vm.zcomponent/types.cxx
 /// @brief Virtual Memory Engine — type definitions implementation
 
 module zxfoundation.memory.vm.types;

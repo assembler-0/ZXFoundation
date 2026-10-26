@@ -1,5 +1,5 @@
-/// SPDX-License-Identifier: Apache 2.0
-/// @file util.cxxm
+/// SPDX-License-Identifier: Apache-2.0
+/// @file lib/container_of.cxxm
 /// @brief C++ utility
 
 export module lib.container_of;

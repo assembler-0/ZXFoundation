@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/io/css_types.cxxm
+/// @file arch/s390x/io/types.cxxm
 /// @brief z/Architecture Channel Subsystem hardware data structures (PoP Chapter 14).
 
 export module arch.s390x.io.types;
@@ -502,6 +502,6 @@ namespace arch::s390x::io {
         lib::rw<"interrogate_tcw_addr", lib::bytes<60, 63>, u32>
     >;
 
-} // namespace arch::s390x::css
+} // namespace arch::s390x::io
 
 } // end export

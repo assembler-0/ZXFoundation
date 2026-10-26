@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file teid_types.cxxm
+/// @file arch/s390x/cpu/teid.cxxm
 /// @brief Translation-Exception Identification (TEID) layout
 
 export module arch.s390x.cpu.teid;

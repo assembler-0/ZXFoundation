@@ -1,4 +1,4 @@
-/// SPDX-License-Identifier: Apache 2.0
+/// SPDX-License-Identifier: Apache-2.0
 /// @file lib/cpumask.cxxm
 /// @brief Fixed-capacity CPU set primitive built on lib::static_bitmap.
 

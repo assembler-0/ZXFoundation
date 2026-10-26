@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file zxfoundation/sched/balance.cxx
+/// @file zxfoundation/sched/balance.zcomponent/core.cxx
 /// @brief Topology-aware DGP scheduler balancing policy helpers.
 
 module zxfoundation.sched.balance.core;
@@ -31,7 +31,7 @@ namespace zxfoundation::sched::balance::detail {
 
     /// @brief Score-weighting constants — 1024 = 1.0 scaled fixed-point.
     /// @note Mirrors Linux's @c source_load / @c target_load weights;
-    constexpr u32 BALANCE_MIN_SCORE    = 32U;   ///< below this, no migration
+    constexpr u32 BALANCE_MIN_SCORE    = 8U;    ///< below this, no migration
     constexpr u32 LOAD_SCALE_FACTOR    = 1024U;
     [[maybe_unused]] constexpr u64 LOAD_AVG_DIVISOR     = 1024U;  ///< PELT @c load_avg ceiling
     [[maybe_unused]] constexpr u32 CAPACITY_REFLAT       = 1024U;  ///< Max @c cpu_capacity_curr
@@ -61,9 +61,9 @@ namespace zxfoundation::sched::balance {
 
         policy.preferred_node = owner->numa_node;
         policy.allow_remote_node = true;
-        policy.allow_smt_sibling = !zxfoundation::dgp::isolation::has_all_rights(
+        policy.allow_smt_sibling = !zxfoundation::dgp::has_all_rights(
             owner->granted_rights,
-            zxfoundation::dgp::isolation::isolation_rights::sched);
+            ::zxfoundation::dgp::right::sched);
         policy.isolation_sensitive = !policy.allow_smt_sibling;
         return policy;
     }
@@ -121,9 +121,9 @@ namespace zxfoundation::sched::balance {
         }
 
         const u32 capacity = (source_capacity == 0U) ? 100U : source_capacity;
-        const u32 distance_penalty = static_cast<u32>(relation) * 16U;
+        const u32 distance_penalty = static_cast<u32>(relation) * 8U;
         const u64 load_score =
-            static_cast<u64>(source_load) *
+            static_cast<u64>(source_load) * 8U *
             (static_cast<u64>(capacity) + detail::LOAD_SCALE_FACTOR) /
             detail::LOAD_SCALE_FACTOR;
         if (load_score <= distance_penalty) {
@@ -239,9 +239,9 @@ namespace zxfoundation::sched::balance {
             }
 
             if (placement_result && stolen_domain) {
-                const auto wants_isolation = !zxfoundation::dgp::isolation::has_all_rights(
+                const auto wants_isolation = !zxfoundation::dgp::has_all_rights(
                     stolen_domain->granted_rights,
-                    zxfoundation::dgp::isolation::isolation_rights::sched);
+                    ::zxfoundation::dgp::right::sched);
                 if (wants_isolation) {
                     const u32 src_dom   = stolen_domain->ko.id;
                     const u32 src_attach = best.snap.attached_domain_id;
@@ -252,7 +252,7 @@ namespace zxfoundation::sched::balance {
                     }
                     if (const auto* tgt_pcp =
                             arch::s390x::cpu::percpu::cpu_percpu(local_rq.cpu_id)) {
-                        const u32 tgt_attach = tgt_pcp->attached_domain_id;
+                        const u32 tgt_attach = tgt_pcp->attached.domain_id;
                         if (tgt_attach != 0U && tgt_attach != src_dom) {
                             placement_result = std::unexpected(
                                 lib::kernel_error::from_generic(

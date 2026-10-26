@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file arch/s390x/cpu/uaccess.cxxm
+/// @file arch/s390x/cpu/uaccess.zcomponent/uaccess.cxx
 /// @brief z/Architecture user-space access
 
 module arch.s390x.cpu.uaccess;

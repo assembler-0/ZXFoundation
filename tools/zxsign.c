@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// tools/zxsign.c
+/// @file tools/zxsign.c
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,9 +48,6 @@ int main(int argc, char **argv) {
     FILE *f = fopen(argv[1], "r+b");
     if (!f) { perror(argv[1]); return 1; }
 
-    /* ------------------------------------------------------------------ */
-    /* 1. Read and validate the ELF64 header (64 bytes).                   */
-    /* ------------------------------------------------------------------ */
     uint8_t ehdr[64];
     if (fread(ehdr, 1, 64, f) != 64 || memcmp(ehdr, ELFMAG, 4) != 0) {
         fprintf(stderr, "zxsign: not a valid ELF file\n");
@@ -74,10 +71,6 @@ int main(int argc, char **argv) {
         fclose(f); return 1;
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 2. Load section headers and locate .zxvl_checksums file offset.    */
-    /*    Used only to find where to write the table.                     */
-    /* ------------------------------------------------------------------ */
     uint8_t *shdrs = malloc((size_t)shnum * shentsz);
     if (!shdrs) { perror("malloc"); fclose(f); return 1; }
     fseek(f, (long)shoff, SEEK_SET);
@@ -110,9 +103,6 @@ int main(int argc, char **argv) {
         fclose(f); return 1;
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 3. Load program headers and collect PT_LOAD segments to hash.      */
-    /* ------------------------------------------------------------------ */
     uint8_t *phdrs = malloc((size_t)phnum * phentsz);
     if (!phdrs) { perror("malloc"); fclose(f); return 1; }
     fseek(f, (long)phoff, SEEK_SET);
@@ -152,9 +142,6 @@ int main(int argc, char **argv) {
         fclose(f); return 1;
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 4. Compute SHA-256 for each segment.                               */
-    /* ------------------------------------------------------------------ */
     table_t tbl;
     memset(&tbl, 0, sizeof(tbl));
     wbe32((uint8_t *)&tbl.magic,   ZXVL_CKSUM_MAGIC);
@@ -190,10 +177,6 @@ int main(int argc, char **argv) {
         printf("\n");
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 5. Write the completed table into .zxvl_checksums — ONE write,      */
-    /*    after all digests are final.                                     */
-    /* ------------------------------------------------------------------ */
     fseek(f, cksum_file_off, SEEK_SET);
     if (fwrite(&tbl, 1, sizeof(tbl), f) != sizeof(tbl)) {
         fprintf(stderr, "zxsign: write failed: %s\n", strerror(errno));

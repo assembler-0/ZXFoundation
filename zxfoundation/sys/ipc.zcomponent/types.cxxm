@@ -1,5 +1,5 @@
 /// SPDX-License-Identifier: Apache-2.0
-/// @file ipc_types.cxxm
+/// @file zxfoundation/sys/ipc.zcomponent/types.cxxm
 /// @brief Bounded nucleus IPC object types.
 
 export module zxfoundation.sys.ipc.types;
@@ -8,6 +8,8 @@ import zxfoundation.scoms.kobject.base;
 import zxfoundation.scoms.kobject.types;
 import zxfoundation.memory.objects;
 import zxfoundation.dgp.cap.types;
+import zxfoundation.sync.waitqueue.types;
+import lib.stl;
 
 export {
 
@@ -46,6 +48,7 @@ namespace zxfoundation::sys::ipc {
         u32 length{0};
         u32 capability_count{0};
         u32 grant_count{0};
+        u64 correlation{0};
         message_body* body{nullptr};
     };
 
@@ -55,9 +58,12 @@ namespace zxfoundation::sys::ipc {
         u32 peer_domain{scoms::kobject::KOBJECT_ID_INVALID};
         u32 queue_head{0};
         u32 queue_tail{0};
-        u32 queue_count{0};
-        u32 dropped_messages{0};
+        std::atomic<u32> queue_count{0};
         endpoint_queue* queue{nullptr};
+        zxfoundation::sync::waitqueue::wait_head receiver_wait{};
+        std::atomic<u64> call_correlation{0};
+        std::atomic<u64> reply_status{0};
+        zxfoundation::sync::waitqueue::wait_head caller_wait{};
     };
 
     struct user_message_request {
