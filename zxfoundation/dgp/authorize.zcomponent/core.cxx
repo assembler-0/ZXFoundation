@@ -264,7 +264,6 @@ namespace zxfoundation::dgp {
 
         if (auto kind = detail::policy_kind_for_op(op)) {
             if (zxfoundation::sched::context::nesting_depth() == 0U &&
-                zxfoundation::sched::context::nucleus_nesting_depth() == 0U &&
                 !zxfoundation::sched::context::preempt_disabled()) {
                 const auto consult = zxfoundation::dgp::policy::decide(
                     caller.ko.id, kind.value(),

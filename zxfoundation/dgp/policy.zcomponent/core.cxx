@@ -58,7 +58,6 @@ namespace zxfoundation::dgp::policy {
                                   u64 timeout_ns) noexcept -> decision {
         if (!detail::g_initialized) return {};   // pre-registry: default
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
-        sys::printk::perr("consult: enter kind={}", static_cast<u32>(kind));
         // Re-entrancy guard: a consult must never consult (an ipc op inside
         // the consult's own transport would loop through this path).
         if (detail::g_consult_active[pcp.cpu_id].load(std::memory_order::relaxed))
@@ -82,16 +81,15 @@ namespace zxfoundation::dgp::policy {
                                : nullptr;
             if (caller) {
                 u32 endpoint_id = 0U;
+                bool have_server = false;
                 {
                     const sync::irq_lock_guard _{detail::g_lock};
                     auto* server = find_server(kind);
-                    endpoint_id = (server && server->ko.state ==
-                                   base::lifecycle_state::active)
-                        ? server->endpoint_id : 0U;
+                    have_server = server && server->ko.state ==
+                                  base::lifecycle_state::active;
+                    if (have_server) endpoint_id = server->endpoint_id;
                 }
-                sys::printk::perr("consult: caller={} ep={}", cid,
-                    endpoint_id);
-                if (endpoint_id != 0U) {
+                if (have_server) {
                     u32 payload[4]{static_cast<u32>(kind),
                                    static_cast<u32>(request_a0),
                                    static_cast<u32>(request_a1),
@@ -103,16 +101,11 @@ namespace zxfoundation::dgp::policy {
                         *caller, endpoint_id,
                         reinterpret_cast<const u8*>(payload), sizeof(payload),
                         nullptr, 0U, nullptr, 0U, correlation);
-                    sys::printk::perr("consult: send={:#x}",
-                        sent ? 1ULL : 0ULL);
                     if (sent) {
                         u64 status = 0ULL;
                         auto waited = zxfoundation::sys::ipc::message_call_wait(
                             *caller, endpoint_id, correlation, timeout_ns,
                             status);
-                        sys::printk::perr(
-                            "consult: wait={:#x} status={:#x}",
-                            waited ? 1ULL : 0ULL, status);
                         if (waited && status != 0ULL) {
                             out.outcome = decide_outcome::deny;
                             out.status = static_cast<u32>(status & 0xFFFFFFFFULL);

@@ -93,7 +93,7 @@ namespace zxfoundation::dgp::portal::detail {
     ) noexcept -> std::expected<void, lib::kernel_error> {
         namespace mmu = arch::s390x::mmu;
         namespace pmm = zxfoundation::memory::pmm;
-        auto root_result = mmu::crst_alloc<mmu::dat_level::region_1>();
+        auto root_result = mmu::crst_alloc<mmu::dat_level::segment>();
         if (!root_result) return std::unexpected(root_result.error());
         const auto root = *root_result;
         desc.portal_root_phys = root.origin_phys;
@@ -126,7 +126,8 @@ namespace zxfoundation::dgp::portal::detail {
                 return std::unexpected(pin.error());
             }
             const u64 portal_va = desc.va_start + (source_va - source.va_start);
-            auto map = mmu::map_page(root, portal_va, slot->phys, page_prot);
+            auto map = mmu::map_page<mmu::dat_level::segment>(
+                root, portal_va, slot->phys, page_prot);
             if (!map) {
                 discard_value pmm::frame_release_pin(slot->phys);
                 portal_root_destroy(desc);
@@ -141,9 +142,9 @@ namespace zxfoundation::dgp::portal::detail {
         if (desc.portal_root_phys == 0U) return;
         namespace mmu = arch::s390x::mmu;
         namespace pmm = zxfoundation::memory::pmm;
-        const mmu::dat_table<mmu::dat_level::region_1> root{desc.portal_root_phys};
+        const mmu::dat_table<mmu::dat_level::segment> root{desc.portal_root_phys};
         for (u64 va = desc.va_start; va < desc.va_end; va += PAGE_SIZE) {
-            auto phys = mmu::unmap_page(root, va);
+            auto phys = mmu::unmap_page<mmu::dat_level::segment>(root, va);
             if (phys) discard_value pmm::frame_release_pin(*phys);
         }
         mmu::tlb_flush_asce(desc.portal_asce);
@@ -448,11 +449,12 @@ namespace zxfoundation::dgp::portal {
                     if (auto* slot = region->find_page(backing_va); slot && slot->phys != 0U) {
                         auto pin = pmm::frame_ref(slot->phys);
                         if (pin) {
-                            mmu::dat_table<mmu::dat_level::region_1> root{
+                            mmu::dat_table<mmu::dat_level::segment> root{
                                 live->portal_root_phys};
                             const mmu::page_prot prot{
                                 mmu::PTE_PROTECT | mmu::PTE_NOEXEC};
-                            if (mmu::map_page(root, fault_va, slot->phys, prot)) {
+                            if (mmu::map_page<mmu::dat_level::segment>(
+                                    root, fault_va, slot->phys, prot)) {
                                 sys::printk::pverbose(
                                     "portal: fault resolved id={} va={:#x}",
                                     live->ko.id, fault_va);

@@ -98,8 +98,9 @@ static void surf_consult_worker(void) {
         }
         consult_served++;
         if (consult_mode == 3) nb_dom_strand_exit(0, 0, 0, 0, 0);
-        nb_ipc_reply(consult_ep, r >> 32,
-                     consult_mode == 1 ? 0xE1ULL : 0ULL, 0, 0);
+        if (consult_mode != 2)
+            nb_ipc_reply(consult_ep, r >> 32,
+                         consult_mode == 1 ? 0xE1ULL : 0ULL, 0, 0);
         if (consult_mode == 3) nb_dom_strand_exit(0, 0, 0, 0, 0);
     }
 }
@@ -229,6 +230,34 @@ void zxt_main(void) {
     if ((mapr & 0xFFFFFFFFULL) == 0) fail("map_id");
     if (bind == mapr) fail("bind_same");
     surf_opts++;
+
+    {
+        const nb_u64 ar1 = bind & 0xFFFFFFFFULL;
+        const nb_u64 ar2 = mapr & 0xFFFFFFFFULL;
+        const nb_u64 expect = 0x5AFEBABE164E0ULL;
+        nb_u64 v1 = 0, v2 = 0;
+        if (ar1 == 1) {
+            __asm__ volatile("lgr %%r1, %1\n\tlg %0, 0(%%r1)"
+                             : "=r"(v1) : "r"(dv1) : "r1");
+        } else if (ar1 == 2) {
+            __asm__ volatile("lgr %%r2, %1\n\tlg %0, 0(%%r2)"
+                             : "=r"(v1) : "r"(dv1) : "r2");
+        } else {
+            fail("bind_ar");
+        }
+        if (ar2 == 1) {
+            __asm__ volatile("lgr %%r1, %1\n\tlg %0, 0(%%r1)"
+                             : "=r"(v2) : "r"(dv2) : "r1");
+        } else if (ar2 == 2) {
+            __asm__ volatile("lgr %%r2, %1\n\tlg %0, 0(%%r2)"
+                             : "=r"(v2) : "r"(dv2) : "r2");
+        } else {
+            fail("map_ar");
+        }
+        if (v1 != expect) fail("portal_ar1");
+        if (v2 != expect) fail("portal_ar2");
+        surf_opts++;
+    }
     // Teardown: portals of the bindings, then token, then regions.
     const nb_u64 bpid = bind >> 32;
     const nb_u64 mpid = mapr >> 32;
@@ -289,10 +318,6 @@ void zxt_main(void) {
         surf_opts++;
     }
 
-    // ---- policy plane: the consult broker (allow / deny / timeout) ----
-    // The planted server (this domain's worker strand) answers the kernel's
-    // decision request.  Leg C exercises RC-08.4's rule: no reply degrades
-    // to the kernel default after the deadline — never a wedge.
     {
         consult_ep = nb_ipc_endpoint_create(dom, 0, 0, 0, 0);
         if (consult_ep == NB_ERR) fail("consult_ep");
@@ -302,14 +327,12 @@ void zxt_main(void) {
                 == NB_ERR) {
             fail("consult_worker");
         }
-        // One server per kind: services, answered by our endpoint.
         if (nb_policy_register(4 /*services*/, consult_ep, 0, 0, 0)
                 == NB_ERR) {
             fail("consult_server");
         }
 
         static char csvc[16] = "zxtsurf.consult";
-        // Leg A — allow: worker replies 0; registration proceeds.
         consult_mode = 0;
         const nb_u64 creg = nb_svc_register(zxt_admin_cap,
                                             (nb_u64)(nb_uptr)csvc,
@@ -317,8 +340,6 @@ void zxt_main(void) {
         if (creg == NB_ERR) fail("consult_allow");
         if (nb_svc_unregister(creg, 0, 0, 0, 0) == NB_ERR) fail("consult_unreg2");
 
-        // Leg B — deny: worker replies a nonzero status; the operation must
-        // fail with it (a server can only deny).
         consult_mode = 1;
         if (nb_svc_register(zxt_admin_cap, (nb_u64)(nb_uptr)csvc,
                              0x3F4ULL, 0, 0) != NB_ERR) {
@@ -326,7 +347,6 @@ void zxt_main(void) {
         }
         if (nb_last_error(0, 0, 0, 0, 0) == NB_ERR) fail("consult_code");
 
-        // Leg C — never replies: bounded wait, then the kernel default.
         consult_mode = 2;
         const nb_u64 c0 = nb_sys_now(0, 0, 0, 0, 0);
         const nb_u64 creg2 = nb_svc_register(zxt_admin_cap,
@@ -340,10 +360,14 @@ void zxt_main(void) {
         if (nb_policy_unregister(4, 0, 0, 0, 0) == NB_ERR) fail("server_unreg");
         if (nb_ipc_endpoint_destroy(consult_ep, 0, 0, 0, 0) == NB_ERR)
             fail("consult_ep_destroy");
-        // The worker is parked in a blocked receive on a destroyed endpoint;
-        // its strand is reaped with the domain at exit (quiesce organ).
         surf_opts++;
     }
+
+    if (nb_dom_strand_join(0xDEADULL, 0, 0, 0, 0) != NB_ERR) fail("join_neg");
+    if (nb_mem_alloc(0, 0, 0, 0, 0) != NB_ERR) fail("alloc_neg");
+    if (nb_ipc_send(0x7FFFULL, 0, 0, 0, 0) != NB_ERR) fail("ipc_send_neg");
+    if (nb_portal_destroy(zxt_admin_cap, 0xDEADBEEFULL, 0, 0, 0) != NB_ERR)
+        fail("portal_destroy_neg");
 
     {
         const nb_u64 it = nb_io_bind(0xFFFEULL, 0, 0, 0, 0);
