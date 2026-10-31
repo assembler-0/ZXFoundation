@@ -18,10 +18,10 @@ auto allocate(u64) noexcept -> void* symalias_reference(kmalloc);
 
 namespace zxfoundation::scoms::object_core::detail {
 
-    no_export std::array<object_metadata*, METADATA_BLOCK_COUNT> g_metadata{};
-    alignas(4) no_export sync::qspinlock::qspinlock<sync::lock_rank::scoms_meta> g_lock{};
+    static std::array<object_metadata*, METADATA_BLOCK_COUNT> g_metadata{};
+    alignas(4) static sync::qspinlock::qspinlock<sync::lock_rank::scoms_meta> g_lock{};
 
-    [[nodiscard]] no_export auto metadata_at(u32 index, bool create = false) noexcept
+    [[nodiscard]] static auto metadata_at(u32 index, bool create = false) noexcept
         -> object_metadata* {
         const u32 block = index / METADATA_BLOCK_SIZE;
         if (!g_metadata[block]) {
@@ -35,7 +35,7 @@ namespace zxfoundation::scoms::object_core::detail {
         return &g_metadata[block][index % METADATA_BLOCK_SIZE];
     }
 
-    [[nodiscard]] no_export auto find_locked(const kobject::bobject& object) noexcept -> object_metadata* {
+    [[nodiscard]] static auto find_locked(const kobject::bobject& object) noexcept -> object_metadata* {
         if (object.object_flags == 0U) return nullptr;
         const u32 index = object.object_flags - 1U;
         if (index >= MAX_OBJECT_METADATA) return nullptr;
@@ -43,7 +43,7 @@ namespace zxfoundation::scoms::object_core::detail {
         return entry && entry->active && entry->object == &object ? entry : nullptr;
     }
 
-    [[nodiscard]] no_export auto retired_locked(const kobject::bobject& object) noexcept -> object_metadata* {
+    [[nodiscard]] static auto retired_locked(const kobject::bobject& object) noexcept -> object_metadata* {
         if (object.object_flags == 0U) return nullptr;
         const u32 index = object.object_flags - 1U;
         if (index >= MAX_OBJECT_METADATA) return nullptr;
@@ -51,11 +51,11 @@ namespace zxfoundation::scoms::object_core::detail {
         return entry && entry->reclaim_pending && entry->object == &object ? entry : nullptr;
     }
 
-    [[nodiscard]] no_export auto error_not_found() noexcept -> lib::kernel_error {
+    [[nodiscard]] static auto error_not_found() noexcept -> lib::kernel_error {
         return lib::kernel_error::from_generic(lib::generic_error::not_found);
     }
 
-    no_export auto clear_parent_locked(object_metadata& child) noexcept -> void {
+    static auto clear_parent_locked(object_metadata& child) noexcept -> void {
         if (child.parent_id == kobject::KOBJECT_ID_INVALID) return;
 
         if (child.parent_slot != 0U) {

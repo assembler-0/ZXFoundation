@@ -11,6 +11,7 @@ import zxfoundation.sync.qspinlock.core;
 import zxfoundation.sync.lockable;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.sys.zinit.core;
+import zxfoundation.base.cmdline;
 import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.irq;
@@ -20,11 +21,11 @@ import lib.format;
 import lib.ring_buffer;
 import lib.static_vector;
 import lib.stl;
+import lib.error;
 import :state;
 
 #define __zxmacro_want_zinit
 #include macro_extensions
-import lib.error;
 
 namespace zxfoundation::sys::printk {
 
@@ -32,23 +33,19 @@ namespace zxfoundation::sys::printk {
         g_state.min_level = level;
     }
 
-    auto get_current_level() noexcept -> log_level {
-        return g_state.min_level;
+    auto register_cmdline() noexcept -> void {
+        zxfoundation::base::cmdline::add({
+            .name         = "zx.sys.printk.min_level",
+            .type         = zxfoundation::base::cmdline::value_type::u64,
+            .storage      = &g_state.min_level,
+            .storage_size = sizeof(g_state.min_level),
+            .help         = "Drop levels below this: EMERG=0 ... INFO=6, "
+                            "VERBOSE=8",
+        });
     }
 
-    auto handle_min_level(std::string_view val) noexcept -> bool {
-        if (val.empty()) [[unlikely]]
-            return false;
-        u64 level = 0;
-        for (char c : val) {
-            if (c < '0' || c > '9') [[unlikely]]
-                return false;
-            level = level * 10 + (c - '0');
-        }
-        if (level > 7) [[unlikely]]
-            return false;
-        set_min_level(static_cast<log_level>(level));
-        return true;
+    auto get_current_level() noexcept -> log_level {
+        return g_state.min_level;
     }
 
     auto zi_printk_init(const zinit::zi_desc&) noexcept -> zinit::zi_result {

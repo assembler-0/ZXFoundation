@@ -10,6 +10,8 @@ import zxfoundation.memory.numa.types;
 import zxfoundation.memory.oom;
 import zxfoundation.memory.page_cache;
 import zxfoundation.memory.vm;
+import zxfoundation.dgp.policy.types;
+import zxfoundation.sched.context;
 import zxfoundation.memory.vm.types;
 import arch.s390x.mmu.tlb;
 import zxfoundation.dgp.domain.core;
@@ -43,6 +45,20 @@ namespace zxfoundation::memory::reclaim {
         -> std::expected<u32, lib::kernel_error> {
         if (!numa::node_id_is_valid(node) || target_pages == 0U) return std::unexpected(
             lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+
+        if (zxfoundation::sched::context::nesting_depth() == 0U &&
+            zxfoundation::sched::context::nucleus_nesting_depth() == 0U &&
+            !zxfoundation::sched::context::preempt_disabled()) {
+            const auto consult = zxfoundation::dgp::policy::decide(
+                0U, zxfoundation::dgp::policy::server_kind::reclaim,
+                node, target_pages,
+                zxfoundation::dgp::policy::DECIDE_TIMEOUT_NS);
+            if (consult.outcome ==
+                zxfoundation::dgp::policy::decide_outcome::deny)
+                return std::unexpected(lib::kernel_error::from_generic(
+                    lib::generic_error::denied));
+        }
+
         u32 reclaimed = page_cache::reclaim_unmapped(target_pages);
         if (reclaimed >= target_pages || !g_reclaimer) return reclaimed;
 

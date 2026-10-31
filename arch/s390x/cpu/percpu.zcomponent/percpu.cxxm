@@ -99,7 +99,7 @@ namespace arch::s390x::cpu::percpu {
         u8      capacity{100};         ///< Scheduler capacity percentage, 100 when unknown.
         u8      _pad_drawer[2]{};
 
-        attached_domain_snapshot attached{}; ///< §10.5 mirror (single writer: publish()).
+        attached_domain_snapshot attached{}; ///< mirror (single writer: publish()).
 
         u64     watchdog_heartbeat{0}; ///< Monotonic counter bumped by scheduler_tick().
 

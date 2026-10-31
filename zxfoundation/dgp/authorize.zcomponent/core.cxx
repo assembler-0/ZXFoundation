@@ -10,11 +10,28 @@ import zxfoundation.dgp.sync_contract.core;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.cap.types;
 import zxfoundation.dgp.cap.core;
+import zxfoundation.dgp.policy.types;
+import zxfoundation.sys.printk.core;
+import zxfoundation.sched.context;
 import zxfoundation.scoms.kobject.base;
 import lib.error;
 import lib.stl;
 
 namespace zxfoundation::dgp::detail {
+
+    /// @brief Which policy kind does an operation's consult belong to
+    [[nodiscard]] static auto policy_kind_for_op(operation_kind op) noexcept
+        -> ::std::optional<zxfoundation::dgp::policy::server_kind> {
+        using op_k = operation_kind;
+        using sk = zxfoundation::dgp::policy::server_kind;
+        switch (op) {
+        case op_k::register_service: return {sk::services};
+        case op_k::domain_exec:      return {sk::loader};
+        case op_k::io_bind:          return {sk::drivers};
+        default:                     return ::std::nullopt;
+        }
+    }
+
     [[nodiscard]] auto validate_common(
         const zxfoundation::dgp::domain::domain& caller,
         const zxfoundation::dgp::domain::domain& target
@@ -242,6 +259,21 @@ namespace zxfoundation::dgp {
                 meta.token, meta.token_rights, caller.ko.id);
             if (!cap_r) {
                 return std::unexpected(cap_r.error());
+            }
+        }
+
+        if (auto kind = detail::policy_kind_for_op(op)) {
+            if (zxfoundation::sched::context::nesting_depth() == 0U &&
+                zxfoundation::sched::context::nucleus_nesting_depth() == 0U &&
+                !zxfoundation::sched::context::preempt_disabled()) {
+                const auto consult = zxfoundation::dgp::policy::decide(
+                    caller.ko.id, kind.value(),
+                    static_cast<u64>(meta.requested_rights),
+                    static_cast<u64>(op), policy::DECIDE_TIMEOUT_NS);
+                if (consult.outcome == dgp::policy::decide_outcome::deny) {
+                    return std::unexpected(lib::kernel_error::from_generic(
+                        lib::generic_error::denied));
+                }
             }
         }
 

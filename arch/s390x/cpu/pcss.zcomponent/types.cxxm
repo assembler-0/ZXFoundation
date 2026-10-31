@@ -169,9 +169,10 @@ namespace arch::s390x::cpu::pcss {
     };
 
     /// @brief Linkage-stack geometry
-    constexpr u32 STACK_SECTION_SIZE     = 4096U;
+    constexpr u32 STACK_SECTION_SIZE      = 4096U;
     constexpr u32 STACK_STATE_PER_SECTION = 13U;
-    constexpr u32 STACK_MAX_SECTIONS     = 8U;
+    constexpr u32 STACK_MAX_SECTIONS      = 8U;
+    constexpr u32 STACK_INIT_SECTIONS     = 4U;
 
     struct stack_section {
         u64 base_phys{0};

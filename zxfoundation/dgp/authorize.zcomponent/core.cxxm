@@ -8,6 +8,8 @@ import zxfoundation.base.typestate;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.cap.types;
+import zxfoundation.dgp.policy.types;
+import zxfoundation.sched.context;
 import zxfoundation.scoms.kobject.base;
 import lib.error;
 import lib.stl;

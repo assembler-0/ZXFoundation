@@ -45,12 +45,13 @@ static void receiver_main(void) {
         if (r == NB_ERR) continue;
         nb_u64 corr = r >> 32;
         nb_u64 len = r & 0xFFFFFFFFull;
-        if (corr == 0 || len < 8) continue;
+        if (len < 8) continue;
         nb_u64 v = *(nb_u64 *) buf;
         if (v == POISON) {
             rx_done = 1;
             return;
         }
+        if (corr == 0) continue;
         if (v == NONCE_BASE + rx_count) {
             rx_count++;
         } else {

@@ -260,49 +260,6 @@ namespace arch::s390x::cpu::pcss {
         }
     }
 
-    auto stack_init(stack& s) noexcept
-        -> std::expected<void, lib::kernel_error> {
-        auto sec = alloc(0U, zone::dma31, purpose::stack, page_init::zeroed);
-        if (!sec) return std::unexpected(sec.error());
-        s.sections[0].base_phys = sec.value().phys_base;
-        s.sections[0].base_va =
-            reinterpret_cast<u64>(detail::virt(sec.value().phys_base));
-        s.section_count = 1U;
-        s.next_section_id = 1U;
-
-        header_entry header{};
-        header.set<R"(backward\valid)">(false);
-        header.set<R"(descriptor\word\entry_type)">(STACK_ET_HEADER);
-        header.set<R"(descriptor\word\section_id)">(1U);
-        header.set<R"(descriptor\word\remaining_free_space)">(
-            static_cast<u16>(STACK_SECTION_SIZE - 2U * STACK_HEADER_SIZE));
-        header.set<R"(descriptor\word\next_entry_size)">(
-            static_cast<u16>(STACK_STATE_SIZE));
-
-        auto* base = reinterpret_cast<u8*>(s.sections[0].base_va);
-        for (usize i = 0; i < sizeof(header_entry); ++i)
-            base[i] = header.as_bytes()[i];
-
-        trailer_entry trailer{};
-        // Last (only) section: no following section (V=0, address 0).
-        trailer.set<R"(forward\valid)">(false);
-        trailer.set<R"(descriptor\word\entry_type)">(STACK_ET_TRAILER);
-        trailer.set<R"(descriptor\word\section_id)">(1U);
-        auto* tbase = base + STACK_SECTION_SIZE - STACK_TRAILER_SIZE;
-        for (usize i = 0; i < sizeof(trailer_entry); ++i)
-            tbase[i] = trailer.as_bytes()[i];
-
-        // §5.12 addressing: CR15 and the section links carry IDENTITY
-        // home VAs (VA == phys).  The zxfl loader wires the same R3
-        // tables at region-first index 0 (identity) and at the HHDM
-        // index, but the 61-bit LSTE/LSHE link fields cannot represent
-        // an HHDM VA whose top bits are set — a chained FSHA silently
-        // lost 0xFFFF800000000000 and the hardware walked a garbage
-        // address.  Kernel-side dereferences go through the HHDM alias
-        // (hhdm::phys_to_virt).
-        s.cr15 = s.sections[0].base_phys + STACK_HEADER_SIZE - STACK_DESC_SIZE;
-        return {};
-    }
 
     auto stack_save(stack& s, const u64 cr15_value) noexcept -> void {
         s.cr15 = cr15_value;
@@ -310,6 +267,19 @@ namespace arch::s390x::cpu::pcss {
 
     [[nodiscard]] auto stack_load(const stack& s) noexcept -> u64 {
         return s.cr15;
+    }
+
+    auto stack_grow(stack& s) noexcept
+        -> std::expected<void, lib::kernel_error>;
+
+    /// @brief Seed a fresh linkage stack
+    auto stack_init(stack& s) noexcept
+        -> std::expected<void, lib::kernel_error> {
+        for (u32 i = 0; i < STACK_INIT_SECTIONS; ++i) {
+            auto grown = stack_grow(s);
+            if (!grown) return grown;
+        }
+        return {};
     }
 
     auto stack_grow(stack& s) noexcept
@@ -354,11 +324,6 @@ namespace arch::s390x::cpu::pcss {
             auto* prev_trailer = reinterpret_cast<trailer_entry*>(
                 s.sections[s.section_count - 1U].base_va
                 + STACK_SECTION_SIZE - STACK_TRAILER_SIZE);
-            // §5.12 wire format: the LSTE doubleword IS the raw home
-            // VA (low three bits zero) with V at bit 63-LSB; the msb0
-            // bits<0,60> field occupies the top 61 bits, so it stores
-            // VA >> 3.  Passing the raw VA made the hardware walk
-            // VA*8 (the 13:22/13:50 captures' 0x1F3E30040 fault).
             const u64 next_header_desc =
                 s.sections[s.section_count].base_phys + STACK_HEADER_SIZE
                 - STACK_DESC_SIZE;
@@ -445,8 +410,6 @@ namespace arch::s390x::cpu::pcss {
 
     [[nodiscard]] auto state_entry_restore(
         cpu::irq::irq_frame& frame, u64 entry_base) noexcept -> bool {
-        // entry_base is a CR15-derived IDENTITY home VA; the kernel
-        // reads the entry through the HHDM alias.
         const u8* entry = reinterpret_cast<const u8*>(
             zxfoundation::memory::hhdm::phys_to_virt(entry_base));
         if ((entry[detail::STATE_OFF_DESC] & 0x7FU) != STACK_ET_STATE)
@@ -470,10 +433,6 @@ namespace arch::s390x::cpu::pcss {
         const u8* entry = reinterpret_cast<const u8*>(
             zxfoundation::memory::hhdm::phys_to_virt(entry_base));
         auto& pcp = cpu::percpu::this_cpu();
-        // §5.12 BUG-072: CR1 must return to the CALLER's own space.  The
-        // percpu attached record holds the LAST DISPATCHED owner's ASCE —
-        // on a deferred-gate resume that is the serving worker's domain,
-        // not the parked caller's.
         cpu::ctlreg::crwrite<1, 1>(caller_asce);
         cpu::ctlreg::crwrite<5, 5>(
             aste::aste_origin(static_cast<u32>(

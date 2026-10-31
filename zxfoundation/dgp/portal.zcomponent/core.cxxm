@@ -34,7 +34,7 @@ namespace zxfoundation::dgp::portal {
     /// @brief Outcome of portal fault resolution (RC-06.2/06.4).
     enum class fault_outcome : u8 { resolved, revoked, stale };
 
-    /// @brief Resolve an AR-mode fault through a live portal (§6.3).
+    /// @brief Resolve an AR-mode fault through a live portal
     /// @param[in] accessor_domain  Faulting (holding) domain id.
     /// @return Disposition plus the live portal id (0 when stale).
     [[nodiscard]] auto resolve_fault(

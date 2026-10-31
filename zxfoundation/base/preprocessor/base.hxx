@@ -31,12 +31,4 @@
 #error "not compiling for LP64"
 #endif
 
-/// @name language renaming, reads better, nothing else.
-/// @{
 #define discard_value (void)
-#define no_export static
-#define from_global_reference extern
-#define from_global_nomangle extern "C"
-#define from_global(T) concat(from_global_,T)
-#define declscope(s) extern stringify(s)
-/// @}

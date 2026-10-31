@@ -4,6 +4,8 @@
 
 module zxfoundation.sync.futex.core;
 import zxfoundation.base.types;
+import zxfoundation.base.config;
+import zxfoundation.sys.printk.core;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.sync.waitqueue.core;
 import zxfoundation.sync.waitqueue.types;
@@ -44,14 +46,7 @@ namespace zxfoundation::sync::futex {
         auto strand_wake(void* opaque) noexcept -> void {
             auto* s = static_cast<zxfoundation::dgp::domain::strand*>(opaque);
             if (!s) return;
-            auto* owner = static_cast<zxfoundation::dgp::domain::domain*>(s->owner);
-            if (s->substate != zxfoundation::sched::sched_substate::blocked) {
-                if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
-                return;
-            }
-            s->substate = zxfoundation::sched::sched_substate::runnable;
-            zxfoundation::sched::enqueue_strand(s);
-            if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+            zxfoundation::sched::wake_strand(*s);
         }
 
         struct timeout_ctx {
@@ -111,16 +106,6 @@ namespace zxfoundation::sync::futex {
             if (!armed) return std::unexpected(armed.error());
         }
 
-        // §20.2b canonical sleep discipline: mark blocked FIRST, queue,
-        // re-check the value under the queue's airlock, only then sleep.
-        // A wake landing in any window either finds the strand blocked
-        // (strand_wake: runnable + enqueue) or grants the queued node
-        // (the predicate fires); a wake whose value-change has not been
-        // observed yet is caught by the post-queue recheck.  The earlier
-        // ordering (queue → recheck → blocked → sleep) left a window
-        // where a wake saw a running strand, consumed its grant, and the
-        // strand slept forever on a changed word — the silent wedge of
-        // the futex ping-pong era.
         self->substate = zxfoundation::sched::sched_substate::blocked;
         bool read_failed = false;
         for (;;) {

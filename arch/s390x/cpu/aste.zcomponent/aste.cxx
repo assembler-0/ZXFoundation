@@ -31,17 +31,17 @@ namespace pmm = zxfoundation::memory::pmm;
 namespace arch::s390x::cpu::aste {
 
     /// @brief Physical address of the ASTE table (MAX_ASTE_ENTRIES × 64 bytes).
-    no_export u64 g_aste_table_phys{0};
+    static u64 g_aste_table_phys{0};
     u64 g_aft_phys{0};
 
     /// @brief Lock protecting all ASTE/ALE table mutations.
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::aste_table> g_aste_lock{};
+    alignas(4) static zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::aste_table> g_aste_lock{};
 
     /// @brief Per-slot occupancy for the ASTE table (true = occupied).
-    no_export std::array<bool, MAX_ASTE_ENTRIES> g_aste_used{};
+    static std::array<bool, MAX_ASTE_ENTRIES> g_aste_used{};
 
     /// @brief Whether the subsystem has been initialized.
-    no_export bool g_initialized{false};
+    static bool g_initialized{false};
 
     /// @brief Return a typed pointer into the ASTE table by index.
     [[nodiscard]] auto aste_at(u32 idx) noexcept -> aste* {

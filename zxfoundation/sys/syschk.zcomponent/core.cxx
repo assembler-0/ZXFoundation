@@ -30,12 +30,12 @@ import drivers.watchdog.core;
 
 namespace zxfoundation::sys::syschk::detail {
 
-    no_export constexpr auto ZXF_BUG_REPORT_URL_HTTPS = "https://github.com/assembler-0/ZXFoundation/issues";
+    static constexpr auto ZXF_BUG_REPORT_URL_HTTPS = "https://github.com/assembler-0/ZXFoundation/issues";
 
     /// @brief Atomic flag: set to 1 by the first CPU to call system_check.
-    no_export std::atomic<u32> g_halting{0};
+    static std::atomic<u32> g_halting{0};
 
-    no_export auto to_log_level(syschk_severity sev) -> printk::log_level {
+    static auto to_log_level(syschk_severity sev) -> printk::log_level {
         switch (sev) {
             case syschk_severity::notice: return zxfoundation::sys::printk::log_level::NOTICE;
             case syschk_severity::warning: return zxfoundation::sys::printk::log_level::WARN;

@@ -148,6 +148,13 @@ namespace zxfoundation::sched::balance {
 
         auto& local_rq = cpu_rq(cpu);
         if (!local_rq.online.load(std::memory_order::acquire)) return;
+
+        if (rq_snapshot::steal_epoch_slot() != cpu) {
+            req.last_migration_ok.store(0U, std::memory_order::release);
+            return;
+        }
+        rq_snapshot::steal_epoch_advance(cpu);
+
         topology::refresh_cpu_record(cpu, local_rq.nr_running, true);
 
         constexpr u16 CONFIG = zxfoundation::base::config::CONFIG_ZX_MAX_CPUS;

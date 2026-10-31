@@ -30,7 +30,7 @@ namespace zxfoundation::sync::detail {
     using zxfoundation::sched::sched_class_id;
 
     /// @brief Recover the enclosing @c strand from its @c pi_waiters node.
-    [[nodiscard]] no_export inline auto strand_from_pi_waiters(lib::list_node* n) noexcept -> strand* {
+    [[nodiscard]] static inline auto strand_from_pi_waiters(lib::list_node* n) noexcept -> strand* {
         auto* body = lib::container_of<
             zxfoundation::dgp::domain::strand_body,
             lib::list_node,
@@ -42,11 +42,11 @@ namespace zxfoundation::sync::detail {
 
     /// @brief Defensive upper bound on the PI chain length.  Real lock
     ///        nesting depths are tiny; this is a pure DoS guard.
-    no_export constexpr u32 MAX_PI_DEPTH = 16U;
+    static constexpr u32 MAX_PI_DEPTH = 16U;
 
     /// @brief Effective RT priority of a strand — boosted_prio if set,
     ///        else @c sched_policy.rt_priority when class is rt, else 0.
-    [[nodiscard]] no_export auto effective_rt_prio(const strand& s) noexcept -> u8 {
+    [[nodiscard]] static auto effective_rt_prio(const strand& s) noexcept -> u8 {
         if (s.body && s.body->boosted_prio != 0U) {
             return s.body->boosted_prio;
         }
@@ -57,7 +57,7 @@ namespace zxfoundation::sync::detail {
     }
 
     /// @brief DGP cross-domain PI propagation gate.
-    [[nodiscard]] no_export auto pi_may_cross(const strand& waiter, const strand& owner) noexcept -> bool {
+    [[nodiscard]] static auto pi_may_cross(const strand& waiter, const strand& owner) noexcept -> bool {
         const auto* wd = static_cast<const domain*>(waiter.owner);
         const auto* od = static_cast<const domain*>(owner.owner);
         if (!wd || !od) return true;
@@ -70,7 +70,7 @@ namespace zxfoundation::sync::detail {
 
     /// @brief Highest effective RT priority among the waiters of @c m.
     ///        Caller must hold @c m.pi_lock.
-    [[nodiscard]] no_export auto top_waiter_prio(const lib::list_head& waiters) noexcept -> u8 {
+    [[nodiscard]] static auto top_waiter_prio(const lib::list_head& waiters) noexcept -> u8 {
         u8 best = 0U;
         for (auto waiter : waiters) {
             auto* ws = strand_from_pi_waiters(waiter);
@@ -82,7 +82,7 @@ namespace zxfoundation::sync::detail {
 
     /// @brief Re-apply the boost on @c owner given the current top-waiter
     ///        priority @c new_prio of the mutex it holds.
-    no_export auto reboost_owner(strand& owner, u8 new_prio, const strand& top_waiter) noexcept -> void {
+    static auto reboost_owner(strand& owner, u8 new_prio, const strand& top_waiter) noexcept -> void {
         if (new_prio == 0U) {
             zxfoundation::sched::rt::unboost_prio(owner);
             return;

@@ -131,7 +131,7 @@ namespace zxfoundation::init::detail {
     }
 
     /// @brief Print the kernel banner.
-    no_export auto banner() -> void {
+    static auto banner() -> void {
         const auto& proto = zxfoundation::init::storage::get_protocol();
         pinfo("sys: ZXFoundation (TM) {} - Copyright (c) {} assembler-0. Licensed under the Apache License, Version 2.0.\n",
             zxfoundation::base::config::CONFIG_ZX_RELEASE,
@@ -146,7 +146,7 @@ namespace zxfoundation::init::detail {
     }
 
     /// @brief Launch the bootstrap domain.
-    no_export auto launch_bootstrap_domain() -> void {
+    static auto launch_bootstrap_domain() -> void {
         const auto& proto = zxfoundation::init::storage::get_protocol();
         auto dom_r = zxfoundation::dgp::domain::domain_create("foundation/bootstrapd");
         if (!dom_r) {
@@ -166,13 +166,7 @@ namespace zxfoundation::init::detail {
 
     /// @brief Register command line parameters and parse the boot command line.
     auto cmdline_init(const arch::s390x::init::zxfl::protocol& proto) -> void {
-        zxfoundation::base::cmdline::add({
-            .name = "zx.sys.printk.min_level",
-            .type = zxfoundation::base::cmdline::value_type::callback,
-            .handler = zxfoundation::sys::printk::handle_min_level,
-            .help = "Set minimum log level (0-7, 7=verbose)"
-        });
-
+        zxfoundation::sys::printk::register_cmdline();
         zxfoundation::sys::zinitgraph::register_cmdline();
         zxfoundation::sync::lockgraph::register_cmdline();
 
@@ -198,7 +192,7 @@ namespace zxfoundation::init::nodes {
 } // namespace zxfoundation::init::nodes
 
 /// @brief nucleus main entry point
-declscope(C) [[noreturn]] auto zxfoundation_global_initialize(
+extern "C" [[noreturn]] auto zxfoundation_global_initialize(
     const arch::s390x::init::zxfl::protocol* protocol
 ) noexcept -> void {
     trap_on(!protocol);

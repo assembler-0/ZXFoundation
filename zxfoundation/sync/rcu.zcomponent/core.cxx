@@ -26,12 +26,12 @@ namespace zxfoundation::sync::rcu::detail {
     using atomic_u64   = std::atomic<u64>;
     using atomic_u32   = std::atomic<u32>;
 
-    no_export atomic_u64 g_gp_seq{0};    ///< GP sequence counter. Even=idle, odd=active.
-    no_export atomic_u32 g_gp_lock{0};   ///< BSP-side GP state lock.
-    no_export ::lib::cpumask g_qs_mask{};
-    no_export std::atomic<bool> g_initialized{false};
+    static atomic_u64 g_gp_seq{0};    ///< GP sequence counter. Even=idle, odd=active.
+    static atomic_u32 g_gp_lock{0};   ///< BSP-side GP state lock.
+    static ::lib::cpumask g_qs_mask{};
+    static std::atomic<bool> g_initialized{false};
 
-    no_export auto gp_lock_acquire() noexcept -> void {
+    static auto gp_lock_acquire() noexcept -> void {
         u32 expected = 0;
         while (!g_gp_lock.compare_exchange_weak(
             expected, 1U, memory_order::acquire, memory_order::relaxed))
@@ -41,15 +41,15 @@ namespace zxfoundation::sync::rcu::detail {
         }
     }
 
-    no_export auto gp_lock_release() noexcept -> void {
+    static auto gp_lock_release() noexcept -> void {
         g_gp_lock.store(0U, memory_order::release);
     }
 
-    no_export auto record_qs(u32 cpu_id) noexcept -> void {
+    static auto record_qs(u32 cpu_id) noexcept -> void {
         g_qs_mask.set(static_cast<usize>(cpu_id), memory_order::release);
     }
 
-    no_export auto all_qs_reported() noexcept -> bool {
+    static auto all_qs_reported() noexcept -> bool {
         bool all = true;
         arch::s390x::cpu::cpumask::for_each_online_cpu(
             [&](u16 cpu) noexcept -> void {
@@ -59,7 +59,7 @@ namespace zxfoundation::sync::rcu::detail {
         return all;
     }
 
-    no_export auto drain_callbacks(
+    static auto drain_callbacks(
         arch::s390x::cpu::percpu::percpu_data& pcp,
         gp_seq_t completed_gp
     ) noexcept -> void {

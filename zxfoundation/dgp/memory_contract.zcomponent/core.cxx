@@ -13,7 +13,7 @@ import lib.stl;
 namespace zxfoundation::dgp::memory_contract::detail {
 
     /// @brief Live monotonic generation.
-    no_export std::atomic<u64> g_generation{1ULL};
+    static std::atomic<u64> g_generation{1ULL};
 
 } // namespace zxfoundation::dgp::memory_contract::detail
 

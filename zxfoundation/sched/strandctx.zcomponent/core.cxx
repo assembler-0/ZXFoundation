@@ -23,7 +23,7 @@ import lib.stl;
 #define __zxmacro_want_assert
 #include macro_extensions
 
-from_global(nomangle) {
+extern "C" {
 
     /// @brief Assembly stub: load ARs/VRs/FPC from @c user_regs, then jump to
     ///        @c ret_to_user.
@@ -225,13 +225,9 @@ namespace zxfoundation::sched::strandctx {
         s->ksp = ksp;
     }
 
-    /// @brief Seed a domain primary's linkage stack (§5.12).
+    /// @brief Seed a domain primary's linkage stack
     /// @param[in,out] d  Domain whose primary strand gets the stack.
     /// @return Success, or the stack allocation error.
-    /// @note CR15=0 means an architecturally empty linkage stack; any
-    ///       PROGRAM CALL from such a strand faults with no recoverable
-    ///       section.  Bootstrap-launched primaries must be seeded before
-    ///       first entry, exactly as dom_exec seeds its children.
     [[nodiscard]] auto seed_primary_linkage_stack(
         domain* d) noexcept -> std::expected<void, lib::kernel_error> {
         if (!d || !d->primary_strand.body) {

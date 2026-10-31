@@ -6,10 +6,10 @@ module zxfoundation.sys.irq.desc;
 import zxfoundation.sys.irq.consts;
 import zxfoundation.scoms.table;
 
-from_global(nomangle) namespace zxfoundation::sys::irq::detail {
+extern "C" namespace zxfoundation::sys::irq::detail {
 
-    from_global(reference) scoms::scoms_table<irq_desc, IRQ_NR_MAX> g_irq_table;
-    from_global(reference) bool g_initialized;
+    extern scoms::scoms_table<irq_desc, IRQ_NR_MAX> g_irq_table;
+    extern bool g_initialized;
 
 } // namespace zxfoundation::sys::irq::detail
 

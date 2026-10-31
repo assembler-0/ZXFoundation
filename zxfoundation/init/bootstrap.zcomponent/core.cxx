@@ -123,11 +123,6 @@ namespace zxfoundation::init::bootstrap {
                       d->admin_token, d->ko.id, static_cast<u32>(d->ko.generation));
             }
 
-            // §9.4/§5.12: every strand that can execute a PROGRAM CALL
-            // needs a seeded linkage stack — CR15=0 is an architecturally
-            // EMPTY stack; the first PC then faults stack-full with no
-            // section to grow from.  (dom_exec seeds its children; the
-            // bootstrap-launched init was the one unseeded primary.)
             {
                 auto stack_result = zxfoundation::sched::strandctx::
                     seed_primary_linkage_stack(d);

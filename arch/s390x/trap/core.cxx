@@ -17,7 +17,7 @@ import lib.error;
 import lib.softirq.core;
 
 /// @brief Program check handler.
-declscope(C) auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+extern "C" auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::pgm::handle(frame);
     namespace irq = zxfoundation::sys::irq;
     if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
@@ -26,12 +26,12 @@ declscope(C) auto do_pgm_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noex
 }
 
 /// @brief External interrupt handler.
-declscope(C) auto do_ext_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+extern "C" auto do_ext_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::ext::handle(frame);
 }
 
 /// @brief I/O interrupt handler.
-declscope(C) auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+extern "C" auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::io::handle(frame);
     namespace irq = zxfoundation::sys::irq;
     if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
@@ -41,7 +41,7 @@ declscope(C) auto do_io_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexc
 
 /// @brief SVC handler — nucleus-call dispatch.
 /// @note Drains deferred softirq work after the nucleus call completes.
-declscope(C) auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 svc_code) noexcept -> void {
+extern "C" auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 svc_code) noexcept -> void {
     frame->gprs[2] = arch::s390x::trap::svc::handle(frame, svc_code);
     namespace irq = zxfoundation::sys::irq;
     if (irq::deferred_test_clear(irq::DEFERRED_IRQ_WORK_BIT)) {
@@ -50,12 +50,12 @@ declscope(C) auto do_svc_interrupt(arch::s390x::cpu::irq::irq_frame* frame, u16 
 }
 
 /// @brief Machine-check handler — decode MCIC and attempt recovery.
-declscope(C) auto do_mcck_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
+extern "C" auto do_mcck_interrupt(arch::s390x::cpu::irq::irq_frame* frame) noexcept -> void {
     arch::s390x::trap::mcck::handle(frame);
 }
 
 /// @brief Restart interruption handler.
-declscope(C) [[noreturn]] auto do_restart_interrupt(
+extern "C" [[noreturn]] auto do_restart_interrupt(
     void* data,
     i32   source,
     u16   cpu_id,

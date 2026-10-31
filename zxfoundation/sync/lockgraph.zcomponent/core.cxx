@@ -25,7 +25,7 @@ namespace zxfoundation::sync::lockgraph::detail {
     };
 
     // Rank dependency edges: bit j of g_rank_edges[i] means "rank i may be
-    // followed by rank j". Ranks are the node taxonomy (§20.4).
+    // followed by rank j". Ranks are the node taxonomy
     u32 g_rank_edges[RANK_COUNT]{};
 
     // Same-rank instance ordering edges (the acquire_equal contract).
@@ -57,8 +57,7 @@ namespace zxfoundation::sync::lockgraph::detail {
         return false;
     }
 
-    /// @brief Rate-limited violation report (§20.4: system_check warning
-    ///        + held-chain dump; first 8 always, then every 32nd).
+    /// @brief Rate-limited violation report
     auto report(const char* what, const lockdep_map& map) noexcept -> void {
         ++g_report_seq;
         const bool emit = (g_counters.reports < 8U) || ((g_report_seq % 32U) == 0U);
@@ -94,7 +93,7 @@ namespace zxfoundation::sync::lockgraph {
         detail::g_enabled = true;
     }
 
-    /// @brief Register the boot parameter plane entry (OBL-026).
+    /// @brief Register the boot parameter plane entry
     /// @note Called from init's cmdline_init before cmdline::parse; the
     ///       zinit-time init() runs after parsing on some graphs.
     auto register_cmdline() noexcept -> void {

@@ -13,13 +13,13 @@ import lib.stl;
 namespace zxfoundation::sched::topology::detail {
 
     /// @brief Online CPUs grouped by NUMA node (drawer).
-    from_global(reference) std::array<lib::cpumask, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_node_masks;
+    extern std::array<lib::cpumask, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_node_masks;
 
     /// @brief Per-CPU set of online core siblings
-    from_global(reference) std::array<lib::cpumask, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_core_siblings;
+    extern std::array<lib::cpumask, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_core_siblings;
 
     /// @brief Single mask covering all online CPUs across all NUMA nodes.
-    from_global(reference) ::lib::cpumask g_remote_mask;
+    extern ::lib::cpumask g_remote_mask;
 
 } // namespace zxfoundation::sched::topology::detail
 

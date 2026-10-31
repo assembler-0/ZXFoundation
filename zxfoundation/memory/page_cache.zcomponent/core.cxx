@@ -9,6 +9,8 @@ import zxfoundation.memory.pmm.types;
 import zxfoundation.memory.hhdm;
 import zxfoundation.memory.kmalloc;
 import zxfoundation.memory.objects;
+import zxfoundation.dgp.policy.types;
+import zxfoundation.sched.context;
 import zxfoundation.scoms.kobject.base;
 import zxfoundation.scoms.kobject.types;
 import zxfoundation.dgp.isolation.types;
@@ -317,6 +319,19 @@ namespace zxfoundation::memory::page_cache {
     ) noexcept -> std::expected<page_lease, lib::kernel_error> {
         if (!node) return std::unexpected(lib::kernel_error::from_generic(
             lib::generic_error::invalid_arg));
+
+        if (zxfoundation::sched::context::nesting_depth() == 0U &&
+            zxfoundation::sched::context::nucleus_nesting_depth() == 0U &&
+            !zxfoundation::sched::context::preempt_disabled()) {
+            const auto consult = zxfoundation::dgp::policy::decide(
+                0U,
+                zxfoundation::dgp::policy::server_kind::vfs,
+                reinterpret_cast<u64>(node), index,
+                zxfoundation::dgp::policy::DECIDE_TIMEOUT_NS);
+            if (consult.outcome == zxfoundation::dgp::policy::decide_outcome::deny)
+                return std::unexpected(lib::kernel_error::from_generic(
+                    lib::generic_error::denied));
+        }
 
         cache_entry* loading = nullptr;
         u32 loading_generation = 0U;

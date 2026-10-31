@@ -18,13 +18,10 @@ namespace zxfoundation::sync::rwsem {
     using zxfoundation::dgp::domain::strand;
     using zxfoundation::sched::sched_substate;
 
-    no_export auto wake_waiter(void* opaque) noexcept -> void {
+    static auto wake_waiter(void* opaque) noexcept -> void {
         auto* waiter_ptr = static_cast<waiter*>(opaque);
         if (!waiter_ptr || !waiter_ptr->strand_ptr) return;
-        waiter_ptr->strand_ptr->substate = sched_substate::runnable;
-        zxfoundation::sched::enqueue_strand(waiter_ptr->strand_ptr);
-        if (auto* d = static_cast<domain*>(waiter_ptr->strand_ptr->owner))
-            d->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+        zxfoundation::sched::wake_strand(*waiter_ptr->strand_ptr);
     }
 
     auto rw_semaphore::lock_shared() noexcept -> void {

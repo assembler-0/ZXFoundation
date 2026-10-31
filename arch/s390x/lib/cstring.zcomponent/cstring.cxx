@@ -9,7 +9,7 @@ import arch.s390x.cpu.types;
 
 using arch::s390x::cpu::features::facility;
 
-declscope(C) {
+extern "C" {
 
     auto __zx_clcle(const char *s1, usize l1,
                     const char *s2, usize l2) -> condition_code {
@@ -284,4 +284,4 @@ declscope(C) {
     char* strnend(const char* s, usize n)
         __attribute__((alias("__zx_strnend")));
 
-} // declscope(C)
+} // extern "C"

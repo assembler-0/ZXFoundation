@@ -16,7 +16,7 @@ import lib.stl;
 
 namespace zxfoundation::memory::hhdm::detail {
 
-    no_export u64 g_phys_coverage_end{0U};
+    static u64 g_phys_coverage_end{0U};
 
 } // namespace zxfoundation::memory::hhdm::detail
 

@@ -39,13 +39,13 @@ namespace detail {
 
 } // namespace detail
 
-declscope(C) {
+extern "C" {
 
-    from_global(reference) void (*__init_array_start[])() __attribute__((weak));
-    from_global(reference) void (*__init_array_end[])()   __attribute__((weak));
-    from_global(reference) void (*__fini_array_start[])() __attribute__((weak));
-    from_global(reference) void (*__fini_array_end[])()   __attribute__((weak));
-    from_global(reference) void *__dso_handle __attribute__((weak));
+    extern void (*__init_array_start[])() __attribute__((weak));
+    extern void (*__init_array_end[])()   __attribute__((weak));
+    extern void (*__fini_array_start[])() __attribute__((weak));
+    extern void (*__fini_array_end[])()   __attribute__((weak));
+    extern void *__dso_handle __attribute__((weak));
 
     inline constexpr u64 GUARD_INITIALIZED_BIT = 0x0100'0000'0000'0000ULL;
     inline constexpr u64 GUARD_IN_PROGRESS_BIT  = 0x0001'0000'0000'0000ULL;
@@ -260,7 +260,7 @@ declscope(C) {
         __builtin_unreachable();
     }
 
-} // declscope(C)
+} // extern "C"
 
 namespace zxfoundation::base::cxxrtse::cxxabi {
 

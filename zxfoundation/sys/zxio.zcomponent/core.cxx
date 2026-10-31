@@ -48,19 +48,19 @@ namespace zxfoundation::sys::zxio::detail {
     using namespace scoms;
     using namespace dgp::cap;
 
-    no_export scoms_table<io_binding, MAX_IO_BINDINGS> g_io_table{};
-    no_export bool g_initialized{false};
+    static scoms_table<io_binding, MAX_IO_BINDINGS> g_io_table{};
+    static bool g_initialized{false};
 
-    no_export constexpr u32 DMA_ORDER = 2U;
-    no_export constexpr u64 DMA_BYTES = PAGE_SIZE << DMA_ORDER;
-    no_export constexpr u32 CCW_STAGE_OFFSET = 0U;
-    no_export constexpr u32 DRIVER_DMA_OFFSET = PAGE_SIZE;
-    no_export constexpr u64 DRIVER_DMA_BYTES = DMA_BYTES - DRIVER_DMA_OFFSET;
-    no_export constexpr u32 IO_FENCE_POLL_LIMIT = 65'536U;
-    no_export constexpr u8 CCW_USER_FLAGS = CCW_FLAG_CD | CCW_FLAG_CC | CCW_FLAG_SLI |
+    static constexpr u32 DMA_ORDER = 2U;
+    static constexpr u64 DMA_BYTES = PAGE_SIZE << DMA_ORDER;
+    static constexpr u32 CCW_STAGE_OFFSET = 0U;
+    static constexpr u32 DRIVER_DMA_OFFSET = PAGE_SIZE;
+    static constexpr u64 DRIVER_DMA_BYTES = DMA_BYTES - DRIVER_DMA_OFFSET;
+    static constexpr u32 IO_FENCE_POLL_LIMIT = 65'536U;
+    static constexpr u8 CCW_USER_FLAGS = CCW_FLAG_CD | CCW_FLAG_CC | CCW_FLAG_SLI |
         CCW_FLAG_SKIP | CCW_FLAG_PCI | CCW_FLAG_SUSPEND;
 
-    [[nodiscard]] no_export auto lookup_binding(
+    [[nodiscard]] static auto lookup_binding(
         u32 id, u32 generation
     ) noexcept -> kobject::robject<io_binding, lifecycle_state::active> {
         auto ref = g_io_table.acquire_ref<lifecycle_state::active>(id);
@@ -68,7 +68,7 @@ namespace zxfoundation::sys::zxio::detail {
         return ref;
     }
 
-    [[nodiscard]] no_export auto binding_for_owner(
+    [[nodiscard]] static auto binding_for_owner(
         cap_token token, u32 owner_domain
     ) noexcept -> std::expected<io_binding*, lib::kernel_error> {
         if (!token || token.type() != cap_type::io_device) {
@@ -88,7 +88,7 @@ namespace zxfoundation::sys::zxio::detail {
         return binding;
     }
 
-    [[nodiscard]] no_export auto validate_dma_authority(
+    [[nodiscard]] static auto validate_dma_authority(
         const io_binding& binding
     ) noexcept -> std::expected<objects::memory_object*, lib::kernel_error> {
         auto storage_result = objects::memory_object_resolve(binding.dma_storage);
@@ -126,7 +126,7 @@ namespace zxfoundation::sys::zxio::detail {
         }
     }
 
-    [[nodiscard]] no_export auto verify_and_stage_ccws(
+    [[nodiscard]] static auto verify_and_stage_ccws(
         const io_binding& binding, const io_request& request
     ) noexcept -> std::expected<void, lib::kernel_error> {
         if (request.request_id == 0U || request.ccw_count == 0U ||
@@ -209,7 +209,7 @@ namespace zxfoundation::sys::zxio::detail {
         return {};
     }
 
-    [[nodiscard]] no_export auto enqueue_completion(
+    [[nodiscard]] static auto enqueue_completion(
         io_binding& binding, const irb& status
     ) noexcept -> bool {
         const sync::irq_lock_guard _{binding.ko.lock};
@@ -244,7 +244,7 @@ namespace zxfoundation::sys::zxio::detail {
         return true;
     }
 
-    no_export auto css_completion_sink(
+    static auto css_completion_sink(
         u32 sch_index, u32 binding_id, u32 binding_generation,
         const irb& status
     ) noexcept -> void {
@@ -260,7 +260,7 @@ namespace zxfoundation::sys::zxio::detail {
         }
     }
 
-    [[nodiscard]] no_export auto fence_binding_io(io_binding& binding) noexcept
+    [[nodiscard]] static auto fence_binding_io(io_binding& binding) noexcept
         -> std::expected<void, lib::kernel_error> {
         {
             const sync::irq_lock_guard _{binding.ko.lock};

@@ -120,18 +120,7 @@ namespace zxfoundation::dgp::gate::svc_gate::detail {
     auto strand_wake(void* opaque) noexcept -> void {
         auto* s = static_cast<zxfoundation::dgp::domain::strand*>(opaque);
         if (!s) return;
-        auto* owner = static_cast<zxfoundation::dgp::domain::domain*>(s->owner);
-        // Only a parked strand may be enqueued (§09.2). A wake landing on a
-        // strand that is running (mid re-park) or already queued must not
-        // link it again: the duplicate run-queue node gets picked later and
-        // resumes a stale stack context next to the live one.
-        if (s->substate != zxfoundation::sched::sched_substate::blocked) {
-            if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
-            return;
-        }
-        s->substate = zxfoundation::sched::sched_substate::runnable;
-        zxfoundation::sched::enqueue_strand(s);
-        if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+        zxfoundation::sched::wake_strand(*s);
     }
 
     auto nc_gate_defer(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
@@ -155,8 +144,6 @@ namespace zxfoundation::dgp::gate::svc_gate::detail {
         const u64 entry_base = cr15 -
             (arch::s390x::cpu::pcss::STACK_STATE_SIZE -
              arch::s390x::cpu::pcss::STACK_DESC_SIZE);
-        // CR15 carries an IDENTITY home VA; the kernel reads the
-        // entry through the HHDM alias.
         const auto* desc = reinterpret_cast<const u8*>(
             zxfoundation::memory::hhdm::phys_to_virt(
                 entry_base + arch::s390x::cpu::pcss::STACK_STATE_SIZE -
@@ -251,10 +238,6 @@ namespace zxfoundation::dgp::gate::svc_gate::detail {
 
         arch::s390x::cpu::pcss::state_entry_write_reply(req->entry_va, a0, a1, a2);
         req->done.store(true, std::memory_order::release);
-        // S10.5 deferred-work billing, server-worker leg (OBL-034): the
-        // request's lifetime (defer enqueue → reply completion) is charged
-        // to the resuming worker's CBS — the fast-path leg already bills
-        // the strand owner by construction.
         if (self && self->body && req->enqueued_mono_ns != 0U) {
             const u64 now_ns = zxfoundation::sys::time::monotonic_now()
                                    .nanoseconds_since_epoch();

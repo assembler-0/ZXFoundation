@@ -9,6 +9,8 @@
 #include <arch/s390x/init/zxfl/string.h>
 #include <zxfoundation/memory/hhdm.h>
 
+extern uint64_t tod_read(void);
+
 /// ASCE Designation-Type field (bits 60-61).
 /// DT=11 means the root table is a Region-First table (5-level paging).
 #define Z_ASCE_DT_R1        0x0CULL
@@ -224,6 +226,9 @@ static uint64_t *alloc_page_table(void) {
     static uint64_t jump_psw[2] __attribute__((aligned(16)));
     jump_psw[0] = PSW_MASK_KERNEL_DAT;
     jump_psw[1] = entry;
+
+    proto->tod_boot = tod_read();
+    proto->flags |= ZXFL_FLAG_TOD;
 
     __asm__ volatile(
         "lgr   %%r2, %[proto]\n"

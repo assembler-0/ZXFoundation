@@ -54,11 +54,11 @@ namespace zxfoundation::dgp::portal::detail {
     using zxfoundation::base::lifecycle_state;
 
     /// @brief SCOMS-managed portal table (replaces ad-hoc array + lock + count).
-    no_export scoms_table<portal_desc, MAX_PORTALS> g_portal_table{};
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::portal_ar> g_portal_lock{};
-    no_export std::atomic_flag g_alb_purge_lock{};
-    no_export ::lib::cpumask g_alb_purge_mask{};
-    no_export std::array<smp::csd::call_single_data, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS>
+    static scoms_table<portal_desc, MAX_PORTALS> g_portal_table{};
+    alignas(4) static zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::portal_ar> g_portal_lock{};
+    static std::atomic_flag g_alb_purge_lock{};
+    static ::lib::cpumask g_alb_purge_mask{};
+    static std::array<smp::csd::call_single_data, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS>
         g_alb_purge_csds{};
 
     auto portal_root_destroy(portal_desc& desc) noexcept -> void;

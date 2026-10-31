@@ -407,14 +407,8 @@ static uint32_t detect_memory(zxfl_mem_region_t *map, uint32_t max,
     s_proto.kernel_phys_end = load_modules(schid, s_cmdline, load_base + load_size);
     s_proto.kernel_entry = entry_point;
 
-    print("zxfl01: detecting system (stsi/smp/tod)\n");
+    print("zxfl01: detecting system (stsi/smp)\n");
     zxfl_system_detect(&s_proto);
-
-    // DIAG 318: Set Control Program Name Code to "Linux"
-    {
-        uint64_t diag318_val = (4UL << 56); // cpnc=0x04 (Linux), cpvc=0
-        __asm__ volatile("diag %0,0,0x318" : : "d" (diag318_val) : "cc");
-    }
 
     {
         const uint64_t virt_off = CONFIG_KERNEL_VIRT_OFFSET;

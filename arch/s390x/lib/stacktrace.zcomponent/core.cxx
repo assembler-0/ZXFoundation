@@ -12,9 +12,9 @@ import arch.s390x.cpu.percpu;
 import arch.s390x.cpu.processor;
 import arch.s390x.cpu.types;
 
-from_global(nomangle) {
+extern "C" {
     /// @brief Kernel-owned BSP boot stack (nucleus .bss)
-    from_global(reference) u8 __kernel_boot_stack[];
+    extern u8 __kernel_boot_stack[];
 }
 
 namespace arch::s390x::lib::stacktrace {

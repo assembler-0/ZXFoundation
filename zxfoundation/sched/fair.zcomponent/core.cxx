@@ -207,15 +207,22 @@ namespace zxfoundation::sched::fair {
         const u64 avg = avg_vruntime(rq.min_vruntime, rq.avg_vruntime_acc, rq.avg_weight_acc);
 
         auto* node = rb_left;
+        strand* alive_leftmost = nullptr;
         while (node) {
             auto* s = rb_node_to_strand(node);
-            if (entity_eligible(s->se, avg)) {
-                return s;
+            if ((s->flags & dgp::domain::strand_flags::dead)
+                == dgp::domain::strand_flags::none) {
+                if (!alive_leftmost) {
+                    alive_leftmost = s;
+                }
+                if (entity_eligible(s->se, avg)) {
+                    return s;
+                }
             }
             node = lib::rb_next(node);
         }
 
-        return rb_node_to_strand(rb_left);
+        return alive_leftmost;
     }
 
     auto tick(run_queue& rq, strand& s) noexcept -> void {

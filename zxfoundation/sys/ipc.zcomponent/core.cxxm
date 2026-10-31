@@ -16,7 +16,6 @@ export {
 
 namespace zxfoundation::sys::ipc {
 
-    /// §7.4 ipc_receive flags.
     enum class receive_mode : u32 {
         poll  = 0,
         block = 1,
@@ -53,13 +52,13 @@ namespace zxfoundation::sys::ipc {
         receive_mode mode = receive_mode::poll
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    /// §7.4 rendezvous: the peer replies to an in-flight ipc_call.
+    /// @brief rendezvous: the peer replies to an in-flight ipc_call.
     [[nodiscard]] auto message_reply(
         dgp::domain::domain& caller, u32 endpoint_id,
         u64 correlation, u64 status
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    /// §7.4 rendezvous: park the calling strand until its ipc_call is
+    /// @brief rendezvous: park the calling strand until its ipc_call is
     /// replied, or timeout_ns elapses (0 = wait forever).
     [[nodiscard]] auto message_call_wait(
         dgp::domain::domain& caller, u32 endpoint_id, u64 correlation,

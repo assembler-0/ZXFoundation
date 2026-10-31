@@ -20,16 +20,16 @@ import lib.stl;
 #include macro_extensions
 
 namespace zxfoundation::sync::qspinlock::detail {
-    no_export constexpr u32 _Q_LOCKED_VAL   = 1U;      ///< Bit 0: lock held.
-    no_export constexpr u32 _Q_PENDING_VAL  = 2U;      ///< Bit 1: pending waiter.
-    no_export constexpr u32 _Q_LOCKED_MASK  = _Q_LOCKED_VAL | _Q_PENDING_VAL;
+    static constexpr u32 _Q_LOCKED_VAL   = 1U;      ///< Bit 0: lock held.
+    static constexpr u32 _Q_PENDING_VAL  = 2U;      ///< Bit 1: pending waiter.
+    static constexpr u32 _Q_LOCKED_MASK  = _Q_LOCKED_VAL | _Q_PENDING_VAL;
 
-    no_export constexpr u32 _Q_TAIL_OFFSET  = 2U;
-    no_export constexpr u32 _Q_TAIL_MASK    = ~static_cast<u32>(_Q_LOCKED_MASK);
+    static constexpr u32 _Q_TAIL_OFFSET  = 2U;
+    static constexpr u32 _Q_TAIL_MASK    = ~static_cast<u32>(_Q_LOCKED_MASK);
 
-    no_export constexpr u32 _Q_NODE_BITS    = 4U;
-    no_export constexpr u32 _Q_NODE_MASK    = (1U << _Q_NODE_BITS) - 1U;  // 0xF for the 16-node encoding
-    no_export constexpr u32 _Q_TAIL_CPU_BITS = 32U - _Q_TAIL_OFFSET - _Q_NODE_BITS;
+    static constexpr u32 _Q_NODE_BITS    = 4U;
+    static constexpr u32 _Q_NODE_MASK    = (1U << _Q_NODE_BITS) - 1U;  // 0xF for the 16-node encoding
+    static constexpr u32 _Q_TAIL_CPU_BITS = 32U - _Q_TAIL_OFFSET - _Q_NODE_BITS;
 
     static_assert(
         zxfoundation::base::config::CONFIG_ZX_MAX_CPUS < (1U << _Q_TAIL_CPU_BITS),
@@ -43,7 +43,7 @@ namespace zxfoundation::sync::qspinlock::detail {
     /// @param[in] cpu_id   Logical CPU ID (0-based).
     /// @param[in] node_idx MCS node allocation index (0–3).
     /// @return Encoded tail value suitable for OR-ing into the lock word.
-    no_export constexpr auto encode_tail(const u16 cpu_id, const u32 node_idx) noexcept -> u32 {
+    static constexpr auto encode_tail(const u16 cpu_id, const u32 node_idx) noexcept -> u32 {
         const u32 tail_raw = ((static_cast<u32>(cpu_id) + 1U) << _Q_NODE_BITS)
                              | (node_idx & _Q_NODE_MASK);
         return tail_raw << _Q_TAIL_OFFSET;
@@ -52,7 +52,7 @@ namespace zxfoundation::sync::qspinlock::detail {
     /// @brief Decode the CPU index from a full lock word.
     /// @param[in] lock_val The full 32-bit lock word.
     /// @return The logical CPU ID that owns the tail position.
-    no_export constexpr auto decode_tail_cpu(const u32 lock_val) noexcept -> u16 {
+    static constexpr auto decode_tail_cpu(const u32 lock_val) noexcept -> u16 {
         const u32 tail_raw = (lock_val & _Q_TAIL_MASK) >> _Q_TAIL_OFFSET;
         return static_cast<u16>((tail_raw >> _Q_NODE_BITS) - 1U);
     }
@@ -60,7 +60,7 @@ namespace zxfoundation::sync::qspinlock::detail {
     /// @brief Decode the node index from a full lock word.
     /// @param[in] lock_val The full 32-bit lock word.
     /// @return The MCS node index (0–3) for the tail owner.
-    no_export constexpr auto decode_tail_node(const u32 lock_val) noexcept -> u32 {
+    static constexpr auto decode_tail_node(const u32 lock_val) noexcept -> u32 {
         const u32 tail_raw = (lock_val & _Q_TAIL_MASK) >> _Q_TAIL_OFFSET;
         return tail_raw & _Q_NODE_MASK;
     }

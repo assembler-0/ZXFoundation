@@ -16,24 +16,24 @@ import lib.stl;
 namespace zxfoundation::sys::zinitgraph::detail {
 
     /// @brief Cached toggle; default enabled until the cmdline says otherwise.
-    no_export bool g_enabled = true;
+    static bool g_enabled = true;
 
     /// @brief Maximum number of graph nodes, including internal barrier nodes.
-    no_export constexpr usize kMaxNodes = 640U;
+    static constexpr usize kMaxNodes = 640U;
     /// @brief Maximum number of graph edges.
-    no_export constexpr usize kMaxEdges = 2048U;
+    static constexpr usize kMaxEdges = 2048U;
 
-    no_export zg_node  g_node_pool[kMaxNodes];
-    no_export u32      g_node_pool_used = 0U;
+    static zg_node  g_node_pool[kMaxNodes];
+    static u32      g_node_pool_used = 0U;
 
-    no_export zg_edge  g_edge_pool[kMaxEdges];
-    no_export u32      g_edge_pool_used = 0U;
+    static zg_edge  g_edge_pool[kMaxEdges];
+    static u32      g_edge_pool_used = 0U;
 
     /// @brief Barrier node per class level.
-    no_export zg_node* g_barriers[static_cast<usize>(zinit::zi_class::max)] = {};
+    static zg_node* g_barriers[static_cast<usize>(zinit::zi_class::max)] = {};
 
     /// @brief Stable names for barrier nodes, ordered as zi_class.
-    no_export const char* const kBarrierNames[static_cast<usize>(zinit::zi_class::max)] = {
+    static const char* const kBarrierNames[static_cast<usize>(zinit::zi_class::max)] = {
         "__barrier_early",
         "__barrier_memory",
         "__barrier_core",
@@ -53,7 +53,7 @@ namespace zxfoundation::sys::zinitgraph::detail {
         for (auto& b : g_barriers) b = nullptr;
     }
 
-    /// @brief Allocate a zero-initialized node from the no_export pool.
+    /// @brief Allocate a zero-initialized node from the static pool.
     /// @return Node pointer, or nullptr when the pool is exhausted.
     /// @note Pool elements carry in-class initializers, so their list heads
     ///       and state fields are valid at first use without placement new.
@@ -62,7 +62,7 @@ namespace zxfoundation::sys::zinitgraph::detail {
         return &g_node_pool[g_node_pool_used++];
     }
 
-    /// @brief Allocate a zero-initialized edge from the no_export pool.
+    /// @brief Allocate a zero-initialized edge from the static pool.
     [[nodiscard]] auto edge_alloc() noexcept -> zg_edge* {
         if (g_edge_pool_used >= kMaxEdges) return nullptr;
         return &g_edge_pool[g_edge_pool_used++];
@@ -145,11 +145,8 @@ namespace zxfoundation::sys::zinitgraph {
     auto register_cmdline() noexcept -> void {
         zxfoundation::base::cmdline::add({
             .name    = "zx.sys.init.initgraph",
-            .type    = zxfoundation::base::cmdline::value_type::callback,
-            .handler = [](std::string_view value) noexcept -> bool {
-                detail::g_enabled = !(value == "0" || value == "off" || value == "false");
-                return true;
-            },
+            .type    = zxfoundation::base::cmdline::value_type::boolean,
+            .storage = &detail::g_enabled,
             .help    = "Enable the init graph overlay (1, default) or run flat (0)",
         });
     }

@@ -15,6 +15,10 @@ import zxfoundation.memory.objects;
 import zxfoundation.dgp.domain.types;
 import zxfoundation.dgp.domain.core;
 import zxfoundation.sys.ipc.core;
+import zxfoundation.sys.printk.core;
+import zxfoundation.base.config;
+import arch.s390x.cpu.percpu;
+import lib.stl;
 import zxfoundation.dgp.authorize;
 import zxfoundation.dgp.isolation.types;
 import zxfoundation.sync.qspinlock.core;
@@ -28,11 +32,15 @@ import lib.stl;
 
 namespace zxfoundation::dgp::policy::detail {
 
-    no_export scoms::scoms_table<policy_server, MAX_POLICY_SERVERS> g_table{};
-    alignas(4) no_export sync::qspinlock::qspinlock<sync::lock_rank::policy_table> g_lock{};
-    no_export bool g_initialized{false};
+    static scoms::scoms_table<policy_server, MAX_POLICY_SERVERS> g_table{};
+    alignas(4) static sync::qspinlock::qspinlock<sync::lock_rank::policy_table> g_lock{};
+    static bool g_initialized{false};
+    // Consult transport plumbing: never reused for anything else.
+    static std::atomic<u64> g_consult_serial{1ULL};
+    static inline std::array<std::atomic<bool>,
+        zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_consult_active{};
 
-    [[nodiscard]] no_export auto valid_kind(server_kind kind) noexcept -> bool {
+    [[nodiscard]] static auto valid_kind(server_kind kind) noexcept -> bool {
         return static_cast<u8>(kind) < static_cast<u8>(server_kind::count);
     }
 
@@ -40,9 +48,90 @@ namespace zxfoundation::dgp::policy::detail {
 
 namespace zxfoundation::dgp::policy {
 
+    /// @brief Consult transport (ch. §8.3): one decision request to the
+    ///        registered server's endpoint, bounded wait for the reply.
+    ///        Fail-safe envelope — any transport failure or timeout is the
+    ///        kernel default ({allow, 0}); userland answers can only deny
+    ///        (never silently allow more than the rights check permitted).
+    static auto consult_transport(u32 caller_domain_id, server_kind kind,
+                                  u64 request_a0, u64 request_a1,
+                                  u64 timeout_ns) noexcept -> decision {
+        if (!detail::g_initialized) return {};   // pre-registry: default
+        auto& pcp = arch::s390x::cpu::percpu::this_cpu();
+        sys::printk::perr("consult: enter kind={}", static_cast<u32>(kind));
+        // Re-entrancy guard: a consult must never consult (an ipc op inside
+        // the consult's own transport would loop through this path).
+        if (detail::g_consult_active[pcp.cpu_id].load(std::memory_order::relaxed))
+            return {};
+        if (detail::g_consult_active[pcp.cpu_id].exchange(true,
+                std::memory_order::acquire))
+            return {};
+
+        decision out{};
+        {
+            u32 cid = caller_domain_id;
+            if (cid == 0U) {
+                auto* strand = reinterpret_cast<
+                    zxfoundation::dgp::domain::strand*>(
+                    static_cast<u64>(pcp.current_strand));
+                cid = (strand && strand->owner)
+                    ? reinterpret_cast<zxfoundation::dgp::domain::domain*>(
+                        strand->owner)->ko.id : 0U;
+            }
+            auto* caller = cid ? zxfoundation::dgp::domain::domain_find(cid)
+                               : nullptr;
+            if (caller) {
+                u32 endpoint_id = 0U;
+                {
+                    const sync::irq_lock_guard _{detail::g_lock};
+                    auto* server = find_server(kind);
+                    endpoint_id = (server && server->ko.state ==
+                                   base::lifecycle_state::active)
+                        ? server->endpoint_id : 0U;
+                }
+                sys::printk::perr("consult: caller={} ep={}", cid,
+                    endpoint_id);
+                if (endpoint_id != 0U) {
+                    u32 payload[4]{static_cast<u32>(kind),
+                                   static_cast<u32>(request_a0),
+                                   static_cast<u32>(request_a1),
+                                   static_cast<u32>(caller_domain_id)};
+                    const u64 correlation =
+                        detail::g_consult_serial.fetch_add(1U,
+                            std::memory_order::relaxed) | 1ULL;
+                    auto sent = zxfoundation::sys::ipc::message_send(
+                        *caller, endpoint_id,
+                        reinterpret_cast<const u8*>(payload), sizeof(payload),
+                        nullptr, 0U, nullptr, 0U, correlation);
+                    sys::printk::perr("consult: send={:#x}",
+                        sent ? 1ULL : 0ULL);
+                    if (sent) {
+                        u64 status = 0ULL;
+                        auto waited = zxfoundation::sys::ipc::message_call_wait(
+                            *caller, endpoint_id, correlation, timeout_ns,
+                            status);
+                        sys::printk::perr(
+                            "consult: wait={:#x} status={:#x}",
+                            waited ? 1ULL : 0ULL, status);
+                        if (waited && status != 0ULL) {
+                            out.outcome = decide_outcome::deny;
+                            out.status = static_cast<u32>(status & 0xFFFFFFFFULL);
+                        }
+                    }
+                    // send/wait failure or timeout = default decision.
+                }
+            }
+        }
+        detail::g_consult_active[pcp.cpu_id].store(false,
+            std::memory_order::release);
+        return out;
+    }
+
     auto zi_policy_init(const sys::zinit::zi_desc&) noexcept -> sys::zinit::zi_result {
         if (detail::g_initialized) return {};
         detail::g_table.init(scoms::kobject::kobject_type::policy_server);
+        detail::g_consult_serial = 1ULL;
+        g_decide = &consult_transport;
         detail::g_initialized = true;
         return {};
     }
@@ -140,8 +229,17 @@ namespace zxfoundation::dgp::policy {
         const sync::irq_lock_guard _{detail::g_lock};
         detail::g_table.destroy_if(
             [domain_id](const policy_server& server) noexcept -> bool {
-                auto* mo = memory::objects::memory_object_resolve_id(server.authority.id);
+                auto* mo =
+                    memory::objects::memory_object_resolve_id(server.authority.id);
                 return mo && mo->owner_domain == domain_id;
+            },
+            [](policy_server& server) noexcept -> void {
+                // Same hygiene as unregister_server: the authority object
+                // and the owner attach must not survive the reaper.
+                discard_value memory::objects::memory_object_destroy(
+                    server.authority);
+                server.authority = {};
+                discard_value scoms::object_core::detach(server.ko);
             });
     }
 

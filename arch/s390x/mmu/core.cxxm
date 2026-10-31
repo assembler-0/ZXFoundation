@@ -17,8 +17,8 @@ namespace arch::s390x::mmu::detail {
 
     using namespace zxfoundation::memory;
 
-    from_global(reference) bool g_has_edat1;
-    from_global(reference) bool g_has_edat2;
+    extern bool g_has_edat1;
+    extern bool g_has_edat2;
 
     /// @brief Build the default PMM request used for DAT table pages.
     [[nodiscard]] auto default_table_request() noexcept -> pmm::allocation_request;
@@ -83,6 +83,14 @@ namespace arch::s390x::mmu::detail {
 export {
 
 namespace arch::s390x::mmu {
+
+    /// @brief Ensure all south tables exist for [va, va+len): idempotent,
+    ///        no PTE installation — first touch stays page-level.
+    [[nodiscard]] auto ensure_range_tables(
+        u64 root_phys,
+        u64 va,
+        u64 len
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error>;
 
     /// @brief Query EDAT-1 (1 MiB large page) availability.
     [[nodiscard]] auto has_edat1() noexcept -> bool;

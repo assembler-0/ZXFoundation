@@ -37,6 +37,38 @@ namespace zxfoundation::dgp::policy {
 
     static_assert(__builtin_offsetof(policy_server, ko) == 0);
 
+    /// @brief Consult outcome for one policy decision request.
+    enum class decide_outcome : u8 {
+        allow = 0,   ///< Proceed with the kernel default (or the server's allow).
+        deny  = 1,   ///< The server denied; @ref status carries its error code.
+    };
+
+    struct decision {
+        decide_outcome outcome{decide_outcome::allow};
+        u32 status{0};  ///< deny: the server's error code.
+    };
+
+    /// @brief Consult transport hook — installed by the policy component at
+    ///        zinit once its registry and the ipc transport exist.
+    using decide_fn = auto (*)(u32 caller_domain_id, server_kind kind,
+                               u64 request_a0, u64 request_a1,
+                               u64 timeout_ns) noexcept -> decision;
+
+    /// @brief Consult hook pointer.
+    inline decide_fn g_decide{nullptr};
+
+    /// @brief The only call shape callers may use
+    [[nodiscard]] inline auto decide(u32 caller_domain_id, server_kind kind,
+                                     u64 request_a0, u64 request_a1,
+                                     u64 timeout_ns) noexcept -> decision {
+        return g_decide
+            ? g_decide(caller_domain_id, kind, request_a0, request_a1, timeout_ns)
+            : decision{};
+    }
+
+    /// @brief The kernel's consult deadline
+    inline constexpr u64 DECIDE_TIMEOUT_NS = 100'000'000ULL;
+
 } // namespace zxfoundation::dgp::policy
 
 } // end export

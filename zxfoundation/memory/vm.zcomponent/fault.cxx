@@ -4,6 +4,8 @@
 
 module zxfoundation.memory.vm.fault;
 import zxfoundation.memory.vm.types;
+import zxfoundation.dgp.policy.types;
+import zxfoundation.sched.context;
 import zxfoundation.memory.vm;
 import zxfoundation.memory.pmm;
 import zxfoundation.memory.pmm.types;
@@ -46,6 +48,17 @@ namespace zxfoundation::memory::vm {
         using namespace zxfoundation::memory;
 
         const u64 page_va = fault_va & ~(PAGE_SIZE - 1ULL);
+
+        if (zxfoundation::sched::context::nesting_depth() == 0U &&
+            zxfoundation::sched::context::nucleus_nesting_depth() == 0U &&
+            !zxfoundation::sched::context::preempt_disabled()) {
+            const auto consult = zxfoundation::dgp::policy::decide(
+                space.owner_domain, zxfoundation::dgp::policy::server_kind::pager,
+                fault_va, is_write ? 2ULL : 1ULL,
+                zxfoundation::dgp::policy::DECIDE_TIMEOUT_NS);
+            if (consult.outcome == zxfoundation::dgp::policy::decide_outcome::deny)
+                return fault_action::killed;
+        }
 
         _fault_file_request file_req{};
         bool need_file_io = false;

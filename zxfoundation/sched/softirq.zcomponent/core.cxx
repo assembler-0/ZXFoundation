@@ -15,10 +15,10 @@ import lib.stl;
 namespace zxfoundation::sched::softirq::detail {
 
     /// @brief Per-CPU balance request state indexed by CPU id.
-    alignas(64) no_export std::array<balance_req, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_balance_reqs{};
+    alignas(64) static std::array<balance_req, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_balance_reqs{};
 
     /// @brief Softirq entry point
-    no_export auto softirq_entry(void* data) noexcept -> void {
+    static auto softirq_entry(void* data) noexcept -> void {
         const u16 cpu = (data != nullptr)
             ? static_cast<u16>(reinterpret_cast<u64>(data) & 0xFFFFULL)
             : arch::s390x::cpu::percpu::this_cpu().cpu_id;

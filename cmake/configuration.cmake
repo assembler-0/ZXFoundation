@@ -12,9 +12,9 @@ if (NOT DEFINED MAX_CPUS)
     set(MAX_CPUS "768" CACHE STRING "Maximum supported cpus")
 endif()
 
-# 7a2f41726368 is "z/Arch".encode('ascii').hex()
+# D5D6E3E9D6E2 is "NOTZOS"
 if (NOT DEFINED DASD_SERIAL)
-    set(DASD_SERIAL "7a2f41726368" CACHE STRING "Dasd serial")
+    set(DASD_SERIAL "D5D6E3E9D6E2" CACHE STRING "Dasd serial")
 endif()
 
 # LTO (Link-Time Optimization)

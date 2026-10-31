@@ -37,7 +37,7 @@ namespace zxfoundation::sched::cpudl::detail {
         std::atomic<u32> earliest_cpu{0xFFFF'FFFFU};
     };
 
-    no_export cpudl_index g_cpudl{};
+    static cpudl_index g_cpudl{};
 
     /// @brief rb-tree comparator: nodes keyed by (deadline_ns)
     [[nodiscard]] inline auto less(const cpudl_node& a, const cpudl_node& b) noexcept -> bool {

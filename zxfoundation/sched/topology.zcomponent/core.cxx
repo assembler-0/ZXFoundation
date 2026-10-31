@@ -16,7 +16,7 @@ import lib.stl;
 
 namespace zxfoundation::sched::topology::detail {
 
-    no_export std::array<cpu_topology_record, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cpu_records{};
+    static std::array<cpu_topology_record, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cpu_records{};
 
     /// @brief Online CPUs grouped by NUMA node (drawer).
     std::array<lib::cpumask, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_node_masks{};

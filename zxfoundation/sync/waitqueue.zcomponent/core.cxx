@@ -1,7 +1,6 @@
 /// SPDX-License-Identifier: Apache-2.0
 /// @file zxfoundation/sync/waitqueue.zcomponent/core.cxx
-/// @brief Wait queue operations — the FIFO flavor over the turnstile
-///        substrate (ch. 20 §20.2a).
+/// @brief Wait queue operations
 
 module zxfoundation.sync.waitqueue.core;
 import zxfoundation.sync.waitqueue.types;

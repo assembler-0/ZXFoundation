@@ -23,14 +23,10 @@ namespace zxfoundation::sync::mutex {
         strand* strand_ptr{nullptr};
     };
 
-    no_export auto wake_mutex_waiter(void* opaque) noexcept -> void {
+    static auto wake_mutex_waiter(void* opaque) noexcept -> void {
         auto* waiter = static_cast<mutex_waiter*>(opaque);
         if (!waiter || !waiter->strand_ptr) return;
-        auto* strand_ptr = waiter->strand_ptr;
-        strand_ptr->substate = sched_substate::runnable;
-        zxfoundation::sched::enqueue_strand(strand_ptr);
-        if (auto* owner = static_cast<domain*>(strand_ptr->owner))
-            owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+        zxfoundation::sched::wake_strand(*waiter->strand_ptr);
     }
 
     auto mutex::lock() noexcept -> void {

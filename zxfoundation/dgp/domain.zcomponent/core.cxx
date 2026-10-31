@@ -61,37 +61,43 @@ import lib.stl;
 namespace zxfoundation::dgp::domain::detail {
 
     /// @brief The global domain table — SCOMS scoms_table.
-    declscope(C) scoms::scoms_table<domain, MAX_DOMAINS> g_domain_table;
+    extern "C" scoms::scoms_table<domain, MAX_DOMAINS> g_domain_table;
 
     /// @brief Kernel stack size per domain.
-    no_export constexpr u32 DOMAIN_KERNEL_STACK_SIZE =
+    static constexpr u32 DOMAIN_KERNEL_STACK_SIZE =
         arch::s390x::cpu::processor::STACK_SIZE;
 
     /// @brief Buddy order for kernel stack allocation: 2^2 = 4 pages.
-    no_export constexpr u32 DOMAIN_KERNEL_STACK_ORDER = 2;
+    static constexpr u32 DOMAIN_KERNEL_STACK_ORDER = 2;
 
-    no_export constexpr u32 MAX_SECONDARY_STRAND_IDS = MAX_DOMAINS * MAX_STRANDS_PER_DOMAIN;
+    static constexpr u32 MAX_SECONDARY_STRAND_IDS = MAX_DOMAINS * MAX_STRANDS_PER_DOMAIN;
 
     /// @brief Secondary strand SCOMS table.
-    no_export scoms::scoms_table<strand, MAX_SECONDARY_STRAND_IDS> g_strand_table{};
+    static scoms::scoms_table<strand, MAX_SECONDARY_STRAND_IDS> g_strand_table{};
 
     /// @brief Nucleus domain
     struct nucleus_domain_handle {
         domain* ptr{nullptr};
     };
 
-    no_export nucleus_domain_handle g_nucleus{};
+    static nucleus_domain_handle g_nucleus{};
 
     [[nodiscard]] auto lifecycle_error() noexcept -> lib::kernel_error {
         return lib::kernel_error::from_generic(lib::generic_error::invalid_arg);
     }
 
+    /// @brief Claim exclusive ownership of a domain's teardown
     [[nodiscard]] auto claim_domain_destroy(domain& d) noexcept
         -> std::expected<void, lib::kernel_error> {
         const sync::irq_lock_guard _{d.ko.lock};
-        if (d.ko.state != base::lifecycle_state::active
-            || d.teardown_phase != dgp::sync_contract::teardown_phase::none
-            || !d.ko.transition(base::lifecycle_state::dying)) {
+        if (d.teardown_phase != dgp::sync_contract::teardown_phase::none) {
+            return std::unexpected(lifecycle_error());
+        }
+        if (d.ko.state == base::lifecycle_state::active) {
+            if (!d.ko.transition(base::lifecycle_state::dying)) {
+                return std::unexpected(lifecycle_error());
+            }
+        } else if (d.ko.state != base::lifecycle_state::dying) {
             return std::unexpected(lifecycle_error());
         }
         return {};
@@ -686,10 +692,6 @@ namespace zxfoundation::dgp::domain {
     [[nodiscard]] auto domain_destroy(domain_id id) noexcept
         -> std::expected<void, lib::kernel_error>
     {
-                namespace pmm  = zxfoundation::memory::pmm;
-        namespace hhdm = zxfoundation::memory::hhdm;
-        namespace mmu  = arch::s390x::mmu;
-
         if (id >= MAX_DOMAINS)
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
@@ -709,7 +711,24 @@ namespace zxfoundation::dgp::domain {
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
         }
 
-        auto claim_result = claim_domain_destroy(*d);
+        return domain_teardown(d);
+    }
+
+    /// @brief Run the teardown sequence for an already-claimed domain
+    [[nodiscard]] auto domain_teardown(domain* d) noexcept
+        -> std::expected<void, lib::kernel_error>
+    {
+        namespace pmm  = zxfoundation::memory::pmm;
+        namespace hhdm = zxfoundation::memory::hhdm;
+        namespace mmu  = arch::s390x::mmu;
+        const domain_id id = d->ko.id;
+
+        if ((d->flags & domain_flags::nucleus) != domain_flags::none) {
+            return std::unexpected(
+                lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
+        }
+
+        auto claim_result = detail::claim_domain_destroy(*d);
         if (!claim_result) return std::unexpected(claim_result.error());
 
         auto teardown_result = advance_domain_teardown_phase(

@@ -8,11 +8,11 @@ import zxfoundation.base.types;
 import lib.error;
 import lib.stl;
 
-from_global(nomangle) {
-    from_global(reference) const u64  zxallsyms_addrs[];   ///< Sorted ascending virtual addresses.
-    from_global(reference) const u32  zxallsyms_offsets[]; ///< Byte offset into zxallsyms_names[].
-    from_global(reference) const char zxallsyms_names[];   ///< Flat NUL-terminated name pool.
-    from_global(reference) const u32  zxallsyms_count;     ///< Total number of symbols.
+extern "C" {
+    extern const u64  zxallsyms_addrs[];   ///< Sorted ascending virtual addresses.
+    extern const u32  zxallsyms_offsets[]; ///< Byte offset into zxallsyms_names[].
+    extern const char zxallsyms_names[];   ///< Flat NUL-terminated name pool.
+    extern const u32  zxallsyms_count;     ///< Total number of symbols.
 }
 
 namespace zxfoundation::sys::zxallsyms {

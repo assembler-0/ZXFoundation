@@ -27,8 +27,8 @@ import lib.stl;
 namespace zxfoundation::dgp::cap::detail {
 
     /// @brief Maximum number of lookup table entries (must exceed largest cap_type).
-    no_export constexpr u32 LOOKUP_TABLE_SIZE = 16;
-    no_export constexpr u32 MAX_CAPABILITIES = 1024;
+    static constexpr u32 LOOKUP_TABLE_SIZE = 16;
+    static constexpr u32 MAX_CAPABILITIES = 1024;
 
     struct capability_slot {
         scoms::kobject::bobject* target{nullptr};
@@ -40,13 +40,13 @@ namespace zxfoundation::dgp::cap::detail {
         bool            active{false};
     };
 
-    no_export capability_slot* s_capabilities{nullptr};
-    no_export sync::qspinlock::qspinlock<sync::lock_rank::cap_table> s_capability_lock{};
+    static capability_slot* s_capabilities{nullptr};
+    static sync::qspinlock::qspinlock<sync::lock_rank::cap_table> s_capability_lock{};
 
     /// @brief Callback table indexed by cap_type.
-    no_export lookup_fn s_lookup_table[LOOKUP_TABLE_SIZE]{};
+    static lookup_fn s_lookup_table[LOOKUP_TABLE_SIZE]{};
 
-    [[nodiscard]] no_export auto ensure_capabilities_locked() noexcept -> bool {
+    [[nodiscard]] static auto ensure_capabilities_locked() noexcept -> bool {
         if (s_capabilities) return true;
         s_capabilities = static_cast<capability_slot*>(
             memory::kmalloc::kmalloc(sizeof(capability_slot) * MAX_CAPABILITIES));
@@ -59,7 +59,7 @@ namespace zxfoundation::dgp::cap::detail {
     /// @param[in]  type    cap_type discriminator.
     /// @param[in]  obj_id  Object ID.
     /// @return  Pair of (kobject*, generation) or error.
-    [[nodiscard]] no_export auto lookup_kobject(
+    [[nodiscard]] static auto lookup_kobject(
         cap_type type, u16 obj_id
     ) noexcept -> std::expected<std::pair<scoms::kobject::bobject*, u32>, lib::kernel_error> {
 
@@ -78,7 +78,7 @@ namespace zxfoundation::dgp::cap::detail {
     }
 
     /// @brief Validate that the token's type has sufficient rights for an operation.
-    [[nodiscard]] no_export auto check_rights(cap_token token, ::zxfoundation::dgp::right_mask needed) noexcept
+    [[nodiscard]] static auto check_rights(cap_token token, ::zxfoundation::dgp::right_mask needed) noexcept
         -> std::expected<void, lib::kernel_error>
     {
         if (!::zxfoundation::dgp::token_covers(token.rights(), needed)) {
@@ -88,7 +88,7 @@ namespace zxfoundation::dgp::cap::detail {
         return {};
     }
 
-    [[nodiscard]] no_export auto slot_for(cap_token token) noexcept -> capability_slot* {
+    [[nodiscard]] static auto slot_for(cap_token token) noexcept -> capability_slot* {
         if (!s_capabilities) return nullptr;
         if (!token || token.object_id() == 0U ||
             static_cast<u32>(token.object_id()) >= MAX_CAPABILITIES) {
@@ -103,7 +103,7 @@ namespace zxfoundation::dgp::cap::detail {
         return &slot;
     }
 
-    [[nodiscard]] no_export auto issue_locked(
+    [[nodiscard]] static auto issue_locked(
         cap_type type, u16 obj_id, ::zxfoundation::dgp::right_mask rights, u32 owner_domain
     ) noexcept -> std::expected<cap_token, lib::kernel_error> {
         if (!ensure_capabilities_locked()) return std::unexpected(
@@ -146,7 +146,7 @@ namespace zxfoundation::dgp::cap::detail {
             type, static_cast<u16>(slot_id), slot.generation, carried);
     }
 
-    [[nodiscard]] no_export auto validate_slot(
+    [[nodiscard]] static auto validate_slot(
         cap_token token, ::zxfoundation::dgp::right_mask needed, u32 owner_domain, bool check_owner,
         scoms::kobject::bobject*& target
     ) noexcept -> std::expected<void, lib::kernel_error> {

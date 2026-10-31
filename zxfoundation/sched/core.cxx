@@ -85,9 +85,11 @@ namespace zxfoundation::sched::detail {
     using namespace zxfoundation::dgp::domain;
     using namespace zxfoundation::sys::printk;
 
-    no_export std::array<run_queue, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_rqs{};
-    no_export bool g_sched_initialized{false};
-    no_export std::array<u64, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cputimer_armed_tod{};
+    static std::array<run_queue, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_rqs{};
+    static bool g_sched_initialized{false};
+    static std::array<u64, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_cputimer_armed_tod{};
+    static sys::timer::kernel_timer g_bsp_tick_timer{};
+    static std::array<sys::timer::kernel_timer, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_ap_tick_timers{};
 
     [[nodiscard]] auto pcp_cpu_id() noexcept -> u16 {
         return arch::s390x::cpu::percpu::this_cpu().cpu_id;
@@ -99,8 +101,16 @@ namespace zxfoundation::sched::detail {
         arch::s390x::cpu::cputimer::spt(tod);
         detail::g_cputimer_armed_tod[pcp_cpu_id()] = tod;
     }
-    no_export sys::timer::kernel_timer g_bsp_tick_timer{};
-    no_export std::array<sys::timer::kernel_timer, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_ap_tick_timers{};
+
+    /// @brief Charge @p s the real runtime elapsed since its dispatch stamp
+    auto runtime_charge(run_queue& rq, strand& s, u64 now_ns) noexcept -> void {
+        if (!s.body) return;
+        const u64 stamp = s.body->sched_stamp_ns;
+        s.body->sched_stamp_ns = now_ns;
+        if (stamp == 0ULL || stamp >= now_ns) return;
+        zxfoundation::sched::fair::update_curr(
+            s.se, rq.min_vruntime, now_ns - stamp);
+    }
 
     auto validate_scheduler_irq_context(u32 domain_id = 0U) noexcept -> void {
         const auto state = zxfoundation::dgp::sync_contract::contract_snapshot(
@@ -121,7 +131,15 @@ namespace zxfoundation::sched::detail {
         if (d.ko.id == zxfoundation::scoms::kobject::KOBJECT_ID_INVALID) return;
         if (d.ko.state != zxfoundation::base::lifecycle_state::dying) return;
 
-        discard_value zxfoundation::dgp::domain::domain_destroy(d.ko.id);
+        for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
+            const strand* rq_curr = detail::g_rqs[i].curr;
+            if (rq_curr && static_cast<const domain*>(rq_curr->owner) == &d) {
+                arch::s390x::cpu::ipi::send_reschedule(static_cast<u16>(i));
+                return;
+            }
+        }
+
+        discard_value zxfoundation::dgp::domain::domain_teardown(&d);
     }
 
     auto record_asce_attachment(domain& d) noexcept -> void {
@@ -285,13 +303,13 @@ namespace zxfoundation::sched {
 
     auto enqueue_strand(strand* s) noexcept -> void {
         auto* d = static_cast<domain*>(s->owner);
-        // §5.12 BUG-063: only a teardown state refuses enqueue.  A destroy
-        // in progress can wake parked workers (gate drain, futex/waitqueue
-        // wakes) after claiming the domain; enqueueing them races the
-        // destroy loop's kfree.
         if (d
             && (d->ko.state == zxfoundation::base::lifecycle_state::dying
                 || d->ko.state == zxfoundation::base::lifecycle_state::destroyed)) {
+            return;
+        }
+        if ((s->flags & zxfoundation::dgp::domain::strand_flags::dead)
+            != zxfoundation::dgp::domain::strand_flags::none) {
             return;
         }
         auto& rq = cpu_rq(s->cpu);
@@ -323,6 +341,27 @@ namespace zxfoundation::sched {
             }
         }
         softirq::raise_balance_local(softirq::balance_kind::periodic);
+    }
+
+    /// @brief Wake a parked strand through the canonical wake discipline.
+    /// @param[in,out] s Strand to wake.
+    auto wake_strand(strand& s) noexcept -> void {
+        auto* owner = static_cast<domain*>(s.owner);
+        if ((s.flags & zxfoundation::dgp::domain::strand_flags::dead)
+            != zxfoundation::dgp::domain::strand_flags::none) {
+            return;
+        }
+        if (s.substate != sched_substate::blocked) {
+            if (owner) {
+                owner->flags = owner->flags | domain_flags::need_resched;
+            }
+            return;
+        }
+        s.substate = sched_substate::runnable;
+        enqueue_strand(&s);
+        if (owner) {
+            owner->flags = owner->flags | domain_flags::need_resched;
+        }
     }
 
     auto dequeue_strand(strand* s) noexcept -> void {
@@ -364,7 +403,6 @@ namespace zxfoundation::sched {
         const bool kthread_mode = (request.entry != nullptr);
         const bool user_mode    = (request.uregs != nullptr);
 
-        // Exactly one first-switch frame source (§9.4).
         if (kthread_mode == user_mode) {
             return std::unexpected(
                 lib::kernel_error::from_generic(lib::generic_error::invalid_arg));
@@ -413,9 +451,16 @@ namespace zxfoundation::sched {
         -> std::expected<void, lib::kernel_error> {
         auto* current = static_cast<domain*>(
             arch::s390x::cpu::lowcore::current_domain_ptr());
-        if (current == &d || d.primary_strand.substate == sched_substate::running) {
+        if (current == &d) {
             return std::unexpected(lib::kernel_error::from_driver(
                 lib::driver_error::busy));
+        }
+        for (u32 i = 0; i < zxfoundation::base::config::CONFIG_ZX_MAX_CPUS; ++i) {
+            const strand* rq_curr = detail::g_rqs[i].curr;
+            if (rq_curr && static_cast<domain*>(rq_curr->owner) == &d) {
+                return std::unexpected(lib::kernel_error::from_driver(
+                    lib::driver_error::busy));
+            }
         }
         if (d.primary_strand.on_rq) dequeue_strand(&d.primary_strand);
         for (auto it = d.strands.begin(); it != d.strands.end();) {
@@ -424,13 +469,36 @@ namespace zxfoundation::sched {
                 lib::list_node, &zxfoundation::dgp::domain::strand_body::strand_list>(node);
 
             auto* strand_ptr = body->self;
-            if (strand_ptr->substate == sched_substate::running) {
-                return std::unexpected(lib::kernel_error::from_driver(
-                    lib::driver_error::busy));
-            }
             if (strand_ptr->on_rq) dequeue_strand(strand_ptr);
         }
         return {};
+    }
+
+    auto yield_forfeit(strand& s) noexcept -> void {
+        auto& rq = this_rq();
+        const auto flags = arch::s390x::cpu::irq::irq_save_disable();
+        rq.lock.lock();
+        if (s.body) {
+            const u64 now_ns =
+                zxfoundation::sys::time::monotonic_now()
+                    .nanoseconds_since_epoch();
+            detail::runtime_charge(rq, s, now_ns);
+            // Forfeit only toward waiters: an empty queue has nothing to
+            // hand the slice to.
+            if (rq.nr_running != 0U) {
+                const u64 avg = zxfoundation::sched::fair::avg_vruntime(
+                    rq.min_vruntime, rq.avg_vruntime_acc,
+                    rq.avg_weight_acc);
+                if (zxfoundation::sched::fair::entity_eligible(s.se, avg)) {
+                    s.se.vruntime = s.se.deadline;
+                    s.se.deadline = s.se.vruntime + s.se.slice;
+                    s.se.lag = static_cast<i64>(s.se.vruntime)
+                        - static_cast<i64>(avg);
+                }
+            }
+        }
+        rq.lock.unlock();
+        arch::s390x::cpu::irq::irq_restore(flags);
     }
 
     auto schedule() noexcept -> void {
@@ -443,6 +511,13 @@ namespace zxfoundation::sched {
         strand* prev = rq.curr;
         strand* next = nullptr;
 
+        if (prev && prev != rq.idle_strand && prev->body) {
+            detail::runtime_charge(
+                rq, *prev,
+                zxfoundation::sys::time::monotonic_now()
+                    .nanoseconds_since_epoch());
+        }
+
         if (prev) {
             auto* prev_dom = static_cast<domain*>(prev->owner);
             if (prev_dom) {
@@ -453,7 +528,9 @@ namespace zxfoundation::sched {
                 && admit::can_admit_domain(prev_dom)
                 && (prev->substate == sched_substate::running || prev->substate == sched_substate::runnable)
                 && !prev->on_rq
-                && prev != rq.idle_strand) {
+                && prev != rq.idle_strand
+                && (prev->flags & zxfoundation::dgp::domain::strand_flags::dead)
+                    == zxfoundation::dgp::domain::strand_flags::none) {
                 prev->substate = sched_substate::runnable;
                 auto enqueue_result = classed::enqueue(rq, *prev);
                 if (!enqueue_result) [[unlikely]] {
@@ -468,14 +545,41 @@ namespace zxfoundation::sched {
                 && prev->substate != sched_substate::running
                 && prev->substate != sched_substate::runnable) {
                 classed::dequeue(rq, *prev);
+            } else if (prev != rq.idle_strand && !prev->on_rq
+                && prev->substate == sched_substate::running) {
+                prev->substate = sched_substate::idle;
             }
         }
 
-        next = classed::select_next(rq);
-        if (next == rq.idle_strand) next = nullptr;
+        while (true) {
+            next = classed::select_next(rq);
+            if (next == rq.idle_strand) {
+                next = nullptr;
+                break;
+            }
+            if (!next) break;
+
+            auto* candidate_owner = static_cast<domain*>(next->owner);
+            const bool dead_strand =
+                (next->flags & zxfoundation::dgp::domain::strand_flags::dead)
+                != zxfoundation::dgp::domain::strand_flags::none;
+            const bool revoked = candidate_owner
+                && candidate_owner->pending_rights_revoke_raw != 0U;
+            if (dead_strand
+                || !admit::can_admit_domain(candidate_owner)
+                || revoked) [[unlikely]] {
+                classed::dequeue(rq, *next);
+                next->substate = sched_substate::idle;
+                continue;
+            }
+            break;
+        }
 
         if (!next && detail::g_sched_initialized) {
-            next = detail::try_steal_strand_locked(rq);
+            if (rq_snapshot::steal_epoch_slot() == rq.cpu_id) {
+                rq_snapshot::steal_epoch_advance(rq.cpu_id);
+                next = detail::try_steal_strand_locked(rq);
+            }
             if (next) {
                 auto enqueue_result = classed::enqueue(rq, *next);
                 if (!enqueue_result) [[unlikely]] {
@@ -495,13 +599,9 @@ namespace zxfoundation::sched {
         }
 
         auto* next_owner = static_cast<domain*>(next->owner);
-        if (!admit::can_admit_domain(next_owner)) [[unlikely]] {
-            next = rq.idle_strand;
-            next_owner = static_cast<domain*>(next->owner);
-        }
-
-        if (next != rq.idle_strand && next_owner
-            && next_owner->pending_rights_revoke_raw != 0U) {
+        if (next != rq.idle_strand
+            && (!admit::can_admit_domain(next_owner)
+                || (next_owner && next_owner->pending_rights_revoke_raw != 0U))) [[unlikely]] {
             classed::dequeue(rq, *next);
             next->substate = sched_substate::idle;
             next = rq.idle_strand;
@@ -559,6 +659,11 @@ namespace zxfoundation::sched {
             const u64 calibrated_slice = fair::sched_slice(next->se, rq.nr_running);
             next->se.slice = calibrated_slice;
             detail::cputimer_arm_ns(calibrated_slice);
+            if (next->body) {
+                next->body->sched_stamp_ns =
+                    zxfoundation::sys::time::monotonic_now()
+                        .nanoseconds_since_epoch();
+            }
         } else {
             arch::s390x::cpu::cputimer::spt(
                 zxfoundation::sys::timer::TICK_INTERVAL_TOD);
@@ -673,10 +778,14 @@ namespace zxfoundation::sched {
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto* current = reinterpret_cast<strand*>(pcp.current_strand);
         if (current) {
-            current->on_rq = false;
+            const auto irq_flags = arch::s390x::cpu::irq::irq_save_disable();
+            auto& rq = this_rq();
+            rq.lock.lock();
             current->substate = sched_substate::blocked;
             current->flags = current->flags
                 | zxfoundation::dgp::domain::strand_flags::dead;
+            rq.lock.unlock();
+            arch::s390x::cpu::irq::irq_restore(irq_flags);
             discard_value zxfoundation::scoms::kobject::mark_destroyed(current);
             if (auto* owner = static_cast<domain*>(current->owner)) {
                 owner->flags = owner->flags | domain_flags::need_resched;
@@ -693,6 +802,7 @@ namespace zxfoundation::sched {
     auto cpu_timer_tick() noexcept -> void {
         if (!detail::g_sched_initialized) return;
 
+
         auto& rq = this_rq();
 
         auto* curr = rq.curr;
@@ -704,30 +814,16 @@ namespace zxfoundation::sched {
             return;
         }
 
-        const u64 armed = detail::g_cputimer_armed_tod[detail::pcp_cpu_id()];
-        u64 remaining = arch::s390x::cpu::cputimer::stpt();
-        u64 elapsed_tod;
-        if (remaining > armed) {
-            // expired and wrapped negative; charge the full arm
-            elapsed_tod = armed;
-        } else {
-            elapsed_tod = armed - remaining;
-        }
-        const u64 elapsed_ns = (elapsed_tod * 125ULL) >> 9U;
+        const u64 now_ns =
+            zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
 
         const auto flags = arch::s390x::cpu::irq::irq_save_disable();
         rq.lock.lock();
-
-        const u64 weighted_delta = (elapsed_ns * 1024) / curr->se.weight;
-        curr->se.vruntime += weighted_delta;
-
-        if (curr->se.vruntime > rq.min_vruntime)
-            rq.min_vruntime = curr->se.vruntime;
+        detail::runtime_charge(rq, *curr, now_ns);
 
         const bool deadline_expired = (curr->se.vruntime >= curr->se.deadline);
 
         namespace pelt = zxfoundation::sched::pelt;
-        const u64 now_ns = zxfoundation::sys::time::monotonic_now().nanoseconds_since_epoch();
         if (curr->body) {
             pelt::update_entity_load_avg(curr->body->pelt_avg, now_ns, curr->se.weight, 1U, 1U);
         }
@@ -829,9 +925,17 @@ namespace zxfoundation::sched {
 
     auto preempt_schedule() noexcept -> void {
         if (!detail::g_sched_initialized) return;
-        if (need_resched()) {
+        do {
+            context::preempt_disable();            // count>0 shields the switch
             schedule();
-        }
+            context::preempt_enable_no_resched();  // loop re-arms, no recursion
+        } while (need_resched());
+    }
+
+    /// @brief preempt_enable count→0 seam (Linux __preempt_schedule).
+    extern "C" auto zx_preempt_schedule_hook() noexcept -> void {
+        if (!detail::g_sched_initialized) return;
+        preempt_schedule();
     }
 
     [[nodiscard]] auto sched_active() noexcept -> bool {
@@ -931,7 +1035,9 @@ namespace zxfoundation::sched {
     [[noreturn]] auto idle_enter() noexcept -> void {
         while (true) {
             schedule();
-            arch::s390x::cpu::psw::enabled_wait();
+            if (this_rq().nr_running == 0U && !need_resched()) {
+                arch::s390x::cpu::psw::enabled_wait();
+            }
         }
     }
 
@@ -1100,6 +1206,6 @@ namespace zxfoundation::sched {
 
 } // namespace zxfoundation::sched
 
-declscope(C) [[noreturn]] auto sched_strand_trampoline_exit() noexcept -> void {
+extern "C" [[noreturn]] auto sched_strand_trampoline_exit() noexcept -> void {
     zxfoundation::sched::strand_trampoline_exit();
 }

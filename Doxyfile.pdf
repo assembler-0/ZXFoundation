@@ -1,0 +1,7 @@
+@INCLUDE               = Doxyfile
+GENERATE_HTML          = NO
+GENERATE_LATEX         = YES
+USE_PDFLATEX           = YES
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+LATEX_EXTRA_STYLESHEET = scripts/latex/zxf.sty

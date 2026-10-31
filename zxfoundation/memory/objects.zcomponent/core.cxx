@@ -25,8 +25,8 @@ import lib.stl;
 
 namespace zxfoundation::memory::objects::detail {
 
-    no_export scoms::scoms_table<memory_object, MAX_MEMORY_OBJECTS> g_table{};
-    no_export bool g_initialized{false};
+    static scoms::scoms_table<memory_object, MAX_MEMORY_OBJECTS> g_table{};
+    static bool g_initialized{false};
 
     [[nodiscard]] auto policy_from(const memory_object& object) noexcept
         -> memory_object_policy {

@@ -39,8 +39,6 @@ namespace arch::s390x::trap::svc {
 
     /// @brief Centralized SVC nucleus-call dispatcher.
     [[nodiscard]] auto handle(cpu::irq::irq_frame* frame, const u16 svc_code) noexcept -> u64 {
-        // §5.12: record whether the hardware was inside a stacking PC
-        // (PASN switched to a callee) when this interruption arrived.
         zxfoundation::dgp::domain::strand_note_interrupt_context(
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0);
         {
@@ -89,10 +87,6 @@ namespace arch::s390x::trap::svc {
             cpu::pcss::state_entry_synthesize_return(
                 *frame, strand->body->linkage_stack, entry_base,
                 caller_dom ? caller_dom->asce.val : 0ULL);
-            // §5.12 BUG-072: the synthesis consumed the stacked entry —
-            // this strand is the caller again, in its own space.  Clear
-            // in_pc so the next dispatch republishes owner CR state
-            // instead of re-applying the stale mid-PC snapshot.
             strand->body->in_pc = 0U;
             return frame->gprs[2];
         }
@@ -157,10 +151,6 @@ namespace arch::s390x::trap::svc {
                 arch::s390x::cpu::pcss::state_entry_synthesize_return(
                     *frame, strand->body->linkage_stack, entry_base,
                     caller_dom ? caller_dom->asce.val : 0ULL);
-                // §5.12 BUG-072: the parked caller woke and its entry was
-                // consumed — it is the caller again, in its own space.
-                // Clear in_pc so the dispatch path never re-applies the
-                // stale mid-PC CR snapshot over this restored context.
                 strand->body->in_pc = 0U;
                 const u64 restored = frame->gprs[2];
                 return restored;

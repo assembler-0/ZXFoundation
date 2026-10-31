@@ -9,5 +9,5 @@
 /// @{
 #define symaliasname(fn) concat(__symalias_,fn)
 #define symalias_reference(fn) __asm__(stringify(symaliasname(fn)))
-#define symalias(fn) declscope(C) auto symaliasname(fn)
+#define symalias(fn) extern "C" auto symaliasname(fn)
 /// @}

@@ -93,7 +93,7 @@ namespace zxfoundation::dgp {
     inline constexpr right tokenizable_rights =
         static_cast<right>(0x00FF'FFFFU);
 
-    /// @brief Test whether a mask is tokenizable (ch. 03 §3.2, SCR-2).
+    /// @brief Test whether a mask is tokenizable
     [[nodiscard]] constexpr auto tokenizable(right m) noexcept -> bool {
         return (static_cast<u32>(m) & ~static_cast<u32>(tokenizable_rights)) == 0U;
     }

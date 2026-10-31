@@ -21,10 +21,10 @@ namespace lib::detail {
     using namespace lib;
 
     /// @brief Global vector table shared by all CPUs.
-    alignas(64) no_export std::array<softirq_entry, NR_SOFTIRQS> g_vector_table{};
+    alignas(64) static std::array<softirq_entry, NR_SOFTIRQS> g_vector_table{};
 
     /// @brief Per-CPU softirq execution state indexed by logical CPU id.
-    alignas(64) no_export std::array<softirq_state, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_per_cpu_state{};
+    alignas(64) static std::array<softirq_state, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_per_cpu_state{};
 
     /// @brief Compute the per-CPU softirq state for the running CPU.
     [[nodiscard]] inline auto current_state() noexcept -> softirq_state& {

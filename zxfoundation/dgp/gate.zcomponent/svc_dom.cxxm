@@ -135,7 +135,7 @@ namespace zxfoundation::dgp::gate::svc_dom::detail {
 
     auto svc_domain_strand_create(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4) noexcept -> u64 {
         // a0 = admin capability token, a1 = cpu affinity, a2 = owner domain ID,
-        // a3 = user entry VA (required — §9.4 A10: no bookkeeping-only strands).
+        // a3 = user entry VA
         auto* caller = current_domain();
         if (!caller) {
             return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
@@ -335,22 +335,14 @@ namespace zxfoundation::dgp::gate::svc_dom::detail {
         return 0;
     }
 
-    /// Wake callback for exit-join parks (same gated discipline as gate/ipc).
+    /// Wake callback for exit-join parks — canonical wake discipline
     auto strand_wake(void* opaque) noexcept -> void {
         auto* s = static_cast<zxfoundation::dgp::domain::strand*>(opaque);
         if (!s) return;
-        auto* owner = static_cast<zxfoundation::dgp::domain::domain*>(s->owner);
-        if (s->substate != zxfoundation::sched::sched_substate::blocked) {
-            if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
-            return;
-        }
-        s->substate = zxfoundation::sched::sched_substate::runnable;
-        zxfoundation::sched::enqueue_strand(s);
-        if (owner) owner->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
+        zxfoundation::sched::wake_strand(*s);
     }
 
-    /// dom_op::strand_join — (strand_id): park until the target strand
-    /// exits, then return its exit code (§9.4; reaping stays with teardown).
+    /// @brief dom_op::strand_join — (strand_id): park until the target strand exit
     auto svc_dom_strand_join(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto* self = current_domain();
         if (!self) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
@@ -389,7 +381,7 @@ namespace zxfoundation::dgp::gate::svc_dom::detail {
     }
 
     /// dom_op::strand_exit — (code): terminate the calling strand. The body
-    /// stays allocated for joiners; domain teardown reaps it (§9.4 A10).
+    /// stays allocated for joiners; domain teardown reaps it
     auto svc_dom_strand_exit(u64 a0, u64, u64, u64, u64) noexcept -> u64 {
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         auto* self = reinterpret_cast<zxfoundation::dgp::domain::strand*>(pcp.current_strand);

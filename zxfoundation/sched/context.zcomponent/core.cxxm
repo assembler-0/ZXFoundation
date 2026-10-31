@@ -79,6 +79,9 @@ namespace zxfoundation::sched::context {
         std::source_location loc = std::source_location::current()
     ) noexcept -> void;
 
+    /// @brief count→0 preemption seam into sched.core
+    extern "C" auto zx_preempt_schedule_hook() noexcept -> void;
+
     /// @brief Disable preemption on the current CPU.
     inline auto preempt_disable() noexcept -> void {
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
@@ -86,11 +89,14 @@ namespace zxfoundation::sched::context {
         arch::s390x::cpu::sync::ssync();
     }
 
-    /// @brief Re-enable preemption on the current CPU.
+    /// @brief Re-enable preemption
     inline auto preempt_enable() noexcept -> void {
         arch::s390x::cpu::sync::ssync();
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();
         --pcp.preempt_count;
+        if (pcp.preempt_count == 0 && can_sleep()) {
+            zx_preempt_schedule_hook();
+        }
     }
 
     inline auto preempt_disable_notrace() noexcept -> void {
@@ -99,6 +105,7 @@ namespace zxfoundation::sched::context {
         arch::s390x::cpu::sync::barrier();
     }
 
+    /// @brief Re-enable, deliberately without the need_resched re-check.
     inline auto preempt_enable_no_resched() noexcept -> void {
         arch::s390x::cpu::sync::barrier();
         auto& pcp = arch::s390x::cpu::percpu::this_cpu();

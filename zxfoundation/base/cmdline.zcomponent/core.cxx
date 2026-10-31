@@ -12,7 +12,7 @@ import lib.stl;
 
 namespace zxfoundation::base::cmdline::detail {
 
-    no_export lib::static_vector<param, MAX_PARAMS> g_params{};
+    static lib::static_vector<param, MAX_PARAMS> g_params{};
 
 }
 
@@ -75,9 +75,30 @@ namespace zxfoundation::base::cmdline {
                     u64 result = 0;
                     for (char c : val) {
                         if (c < '0' || c > '9') break;
-                        result = result * 10 + static_cast<u64>(c - '0');
+                        const u64 next
+                            = result * 10U + static_cast<u64>(c - '0');
+                        if (next < result) {
+                            result = ~0ULL; // saturate on overflow
+                            break;
+                        }
+                        result = next;
                     }
-                    *static_cast<u64*>(p->storage) = result;
+                    // Store exactly the declared target width — a fixed
+                    // 8-byte store corrupts narrower storage fields.
+                    const usize width =
+                        p->storage_size != 0U ? p->storage_size : 8U;
+                    if (width == 1U) {
+                        *static_cast<u8*>(p->storage) =
+                            static_cast<u8>(result);
+                    } else if (width == 2U) {
+                        *static_cast<u16*>(p->storage) =
+                            static_cast<u16>(result);
+                    } else if (width == 4U) {
+                        *static_cast<u32*>(p->storage) =
+                            static_cast<u32>(result);
+                    } else {
+                        *static_cast<u64*>(p->storage) = result;
+                    }
                 }
                 break;
 

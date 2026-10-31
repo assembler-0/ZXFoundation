@@ -222,7 +222,6 @@ export {
 
 namespace zxfoundation::dgp::gate::svc_mem {
 
-    /// §20.2b: block until *uaddr differs from expected (0 timeout = forever).
     auto svc_futex_wait(u64 a0, u64 a1, u64 a2, u64, u64) noexcept -> u64 {
         auto* d = detail::current_domain();
         if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));
@@ -230,7 +229,6 @@ namespace zxfoundation::dgp::gate::svc_mem {
         return r ? 0U : svc::fail(r.error());
     }
 
-    /// §20.2b: wake up to a1 waiters keyed by (domain, a0).
     auto svc_futex_wake(u64 a0, u64 a1, u64, u64, u64) noexcept -> u64 {
         auto* d = detail::current_domain();
         if (!d) return svc::fail(lib::kernel_error::from_generic(lib::generic_error::internal_error));

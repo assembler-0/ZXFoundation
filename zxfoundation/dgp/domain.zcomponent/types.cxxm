@@ -143,8 +143,6 @@ namespace zxfoundation::dgp::domain {
         strand*         self{nullptr};             ///< Owning strand.  The body is a separate heap allocation — there is NO pointer arithmetic from body back to strand; every body→strand hop must go through this field.
         u64             kstack_base{0};           ///< Base VA of the kernel stack.
         arch::s390x::cpu::pcss::stack linkage_stack{};
-        ///< Linkage stack + saved CR15 (§5.12: one stack per dispatchable
-        ///< unit; the dispatch path saves/restores via stack_save/stack_load).
         u64             gate_defer_entry{0};      ///< Parked gate_defer: state entry to synthesize the return from.
         u8              signal_return_kind{0};    ///< signal_kind staged for delivery (0 = none).
         u64             signal_handler_va{0};     ///< User handler VA.
@@ -168,22 +166,9 @@ namespace zxfoundation::dgp::domain {
         u64             deadline_runtime_used_ns{0}; /// Runtime consumed during current deadline period.
         u64             absolute_deadline_ns{0};   /// Conservative absolute deadline key.
 
-        /// @brief §5.12: set while the hardware is inside a user→user
-        ///        stacking PC started by this strand (the PC switched
-        ///        PASN to the callee).  The saved user context is then
-        ///        NOT the owner's own state — signal delivery must not
-        ///        build frames from it until this clears.
+        u64             sched_stamp_ns{0};
         u8              in_pc{0};
         u8              _pad_inpc[7]{};
-
-        /// @brief §5.12 BUG-072: the borrowed space at the in_pc instant.
-        ///        CR1/CR3/CR4/CR5 exactly as the callee's PC left them,
-        ///        captured when in_pc is noted.  While in_pc is set the
-        ///        dispatch path must restore these instead of publishing
-        ///        the owner's space: the trap return lpswes the callee's
-        ///        PSW, and owner CRs under a callee PSW resumed a
-        ///        franken-context (callee AR-mode/entry key against the
-        ///        owner's pages — protection 0x0004 then 0x3A death).
         u64             pc_cr1{0};
         u64             pc_cr3{0};
         u64             pc_cr4{0};
@@ -278,10 +263,10 @@ namespace zxfoundation::dgp::domain {
         u64                entry_va{0};        ///< Caller state entry (base) the reply is written into.
         u64                arg_regs[5]{};
         std::atomic<bool>  done{false};         ///< Completion flag (embedded — never a raw stack pointer).
-        u64                enqueued_mono_ns{0}; ///< Defer timestamp — S10.5 deferred-work billing base (OBL-034).
+        u64                enqueued_mono_ns{0}; ///< Defer timestamp
     };
 
-    constexpr u32 DEFER_QUEUE_DEPTH = 8U;      ///< §7.6 defer-table quota.
+    constexpr u32 DEFER_QUEUE_DEPTH = 8U;      ///< defer-table quota.
 
     /// @brief Per-domain deferred-gate FIFO.
     struct defer_queue {

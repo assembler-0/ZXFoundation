@@ -112,6 +112,9 @@ typedef __UINTPTR_TYPE__ nb_uptr;
 #define NB_SHM_MAP               237
 #define NB_POLICY_REGISTER       238
 #define NB_POLICY_UNREGISTER     239
+#define NB_SYS_POLICY_CONSULT    245
+#define NB_POLICY_CONSULT        NB_SYS_POLICY_CONSULT
+#define NB_SYS_LAST_ERROR        240
 
 #define NB_CALL(nr, a0, a1, a2, a3, a4)                       \
     __extension__({                                           \
@@ -238,5 +241,7 @@ NB_GENERIC(nb_shm_map, NB_SHM_MAP)
 
 NB_GENERIC(nb_policy_register, NB_POLICY_REGISTER)
 NB_GENERIC(nb_policy_unregister, NB_POLICY_UNREGISTER)
+NB_GENERIC(nb_last_error, NB_SYS_LAST_ERROR)
+NB_GENERIC(nb_policy_consult, NB_POLICY_CONSULT)
 
 #undef NB_GENERIC

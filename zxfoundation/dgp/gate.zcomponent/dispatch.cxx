@@ -168,7 +168,6 @@ namespace zxfoundation::dgp::svc::detail {
     }
 
     /// @brief Token rights required from a capability-addressed op's token
-    ///        (B1b chokepoint mapping; ch. 03 §3.1 semantics).
     [[nodiscard]] constexpr auto token_rights_for_op(
         zxfoundation::dgp::operation_kind op_kind
     ) noexcept -> ::zxfoundation::dgp::right_mask {

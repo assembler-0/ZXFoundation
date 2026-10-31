@@ -40,7 +40,7 @@ namespace zxfoundation::sched::nohz {
     auto idle_enter(u32& nohz_flags, const nohz_ops& ops) noexcept -> void;
 
     /// @brief Constant nohz ops table installed on every CPU.
-    from_global(reference) const zxfoundation::sched::nohz::nohz_ops the_ops;
+    extern const zxfoundation::sched::nohz::nohz_ops the_ops;
 
     /// @brief Exit nohz idle on the current CPU (called on any wakeup).
     /// @param[in,out] nohz_flags Per-CPU flag word.

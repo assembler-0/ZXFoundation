@@ -28,8 +28,8 @@ import lib.stl;
 
 namespace zxfoundation::sys::service::detail {
 
-    no_export scoms::scoms_table<service_entry, MAX_SERVICES> g_service_table{};
-    no_export bool g_service_initialized{false};
+    static scoms::scoms_table<service_entry, MAX_SERVICES> g_service_table{};
+    static bool g_service_initialized{false};
 
 } // namespace zxfoundation::sys::service::detail
 

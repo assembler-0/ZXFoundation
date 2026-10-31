@@ -56,8 +56,7 @@ namespace zxfoundation::sched::strandctx {
         domain* d
     ) noexcept -> void;
 
-    /// @brief Seed a domain primary's linkage stack (§5.12) — CR15=0 is
-    ///        an architecturally empty stack; a PC from it is unrecoverable.
+    /// @brief Seed a domain primary's linkage stack
     [[nodiscard]] auto seed_primary_linkage_stack(
         domain* d) noexcept -> std::expected<void, lib::kernel_error>;
 

@@ -73,7 +73,7 @@ namespace drivers::console::diag::detail {
     };
 
     /// @brief Hardware-level DIAG emission lock.
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::diag> g_diag_lock;
+    alignas(4) static zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::diag> g_diag_lock;
 
 } // namespace detail
 

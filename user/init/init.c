@@ -143,12 +143,9 @@ static nb_u64 spawn_suite(const char *name, int blocks) {
     return d;
 }
 
-/// Wait for a suite domain to exit.  dom_info on a dead domain is
-/// expected to fail; if it does not, the yield budget still bounds the
-/// wait and the suite's own verdict line remains the record.
 static void wait_suite(nb_u64 d, const char *name) {
     for (nb_u64 i = 0; i < 30000; i++) {
-        if (nb_dom_info(d) == NB_ERR) return;
+        if (nb_dom_query(d) == NB_ERR) return;
         nb_sys_yield(0, 0, 0, 0, 0);
     }
     line_reset();
@@ -348,9 +345,10 @@ void zx_init_main(void) {
     }
 
     // ================= self-contained suites =================
-    static const char *suite_ds[3] = {"ZXTSCHED", "ZXTDOM", "ZXTIPC"};
-    static const char *suite_nm[3] = {"sched", "dom", "ipc"};
-    for (int s = 0; s < 3; s++) {
+    static const char *suite_ds[5] = {"ZXTSCHED", "ZXTDOM", "ZXTIPC", "ZXTSGN",
+                                      "ZXTSURF"};
+    static const char *suite_nm[5] = {"sched", "dom", "ipc", "sgn", "surf"};
+    for (int s = 0; s < 5; s++) {
         int b = load_suite(suite_ds[s]);
         if (b == 0) FAIL();
         nb_u64 d = spawn_suite(suite_nm[s], b);

@@ -63,7 +63,7 @@ namespace zxfoundation::dgp::gate::registration {
                 make_op(8, svc_dom::dispatch_wrap<dom_op::strand_query_state>, operation_kind::strand_query_state, true),
                 make_op(9, svc_dom::dispatch_wrap<dom_op::strand_join>, operation_kind::strand_join, false),
                 make_op(10, svc_dom::dispatch_wrap<dom_op::strand_exit>, operation_kind::strand_exit, false),
-            }, 11);
+            }, 12);
 
         register_ns("mem",    call_namespace::mem,
             (const registration_op[]){
@@ -142,7 +142,8 @@ namespace zxfoundation::dgp::gate::registration {
                 make_op(14, svc_sys::dispatch_wrap<sys_op::policy_register>, operation_kind::policy_server_register, false),
                 make_op(15, svc_sys::dispatch_wrap<sys_op::policy_unregister>, operation_kind::policy_server_unregister, false),
                 make_op(16, svc_sys::dispatch_wrap<sys_op::last_error>, operation_kind::none, false),
-              }, 20);
+                make_op(21, svc_sys::dispatch_wrap<sys_op::policy_consult>, operation_kind::none, false),
+              }, 22);
     }
 
 } // namespace zxfoundation::dgp::gate::registration

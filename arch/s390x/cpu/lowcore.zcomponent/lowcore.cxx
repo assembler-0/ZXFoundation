@@ -21,13 +21,13 @@ import lib.stl;
 
 
 /// @brief Physical addresses of each CPU's lowcore page, indexed by logical CPU ID.
-no_export std::array<std::atomic<u64>, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> __percpu_lowcore_phys{};
-alignas(16) no_export std::byte s_boot_async_stack[arch::s390x::cpu::processor::ASYNC_STACK_SIZE]{};
-alignas(16) no_export std::byte s_boot_mcck_stack[arch::s390x::cpu::processor::MCCK_STACK_SIZE]{};
-alignas(16) no_export std::byte s_boot_nodat_stack[arch::s390x::cpu::processor::NODAT_STACK_SIZE]{};
-alignas(16) no_export std::byte s_boot_restart_stack[arch::s390x::cpu::processor::STACK_SIZE]{};
+static std::array<std::atomic<u64>, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> __percpu_lowcore_phys{};
+alignas(16) static std::byte s_boot_async_stack[arch::s390x::cpu::processor::ASYNC_STACK_SIZE]{};
+alignas(16) static std::byte s_boot_mcck_stack[arch::s390x::cpu::processor::MCCK_STACK_SIZE]{};
+alignas(16) static std::byte s_boot_nodat_stack[arch::s390x::cpu::processor::NODAT_STACK_SIZE]{};
+alignas(16) static std::byte s_boot_restart_stack[arch::s390x::cpu::processor::STACK_SIZE]{};
 
-from_global(nomangle) {
+extern "C" {
     auto trap_pgm_entry()     -> void;
     auto trap_ext_entry()     -> void;
     auto trap_io_entry()      -> void;
@@ -37,10 +37,10 @@ from_global(nomangle) {
     auto ap_dat_on()          -> void;
 
     /// @brief Kernel-owned BSP boot stack (in nucleus .bss), defined in head64.S.
-    from_global(reference) u8 __kernel_boot_stack[];
+    extern u8 __kernel_boot_stack[];
 
     /// @brief Kernel-wide stack-protector guard
-    from_global(reference) u64 __stack_chk_guard;
+    extern u64 __stack_chk_guard;
 }
 
 namespace arch::s390x::cpu::lowcore {

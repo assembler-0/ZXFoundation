@@ -15,8 +15,7 @@ namespace zxfoundation::sync::lockgraph {
     ///        out with ZX_NO_LOCKGRAPH or disabled by the boot switch).
     auto init() noexcept -> void;
 
-    /// @brief Boot switch (zx.debug.lockgraph=0) — runtime gate for
-    ///        profiling runs (§20.4).
+    /// @brief Boot switch (zx.debug.lockgraph=0)
     auto set_enabled(bool on) noexcept -> void;
 
     /// @brief Register zx.debug.lockgraph on the boot parameter plane.
@@ -38,7 +37,7 @@ namespace zxfoundation::sync::lockgraph {
     /// @param[in] inst  Lock instance identity (address).
     auto release(const void* inst) noexcept -> void;
 
-    /// @brief §17.5 counters: violations by class, chain-depth histogram.
+    /// @brief counters: violations by class, chain-depth histogram.
     struct lockgraph_counters {
         u32 rank_cycles{0};        ///< Rank-level dependency cycles refused.
         u32 irq_inversions{0};     ///< hardirq/process dual-context inversions.

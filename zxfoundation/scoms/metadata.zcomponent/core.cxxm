@@ -42,8 +42,7 @@ export {
         kobject::bobject& object
     ) noexcept -> std::expected<void, lib::kernel_error>;
 
-    /// @brief Table-owned final reclaimer: receives the owning table as
-    ///        @c ctx so no process-wide singleton is consulted (BUG-049).
+    /// @brief Table-owned final reclaimer
     using reclaimer_fn = void (*)(kobject::bobject&, void* ctx) noexcept;
 
     [[nodiscard]] auto set_reclaimer(

@@ -7,7 +7,7 @@ import arch.s390x.init.zxfl.protocol;
 
 namespace zxfoundation::init::storage::detail {
 
-    no_export arch::s390x::init::zxfl::protocol kernel_protocol{};
+    static arch::s390x::init::zxfl::protocol kernel_protocol{};
 
 }
 

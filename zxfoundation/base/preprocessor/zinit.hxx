@@ -13,7 +13,7 @@
 /// @note No dependencies and no entailed successors are declared.  Ordering is
 ///       determined by class, runtime prio sort, then link order.
 #define __zinit__(c, p, entry, a)                                                   \
-    declscope(C) {                                                                  \
+    extern "C" {                                                                  \
     constexpr zxfoundation::sys::zinit::zi_desc __zi_desc_##entry                   \
     [[gnu::used, gnu::section(".zinit_data." stringify(c) "." stringify(entry))]]   \
     {                                                                               \
@@ -37,7 +37,7 @@
 /// @note The node runs only after every named dependency completes
 ///       successfully.  Unresolved names fault at graph build time.
 #define __zinit_dep__(c, p, entry, a, ...)                                          \
-    declscope(C) {                                                                  \
+    extern "C" {                                                                  \
     static constexpr const char* const __zi_deps_##entry[] = { __VA_ARGS__, nullptr }; \
     constexpr zxfoundation::sys::zinit::zi_desc __zi_desc_##entry                   \
     [[gnu::used, gnu::section(".zinit_data." stringify(c) "." stringify(entry))]]   \
@@ -62,7 +62,7 @@
 /// @note "Entail" is the inverse of "depend on": this entry guarantees it
 ///       precedes every named node.  Unresolved names fault at graph build.
 #define __zinit_entail__(c, p, entry, a, ...)                                       \
-    declscope(C) {                                                                  \
+    extern "C" {                                                                  \
     static constexpr const char* const __zi_entails_##entry[] = { __VA_ARGS__, nullptr }; \
     constexpr zxfoundation::sys::zinit::zi_desc __zi_desc_##entry                   \
     [[gnu::used, gnu::section(".zinit_data." stringify(c) "." stringify(entry))]]   \

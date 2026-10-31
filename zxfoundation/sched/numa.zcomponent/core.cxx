@@ -25,7 +25,7 @@ namespace zxfoundation::sched::numa::detail {
     using namespace zxfoundation::memory::numa;
 
     /// @brief Per-CPU NUMA node assignment cached for fast topology lookups.
-    no_export std::array<u8, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_stsi_cpu_to_node{};
+    static std::array<u8, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_stsi_cpu_to_node{};
 
     /// @brief Build a synthetic 16×16 SLIT using @c cpu_relation placement tiers.
     auto build_synthetic_slit_to(slit_matrix& out) noexcept -> void {

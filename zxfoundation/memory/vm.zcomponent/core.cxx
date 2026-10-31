@@ -48,8 +48,8 @@ namespace zxfoundation::memory::vm::detail {
 
     using namespace zxfoundation::memory;
 
-    no_export scoms::scoms_table<vm_region, MAX_VM_REGIONS> g_region_table{};
-    no_export bool g_vme_initialized{false};
+    static scoms::scoms_table<vm_region, MAX_VM_REGIONS> g_region_table{};
+    static bool g_vme_initialized{false};
 
     auto destroy_region_memory_objects(vm_region& rgn) noexcept -> void;
 
@@ -1229,6 +1229,12 @@ namespace zxfoundation::memory::vm {
         auto contract_result = zxfoundation::dgp::memory_contract::authorize_mapping(request);
         if (!contract_result) return std::unexpected(contract_result.error());
 
+        // Eager DAT south-table build: first touch fails at page level,
+        // never at region level.  Idempotent; safe before any region state.
+        auto ensure_r = arch::s390x::mmu::ensure_range_tables(
+            space.asce_val & arch::s390x::mmu::ASCE_ORIGIN_MASK, va, size);
+        if (!ensure_r) return std::unexpected(ensure_r.error());
+
         auto rgn_r = alloc_region(va, va + size, prot, flags,
             requested_backing, 0);
         if (!rgn_r) return std::unexpected(rgn_r.error());
@@ -1320,6 +1326,12 @@ namespace zxfoundation::memory::vm {
             space, va, size, prot, flags, backing, phys_base, 0U, 0U);
         auto contract_result = zxfoundation::dgp::memory_contract::authorize_mapping(request);
         if (!contract_result) return std::unexpected(contract_result.error());
+
+        // Eager DAT south-table build (one canon: the fault handler's
+        // walk).  First touch resolves at page level afterwards.
+        auto ensure_r = arch::s390x::mmu::ensure_range_tables(
+            space.asce_val & arch::s390x::mmu::ASCE_ORIGIN_MASK, va, size);
+        if (!ensure_r) return std::unexpected(ensure_r.error());
 
         if (space.region_count >= space.max_regions)
             return std::unexpected(lib::kernel_error::from_memory(

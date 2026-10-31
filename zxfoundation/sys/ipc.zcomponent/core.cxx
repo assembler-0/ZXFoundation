@@ -83,14 +83,7 @@ namespace zxfoundation::sys::ipc {
         auto ipc_strand_wake(void* opaque) noexcept -> void {
             auto* s = static_cast<dgp::domain::strand*>(opaque);
             if (!s) return;
-            auto* owner = static_cast<dgp::domain::domain*>(s->owner);
-            if (s->substate != zxfoundation::sched::sched_substate::blocked) {
-                if (owner) owner->flags |= dgp::domain::domain_flags::need_resched;
-                return;
-            }
-            s->substate = zxfoundation::sched::sched_substate::runnable;
-            zxfoundation::sched::enqueue_strand(s);
-            if (owner) owner->flags |= dgp::domain::domain_flags::need_resched;
+            zxfoundation::sched::wake_strand(*s);
         }
 
     }

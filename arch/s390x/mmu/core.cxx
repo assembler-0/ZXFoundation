@@ -244,6 +244,76 @@ namespace arch::s390x::mmu::detail {
         return {};
     }
 
+    /// @brief Complete the DAT chain for one VA without installing a PTE:
+    ///        first-touch faults resolve at page level; large-page entries
+    ///        upstream count as fully formed.  Idempotent.
+    auto ensure_chain_for_virt(
+        u64       root_phys,
+        dat_level root_level,
+        u64       virt
+    ) noexcept -> ::std::expected<void, ::lib::kernel_error> {
+        level_state states[4]{};
+        alloc_stack allocs{};
+        u32 depth = 0;
+        u64 current = root_phys;
+
+        for (auto lvl = root_level; lvl != dat_level::page;
+             lvl = next_level(lvl), ++depth) {
+            const u32 idx = virt_index_rt(lvl, virt);
+            if (!table_is_mapped(current, lvl)) [[unlikely]] {
+                allocs.rollback();
+                return ::std::unexpected(::lib::kernel_error::from_memory(
+                    ::lib::memory_error::code::hhdm_init_failed));
+            }
+            auto* table = reinterpret_cast<u64*>(hhdm::phys_to_virt(current));
+            const u64 entry = table[idx];
+            if (rste_is_invalid(entry)) {
+                const dat_level child_lvl = next_level(lvl);
+                const u32 order = (child_lvl == dat_level::page)
+                    ? PTE_ALLOC_ORDER : CRST_ALLOC_ORDER;
+                auto result = alloc_table_with_policy(child_lvl,
+                    default_table_request());
+                if (!result) [[unlikely]] {
+                    allocs.rollback();
+                    return ::std::unexpected(result.error());
+                }
+                const u64 child_phys = *result;
+                auto init_result = init_table(child_lvl, child_phys);
+                if (!init_result) [[unlikely]] {
+                    pmm::folio_active f{child_phys, order,
+                        pmm::purpose::page_table, pmm::zone::normal};
+                    pmm::free(::std::move(f));
+                    allocs.rollback();
+                    return ::std::unexpected(init_result.error());
+                }
+                allocs.push(child_phys, order);
+                states[depth].table_phys = current;
+                states[depth].index      = idx;
+                states[depth].alloc_phys = child_phys;
+                current = child_phys;
+            } else {
+                if (lvl == dat_level::segment && seg_is_large(entry))
+                    [[unlikely]] return {};
+                if (lvl == dat_level::region_3 && r3_is_large(entry))
+                    [[unlikely]] return {};
+                states[depth].table_phys = current;
+                states[depth].index      = idx;
+                states[depth].alloc_phys = 0;
+                current = rste_origin(entry);
+            }
+        }
+
+        // Commit new south links (only entries allocated above).
+        for (u32 i = 0; i < depth; ++i) {
+            if (states[i].alloc_phys == 0) continue;
+            auto* table = reinterpret_cast<u64*>(
+                hhdm::phys_to_virt(states[i].table_phys));
+            table[states[i].index] = rste_make_rt(
+                level_at_depth(root_level, i), states[i].alloc_phys);
+        }
+        return {};
+    }
+
     [[nodiscard]] auto table_is_empty(dat_level level, u64 phys) noexcept -> bool {
         auto* table = reinterpret_cast<const u64*>(hhdm::phys_to_virt(phys));
         const u32 entries = level == dat_level::page ? PAGE_ENTRIES : CRST_ENTRIES;
@@ -582,6 +652,26 @@ namespace arch::s390x::mmu::detail {
 } // namespace arch::s390x::mmu::detail
 
 namespace arch::s390x::mmu {
+
+/// @brief Ensure all south tables exist for [va, va+len): idempotent,
+///        no PTE installation — first touch stays page-level.  One
+///        chain-build per 1 MiB segment covered by the range.
+[[nodiscard]] auto ensure_range_tables(
+    u64 root_phys,
+    u64 va,
+    u64 len
+) noexcept -> ::std::expected<void, ::lib::kernel_error> {
+    if (len == 0U) return {};
+    u64 seg = va & ~(SEGMENT_SIZE - 1ULL);
+    const u64 end = va + len;
+    while (seg < end) {
+        auto r = detail::ensure_chain_for_virt(root_phys, dat_level::region_1, seg);
+        if (!r) return ::std::unexpected(r.error());
+        seg += SEGMENT_SIZE;
+    }
+    return {};
+}
+
 
     /// @brief Initialize the MMU engine.  Must be called after PMM init
     ///        and arch::s390x::cpu::features::init().

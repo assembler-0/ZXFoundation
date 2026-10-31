@@ -11,7 +11,7 @@ import lib.stl;
 
 namespace crypto::sha256::detail {
 
-    no_export constexpr u32 K[64] {
+    static constexpr u32 K[64] {
         0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
         0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
         0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
@@ -34,7 +34,7 @@ namespace crypto::sha256::detail {
     /// @param[in] x  Value to rotate.
     /// @param[in] n  Number of bit positions to rotate (0..31).
     /// @return Rotated value.
-    [[nodiscard]] no_export constexpr auto rotr32(u32 x, u32 n) -> u32 {
+    [[nodiscard]] static constexpr auto rotr32(u32 x, u32 n) -> u32 {
         return (x >> n) | (x << (32U - n));
     }
 
@@ -42,7 +42,7 @@ namespace crypto::sha256::detail {
     /// @param[in,out] ctx    SHA-256 context whose state[] is updated in place.
     /// @param[in]     block  Exactly 64 bytes of message data (one full block).
     /// @note The 64-word message schedule @c w[] is stack-allocated (~256 bytes).
-    no_export auto sha256_block(sha256_ctx& ctx, std::span<const u8, 64> block) -> void {
+    static auto sha256_block(sha256_ctx& ctx, std::span<const u8, 64> block) -> void {
         u32 w[64];
 
         // Build the first 16 words from big-endian block bytes.

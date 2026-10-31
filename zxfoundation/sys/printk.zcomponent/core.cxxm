@@ -14,24 +14,33 @@ export {
 
 namespace zxfoundation::sys::printk {
 
+    /// @brief Set minimum log level
     auto set_min_level(log_level level) noexcept -> void;
 
+    /// @brief Get current minimum log level
     auto get_current_level() noexcept -> log_level;
 
-    auto handle_min_level(std::string_view val) noexcept -> bool;
+    /// @brief Register commandline options for printk
+    auto register_cmdline() noexcept -> void;
 
+    /// @brief Register a backend
     auto register_backend(const printk_backend& backend) noexcept -> std::expected<void, lib::kernel_error>;
 
+    /// @brief Read logs to buffer
     auto read_logs(std::span<u8> dest, bool consume) noexcept -> usize;
 
+    /// @brief Get current log size
     auto log_size() noexcept -> usize;
 
     /// @brief Commit a pre-formatted message to all active backends and the ring-buffer.
     /// @param[in] buf     Pre-formatted message buffer (NUL-terminated).
     /// @param[in] offset  Number of valid bytes in buf (not counting NUL).
-    /// @param[in] cpu     Logical CPU ID of the calling processor.
     auto printk_commit(const char* buf, usize offset) noexcept -> void;
 
+    /// @brief General printk template
+    /// @param level[in] Log level
+    /// @param fmt[in]   Message format
+    /// @param args[in]  Variadic arguments
     template <typename... Args>
     auto printk(log_level level, std::string_view fmt, Args&&... args) noexcept -> void {
         if (static_cast<u8>(level) > static_cast<u8>(get_current_level()))

@@ -31,7 +31,7 @@ namespace drivers::watchdog::detail {
     using namespace arch::s390x::cpu;
 
     /// @brief Arm / re-ping the hypervisor watchdog.
-    no_export auto harddog_ping() noexcept -> bool {
+    static auto harddog_ping() noexcept -> bool {
         i32 rc = diag::diag288(diag::diag288_fn::change, diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
         if (rc != 0) {
             rc = diag::diag288(diag::diag288_fn::init, diag::WDT_RESTART, diag::WDT_DEFAULT_TIMEOUT, 0);
@@ -39,25 +39,25 @@ namespace drivers::watchdog::detail {
         return rc == 0;
     }
 
-    no_export constexpr u16 WATCHDOG_INTERVAL_SECONDS = 5;
+    static constexpr u16 WATCHDOG_INTERVAL_SECONDS = 5;
 
-    no_export constexpr u64 WATCHDOG_INTERVAL_TOD =
+    static constexpr u64 WATCHDOG_INTERVAL_TOD =
         WATCHDOG_INTERVAL_SECONDS * 4096ULL * 1'000'000ULL;
 
-    no_export constexpr u32 WATCHDOG_MISS_THRESHOLD = 2;
+    static constexpr u32 WATCHDOG_MISS_THRESHOLD = 2;
 
-    no_export constexpr u32 WATCHDOG_FATAL_WARNINGS = 3;
+    static constexpr u32 WATCHDOG_FATAL_WARNINGS = 3;
 
-    no_export constexpr u32 WATCHDOG_FATAL_THRESHOLD =
+    static constexpr u32 WATCHDOG_FATAL_THRESHOLD =
         WATCHDOG_MISS_THRESHOLD + WATCHDOG_FATAL_WARNINGS;
 
-    no_export bool g_harddog_armed = false;
-    no_export std::array<u64, CONFIG_ZX_MAX_CPUS> g_last_heartbeat{};
-    no_export std::array<u32, CONFIG_ZX_MAX_CPUS> g_miss_count{};
-    no_export kernel_timer g_watchdog_timer{};
+    static bool g_harddog_armed = false;
+    static std::array<u64, CONFIG_ZX_MAX_CPUS> g_last_heartbeat{};
+    static std::array<u32, CONFIG_ZX_MAX_CPUS> g_miss_count{};
+    static kernel_timer g_watchdog_timer{};
 
     /// @brief Softdog timer callback — monitors only online APs, pings harddog.
-    no_export auto watchdog_check(void*) noexcept -> void {
+    static auto watchdog_check(void*) noexcept -> void {
         arch::s390x::cpu::cpumask::for_each_online_cpu(
             [](u16 cpu16) noexcept -> void {
                 // The BSP (id 0) runs the watchdog itself; skip self-monitoring.

@@ -19,21 +19,21 @@ import lib.stl;
 namespace zxfoundation::memory::kmalloc::detail {
 
     /// @brief Number of size-class caches.
-    no_export constexpr u32 KMALLOC_NUM_SIZES = 13U;
+    static constexpr u32 KMALLOC_NUM_SIZES = 13U;
 
     /// @brief Maximum single-allocation size via kmalloc.
-    no_export constexpr u64 KMALLOC_MAX_SIZE  = 32768ULL;
+    static constexpr u64 KMALLOC_MAX_SIZE  = 32768ULL;
 
     /// @brief Size of each bucket (powers of two, starting at 8).
-    no_export constexpr u64 g_sizes[KMALLOC_NUM_SIZES] {
+    static constexpr u64 g_sizes[KMALLOC_NUM_SIZES] {
         8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
     };
 
-    no_export std::array<slub::kmem_cache_ref_active, KMALLOC_NUM_SIZES> g_caches{};
-    no_export bool g_initialized{false};
+    static std::array<slub::kmem_cache_ref_active, KMALLOC_NUM_SIZES> g_caches{};
+    static bool g_initialized{false};
 
     /// @brief Names for each size-class cache (diagnostic use only).
-    no_export constexpr const char* g_names[KMALLOC_NUM_SIZES] {
+    static constexpr const char* g_names[KMALLOC_NUM_SIZES] {
         "kmalloc-8",     "kmalloc-16",    "kmalloc-32",
         "kmalloc-64",    "kmalloc-128",   "kmalloc-256",
         "kmalloc-512",   "kmalloc-1024",  "kmalloc-2048",
@@ -42,7 +42,7 @@ namespace zxfoundation::memory::kmalloc::detail {
     };
 
     /// @brief Return the bucket index for a requested size in O(1) time.
-    [[nodiscard]] no_export constexpr auto bucket_for(u64 size) noexcept -> u32 {
+    [[nodiscard]] static constexpr auto bucket_for(u64 size) noexcept -> u32 {
         if (size <= 8ULL) return 0U;
         if (size > KMALLOC_MAX_SIZE) return KMALLOC_NUM_SIZES; // sentinel
         const u32 log2_ceil = 64U - static_cast<u32>(__builtin_clzll(size - 1ULL));

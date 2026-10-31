@@ -237,14 +237,8 @@ uint64_t tod_read(void) {
     return clk;
 }
 
-static void detect_tod(zxfl_boot_protocol_t *proto) {
-    proto->tod_boot = tod_read();
-    proto->flags |= ZXFL_FLAG_TOD;
-}
-
 void zxfl_system_detect(zxfl_boot_protocol_t *proto) {
     memset(&proto->sysinfo, 0, sizeof(proto->sysinfo));
     detect_stsi(proto);
     detect_smp(proto);
-    detect_tod(proto);
 }

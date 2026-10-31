@@ -12,6 +12,9 @@ import arch.s390x.cpu.clock;
 import arch.s390x.cpu.cpumask;
 import arch.s390x.cpu.smp.core;
 import arch.s390x.cpu.psw;
+import arch.s390x.cpu.clock;
+import arch.s390x.cpu.cputimer;
+import zxfoundation.base.config;
 import zxfoundation.sys.irq.consts;
 import zxfoundation.sys.irq.core;
 import zxfoundation.sched.core;
@@ -25,6 +28,7 @@ import zxfoundation.sys.timer.types;
 import zxfoundation.smp.csd.core;
 import lib.error;
 import lib.softirq.core;
+import lib.stl;
 
 namespace arch::s390x::trap::ext::detail {
 
@@ -40,8 +44,6 @@ namespace arch::s390x::trap::ext {
     /// @brief Centralized external-interruption dispatcher.
     /// @param[in,out] frame  Saved interrupt frame from entry.S.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
-        // §5.12: record whether the hardware was inside a stacking PC
-        // (PASN switched to a callee) when this interruption arrived.
         zxfoundation::dgp::domain::strand_note_interrupt_context(
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0);
         auto* lc = cpu::lowcore::get_current();
@@ -66,7 +68,7 @@ namespace arch::s390x::trap::ext {
         }
 
         if (irq::deferred_test_clear(irq::DEFERRED_MCCK_PENDING_BIT)) {
-            // The deferred-MCCK handler stays inline in the MCCK
+            // TODO: The deferred-MCCK handler stays inline in the MCCK
             // dispatcher; the ch. 10.2 handler lands at R4 (OBL-015,
             // BUG-045). The bit is acknowledged here so the trap path
             // stays self-consistent.

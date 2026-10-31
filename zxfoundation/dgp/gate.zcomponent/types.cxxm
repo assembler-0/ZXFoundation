@@ -121,7 +121,7 @@ namespace zxfoundation::dgp::gate {
         strand_set_affinity = 7,  ///< (strand_id, sched_mask_bits) — restrict CPU placement.
         strand_query_state  = 8,  ///< (strand_id, &out) — read cpu/on_rq/substate/prio/vruntime.
         strand_join   = 9,   ///< (strand_id) — park until the strand exits; returns its code.
-        strand_exit   = 10,  ///< (code) — terminate the calling strand (§9.4 A10).
+        strand_exit   = 10,  ///< (code) — terminate the calling strand
         exec          = 11,  ///< (dom_id, image_va, image_len) — exec-analog
         _count       = 12,
     };
@@ -202,7 +202,9 @@ namespace zxfoundation::dgp::gate {
         ipc_call = 18,
         signal_return = 19,
         time_sleep    = 20,
-        _count             = 21,
+        policy_consult = 21,  ///< Userland plane clients consult (ch. §08.4:
+                              ///< file servers decide datasets with it).
+        _count             = 22,
     };
 
     struct gate_desc {

@@ -20,13 +20,13 @@ import lib.stl;
 namespace zxfoundation::sys::time::detail {
 
     /// @brief Seqlock-protected wall-clock offset.
-    no_export zxfoundation::sync::seqlock<u64> g_wall_offset{};
+    static zxfoundation::sync::seqlock<u64> g_wall_offset{};
 
     /// @brief TOD value captured at kernel entry (set once by time::initialize).
-    no_export u64 g_boot_tod{0};
+    static u64 g_boot_tod{0};
 
     /// @brief Monotonic tick counter — incremented by the clock comparator handler.
-    no_export std::atomic<u64> g_tick{0};
+    static std::atomic<u64> g_tick{0};
 
 }
 

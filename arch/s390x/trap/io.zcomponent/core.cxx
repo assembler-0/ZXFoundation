@@ -17,8 +17,6 @@ namespace arch::s390x::trap::io {
 
     /// @brief Centralized io dispatcher.
     auto handle(cpu::irq::irq_frame* frame) noexcept -> void {
-        // §5.12: record whether the hardware was inside a stacking PC
-        // (PASN switched to a callee) when this interruption arrived.
         zxfoundation::dgp::domain::strand_note_interrupt_context(
             (frame->psw_mask & arch::s390x::cpu::psw::PSW_BIT_PSTATE) != 0);
         const auto* lc = cpu::lowcore::get_current();

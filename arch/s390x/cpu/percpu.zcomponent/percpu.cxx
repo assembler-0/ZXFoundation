@@ -22,7 +22,7 @@ import lib.stl;
 namespace arch::s390x::cpu::percpu {
 
     /// @brief Fixed-size, cpu_id-indexed storage for every CPU's percpu_data.
-    alignas(processor::CACHE_LINE_SIZE) no_export
+    alignas(processor::CACHE_LINE_SIZE) static
         std::array<percpu_data, zxfoundation::base::config::CONFIG_ZX_MAX_CPUS> g_percpu_data{};
 
     [[nodiscard]] auto at(const u16 cpu_id) noexcept -> percpu_data& {
@@ -66,12 +66,12 @@ namespace arch::s390x::cpu::percpu {
 
         pcp.ipi_pending_count  = 0;
 
-        for (u32 n = 0; n < zxfoundation::memory::numa::MAX_NUMA_NODES; ++n)
-            for (u32 z = 0; z < static_cast<u32>(zxfoundation::memory::pmm::zone::count); ++z)
+        for (auto & list : pcp.pcp.lists)
+            for (auto & z : list)
                 for (u32 o = 0; o <= zxfoundation::memory::pmm::PCP_MAX_ORDER; ++o) {
-                    pcp.pcp.lists[n][z][o].head_phys = 0;
-                    pcp.pcp.lists[n][z][o].count     = 0;
-                    pcp.pcp.lists[n][z][o]._pad      = 0;
+                    z[o].head_phys = 0;
+                    z[o].count     = 0;
+                    z[o]._pad      = 0;
                 }
         pcp.drawer_id = 0;
         pcp.core_id = 0;

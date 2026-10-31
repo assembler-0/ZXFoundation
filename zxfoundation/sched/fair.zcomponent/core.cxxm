@@ -23,7 +23,7 @@ namespace zxfoundation::sched::fair {
     /// @brief Default nice-0 weight (1024).
     inline constexpr u32 NICE_0_WEIGHT = 1024U;
 
-    /// @brief Default EEVDF slice in nanoseconds (§9.2: 2.5 ms).
+    /// @brief Default EEVDF slice in nanoseconds
     inline constexpr u64 EEVDF_DEFAULT_SLICE_NS = 2'500'000ULL;
 
     /// @brief Maximum weight used in inverse-weight scaling (1024 == 1.0).
@@ -171,7 +171,7 @@ namespace zxfoundation::sched::fair {
     /// @brief Legacy vtable shim
     auto vtable_enqueue(run_queue& rq, strand& s) noexcept -> void;
 
-    from_global(reference) const classed::sched_class the_class;
+    extern const classed::sched_class the_class;
 
 } // namespace zxfoundation::sched::fair
 

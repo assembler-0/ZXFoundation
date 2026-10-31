@@ -9,16 +9,16 @@ export {
 
 namespace zxfoundation::base::linksym {
 
-    from_global(nomangle) u8 __rodata_start[];
-    from_global(nomangle) u8 __rodata_end[];
-    from_global(nomangle) u8 __data_start[];
-    from_global(nomangle) u8 __data_end[];
-    from_global(nomangle) u8 __bss_start[];
-    from_global(nomangle) u8 __bss_end[];
-    from_global(nomangle) u8 __zx_vma_start[];
-    from_global(nomangle) u8 __zx_vma_end[];
-    from_global(nomangle) u8 __ex_table_start[];
-    from_global(nomangle) u8 __ex_table_end[];
+    extern "C" u8 __rodata_start[];
+    extern "C" u8 __rodata_end[];
+    extern "C" u8 __data_start[];
+    extern "C" u8 __data_end[];
+    extern "C" u8 __bss_start[];
+    extern "C" u8 __bss_end[];
+    extern "C" u8 __zx_vma_start[];
+    extern "C" u8 __zx_vma_end[];
+    extern "C" u8 __ex_table_start[];
+    extern "C" u8 __ex_table_end[];
 
 }
 

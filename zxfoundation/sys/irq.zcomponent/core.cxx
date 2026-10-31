@@ -25,8 +25,8 @@ import lib.stl;
 
 namespace zxfoundation::sys::irq::detail {
 
-    from_global(nomangle) scoms::scoms_table<irq_desc, IRQ_NR_MAX> g_irq_table;
-    from_global(nomangle) bool g_initialized;
+    extern "C" scoms::scoms_table<irq_desc, IRQ_NR_MAX> g_irq_table;
+    extern "C" bool g_initialized;
 
 } // namespace zxfoundation::sys::irq::detail
 

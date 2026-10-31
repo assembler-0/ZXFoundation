@@ -24,13 +24,17 @@ namespace zxfoundation::sched {
     [[nodiscard]] auto cpu_rq(u16 cpu_id) noexcept -> run_queue&;
     [[nodiscard]] auto this_rq() noexcept -> run_queue&;
 
-    declscope(C) auto __switch_to_asm(
+    extern "C" auto __switch_to_asm(
         strand* prev,
         strand* next
     ) noexcept -> domain*;
 
     auto enqueue_strand(strand* s) noexcept -> void;
     auto dequeue_strand(strand* s) noexcept -> void;
+
+    /// @brief Wake a parked strand through the canonical wake discipline.
+    /// @param[in,out] s Strand to wake.
+    auto wake_strand(strand& s) noexcept -> void;
     auto enqueue_domain(domain* d) noexcept -> void;
     auto dequeue_domain(domain* d) noexcept -> void;
 
@@ -58,7 +62,9 @@ namespace zxfoundation::sched {
     [[nodiscard]] auto quiesce_domain(domain& d) noexcept
         -> std::expected<void, lib::kernel_error>;
 
+    auto yield_forfeit(strand& s) noexcept -> void;
     auto schedule() noexcept -> void;
+
     [[noreturn]] auto strand_trampoline_exit() noexcept -> void;
 
     /// @brief CPU timer quantum enforcement — fires when a strand's quantum expires.

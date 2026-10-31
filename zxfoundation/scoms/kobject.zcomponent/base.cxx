@@ -11,7 +11,7 @@ import lib.stl;
 
 namespace zxfoundation::scoms::kobject::detail {
 
-    no_export bobject_finalizer_fn g_bobject_finalizer{nullptr};
+    static bobject_finalizer_fn g_bobject_finalizer{nullptr};
 
 }
 

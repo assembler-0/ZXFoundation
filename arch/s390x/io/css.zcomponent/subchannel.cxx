@@ -28,21 +28,21 @@ import lib.stl;
 namespace arch::s390x::io::css::detail {
 
     /// @brief Maximum tracked subchannels (expandable later).
-    no_export inline constexpr u32 MAX_SCH_ENTRIES = 256;
+    static inline constexpr u32 MAX_SCH_ENTRIES = 256;
 
     /// @brief Global subchannel table.
-    no_export std::array<subchannel_entry, MAX_SCH_ENTRIES> g_subchannel_table{};
+    static std::array<subchannel_entry, MAX_SCH_ENTRIES> g_subchannel_table{};
 
     /// @brief Protects the global subchannel table.
-    alignas(4) no_export zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::css_table> g_css_lock;
+    alignas(4) static zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::css_table> g_css_lock;
 
     /// @brief Number of subchannels actually probed and registered.
-    no_export u32 g_sch_count = 0;
+    static u32 g_sch_count = 0;
 
     /// @brief Initialization sentinel.
-    no_export bool g_css_initialized = false;
+    static bool g_css_initialized = false;
 
-    no_export io_completion_sink_fn g_completion_sink{nullptr};
+    static io_completion_sink_fn g_completion_sink{nullptr};
 
 } // namespace detail
 

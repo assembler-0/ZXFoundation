@@ -32,7 +32,7 @@ namespace zxfoundation::base::cmdline {
         value_type  type;
         handler_fn  handler{nullptr}; ///< null = use default dispatch for type.
         void*       storage{nullptr}; ///< Pointer to the target variable.
-        usize       storage_size{0};  ///< For str: capacity in bytes.
+        usize       storage_size{0};  ///< u64 store width / str buffer bytes
         std::string_view help{};      ///< Human-readable description.
     };
 

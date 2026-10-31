@@ -9,9 +9,9 @@ import zxfoundation.sys.printk.core;
 import lib.error;
 import lib.stl;
 
-from_global(nomangle) {
-    from_global(reference) const zxfoundation::sys::zinit::zi_desc __zinit_start[];
-    from_global(reference) const zxfoundation::sys::zinit::zi_desc __zinit_end[];
+extern "C" {
+    extern const zxfoundation::sys::zinit::zi_desc __zinit_start[];
+    extern const zxfoundation::sys::zinit::zi_desc __zinit_end[];
 }
 
 namespace zxfoundation::sys::zinit {

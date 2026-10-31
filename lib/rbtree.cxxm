@@ -378,23 +378,23 @@ namespace lib {
     } // namespace _detail
 
     /// @brief Remove a node from the tree and rebalance.
-    ///
     /// @tparam Augment  Augmentation policy (default = no-op).
     /// @param[in,out] node  The node to remove.
     /// @param[in,out] root  The tree root.
     template <typename Augment = rb_augment_none>
     auto rb_erase(rb_node* node, rb_root& root) noexcept -> void {
-        rb_node* child;
-        rb_node* parent;
-        uptr color;
+        rb_node* child  = node->right;
+        rb_node* left   = node->left;
+        rb_node* parent = nullptr;
 
-        if (!node->left) {
-            // No left child — splice out and replace with right child.
-            child  = node->right;
+        rb_node* fix_node   = nullptr;
+        rb_node* fix_parent = nullptr;
+        uptr     pc         = 0;
+
+        if (!left) {
+            pc     = node->__parent_color;
             parent = rb_parent(node);
-            color  = rb_color(node);
 
-            if (child) rb_set_parent(child, parent);
             if (parent) {
                 if (parent->left == node)
                     parent->left = child;
@@ -404,50 +404,59 @@ namespace lib {
             } else {
                 root.node = child;
             }
-        } else if (!node->right) {
-            // No right child — splice out and replace with left child.
-            child  = node->left;
-            parent = rb_parent(node);
-            color  = rb_color(node);
 
-            rb_set_parent(child, parent);
+            if (child) {
+                child->__parent_color = pc;
+            } else if ((pc & 1U) != 0U) {
+                fix_node   = nullptr;
+                fix_parent = parent;
+            }
+        } else if (!child) {
+            pc = node->__parent_color;
+            left->__parent_color = pc;
+            parent = rb_parent(node);
+
             if (parent) {
                 if (parent->left == node)
-                    parent->left = child;
+                    parent->left = left;
                 else
-                    parent->right = child;
+                    parent->right = left;
                 Augment::propagate(parent);
             } else {
-                root.node = child;
+                root.node = left;
             }
         } else {
-            // Both children exist — find in-order successor.
-            rb_node* successor = node->right;
-            while (successor->left)
-                successor = successor->left;
+            // Both children exist — the in-order successor takes the slot.
+            rb_node* successor = child;
+            rb_node* child2    = nullptr;
 
-            child  = successor->right;
-            parent = rb_parent(successor);
-            color  = rb_color(successor);
-
-            if (child) rb_set_parent(child, parent);
-
-            if (parent == node) {
+            if (!successor->left) {
                 parent = successor;
-                parent->right = child;
+                child2 = successor->right;
+                Augment::copy(node, successor);
             } else {
-                parent->left = child;
-                successor->right = node->right;
-                rb_set_parent(node->right, successor);
+                rb_node* walk = successor->left;
+                do {
+                    parent    = successor;
+                    successor = walk;
+                    walk      = walk->left;
+                } while (walk);
+                child2 = successor->right;
+
+                parent->left     = child2;
+                successor->right = child;
+                rb_set_parent(child, successor);
+
+                Augment::copy(node, successor);
                 Augment::propagate(parent);
             }
 
-            successor->left = node->left;
-            rb_set_parent(node->left, successor);
+            successor->left = left;
+            rb_set_parent(left, successor);
 
             // Take node's position in the tree.
+            pc = node->__parent_color;
             rb_node* np = rb_parent(node);
-            successor->__parent_color = node->__parent_color;
             if (np) {
                 if (np->left == node)
                     np->left = successor;
@@ -457,12 +466,19 @@ namespace lib {
                 root.node = successor;
             }
 
-            Augment::copy(node, successor);
+            if (child2) {
+                rb_set_parent_color(child2, parent, RB_BLACK);
+            } else if (rb_is_black(successor)) {
+                fix_node   = nullptr;
+                fix_parent = parent;
+            }
+            successor->__parent_color = pc;
+
             Augment::propagate(successor);
         }
 
-        if (color == RB_BLACK)
-            _detail::__rb_erase_fixup<Augment>(child, parent, root);
+        if (fix_parent)
+            _detail::__rb_erase_fixup<Augment>(fix_node, fix_parent, root);
     }
 
     /// @brief Return the leftmost (minimum) node, or nullptr if empty.

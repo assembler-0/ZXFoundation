@@ -4,13 +4,15 @@
 
 module zxfoundation.memory.oom.core;
 import zxfoundation.base.types;
+import zxfoundation.dgp.policy.types;
+import zxfoundation.sched.context;
 import lib.error;
 import lib.stl;
 
 namespace zxfoundation::memory::oom::detail {
 
-    no_export score_fn g_score{nullptr};
-    no_export kill_fn g_kill{nullptr};
+    static score_fn g_score{nullptr};
+    static kill_fn g_kill{nullptr};
 
 }
 
@@ -47,7 +49,21 @@ namespace zxfoundation::memory::oom {
                 victim = id;
             }
         }
-        if (highest == 0U || !g_kill(victim)) return std::unexpected(
+        if (highest == 0U) return std::unexpected(
+            lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
+        if (zxfoundation::sched::context::nesting_depth() == 0U &&
+            zxfoundation::sched::context::nucleus_nesting_depth() == 0U &&
+            !zxfoundation::sched::context::preempt_disabled()) {
+            const auto consult = zxfoundation::dgp::policy::decide(
+                0U, zxfoundation::dgp::policy::server_kind::jobs,
+                victim, highest,
+                zxfoundation::dgp::policy::DECIDE_TIMEOUT_NS);
+            if (consult.outcome ==
+                zxfoundation::dgp::policy::decide_outcome::deny)
+                return std::unexpected(lib::kernel_error::from_memory(
+                    lib::memory_error::zone_exhausted));
+        }
+        if (!g_kill(victim)) return std::unexpected(
             lib::kernel_error::from_memory(lib::memory_error::zone_exhausted));
         return victim;
     }

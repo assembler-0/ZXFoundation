@@ -12,6 +12,8 @@ import lib.stl;
 
 namespace zxfoundation::sched::rq_snapshot {
 
+    static std::atomic<u16> g_steal_epoch{0};
+
     /// @brief Publish the run-queue fields used by remote balancers.
     /// @pre The caller owns @p rq.lock, or is publishing during CPU setup.
     auto publish(sched::rq::run_queue& rq) noexcept -> void {
@@ -52,6 +54,19 @@ namespace zxfoundation::sched::rq_snapshot {
         out.attached_domain_id = rq.balance_attached_domain_id.load(std::memory_order::acquire);
         out.attached_dgp_state = rq.balance_attached_dgp_state.load(std::memory_order::acquire);
         return {};
+    }
+
+    /// @brief The CPU id owning the current idle-balance round
+    [[nodiscard]] auto steal_epoch_slot() noexcept -> u16 {
+        return g_steal_epoch.load(std::memory_order::relaxed);
+    }
+
+    /// @brief Hand the idle-balance round to the CPU after @p cpu.
+    auto steal_epoch_advance(u16 cpu) noexcept -> void {
+        g_steal_epoch.store(
+            static_cast<u16>((cpu + 1U)
+                % zxfoundation::base::config::CONFIG_ZX_MAX_CPUS),
+            std::memory_order::relaxed);
     }
 
 } // namespace zxfoundation::sched::rq_snapshot

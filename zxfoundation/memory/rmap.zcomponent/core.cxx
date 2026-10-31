@@ -25,27 +25,27 @@ import lib.stl;
 
 namespace zxfoundation::memory::rmap::detail {
 
-    no_export constexpr u32 RMAP_CHUNK_ORDER = 3U;
-    no_export constexpr u64 RMAP_ENTRIES_PER_CHUNK =
+    static constexpr u32 RMAP_CHUNK_ORDER = 3U;
+    static constexpr u64 RMAP_ENTRIES_PER_CHUNK =
         (static_cast<u64>(PAGE_SIZE) << RMAP_CHUNK_ORDER) / sizeof(entry*);
-    no_export constexpr u64 RMAP_MAX_CHUNKS =
+    static constexpr u64 RMAP_MAX_CHUNKS =
         (pmm::MAX_FRAMES + RMAP_ENTRIES_PER_CHUNK - 1U) / RMAP_ENTRIES_PER_CHUNK;
 
-    no_export std::array<entry**, RMAP_MAX_CHUNKS> g_rmap_chunks{};
-    no_export u64              g_chunk_count{0};
-    no_export u64              g_max_pfn{0};
-    alignas(64) no_export std::array<sync::qspinlock::qspinlock<sync::lock_rank::rmap_stripe>, RMAP_LOCK_STRIPE> g_rmap_locks{};
+    static std::array<entry**, RMAP_MAX_CHUNKS> g_rmap_chunks{};
+    static u64              g_chunk_count{0};
+    static u64              g_max_pfn{0};
+    alignas(64) static std::array<sync::qspinlock::qspinlock<sync::lock_rank::rmap_stripe>, RMAP_LOCK_STRIPE> g_rmap_locks{};
 
-    [[nodiscard]] no_export auto pfn_of(u64 phys) noexcept -> u64 {
+    [[nodiscard]] static auto pfn_of(u64 phys) noexcept -> u64 {
         return phys >> 12;
     }
 
     /// @brief Stripe index for a PFN.
-    [[nodiscard]] no_export auto stripe_of(u64 pfn) noexcept -> u32 {
+    [[nodiscard]] static auto stripe_of(u64 pfn) noexcept -> u32 {
         return static_cast<u32>(pfn & (RMAP_LOCK_STRIPE - 1U));
     }
 
-    [[nodiscard]] no_export auto head_for_pfn(u64 pfn) noexcept -> entry*& {
+    [[nodiscard]] static auto head_for_pfn(u64 pfn) noexcept -> entry*& {
         return g_rmap_chunks[pfn / RMAP_ENTRIES_PER_CHUNK]
             [pfn % RMAP_ENTRIES_PER_CHUNK];
     }

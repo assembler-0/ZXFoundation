@@ -44,7 +44,7 @@ namespace zxfoundation::dgp::gate::detail {
     using zxfoundation::base::lifecycle_state;
 
     /// @brief SCOMS-managed gate table.
-    no_export scoms_table<gate_desc, MAX_GATES> g_gate_table{};
+    static scoms_table<gate_desc, MAX_GATES> g_gate_table{};
 
 } // namespace detail
 

@@ -33,12 +33,12 @@ import zxfoundation.dgp.portal;
 import lib.error;
 import lib.stl;
 
-from_global(nomangle) [[noreturn]] void sched_strand_trampoline_exit() noexcept;
+extern "C" [[noreturn]] void sched_strand_trampoline_exit() noexcept;
 
 namespace arch::s390x::trap::pgm::detail {
     
     /// @brief Log an unhandled domain program exception.
-    no_export void log_domain_pgm(
+    static void log_domain_pgm(
         u16 pgm_code, const cpu::irq::irq_frame* frame,
         u64 trans_exc
     ) noexcept {
@@ -60,7 +60,7 @@ namespace arch::s390x::trap::pgm::detail {
     };
 
     /// @brief Master program-interruption code names
-    no_export constexpr pgm_name_entry<u16> master_pgm_names[] {
+    static constexpr pgm_name_entry<u16> master_pgm_names[] {
         { 0x0001, "operation" },                       
         { 0x0002, "privileged-operation" },             
         { 0x0003, "execute" },                          
@@ -124,7 +124,7 @@ namespace arch::s390x::trap::pgm::detail {
         { 0x0218, "transactional-execution-constraint" },    
     };
 
-    no_export constexpr pgm_name_entry<u8> dxc_pgm_names[] {
+    static constexpr pgm_name_entry<u8> dxc_pgm_names[] {
         { 0x00, "general-operand" },
         { 0x01, "afp-register" },
         { 0x02, "bfp-instruction" },
@@ -152,7 +152,7 @@ namespace arch::s390x::trap::pgm::detail {
         { 0xFF, "compare-and-trap-instruction" },
     };
 
-    no_export constexpr pgm_name_entry<u8> vxc_pgm_names[] {
+    static constexpr pgm_name_entry<u8> vxc_pgm_names[] {
         { 0b0001, "ieee-invalid-operation" },
         { 0b0010, "ieee-division-by-zero" },
         { 0b0011, "ieee-overflow" },
@@ -261,11 +261,6 @@ namespace arch::s390x::trap::pgm {
                     arch::s390x::cpu::ctlreg::crread<15, 15>(live_cr15);
                     if (live_cr15 == 0U
                             && (s.cr15 != 0U || s.section_count != 0U)) {
-                        // §5.12: impossible on a seeded stack — CR15 is
-                        // restored from this very field at dispatch, so a
-                        // zero register here means the cross-CPU CR15
-                        // discipline regressed.  Fail loudly instead of
-                        // growing a section nothing points at.
                         zxfoundation::sys::syschk::syschk_fatal(
                             ::lib::kernel_error::from_generic(
                                 ::lib::generic_error::internal_error),
@@ -273,22 +268,14 @@ namespace arch::s390x::trap::pgm {
                             "strand={} stash={:#x} sections={}",
                             strand->ko.id, s.cr15, s.section_count);
                     }
-                    // The register is the truth (it drifts forward with
-                    // every push); adopt it before growing.
                     s.cr15 = live_cr15;
                     if (live_cr15 != 0U) {
                     }
                     auto grown = arch::s390x::cpu::pcss::stack_grow(s);
                     if (grown) {
                         if (live_cr15 == 0U) {
-                            // Fresh stack: seed CR15 at the new header
-                            // descriptor; nothing else points there.
                             arch::s390x::cpu::ctlreg::crwrite<15, 15>(s.cr15);
                         }
-                        // Seeded case: CR15 stays at the old current
-                        // entry — the re-executed instruction walks the
-                        // chained trailer into the new section, writes
-                        // its backward link, and advances CR15 itself.
                         return;
                     }
                     zxfoundation::sys::printk::perr(
@@ -326,16 +313,10 @@ namespace arch::s390x::trap::pgm {
                 static_cast<u64>(frame->psw_addr), trans_exc);
         }
 
-        // §5.12: record mid-PC state for the interrupted strand.
         zxfoundation::dgp::domain::strand_note_interrupt_context(
             in_problem_state);
 
         auto* d = reinterpret_cast<zxfoundation::dgp::domain::domain*>(lc->get<"current_domain">());
-        // §5.12: a user fault while the hardware is inside a stacking PC
-        // belongs to the CALLEE domain — the PC switched PASN and
-        // current_domain is the stale caller.  Resolve the real domain
-        // by PASN; fatal faults then terminate the callee (and the
-        // caller whose PC can no longer complete), never the wrong one.
         if (in_problem_state && d != nullptr) {
             u64 fault_pasn = 0;
             arch::s390x::cpu::ctlreg::crread<4, 4>(fault_pasn);
@@ -425,12 +406,6 @@ namespace arch::s390x::trap::pgm {
                 && (trans_exc & 0x00CULL) != 0ULL) {
                 const u8 ar_num = lc->get<R"(exception_address_id\access_register_num)">();
                 if (ar_num < 16U && frame->access_regs[ar_num] > 2U) {
-                    // Portal-mediated access (§6.3): resolve against the
-                    // live portal before any kill decision.  Revocation
-                    // signals the accessor with the portal id packed in
-                    // the payload (RC-06.4 — no unconditional kill);
-                    // stale ALETs and out-of-contract accesses keep the
-                    // legacy defaults.
                     const auto [outcome, portal_id] =
                         zxfoundation::dgp::portal::resolve_fault(
                             d->ko.id, ar_num,
@@ -510,9 +485,6 @@ portal_fault:
             discard_value zxfoundation::scoms::kobject::mark_dying(d);
             d->flags = d->flags | zxfoundation::dgp::domain::domain_flags::need_resched;
 
-            // §5.12: fatal fault mid-PC — the interrupted strand belongs
-            // to the CALLER (its PC can never complete now); terminate it
-            // too, then land the interrupted strand on the sched exit.
             auto* interrupted = reinterpret_cast<zxfoundation::dgp::domain::strand*>(
                 arch::s390x::cpu::percpu::this_cpu().current_strand);
             if (interrupted != nullptr && interrupted->body != nullptr

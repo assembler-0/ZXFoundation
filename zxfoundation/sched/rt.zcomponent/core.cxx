@@ -145,7 +145,6 @@ namespace zxfoundation::sched::rt {
         run_queue& rq,
         strand& s
     ) noexcept -> std::expected<void, lib::kernel_error> {
-        // Idempotent: never re-link a strand already on the queue (§09.2).
         if (s.on_rq) return {};
         if (s.sched_policy.class_id != sched_class_id::rt
             || s.sched_admission.class_id != sched_class_id::rt
@@ -312,11 +311,7 @@ namespace zxfoundation::sched::rt {
 
     /// @brief Wake a strand that was sleeping on an rt_mutex.
     auto task_wake_pi(strand& s) noexcept -> void {
-        s.substate = sched_substate::runnable;
-        enqueue_strand(&s);
-        if (auto* dom = static_cast<domain*>(s.owner)) {
-            dom->flags |= zxfoundation::dgp::domain::domain_flags::need_resched;
-        }
+        wake_strand(s);
     }
 
 } // namespace zxfoundation::sched::rt

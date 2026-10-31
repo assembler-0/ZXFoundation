@@ -35,11 +35,11 @@ import zxfoundation.sync.lockable;
 #define __zxmacro_want_zinit
 #include macro_extensions
 
-from_global(nomangle) {
+extern "C" {
     auto ap_entry() -> void;
 }
 
-declscope(C) {
+extern "C" {
     [[noreturn]] auto ap_startup() -> void;
 }
 
@@ -48,19 +48,19 @@ namespace arch::s390x::cpu::smp::detail {
     using namespace zxfoundation::base::config;
     using lock_type = zxfoundation::sync::qspinlock::qspinlock<zxfoundation::sync::lock_rank::smp_doorbell>;
 
-    no_export lock_type g_lock{};
-    no_export lock_type g_transition_lock{};
-    no_export lock_type g_bringup_lock{};
-    no_export bool g_initialized{false};
-    no_export std::array<lifecycle_state, CONFIG_ZX_MAX_CPUS> g_states{};
-    no_export std::array<cpu_descriptor, CONFIG_ZX_MAX_CPUS> g_descriptors{};
-    no_export std::array<lifecycle_callback, LIFECYCLE_NOTIFIER_MAX> g_callbacks{};
-    no_export u32 g_callback_count{0U};
-    no_export std::atomic<u32> g_ap_online{0U};
-    no_export std::atomic<u32> g_sched_ready{0U};
-    no_export std::atomic<u32> g_aps_initialized{0U};
-    no_export std::array<std::atomic<u32>, CONFIG_ZX_MAX_CPUS> g_ap_ack{};
-    no_export std::array<std::atomic<u32>, CONFIG_ZX_MAX_CPUS> g_ap_cancel{};
+    static lock_type g_lock{};
+    static lock_type g_transition_lock{};
+    static lock_type g_bringup_lock{};
+    static bool g_initialized{false};
+    static std::array<lifecycle_state, CONFIG_ZX_MAX_CPUS> g_states{};
+    static std::array<cpu_descriptor, CONFIG_ZX_MAX_CPUS> g_descriptors{};
+    static std::array<lifecycle_callback, LIFECYCLE_NOTIFIER_MAX> g_callbacks{};
+    static u32 g_callback_count{0U};
+    static std::atomic<u32> g_ap_online{0U};
+    static std::atomic<u32> g_sched_ready{0U};
+    static std::atomic<u32> g_aps_initialized{0U};
+    static std::array<std::atomic<u32>, CONFIG_ZX_MAX_CPUS> g_ap_ack{};
+    static std::array<std::atomic<u32>, CONFIG_ZX_MAX_CPUS> g_ap_cancel{};
 
     struct ap_boot_record {
         u16 cpu_id{};
@@ -72,16 +72,16 @@ namespace arch::s390x::cpu::smp::detail {
         u64 nodat_stack_base{};
     };
 
-    no_export std::array<ap_boot_record, CONFIG_ZX_MAX_CPUS> g_ap_records{};
-    no_export u32 g_total_aps{0U};
-    no_export bool g_bringup_complete{false};
+    static std::array<ap_boot_record, CONFIG_ZX_MAX_CPUS> g_ap_records{};
+    static u32 g_total_aps{0U};
+    static bool g_bringup_complete{false};
 
-    no_export constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
-    no_export constexpr u64 AP_ONLINE_TIMEOUT_TOD = TOD_UNITS_PER_MILLISECOND * 30'000ULL;
-    no_export constexpr u64 LOWCORE_PREFIX_ALIGNMENT = 8192ULL;
-    no_export constexpr u64 SIGP_PREFIX_MAX_PHYS = 1ULL << 31U;
+    static constexpr u64 TOD_UNITS_PER_MILLISECOND = 4'096'000ULL;
+    static constexpr u64 AP_ONLINE_TIMEOUT_TOD = TOD_UNITS_PER_MILLISECOND * 30'000ULL;
+    static constexpr u64 LOWCORE_PREFIX_ALIGNMENT = 8192ULL;
+    static constexpr u64 SIGP_PREFIX_MAX_PHYS = 1ULL << 31U;
 
-    no_export auto apply_cpu_evidence(
+    static auto apply_cpu_evidence(
         percpu::percpu_data& pcp,
         const init::zxfl::cpu_info& ci
     ) noexcept -> void {
@@ -93,12 +93,12 @@ namespace arch::s390x::cpu::smp::detail {
         pcp.capacity = (ci.capacity == 0U) ? 100U : ci.capacity;
     }
 
-    [[nodiscard]] no_export auto prefix_block_is_valid(const u64 phys) noexcept -> bool {
+    [[nodiscard]] static auto prefix_block_is_valid(const u64 phys) noexcept -> bool {
         return phys != 0ULL && phys < SIGP_PREFIX_MAX_PHYS &&
             (phys & (LOWCORE_PREFIX_ALIGNMENT - 1ULL)) == 0ULL;
     }
 
-    no_export auto rollback(ap_boot_record& record) noexcept -> void {
+    static auto rollback(ap_boot_record& record) noexcept -> void {
         using namespace zxfoundation::memory::pmm;
         lowcore::unregister_cpu_lowcore(record.cpu_id, record.lowcore_phys);
         discard_value smp::unbind_lowcore(record.cpu_id, record.lowcore_phys);
@@ -117,7 +117,7 @@ namespace arch::s390x::cpu::smp::detail {
         record = {};
     }
 
-    no_export auto release_record(ap_boot_record& record) noexcept -> void {
+    static auto release_record(ap_boot_record& record) noexcept -> void {
         rollback(record);
     }
 
@@ -223,7 +223,7 @@ namespace arch::s390x::cpu::smp::detail {
         return {};
     }
 
-    no_export auto stop_and_reclaim(ap_boot_record& record) noexcept -> bool {
+    static auto stop_and_reclaim(ap_boot_record& record) noexcept -> bool {
         if (record.lowcore_phys == 0ULL)
             return true;
         const auto stopped = hw_stop(record.cpu_addr);
@@ -284,7 +284,7 @@ namespace arch::s390x::cpu::smp::detail {
 
 } // namespace arch::s390x::cpu::smp::detail
 
-declscope(C) {
+extern "C" {
     [[noreturn]] auto ap_startup() -> void {
         using namespace arch::s390x::cpu;
         features::enable_hardware_facilities();
